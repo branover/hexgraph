@@ -85,8 +85,9 @@ then run the resume verifier, then continue at the next unchecked task.
 ## M5 — Polish
 - [ ] M5-T1 Accept/dismiss finding status (API + UI)
 - [ ] M5-T2 `engine/dedup.py`
-- [ ] M5-T3 graph + findings export
-- [ ] M5-T4 README quickstart + security notes; finalize `make demo`
+- [ ] M5-T3 graph + findings export  (graph export done in M2; findings export left)
+- [~] M5-T4 `README.md` written ahead of schedule (full structure; unbuilt features marked
+      "🚧 Not yet implemented"). Keep it updated as M3-T5/M4/M5 land; finalize `make demo` section.
 
 ## Project-specific skills created (note here as added)
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_

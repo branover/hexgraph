@@ -1,0 +1,276 @@
+# ⬡ HexGraph
+
+A self-hosted, **local-only** agentic vulnerability-research workbench. Point it at a binary or
+firmware image; HexGraph ingests the target, breaks firmware into child targets, runs AI-driven
+analysis tasks **using your own model access**, and records every result as a structured **finding**
+in a SQLite-backed **graph** linking targets and findings. A loopback-only web UI browses the graph,
+launches tasks, and triages findings.
+
+Three principles are non-negotiable:
+
+- **Local-only.** The API/UI bind to `127.0.0.1`. Nothing calls a HexGraph-operated server; no
+  telemetry, no auto-update pings.
+- **Bring-your-own-key, or none at all.** Model access is via your Anthropic API key, a local
+  Claude Code session, or the built-in **mock** backend. The mock is the default and needs **no key
+  and no network**, so you can run the entire loop for free.
+- **Targets are hostile.** All parsing/unpacking/analysis of target bytes happens inside a disposable
+  Docker container with no network and strict resource limits. **HexGraph never executes the target**
+  (static/RE only).
+
+> ### Project status — pre-1.0, under active construction
+> The core loop works today: **ingest → recon → finding → graph**, plus AI analysis tasks against the
+> **mock** backend. Real model backends and the later triage/export features are still being built.
+> See [Roadmap](#roadmap) for exactly what's done. Sections below marked **🚧 Not yet implemented**
+> describe planned behavior.
+
+---
+
+## Requirements
+
+- **Python 3.11+**
+- **Docker** (the analysis sandbox runs in a container; required for ingest/recon and the demo)
+- Linux or macOS. Docker must be runnable by your user (`docker run --rm hello-world` should work).
+
+No API key is required for development — the default mock backend is fully offline.
+
+---
+
+## Install
+
+```bash
+git clone <your-fork-or-path> hexgraph && cd hexgraph
+make install          # creates .venv and installs HexGraph (server + dev extras)
+make sandbox-build    # builds the analysis sandbox image (hexgraph-sandbox:latest)
+```
+
+`make install` creates a virtualenv at `.venv/` and installs the `hexgraph` CLI into it.
+`make sandbox-build` builds the Docker image that the static-analysis tools run inside; it is needed
+for any task that touches target bytes (recon, firmware unpack).
+
+---
+
+## Quickstart (mock backend — no key, no network)
+
+Run the whole loop on the bundled test targets and exit 0:
+
+```bash
+make demo
+```
+
+Or drive it yourself:
+
+```bash
+# 1. Ingest the bundled firmware image. Recon runs automatically (zero model calls)
+#    and unpacks it into child targets joined by `contains` edges.
+.venv/bin/hexgraph ingest tests/fixtures/synthetic_fw.bin --name demo
+
+# 2. Start the loopback-only web UI (mock backend is the default).
+.venv/bin/hexgraph serve            # → http://127.0.0.1:8765
+```
+
+Then open **http://127.0.0.1:8765**, click your project, and use the per-target task launcher
+(see [The web UI](#the-web-ui)).
+
+---
+
+## The web UI
+
+Open `http://127.0.0.1:8765` after `hexgraph serve`. The workspace has three panes:
+
+- **Left — target tree.** The ingested target and any firmware children. Each target has a small
+  launcher: pick a **task type** and (for the mock) a **scenario**, then **Run**.
+- **Center — graph.** Targets and findings as connected nodes (`contains` / `links_against` /
+  `related_to` edges, plus finding→target links). Rendered offline with a vendored Cytoscape.js.
+- **Right — findings.** Every finding for the project; click one to see its evidence, reasoning, and
+  suggested follow-ups.
+
+**Mock scenarios you can try** (mock backend only) on the `sbin/httpd` target:
+
+| Task type / scenario | What you'll see |
+|---|---|
+| `static_analysis` / `critical_overflow` | A **critical** stack-overflow finding + a `related_to` edge to `libupnp.so` |
+| `static_analysis` / `no_findings` | The clean "0 findings" path |
+| `static_analysis` / `malformed_then_valid` | Exercises the JSON-repair retry, then a valid finding |
+| `reverse_engineering` | An info-level annotation finding |
+| `pattern_sweep` | A high-severity sibling match (the same `strcpy` sink in `libupnp.so`) |
+| `error_rate_limit` / `error_timeout` | The task fails gracefully (retry/backoff then `failed`) |
+| `(default)` | A deterministic, always-successful scenario |
+
+> 🚧 **Not yet implemented:** one-click spawning of suggested follow-ups with parent-finding linkage,
+> accept/dismiss triage controls, and per-project cost display in the UI. (Roadmap M3–M5.)
+
+---
+
+## CLI reference
+
+All commands are available as `.venv/bin/hexgraph <command>` (or just `hexgraph` with the venv active).
+
+```text
+hexgraph init                              Initialize HexGraph (DB + ~/.hexgraph dirs)
+hexgraph ingest <path> [--name N]          Ingest a binary/firmware; runs recon (auto-unpacks firmware)
+                 [--project ID]            …add to an existing project instead of creating one
+                 [--no-recon]              …register the target without running analysis
+                 [--backend B]             …mock | anthropic | claude_code  (default: mock)
+hexgraph targets <project>                 List targets in a project
+hexgraph run <target> --type T             Run an analysis task against a target
+             [--objective TEXT]            …free-text objective for the agent
+             [--model M] [--backend B]     …per-task model / backend override
+             [--function F]                …focus function
+             [--mock-scenario S]           …force a specific mock scenario
+hexgraph findings <project> [--status S]   List findings (optionally filter by new|accepted|dismissed)
+hexgraph graph <project> --export FILE     Export the project graph as JSON (nodes + edges)
+hexgraph serve [--host H] [--port P]       Start the loopback-only API/UI (default 127.0.0.1:8765)
+```
+
+Task types for `--type`: `recon`, `static_analysis`, `reverse_engineering`, `pattern_sweep`,
+`harness_generation`.
+
+---
+
+## Model backends
+
+Selected by `HEXGRAPH_LLM_BACKEND` (default `mock`) or per-task with `--backend`. Task code is
+identical across backends — only the backend boundary changes.
+
+| Backend | Status | Notes |
+|---|---|---|
+| `mock` | ✅ Working | Deterministic, schema-valid findings from bundled fixtures. No key, no network. The default for dev, CI, and `make demo`. |
+| `anthropic` | 🚧 Not yet implemented (M3) | BYOK via `ANTHROPIC_API_KEY` (env or config). Real token/cost telemetry. |
+| `claude_code` | 🚧 Not yet implemented (M3) | Uses a local Claude Code session. |
+
+HexGraph **never logs or stores your API key**.
+
+---
+
+## Configuration
+
+HexGraph reads optional config from `~/.hexgraph/config.toml`; environment variables override it.
+
+```toml
+# ~/.hexgraph/config.toml
+[llm]
+backend = "mock"        # mock | anthropic | claude_code
+model   = ""            # optional default model
+
+[api]
+host = "127.0.0.1"
+port = 8765
+
+[anthropic]
+# api_key = "sk-ant-..."   # BYOK; prefer the ANTHROPIC_API_KEY env var. Never logged or stored.
+```
+
+### Environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `HEXGRAPH_LLM_BACKEND` | `mock` | Backend selection. |
+| `HEXGRAPH_MODEL` | — | Default model. |
+| `HEXGRAPH_HOST` / `HEXGRAPH_PORT` | `127.0.0.1` / `8765` | API/UI bind address. |
+| `HEXGRAPH_HOME` | `~/.hexgraph` | Root for the DB and per-project artifacts. |
+| `HEXGRAPH_DB_PATH` | `$HEXGRAPH_HOME/hexgraph.db` | SQLite database path. |
+| `HEXGRAPH_MOCK_SCENARIO` | — | Force a mock scenario for all tasks. |
+| `HEXGRAPH_SANDBOX_IMAGE` | `hexgraph-sandbox:latest` | Analysis sandbox image. |
+| `HEXGRAPH_SANDBOX_DEV` | — | `1` to dev-mount local probe scripts instead of the baked-in copies. |
+| `HEXGRAPH_I_KNOW_WHAT_IM_DOING` | — | `1` to allow a non-loopback bind (warns loudly; not recommended). |
+| `ANTHROPIC_API_KEY` | — | Your key for the `anthropic` backend. Read on demand; never logged or stored. |
+
+---
+
+## Security model
+
+- **Loopback only.** The server refuses to bind to a non-loopback address. Override requires
+  `HEXGRAPH_I_KNOW_WHAT_IM_DOING=1`, which still warns loudly.
+- **Hostile-target isolation.** Every operation on target bytes runs in a fresh container with
+  `--network none`, a read-only root filesystem, a tmpfs scratch, and memory/CPU/PID limits plus a
+  wall-clock timeout. Only HexGraph's probe scripts run there — **the target is never executed**.
+- **The LLM never sees raw target bytes** — only tool output (decompilation, strings, imports) is
+  sent to a model.
+- **Secrets are never persisted or logged.** Your API key lives only in env/config and is read on
+  demand.
+
+---
+
+## How it works
+
+The whole system proves one loop: **target → delegate task → structured finding → graph → spawn next
+task.** It is built around three clean seams:
+
+- **`LLMBackend`** — `mock`, `anthropic`, and `claude_code` are interchangeable; task code never
+  knows which backend it talks to.
+- **Task registry** — every task type implements one `plan → run → suggest_followups` protocol.
+- **Sandbox runner** — the single container boundary for all target-byte handling.
+
+**The Finding is the heart of the product.** Every task and every backend emits the same schema
+(`context/schemas/finding.schema.json`), which is what makes triage and the graph possible.
+
+### Data model
+
+SQLite via SQLAlchemy, UUID ids: `project`, `target` (self-referential `parent_id` tree),
+`edge` (`contains` | `links_against` | `related_to`), `task`, `finding`. Artifacts are stored on the
+local filesystem under `~/.hexgraph/projects/<id>/`.
+
+### Bundled test targets
+
+Tiny, intentionally-vulnerable targets live under `tests/fixtures/` (regenerate with `make fixtures`):
+
+- `vuln_httpd` — an ELF with an unbounded `strcpy` in a fake CGI handler, built with weak mitigations.
+- `libupnp.so` — a shared library with the same `strcpy` sink in `ssdp_recv` (a sibling for pattern sweeps).
+- `synthetic_fw.bin` — a squashfs firmware image that unpacks into the two ELFs above.
+
+---
+
+## Development
+
+```bash
+make test            # full test suite (mock backend; sandbox tests auto-skip without Docker)
+make demo            # the full offline loop, exits 0 — doubles as a smoke test
+make fixtures        # rebuild the bundled test targets
+make sandbox-build   # rebuild the analysis sandbox image
+make serve           # start the server from the venv
+make help            # list all targets
+```
+
+Source layout (under `src/hexgraph/`): `models/` (Finding), `llm/` (the backend seam + mock),
+`db/` (SQLAlchemy models), `sandbox/` (runner + probe scripts), `tasks/` (handler protocol),
+`engine/` (ingest, recon, unpack, graph, worker, pipeline), `api/` (FastAPI + loopback guard),
+`web/` (templates + static assets), `cli.py`.
+
+**Build progress is tracked in [`PROGRESS.md`](PROGRESS.md)** — the canonical, resumable record of
+what's done and what's next. Start there if you're picking up the build.
+
+---
+
+## Roadmap
+
+| Milestone | Scope | Status |
+|---|---|---|
+| **M0** | Mock backend, `LLMBackend` seam, `Finding` model, contract test | ✅ Done |
+| **M1** | Config, SQLite models, ingest, CLI, FastAPI on loopback | ✅ Done |
+| **M2** | Sandbox + `recon`, firmware unpack, graph endpoint, web UI | ✅ Done |
+| **M3** | `static_analysis` + `reverse_engineering`; real backends; per-task model/cost | 🟡 Mock path done; real backends + decompiler + cost UI pending |
+| **M4** | One-click follow-up spawn; `pattern_sweep`; `harness_generation` | ⏳ Planned |
+| **M5** | Accept/dismiss triage, dedup, findings export, polish | ⏳ Planned |
+
+Out of scope (by design): accounts/multi-user, cloud/hosted compute, live fuzzing, dynamic/emulated
+execution, exploit generation, Neo4j, Kubernetes.
+
+---
+
+## Running with Docker Compose
+
+> 🚧 **Partially implemented.** `docker compose up` builds and starts the loopback-only UI service
+> (published to `127.0.0.1:8765`). The container launches the analysis sandbox via the host Docker
+> socket, so you must run `make sandbox-build` on the host first. This path is not yet fully smoke-tested
+> end-to-end — the venv quickstart above is the recommended way to run HexGraph today.
+
+```bash
+make sandbox-build
+docker compose up
+```
+
+---
+
+## License
+
+> 🚧 To be determined. HexGraph is intended to be fully free and open (no license gates, no paid tiers).

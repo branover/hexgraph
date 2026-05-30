@@ -12,8 +12,8 @@ help: ## Show this help
 venv: ## Create the virtualenv
 	python3 -m venv .venv
 
-install: venv ## Install the package (dev extras) into the venv
-	$(PIP) install -e ".[dev]"
+install: venv ## Install the package (server + dev extras) into the venv
+	$(PIP) install -e ".[server,dev]"
 
 test: ## Run the test suite against the mock backend
 	$(PY) -m pytest -q
