@@ -4,24 +4,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project state
 
-This repo is **mid-build**. The MVP described in `context/SPEC.md` is being implemented milestone by milestone (M0–M5).
+The MVP described in `context/SPEC.md` is **complete** — all milestones M0–M5 are implemented, tested (69 passing), and committed on branch `build/hexgraph-mvp`. `make demo` runs the full loop offline and exits 0. Remaining work is polish/hardening (UI backlog in `docs/ui-backlog.md`; optional: cassette record/replay, Ghidra, Celery/Redis, Docker Compose smoke test, license).
 
 **▶ RESUME PROTOCOL — do this first, every session:**
-1. Read **`PROGRESS.md`** (repo root). Its `▶ RESUME HERE` block names the current milestone, the next task, and how to re-verify the last completed work. The `[ ]/[~]/[x]/[!]` checklist is the source of truth for what is done.
-2. Run the resume verifier when one exists (`make demo` once M2 lands; `python -m pytest` before that).
-3. Continue at the next unchecked task. **Update `PROGRESS.md` as tasks complete** (check the box, refresh `▶ RESUME HERE`, append to the session log) and commit it alongside the code it describes. Commit messages are prefixed with the task id (e.g. `M2-T3: ...`).
-4. Keep this CLAUDE.md current as durable facts land (real commands, final layout, gotchas). When a workflow becomes repetitive, capture it as a skill under `.claude/skills/` and note it in `PROGRESS.md`.
+1. Read **`PROGRESS.md`** (repo root). Its `▶ RESUME HERE` block names the current state, the next task, and how to re-verify. The `[ ]/[~]/[x]/[!]` checklist is the source of truth for what's done.
+2. Re-verify with `make test` (full suite) and `make demo` (full loop, needs Docker + sandbox image).
+3. **Update `PROGRESS.md` as work lands** (check boxes, refresh `▶ RESUME HERE`, append to the session log) and commit it alongside the code. Keep this CLAUDE.md current as durable facts change. When a workflow becomes repetitive, capture it as a skill under `.claude/skills/` and note it in `PROGRESS.md`.
 
-**Dev commands (live as of M2):**
-- `make install` — create `.venv`, install `-e ".[dev]"` (+`server` extra). Also `pip install pyelftools` if running probes on host.
-- `make sandbox-build` — build the `hexgraph-sandbox:latest` analysis image (needed for recon/unpack/demo). Add `WITH_GHIDRA=1` later.
-- `make test` / `.venv/bin/python -m pytest -q` — full suite, mock backend, offline. Docker-gated tests (recon/unpack/demo) skip automatically if the sandbox image is absent.
-- `make demo` — full offline loop (ingest→recon→finding→graph) on bundled fixtures, exits 0. Needs Docker + sandbox image.
+**Dev commands:**
+- `make install` — create `.venv`, install `-e ".[server,dev]"`. For the real Anthropic backend add `pip install -e ".[byok]"`; to run probes on the host (rare) add `pip install pyelftools`.
+- `make sandbox-build` — build the `hexgraph-sandbox:latest` analysis image (file/binwalk/squashfs-tools/cpio/pyelftools/lief/**radare2 6.1.4**/**gcc**). Add `WITH_GHIDRA=1` for the (not-yet-wired) Ghidra option. Required for recon/unpack/decompile/harness-compile/demo.
+- `make test` / `.venv/bin/python -m pytest -q` — full suite, mock backend, offline. Docker-gated tests (recon/unpack/decompiler/harness/demo) skip automatically if the sandbox image is absent.
+- `make demo` — full offline loop: ingest → recon → AI finding → graph → **spawn follow-up**, exits 0. Needs Docker + sandbox image.
 - `make fixtures` — rebuild `tests/fixtures/{vuln_httpd,libupnp.so,synthetic_fw.bin}` (committed; only re-run when sources change).
-- CLI (all working): `hexgraph init | ingest <path> [--name] [--project] [--no-recon] | targets <p> | findings <p> [--status] | graph <p> --export f.json | serve`. `run` lands in M3.
+- CLI (all working): `hexgraph init | ingest <path> [--name] [--project] [--no-recon] | targets <p> | run <target> --type T [--objective] [--model] [--backend] [--function] [--mock-scenario] | findings <p> [--status] [--export f.json] | graph <p> --export f.json | serve`.
 - Runtime data under `~/.hexgraph/` (`hexgraph.db` + `projects/<id>/{artifacts,tasks}/`); override home with `HEXGRAPH_HOME`, db with `HEXGRAPH_DB_PATH`.
 
-**Key seams as built:** target bytes are touched ONLY by probe scripts in `src/hexgraph/sandbox/probes/` run via `sandbox/runner.py` (docker `--network none --read-only` + caps + timeout). `engine/pipeline.py` orchestrates ingest→recon→unpack→recon-children. The UI is vanilla JS + a vendored Cytoscape (offline), not HTMX.
+**Key seams as built:** target bytes are touched ONLY by probe scripts in `src/hexgraph/sandbox/probes/` (recon/unpack/decompile/compile) run via `sandbox/runner.py` (docker `--network none --read-only` + mem/cpu/pids caps + tmpfs + timeout). `engine/pipeline.py` orchestrates ingest→recon→unpack→recon-children; `engine/llm_tasks.py` runs LLM tasks backend-agnostically (`get_backend()` + `run_findings()`); `engine/followups.py` spawns the next task wiring `parent_finding_id`. Decompiler seam in `sandbox/decompiler.py` (R2Decompiler now, Ghidra later). The UI is vanilla JS + a vendored Cytoscape (offline), not HTMX. Decompilation/harness-compile are best-effort and env-gated (`HEXGRAPH_DISABLE_DECOMPILE`, `HEXGRAPH_DISABLE_SANDBOX_BUILD`) — never gated on backend identity.
 
 **Read before writing code, in this order:**
 1. `context/SPEC.md` — the source of truth (constraints, data model, task types, milestones, acceptance criteria).
@@ -82,6 +81,8 @@ It is a first-class backend, not a test stub. Three fidelity layers (build in or
 
 ## Build order (milestones — SPEC §9)
 
+> **All milestones below are complete** (see `PROGRESS.md` for the per-task record). Kept here as a map of what each milestone delivered.
+
 - **M0** — mock backend + `LLMBackend` interface + `Finding` model + contract test. (Schema-valid findings with no key.)
 - **M1** — scaffolding, config, SQLite models, CLI `init`/`ingest`, FastAPI on loopback, docker compose. Lone ELF → project + one target.
 - **M2** — sandbox container + `recon` task; binwalk firmware unpack → child targets + `contains` edges; graph JSON endpoint; minimal UI. **Core loop demonstrable with zero model calls.**
@@ -91,16 +92,16 @@ It is a first-class backend, not a test stub. Three fidelity layers (build in or
 
 Keep scope tight (SPEC §12): no auth/multi-user/cloud, no auto-router, no live fuzzing, no dynamic/emulated execution, no Neo4j, no Kubernetes. Build the smallest thing that proves the loop with clean seams.
 
-## Planned commands (do not exist yet — create as you build)
+## Commands (implemented — see "Dev commands" above for the full set)
 
-The spec assumes these will exist; honor these names:
 - `make demo` — full ingest → task → finding → graph → spawn loop on bundled fixtures, mock backend, no key/network, exit 0. Doubles as a smoke test.
-- `pytest` — defaults to `HEXGRAPH_LLM_BACKEND=mock`.
-- CLI: `hexgraph init | ingest <path> [--name] | targets <project> | run <target> --type static_analysis [--objective] [--model] [--mock-scenario] | findings <project> [--status new] | graph <project> --export graph.json | serve`.
-- `docker compose up` — brings up the loopback-only UI.
+- `pytest` — defaults to `HEXGRAPH_LLM_BACKEND=mock` (set in `tests/conftest.py`).
+- CLI: `hexgraph init | ingest | targets | run | findings | graph | serve` (full signature in "Dev commands").
+- `docker compose up` — brings up the loopback-only UI (builds the app image; needs the sandbox image built on the host first; not yet end-to-end smoke-tested).
 
-## Test fixtures to generate (SPEC §11, `context/fixtures/targets/README.md`)
+## Test fixtures (SPEC §11, `context/fixtures/targets/README.md`)
 
-Generate and commit under `tests/fixtures/` so CI is hermetic:
+Built and committed under `tests/fixtures/` (regenerate with `make fixtures` / `tests/fixtures/build.sh`):
 - `vuln_httpd` — a tiny intentionally-vulnerable ELF (unbounded `strcpy` in a fake CGI handler), built `-fno-stack-protector -no-pie -z norelro` so recon reports weak mitigations matching the mock fixtures.
-- `synthetic_fw.bin` — a small firmware image (squashfs/cpio) binwalk can unpack into 2–3 ELFs, including a second binary with a similar `strcpy` sink so `pattern_sweep` has a real sibling to match.
+- `libupnp.so` — a shared library with the same `strcpy` sink in `ssdp_recv` (the `pattern_sweep` sibling).
+- `synthetic_fw.bin` — a squashfs firmware image binwalk/unsquashfs unpacks into the two ELFs above.

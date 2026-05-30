@@ -14,22 +14,21 @@ then run the resume verifier, then continue at the next unchecked task.
 - **UI quickstart:** `make sandbox-build` once → `hexgraph ingest tests/fixtures/synthetic_fw.bin --name demo`
   → `hexgraph serve` → open http://127.0.0.1:8765 → click a target, pick task type + scenario, Run.
 - **Open notes / gotchas:**
-  - **Docker is installed** and `jonsnow` is in the `docker` group (M2 unblocked).
-    Verify with `docker run --rm hello-world` before M2-T1; a fresh shell may be needed
-    for the group to take effect.
-  - **git ownership fixed** by the user (`chown` to jonsnow); commits work now.
-  - Python is 3.12.3 (spec asks 3.11+ — fine).
+  - **Docker required** for recon/unpack/decompile/harness/demo; `jonsnow` is in the `docker` group.
+    Build the sandbox image once with `make sandbox-build` (re-run after editing probes or the Dockerfile).
+  - Python 3.12.3 (spec asks 3.11+ — fine).
+  - Schema changes: `db/models.py` uses `create_all` (no migrations) — delete `~/.hexgraph/hexgraph.db`
+    (or use a fresh `HEXGRAPH_HOME`) after changing columns; tests use isolated temp homes.
   - Mock reads fixtures + schema directly from `context/` (single source of truth, no duplication).
-  - Backends return raw text; parsing + retry/JSON-repair live in `llm/runner.py` so the
-    path is identical for mock and real backends. Tasks call `run_findings`, never `complete`.
-  - Pydantic `Finding` (extra='forbid') mirrors the schema; DB `Finding` row adds the
-    envelope (id/project_id/target_id/task_id/status/created_at).
-  - DB is one SQLite file at `~/.hexgraph/hexgraph.db` (override `HEXGRAPH_DB_PATH`);
-    artifacts copied under `~/.hexgraph/projects/<id>/artifacts/`. `init_db()` = create_all.
-  - Loopback guard (`api/loopback.py`) is dependency-free + unit-tested; compose binds
-    0.0.0.0 in-container but publishes only to host 127.0.0.1 (see docker-compose.yml note).
-  - Ingest does NOT parse target bytes (only copies) — kind/format/arch/mitigations are
-    filled by the sandboxed `recon` task in M2.
+  - Backends return raw text; parsing + retry/JSON-repair live in `llm/runner.py` so the path is
+    identical for mock and real backends. Tasks call `run_findings`, never `complete`.
+  - Pydantic `Finding` (extra='forbid') mirrors the schema; DB `Finding` row adds the envelope
+    (id/project_id/target_id/task_id/status/created_at).
+  - Ingest does NOT parse target bytes (only copies) — kind/format/arch/mitigations come from the
+    sandboxed `recon` task. The LLM never sees raw bytes, only probe output.
+  - Decompile/harness-compile are best-effort, env-gated (`HEXGRAPH_DISABLE_DECOMPILE` /
+    `HEXGRAPH_DISABLE_SANDBOX_BUILD`, both set in tests) and gated on docker availability — never on backend.
+  - UI is vanilla JS + vendored Cytoscape (offline). Anthropic SDK only needed for the real backend (`[byok]`).
 
 ## Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 
