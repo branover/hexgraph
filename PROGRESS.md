@@ -106,6 +106,13 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-05-30: **Design vision authored** → [`docs/design-vision.md`](docs/design-vision.md). Multi-agent
+  workflow (ground → 8 design dimensions → 3 adversarial critiques → synthesis) producing the v2 target
+  shape: typed graph (`target` artifacts + `node` concepts + polymorphic `edge`), task anchors
+  (node/edge/selection/hypothesis) over the canonical 5 task types, the content-addressed **Context
+  Bundle** model (provenance + reproducibility + analysis_run diff), HITL/triage model, graph-as-hub UI,
+  and a prioritized gap analysis. Finding schema stays frozen; migrations are a committed prerequisite.
+  **Next: turn this into an implementation plan.** 15 cross-cutting rulings + 13 open questions captured.
 - 2026-05-30: **M5 complete → MVP done (M0–M5).** Accept/dismiss status (API+UI), dedup engine+endpoint,
   findings/project export (CLI + API), README finalized. 69 tests pass; `make demo` green. Remaining
   work is polish (see UI backlog) + optional hardening (cassettes, Ghidra, Celery, compose smoke test).
