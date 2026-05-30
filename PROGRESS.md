@@ -4,12 +4,11 @@ The durable, resumable record of this build. **A new session should read this fi
 then run the resume verifier, then continue at the next unchecked task.
 
 ## ▶ RESUME HERE
-- **Current milestone:** M4 — Spawn the next thing (one-click follow-ups; pattern_sweep; harness_generation)
-- **Next task:** M4-T1 `engine/followups.py` — one-click launch from a finding's suggested_followups,
-  wiring `task.parent_finding_id` (the API field already exists; UI follow-up buttons exist but don't
-  pass parent/target_ref yet).
-- **Last verified:** `make test` → 62 passed; `make demo` exits 0; real-backend exception mapping
-  tested offline; radare2 decompiler verified in-sandbox.
+- **Current milestone:** M5 — Polish (accept/dismiss, dedup, findings export, README finalize)
+- **Next task:** M5-T1 — accept/dismiss finding status (API endpoint + UI controls); status enum already
+  on the Finding model (new|accepted|dismissed) and surfaced in the API.
+- **Last verified:** `make test` → 66 passed; `make demo` exits 0 with the full
+  ingest→recon→finding→graph→**spawn** chain (pattern_sweep homes a finding on the sibling + related_to).
 - **How to re-verify:** `make test`; or run the UI (see UI quickstart below).
 - **UI quickstart:** `make sandbox-build` once → `hexgraph ingest tests/fixtures/synthetic_fw.bin --name demo`
   → `hexgraph serve` → open http://127.0.0.1:8765 → click a target, pick task type + scenario, Run.
@@ -80,11 +79,14 @@ then run the resume verifier, then continue at the next unchecked task.
 - NOTES: decompilation is best-effort, env-gated (`HEXGRAPH_DISABLE_DECOMPILE=1` in tests; gated on docker
   availability, never on backend identity). hash-fallback scenario pick excludes `error_*`.
 
-## M4 — Spawn the next thing
-- [ ] M4-T1 `engine/followups.py` one-click launch + wire parent_finding_id
-- [ ] M4-T2 `tasks/pattern_sweep.py` related_to edges + sibling findings
-- [ ] M4-T3 `tasks/harness_generation.py` (compile in sandbox; stub if time)
-- [ ] M4-T4 Extend `make demo` to spawn a follow-up
+## M4 — Spawn the next thing ✅
+- [x] M4-T1 `engine/followups.py` spawn_followup + POST /api/findings/{id}/followups/{i}; UI buttons wire
+      parent_finding_id + target_ref + params; shared `engine/refs.py` (resolve_target_ref, pick_sibling)
+- [x] M4-T2 pattern_sweep: homes the finding ON the matched sibling + seed→sibling related_to edge
+- [x] M4-T3 harness_generation: `compile_probe.py` + `engine/harness.py` actually compile the emitted
+      source in the sandbox (gcc added to image); real build result replaces the mock's claim
+- [x] M4-T4 `make demo` extended: static_analysis → spawn pattern_sweep follow-up → sibling finding +
+      related_to + parent_finding_id. 66 tests pass.
 
 ## M5 — Polish
 - [ ] M5-T1 Accept/dismiss finding status (API + UI)
@@ -103,6 +105,9 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-05-30: **M4 complete** — follow-up spawner (endpoint + UI + parent_finding_id), pattern_sweep
+  homes findings on the matched sibling with related_to edges, harness_generation compiles the emitted
+  source in the sandbox (gcc in image), demo extended to show the spawn chain. 66 tests pass.
 - 2026-05-30: **M3 complete** — radare2 decompiler seam (probe + R2Decompiler, image rebuilt with r2 6.1.4);
   real backends `anthropic` (BYOK, SDK exception mapping, cost estimate) + `claude_code` (CLI, graceful);
   shared schema-embedding system prompt; per-task + per-project cost (API + UI readout). 62 tests pass.

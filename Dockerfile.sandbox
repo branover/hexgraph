@@ -18,6 +18,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-pip \
         curl \
         ca-certificates \
+        gcc \
+        libc6-dev \
     && curl -fsSL -o /tmp/radare2.deb \
         "https://github.com/radareorg/radare2/releases/download/${R2_VERSION}/radare2_${R2_VERSION}_amd64.deb" \
     && (dpkg -i /tmp/radare2.deb || apt-get install -fy --no-install-recommends) \

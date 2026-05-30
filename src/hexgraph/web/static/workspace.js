@@ -93,10 +93,7 @@ async function showDetail(fid) {
   const detail = $("#detail");
   detail.innerHTML = parts.join("");
   detail.querySelectorAll("button[data-fu]").forEach((b) => {
-    b.onclick = () => {
-      const s = f.suggested_followups[+b.dataset.fu];
-      launch(f.target_id, s.task_type);
-    };
+    b.onclick = () => spawnFollowup(f.id, +b.dataset.fu);
   });
 }
 
@@ -104,17 +101,25 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 }
 
-async function launch(targetId, type, scenario) {
-  const body = { target_id: targetId, type };
-  if (scenario) body.mock_scenario = scenario;
-  const { task_id } = await postJSON("/api/tasks", body);
-  // Poll until the task leaves running/queued, then refresh.
+async function pollAndReload(task_id) {
   for (let i = 0; i < 60; i++) {
     await new Promise((r) => setTimeout(r, 700));
     const t = await getJSON(`/api/tasks/${task_id}`);
     if (t.status !== "queued" && t.status !== "running") break;
   }
   await loadAll();
+}
+
+async function launch(targetId, type, scenario) {
+  const body = { target_id: targetId, type };
+  if (scenario) body.mock_scenario = scenario;
+  const { task_id } = await postJSON("/api/tasks", body);
+  await pollAndReload(task_id);
+}
+
+async function spawnFollowup(findingId, index) {
+  const { task_id } = await postJSON(`/api/findings/${findingId}/followups/${index}`, {});
+  await pollAndReload(task_id);
 }
 
 async function loadGraph() {

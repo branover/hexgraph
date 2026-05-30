@@ -164,6 +164,19 @@ def create_app() -> FastAPI:
         await get_worker().enqueue(task_id)
         return {"task_id": task_id, "status": "queued"}
 
+    @app.post("/api/findings/{finding_id}/followups/{index}")
+    async def api_spawn_followup(finding_id: str, index: int):
+        from hexgraph.engine.followups import spawn_followup
+
+        with session_scope() as s:
+            try:
+                task = spawn_followup(s, finding_id, index)
+            except (ValueError, IndexError) as exc:
+                raise HTTPException(404, str(exc))
+            task_id, target_id = task.id, task.target_id
+        await get_worker().enqueue(task_id)
+        return {"task_id": task_id, "status": "queued", "target_id": target_id}
+
     @app.get("/api/tasks/{task_id}")
     def api_task(task_id: str):
         with session_scope() as s:

@@ -86,8 +86,55 @@ def main() -> int:
         assert len(children) == 2
         assert contains == 2
         assert findings == 3
+        httpd = next(t for t in s.query(Target).filter(Target.project_id == pid) if t.name.endswith("httpd"))
+        httpd_id = httpd.id
 
-    print("\n\033[32m✓ demo loop complete\033[0m — ingest → recon → finding → graph, zero model calls.")
+    _step("Delegate static_analysis on sbin/httpd (mock) → critical finding with follow-ups")
+    from hexgraph.engine.tasks import create_task
+    from hexgraph.engine.worker import run_task_sync
+
+    with session_scope() as s:
+        from hexgraph.db.models import Project as P
+
+        project = s.query(P).filter(P.id == pid).one()
+        task = create_task(
+            s, project=project, target_id=httpd_id, type="static_analysis",
+            backend="mock", params={"mock_scenario": "critical_overflow", "function": "cgi_handler"},
+        )
+        sa_task_id = task.id
+    run_task_sync(sa_task_id)
+    with session_scope() as s:
+        from hexgraph.db.models import Finding
+
+        f = s.query(Finding).filter(Finding.task_id == sa_task_id).one()
+        print(f"   finding: [{f.severity}] {f.title}")
+        print(f"   suggested follow-ups: {[fu['label'] for fu in f.suggested_followups_json]}")
+        finding_id = f.id
+        sweep_idx = next(
+            i for i, fu in enumerate(f.suggested_followups_json) if fu["task_type"] == "pattern_sweep"
+        )
+
+    _step("Spawn the suggested pattern_sweep follow-up → finding on the sibling + related_to edge")
+    from hexgraph.engine.followups import spawn_followup
+
+    with session_scope() as s:
+        spawned = spawn_followup(s, finding_id, sweep_idx)
+        spawned_id = spawned.id
+    run_task_sync(spawned_id)
+    with session_scope() as s:
+        from hexgraph.db.models import Edge, EdgeType, Finding, Target, Task
+
+        spawned_task = s.get(Task, spawned_id)
+        sweep_finding = s.query(Finding).filter(Finding.task_id == spawned_id).one()
+        sibling = s.get(Target, sweep_finding.target_id)
+        related = s.query(Edge).filter(Edge.project_id == pid, Edge.type == EdgeType.related_to).count()
+        print(f"   spawned task parent_finding_id == seed finding: {spawned_task.parent_finding_id == finding_id}")
+        print(f"   new finding on sibling '{sibling.name}': [{sweep_finding.severity}] {sweep_finding.title}")
+        print(f"   related_to edges: {related}")
+        assert spawned_task.parent_finding_id == finding_id
+        assert related >= 1
+
+    print("\n\033[32m✓ demo loop complete\033[0m — ingest → recon → finding → graph → spawn, zero model calls.")
     return 0
 
 

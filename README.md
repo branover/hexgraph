@@ -96,8 +96,12 @@ Open `http://127.0.0.1:8765` after `hexgraph serve`. The workspace has three pan
 | `error_rate_limit` / `error_timeout` | The task fails gracefully (retry/backoff then `failed`) |
 | `(default)` | A deterministic, always-successful scenario |
 
-> 🚧 **Not yet implemented:** one-click spawning of suggested follow-ups with parent-finding linkage,
-> accept/dismiss triage controls, and per-project cost display in the UI. (Roadmap M3–M5.)
+Click a finding's **suggested follow-up** button to spawn the next task in one click — it runs against
+the resolved target (e.g. a sibling), with the parent finding recorded. `pattern_sweep` adds a finding
+on the matched sibling and a `related_to` edge; `harness_generation` compiles the generated harness in
+the sandbox.
+
+> 🚧 **Not yet implemented:** accept/dismiss triage controls in the UI (Roadmap M5).
 
 ---
 
@@ -257,7 +261,7 @@ what's done and what's next. Start there if you're picking up the build.
 | **M1** | Config, SQLite models, ingest, CLI, FastAPI on loopback | ✅ Done |
 | **M2** | Sandbox + `recon`, firmware unpack, graph endpoint, web UI | ✅ Done |
 | **M3** | `static_analysis` + `reverse_engineering`; real backends; decompiler; per-task model/cost | ✅ Done |
-| **M4** | One-click follow-up spawn; `pattern_sweep`; `harness_generation` | ⏳ Planned |
+| **M4** | One-click follow-up spawn; `pattern_sweep`; `harness_generation` | ✅ Done |
 | **M5** | Accept/dismiss triage, dedup, findings export, polish | ⏳ Planned |
 
 Out of scope (by design): accounts/multi-user, cloud/hosted compute, live fuzzing, dynamic/emulated

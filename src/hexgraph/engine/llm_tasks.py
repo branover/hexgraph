@@ -15,13 +15,13 @@ Findings' `related_target_refs` become `related_to` edges and
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Edge, EdgeType, Project, Target, TargetKind, Task, TaskStatus
 from hexgraph.engine.findings import persist_finding
 from hexgraph.engine.recon import RISKY_SINKS
+from hexgraph.engine.refs import pick_sibling, resolve_target_ref
 from hexgraph.engine.tasks import write_trace
 from hexgraph.llm.registry import get_backend
 from hexgraph.llm.runner import run_findings
@@ -83,11 +83,7 @@ def _build_context(session: Session, project: Project, target: Target, task: Tas
     meta = target.metadata_json or {}
     risky = sorted(set(meta.get("imports", [])) & RISKY_SINKS)
 
-    sibling = (
-        session.query(Target)
-        .filter(Target.project_id == project.id, Target.id != target.id)
-        .first()
-    )
+    sibling = pick_sibling(session, project.id, target)
     return TaskContext(
         task_id=task.id,
         task_type=task.type,
@@ -106,17 +102,28 @@ def _build_context(session: Session, project: Project, target: Target, task: Tas
     )
 
 
-def _resolve_target_ref(session: Session, project: Project, ref: str) -> Target | None:
-    if not ref:
-        return None
-    direct = session.get(Target, ref)
-    if direct is not None and direct.project_id == project.id:
-        return direct
-    base = Path(ref).name
-    for t in session.query(Target).filter(Target.project_id == project.id).all():
-        if Path(t.name).name == base:
-            return t
-    return None
+def _compile_harnesses(findings) -> None:
+    """For harness_generation findings, actually build the emitted source in the
+    sandbox and record the real result. Best-effort + env/docker-gated."""
+    if os.environ.get("HEXGRAPH_DISABLE_SANDBOX_BUILD") == "1":
+        return
+    from hexgraph.sandbox.runner import docker_available
+
+    if not docker_available():
+        return
+    from hexgraph.engine.harness import compile_harness_source
+
+    for finding in findings:
+        source = finding.evidence.decompiled_snippet
+        if not source:
+            continue
+        try:
+            build = compile_harness_source(source)
+        except Exception:  # noqa: BLE001 — best-effort enrichment
+            continue
+        extra = dict(finding.evidence.extra or {})
+        extra["build"] = build
+        finding.evidence.extra = extra
 
 
 def execute_llm_task(session: Session, project: Project, target: Target, task: Task) -> int:
@@ -133,6 +140,9 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
 
     findings, usage = run_findings(backend, ctx.build_request(prompt=prompt))
 
+    if task.type == "harness_generation":
+        _compile_harnesses(findings)
+
     write_trace(task, "prompt.txt", prompt)
     write_trace(task, "usage.json", {
         "input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens,
@@ -143,28 +153,32 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
 
     low_confidence = False
     for finding in findings:
+        resolved_refs = [
+            r for r in (resolve_target_ref(session, project.id, ref) for ref in finding.related_target_refs or [])
+            if r is not None and r.id != target.id
+        ]
+        # pattern_sweep reports a sibling's issue: home the finding ON that sibling
+        # (the graph payoff), while still drawing the seed -> sibling related_to edge.
+        home = resolved_refs[0] if (task.type == "pattern_sweep" and resolved_refs) else target
         row = persist_finding(
             session,
             project_id=project.id,
-            target_id=target.id,
+            target_id=home.id,
             task_id=task.id,
             finding=finding,
         )
         if finding.confidence == "low":
             low_confidence = True
-        # related_target_refs -> related_to edges
-        for ref in finding.related_target_refs or []:
-            dst = _resolve_target_ref(session, project, ref)
-            if dst is not None and dst.id != target.id:
-                session.add(
-                    Edge(
-                        project_id=project.id,
-                        src_target_id=target.id,
-                        dst_target_id=dst.id,
-                        type=EdgeType.related_to,
-                        metadata_json={"finding_id": row.id},
-                    )
+        for dst in resolved_refs:
+            session.add(
+                Edge(
+                    project_id=project.id,
+                    src_target_id=target.id,
+                    dst_target_id=dst.id,
+                    type=EdgeType.related_to,
+                    metadata_json={"finding_id": row.id},
                 )
+            )
 
     if findings and low_confidence:
         task.status = TaskStatus.needs_triage
