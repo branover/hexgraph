@@ -68,9 +68,12 @@ def test_firmware_unpack_creates_children_and_edges(hg_home, sandbox):
         # one recon finding per target (3 total)
         assert s.query(Finding).filter(Finding.project_id == pid).count() == 3
         graph = build_graph(s, pid)
-        assert len(graph["nodes"]) == 6  # 3 targets + 3 findings
-        kinds = {n["kind"] for n in graph["nodes"] if n["type"] == "target"}
-        assert kinds == {"firmware_image", "executable", "shared_library"}
+        targets = [n for n in graph["nodes"] if n["type"] == "target"]
+        finding_nodes = [n for n in graph["nodes"] if n["type"] == "finding"]
+        assert len(targets) == 3 and len(finding_nodes) == 3
+        assert {n["kind"] for n in targets} == {"firmware_image", "executable", "shared_library"}
+        # recon also materialized typed symbol/string nodes
+        assert any(n["type"] == "node" for n in graph["nodes"])
 
 
 def test_worker_runs_recon_task(hg_home, sandbox):

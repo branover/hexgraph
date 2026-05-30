@@ -40,8 +40,8 @@ def test_static_analysis_critical_overflow(hg_home):
         # critical_overflow carries two suggested follow-ups (harness + sweep).
         assert len(f.suggested_followups_json) == 2
         # related_target_refs (sibling) -> a related_to edge.
-        rel = s.query(Edge).filter(Edge.project_id == pid, Edge.type == EdgeType.related_to).all()
-        assert len(rel) == 1 and rel[0].src_target_id == hid
+        rel = s.query(Edge).filter(Edge.project_id == pid, Edge.type == EdgeType.related_to.value).all()
+        assert len(rel) == 1 and rel[0].src_id == hid and rel[0].origin == "llm"
 
 
 def test_no_findings_scenario_succeeds_empty(hg_home):

@@ -94,7 +94,7 @@ def execute_recon(
     project: Project,
     target: Target,
     task: Task,
-    runner: SandboxRunner | None = None,
+    runner: Executor | None = None,
 ) -> tuple[FindingRow, dict]:
     """Run recon for an existing task row. Returns (finding row, raw facts)."""
     runner = runner or get_executor()
@@ -102,6 +102,7 @@ def execute_recon(
     write_trace(task, "recon_facts.json", facts)
 
     apply_facts_to_target(target, facts)
+    _materialize_recon_nodes(session, project.id, target, facts)
     finding = build_recon_finding(facts, target.name)
     row = persist_finding(
         session,
@@ -113,11 +114,26 @@ def execute_recon(
     return row, facts
 
 
+def _materialize_recon_nodes(session: Session, project_id: str, target: Target, facts: dict) -> None:
+    """Materialize a bounded set of symbol + string nodes from recon facts
+    (design §3.2: filtered, not thousands of rows)."""
+    from hexgraph.engine.nodes import MAX_STRINGS, MAX_SYMBOLS, materialize_string, materialize_symbol
+
+    imports = facts.get("imports", [])[:MAX_SYMBOLS]
+    for name in imports:
+        materialize_symbol(
+            session, project_id=project_id, target_id=target.id, name=name,
+            kind="import", is_sink=name in RISKY_SINKS,
+        )
+    for value in (facts.get("strings", []) or [])[:MAX_STRINGS]:
+        materialize_string(session, project_id=project_id, target_id=target.id, value=value)
+
+
 def run_recon(
     session: Session,
     project: Project,
     target: Target,
-    runner: SandboxRunner | None = None,
+    runner: Executor | None = None,
 ) -> tuple[FindingRow, dict]:
     """Create a recon task and run it. Returns (finding row, raw facts)."""
     task = create_task(session, project=project, target_id=target.id, type="recon", backend="none")

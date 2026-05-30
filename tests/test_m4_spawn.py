@@ -62,9 +62,11 @@ def test_pattern_sweep_homes_finding_on_sibling_and_links(hg_home):
         f = s.query(Finding).filter(Finding.task_id == tid).one()
         # finding is homed on the sibling library, not the seed executable
         assert f.target_id == lid
-        # a related_to edge runs from the seed to the sibling
-        rel = s.query(Edge).filter(Edge.project_id == pid, Edge.type == EdgeType.related_to).all()
-        assert any(e.src_target_id == hid and e.dst_target_id == lid for e in rel)
+        # pattern_sweep draws an attributed instance_of_pattern edge seed → sibling
+        rel = s.query(Edge).filter(
+            Edge.project_id == pid, Edge.type == EdgeType.instance_of_pattern.value
+        ).all()
+        assert any(e.src_id == hid and e.dst_id == lid and e.origin == "llm" for e in rel)
 
 
 def test_followup_index_out_of_range_raises(hg_home):

@@ -6,9 +6,11 @@ then run the resume verifier, then continue at the next unchecked task.
 ## ▶ RESUME HERE
 - **Current milestone:** v2 build — see [`docs/implementation-plan.md`](docs/implementation-plan.md)
   (built from [`docs/design-vision.md`](docs/design-vision.md)). MVP (M0–M5) is the foundation.
-- **Next task:** **P1-1** — `node` table (`NodeType` + content_hash identity + lazy materialization)
-  + `engine/nodes.py`. (P0 foundations & seams complete.)
-- **Last verified:** `make test` → 78 passed; `make demo` exits 0 (full ingest→recon→AI→graph→spawn).
+- **Next task:** **P2-1** — Context Bundle + CAS (content-addressed store, `context_bundle`/
+  `context_item` tables, `task.context_bundle_id`). (P0 + P1 complete.)
+- **Last verified:** `make test` → 83 passed; `make demo` exits 0 (full ingest→recon→AI→graph→spawn).
+  P1 acceptance: recon materializes symbol/string nodes; decompile makes function nodes + `calls` edges;
+  findings attach to function nodes via `about` edges.
 - **How to re-verify:** `make test`; or run the UI (see UI quickstart below).
 - **v2 sequencing:** P0 seams/migrations → P1 typed graph → P2 context bundle/CAS → P3 task anchors →
   P4 React notebook UI → P5 finding/task management → P6 HITL/triage → P7 search/report/cross-target →
@@ -101,7 +103,7 @@ then run the resume verifier, then continue at the next unchecked task.
 
 ## v2 execution — phases (detail in `docs/implementation-plan.md`)
 - [x] P0 Foundations & seams: Alembic migrations (baseline `bbdb1d98bf54`) + `hexgraph db upgrade` (backup + legacy-adopt); seams `sandbox/executor.py` (get_executor), `policy.py`, `entitlements.py`, `metering.py`, `principal.py` with local defaults; reserved `HEXGRAPH_API_KEY`. 78 tests pass.
-- [ ] P1 Typed graph core: `node` table + content_hash identity; polymorphic attributed `edge`; findings attach via `about` edge; recon/decompile populate function/symbol/string nodes + calls/xref edges
+- [x] P1 Typed graph core: `node` table + content_hash identity (`engine/nodes.py`); polymorphic attributed `edge` (`engine/edges.py`, String type cols, no CHECK); findings attach via `about` edge; recon materializes bounded symbol/string nodes; decompile makes function nodes + `calls` edges; migration `0002_typed_graph`. 83 tests pass.
 - [ ] P2 Context Bundle + CAS: content-addressed store, ContextBuilder + token estimator, full trace, 3-tier cache incl. response cassette, analysis_run + run-diff, staleness
 - [ ] P3 Task anchors + relational tasks + capability table; pattern_sweep provenance fix; FollowupSuggester seam (rule-based default)
 - [ ] P4 Analyst-notebook UI (React+Vite+TS): graph hub + visual grammar, Inspector, SSE activity, launch dialog + pre-flight context preview

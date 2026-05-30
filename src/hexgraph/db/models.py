@@ -43,10 +43,49 @@ class TargetKind(str, enum.Enum):
     unknown = "unknown"
 
 
+class NodeType(str, enum.Enum):
+    """Sub-file / conceptual node kinds (P1 materializes function/symbol/string;
+    struct/hypothesis/pattern/task arrive in later phases)."""
+
+    function = "function"
+    symbol = "symbol"
+    string = "string"
+    struct = "struct"
+    hypothesis = "hypothesis"
+    pattern = "pattern"
+    task = "task"
+
+
 class EdgeType(str, enum.Enum):
+    """Canonical edge vocabulary (design §3.3). Stored as a string column (no DB
+    CHECK constraint) so new types are zero-migration."""
+
     contains = "contains"
     links_against = "links_against"
-    related_to = "related_to"
+    imports_symbol = "imports_symbol"
+    exports_symbol = "exports_symbol"
+    calls = "calls"
+    references = "references"
+    reads = "reads"
+    writes = "writes"
+    instance_of_pattern = "instance_of_pattern"
+    similar_to = "similar_to"
+    duplicate_of = "duplicate_of"
+    derived_from = "derived_from"
+    produced_by = "produced_by"
+    confirms = "confirms"
+    refutes = "refutes"
+    supports = "supports"
+    contradicts = "contradicts"
+    about = "about"
+    annotates = "annotates"
+    dataflow_hint = "dataflow_hint"
+    related_to = "related_to"  # generic fallback (kept for back-compat)
+
+
+# Edge endpoint kinds + provenance origins (plain strings in the DB).
+EDGE_KINDS = ("target", "node", "finding", "task")
+EDGE_ORIGINS = ("tool", "llm", "human", "derived")
 
 
 class TaskStatus(str, enum.Enum):
@@ -99,15 +138,50 @@ class Target(Base):
     children: Mapped[list["Target"]] = relationship()
 
 
+class Node(Base):
+    """A sub-file / conceptual node (function, symbol, string, ...). Distinct from
+    `target` (artifacts with bytes). Identity is content-addressed via
+    `content_hash` where available; `fq_name`/`address` are locators."""
+
+    __tablename__ = "node"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("project.id"), index=True)
+    node_type: Mapped[str] = mapped_column(String(32), index=True)
+    # The artifact this node lives in (nullable for cross-artifact concepts e.g. pattern).
+    target_id: Mapped[str | None] = mapped_column(ForeignKey("target.id"), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(300))
+    fq_name: Mapped[str | None] = mapped_column(String(400), nullable=True)
+    address: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    attrs_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_by: Mapped[str] = mapped_column(String(32), default="recon")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Edge(Base):
+    """One polymorphic, typed, attributed relationship between any two graph
+    entities (target | node | finding | task)."""
+
     __tablename__ = "edge"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
-    project_id: Mapped[str] = mapped_column(ForeignKey("project.id"))
-    src_target_id: Mapped[str] = mapped_column(ForeignKey("target.id"))
-    dst_target_id: Mapped[str] = mapped_column(ForeignKey("target.id"))
-    type: Mapped[EdgeType] = mapped_column(Enum(EdgeType))
-    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    project_id: Mapped[str] = mapped_column(ForeignKey("project.id"), index=True)
+    # Polymorphic endpoints — kinds in EDGE_KINDS; ids reference target/node/finding/task.
+    src_kind: Mapped[str] = mapped_column(String(16))
+    src_id: Mapped[str] = mapped_column(String(36), index=True)
+    dst_kind: Mapped[str] = mapped_column(String(16))
+    dst_id: Mapped[str] = mapped_column(String(36), index=True)
+    type: Mapped[str] = mapped_column(String(40), index=True)
+    directed: Mapped[bool] = mapped_column(default=True)
+    # Typed attribution (queryable; required for server-side filtering).
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    weight: Mapped[float | None] = mapped_column(Float, nullable=True)
+    origin: Mapped[str] = mapped_column(String(16), default="tool")  # EDGE_ORIGINS
+    created_by_task_id: Mapped[str | None] = mapped_column(ForeignKey("task.id"), nullable=True)
+    created_by_tool: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    attrs_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class Task(Base):

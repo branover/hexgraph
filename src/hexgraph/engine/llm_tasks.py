@@ -18,8 +18,10 @@ import os
 
 from sqlalchemy.orm import Session
 
-from hexgraph.db.models import Edge, EdgeType, Project, Target, TargetKind, Task, TaskStatus
+from hexgraph.db.models import EdgeType, Project, Target, TargetKind, Task, TaskStatus
+from hexgraph.engine.edges import add_edge
 from hexgraph.engine.findings import persist_finding
+from hexgraph.engine.nodes import materialize_function
 from hexgraph.engine.recon import RISKY_SINKS
 from hexgraph.engine.refs import pick_sibling, resolve_target_ref
 from hexgraph.engine.tasks import write_trace
@@ -126,6 +128,27 @@ def _compile_harnesses(findings) -> None:
         finding.evidence.extra = extra
 
 
+def _materialize_decomp_graph(session: Session, project_id: str, target_id: str, decomp: dict) -> None:
+    """Turn decompilation into graph: a function node for the focus + its callees,
+    joined by `calls` edges (design §3.2 lazy materialization, §3.3 `calls`)."""
+    focus = decomp.get("focus")
+    if not focus or not focus.get("name"):
+        return
+    fnode = materialize_function(
+        session, project_id=project_id, target_id=target_id, name=focus["name"],
+        pseudocode=focus.get("pseudocode") or None, created_by="decompile",
+    )
+    for callee in focus.get("callees", []):
+        cnode = materialize_function(
+            session, project_id=project_id, target_id=target_id, name=callee, created_by="decompile",
+        )
+        add_edge(
+            session, project_id=project_id,
+            src=("node", fnode.id), dst=("node", cnode.id),
+            type=EdgeType.calls, origin="tool", confidence=1.0, created_by_tool="radare2",
+        )
+
+
 def execute_llm_task(session: Session, project: Project, target: Target, task: Task) -> int:
     """Run an LLM-backed task to findings. Returns the number of findings emitted.
 
@@ -135,6 +158,7 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
     decomp = _gather_decompilation(target, ctx)
     if decomp:
         ctx.tool_outputs["decompilation"] = decomp
+        _materialize_decomp_graph(session, project.id, target.id, decomp)
     prompt = _build_prompt(target, ctx, decomp)
     backend = get_backend(task.backend if task.backend not in (None, "none") else None)
 
@@ -175,15 +199,14 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
         )
         if finding.confidence == "low":
             low_confidence = True
+        edge_type = EdgeType.instance_of_pattern if task.type == "pattern_sweep" else EdgeType.related_to
         for dst in resolved_refs:
-            session.add(
-                Edge(
-                    project_id=project.id,
-                    src_target_id=target.id,
-                    dst_target_id=dst.id,
-                    type=EdgeType.related_to,
-                    metadata_json={"finding_id": row.id},
-                )
+            add_edge(
+                session, project_id=project.id,
+                src=("target", target.id), dst=("target", dst.id),
+                type=edge_type, origin="llm", confidence=finding.confidence,
+                created_by_task_id=task.id,
+                attrs={"finding_id": row.id, "matched_from_finding_id": row.id},
             )
 
     if findings and low_confidence:

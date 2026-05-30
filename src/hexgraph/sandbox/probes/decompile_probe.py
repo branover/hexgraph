@@ -12,7 +12,27 @@ r2ghidra plugin required. No network; the target is analyzed, never executed.
 from __future__ import annotations
 
 import json
+import re
 import sys
+
+# `call <target>` in r2 disassembly. Capture the callee symbol/function name,
+# skipping register-indirect calls (call rax / call qword [..]).
+_CALL_RE = re.compile(r"\bcall\b\s+(?:dword |qword |word |byte )?(?:sym\.imp\.|sym\.|fcn\.|loc\.)?([A-Za-z_][\w]*)")
+_REGISTERS = {
+    "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp", "rip",
+    "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
+    "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp",
+}
+
+
+def _callees(disasm: str) -> list[str]:
+    out: list[str] = []
+    for m in _CALL_RE.finditer(disasm or ""):
+        name = m.group(1)
+        if name in _REGISTERS or name in out:
+            continue
+        out.append(name)
+    return out
 
 
 def _name_candidates(fn: str) -> list[str]:
@@ -51,7 +71,8 @@ def main() -> int:
                 "name": focus_name,
                 "resolved": resolved,
                 "pseudocode": pseudo,
-                "disasm": disasm if not pseudo else "",
+                "disasm": disasm,
+                "callees": _callees(disasm),
             }
 
         print(json.dumps({"tool": "decompile_probe", "functions": functions[:200], "focus": focus}))

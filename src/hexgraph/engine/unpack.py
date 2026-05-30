@@ -11,7 +11,8 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from hexgraph.db.models import Edge, EdgeType, Project, Target, TargetKind
+from hexgraph.db.models import EdgeType, Project, Target, TargetKind
+from hexgraph.engine.edges import add_edge
 from hexgraph.engine.ingest import ingest_file
 from hexgraph.sandbox.executor import Executor, get_executor
 
@@ -44,14 +45,11 @@ def unpack_firmware(
             child = ingest_file(
                 session, project, host_path, name=entry["rel"], parent=parent
             )
-            session.add(
-                Edge(
-                    project_id=project.id,
-                    src_target_id=parent.id,
-                    dst_target_id=child.id,
-                    type=EdgeType.contains,
-                    metadata_json={"path": entry["rel"]},
-                )
+            add_edge(
+                session, project_id=project.id,
+                src=("target", parent.id), dst=("target", child.id),
+                type=EdgeType.contains, origin="tool", confidence=1.0,
+                created_by_tool="unpack", attrs={"path": entry["rel"]},
             )
             children.append(child)
 
@@ -73,14 +71,11 @@ def build_links_against(session: Session, project: Project) -> int:
         for lib in (t.metadata_json or {}).get("libraries", []):
             dep = by_basename.get(Path(lib).name)
             if dep is not None and dep.id != t.id:
-                session.add(
-                    Edge(
-                        project_id=project.id,
-                        src_target_id=t.id,
-                        dst_target_id=dep.id,
-                        type=EdgeType.links_against,
-                        metadata_json={"lib": lib},
-                    )
+                add_edge(
+                    session, project_id=project.id,
+                    src=("target", t.id), dst=("target", dep.id),
+                    type=EdgeType.links_against, origin="tool", confidence=1.0,
+                    created_by_tool="recon", attrs={"lib": lib},
                 )
                 created += 1
     return created

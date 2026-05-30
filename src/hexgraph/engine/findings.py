@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
+from hexgraph.db.models import EdgeType
 from hexgraph.db.models import Finding as FindingRow
 from hexgraph.db.models import FindingStatus
+from hexgraph.engine.edges import add_edge
+from hexgraph.engine.nodes import materialize_function
 from hexgraph.models.finding import Finding
 
 
@@ -38,6 +41,28 @@ def persist_finding(
     )
     session.add(row)
     session.flush()
+
+    # Attach the finding to the finest node its evidence concerns via an `about`
+    # edge (design ruling #7). Falls back to the coarse target. `finding.target_id`
+    # remains the coarse pointer.
+    func = finding.evidence.function
+    if func:
+        node = materialize_function(
+            session, project_id=project_id, target_id=target_id, name=func, created_by="llm"
+        )
+        add_edge(
+            session, project_id=project_id,
+            src=("finding", row.id), dst=("node", node.id),
+            type=EdgeType.about, origin="derived", confidence=1.0,
+            attrs={"role": "primary"},
+        )
+    else:
+        add_edge(
+            session, project_id=project_id,
+            src=("finding", row.id), dst=("target", target_id),
+            type=EdgeType.about, origin="derived", confidence=1.0,
+            attrs={"role": "context"},
+        )
     return row
 
 
