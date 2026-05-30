@@ -23,6 +23,7 @@ const P: Record<string, ReactNode> = {
   task: <><path d="M9 11l3 3 8-8" /><path d="M20 12v7H4V5h11" /></>,
   copy: <><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5h10" /></>,
   target: <><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="4" /></>,
+  filter: <path d="M3 4h18l-7 8v6l-4 2v-8z" />,
 };
 
 export function Icon({ name, size = 16, className }: { name: string; size?: number; className?: string }) {

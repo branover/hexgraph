@@ -14,10 +14,12 @@ from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
 
-from hexgraph.db.models import ContextBundle, ContextItem, Finding, Project, Target
+from hexgraph.db.models import ContextBundle, ContextItem, Edge, Finding, Project, Target
 from hexgraph.engine import cas
 
-ASSEMBLER_VERSION = "1"
+ASSEMBLER_VERSION = "2"
+# Relationship edge types worth pulling into a target's task context.
+_REL_TYPES = ("links_against", "similar_to", "duplicate_of", "instance_of_pattern", "related_to")
 DEFAULT_BUDGET = 6000
 _WS = re.compile(r"\s+")
 
@@ -104,7 +106,44 @@ def _gather_items(session: Session, project: Project, target: Target, task, ctx)
     if ctx.sibling_name:
         items.append(_Item("sibling", f"Sibling target available: {ctx.sibling_name}", 30,
                            "target", ctx.sibling_target_id))
+
+    # Selective graph context (design §7): pull THIS target's relationships and any
+    # findings on the related targets — relevant cross-target prior art, bounded to
+    # direct neighbors (not the whole graph). Budget-packed like everything else.
+    _gather_graph_context(session, project, target, items)
     return items
+
+
+def _gather_graph_context(session: Session, project: Project, target: Target, items: list[_Item]) -> None:
+    edges = (
+        session.query(Edge)
+        .filter(
+            Edge.project_id == project.id, Edge.type.in_(_REL_TYPES),
+            ((Edge.src_kind == "target") & (Edge.src_id == target.id))
+            | ((Edge.dst_kind == "target") & (Edge.dst_id == target.id)),
+        )
+        .all()
+    )
+    rels, related_ids = [], set()
+    for e in edges:
+        other_id = e.dst_id if e.src_id == target.id else e.src_id
+        other_kind = e.dst_kind if e.src_id == target.id else e.src_kind
+        if other_kind != "target":
+            continue
+        ot = session.get(Target, other_id)
+        if ot is not None:
+            rels.append(f"{e.type} → {ot.name}")
+            related_ids.add(other_id)
+    if rels:
+        items.append(_Item("graph.relations", "This target relates to: " + "; ".join(rels[:12]),
+                           66, "target", target.id))
+    if related_ids:
+        rfs = session.query(Finding).filter(Finding.target_id.in_(related_ids)).all()
+        if rfs:
+            names = {t.id: t.name for t in session.query(Target).filter(Target.id.in_(related_ids))}
+            summary = "; ".join(f"[{f.severity}] {f.title} (in {names.get(f.target_id, '?')})" for f in rfs[:10])
+            items.append(_Item("related_findings", "Findings on related targets (prior art): " + summary,
+                               68, "target", target.id))
 
 
 def _pack(items: list[_Item], budget: int) -> tuple[list[_Item], list[_Item]]:
