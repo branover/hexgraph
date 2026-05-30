@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hexgraph"
+version = "0.0.1"
+description = "Self-hosted, local-only agentic vulnerability-research workbench (MVP)"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.6",
+    "jsonschema>=4.21",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# Added per milestone so each install stays minimal and offline-friendly.
+server = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "sqlalchemy>=2.0",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
+]
+analysis = [
+    "r2pipe>=1.8",
+    "lief>=0.14",
+    "pyelftools>=0.31",
+]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+hexgraph = "hexgraph.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Tests default to the mock backend (set in tests/conftest.py): zero key, zero network (SPEC §1).

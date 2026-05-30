@@ -4,7 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project state
 
-This repo is **pre-implementation**. The only contents are the `context/` bundle — a complete build specification. No application code, build system, or tests exist yet. Your job is to build the MVP described in the spec.
+This repo is **mid-build**. The MVP described in `context/SPEC.md` is being implemented milestone by milestone (M0–M5).
+
+**▶ RESUME PROTOCOL — do this first, every session:**
+1. Read **`PROGRESS.md`** (repo root). Its `▶ RESUME HERE` block names the current milestone, the next task, and how to re-verify the last completed work. The `[ ]/[~]/[x]/[!]` checklist is the source of truth for what is done.
+2. Run the resume verifier when one exists (`make demo` once M2 lands; `python -m pytest` before that).
+3. Continue at the next unchecked task. **Update `PROGRESS.md` as tasks complete** (check the box, refresh `▶ RESUME HERE`, append to the session log) and commit it alongside the code it describes. Commit messages are prefixed with the task id (e.g. `M2-T3: ...`).
+4. Keep this CLAUDE.md current as durable facts land (real commands, final layout, gotchas). When a workflow becomes repetitive, capture it as a skill under `.claude/skills/` and note it in `PROGRESS.md`.
+
+**Dev commands (live as of M1):**
+- `make install` — create `.venv` and install `-e ".[dev]"` (+`server` extra is installed too).
+- `make test` / `.venv/bin/python -m pytest -q` — full suite, mock backend, offline.
+- `.venv/bin/hexgraph init | ingest <path> [--name] [--project] | targets <project> | serve` — working CLI; `run`/`findings`/`graph` are stubbed to their milestone.
+- `make demo`, `make fixtures`, `make sandbox-build` — placeholders that land in M2.
+- Source lives under `src/hexgraph/` (package layout in `PROGRESS.md`). Runtime data: `~/.hexgraph/` (`hexgraph.db` + `projects/<id>/artifacts/`); override home with `HEXGRAPH_HOME`, db with `HEXGRAPH_DB_PATH`.
 
 **Read before writing code, in this order:**
 1. `context/SPEC.md` — the source of truth (constraints, data model, task types, milestones, acceptance criteria).
