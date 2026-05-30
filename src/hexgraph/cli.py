@@ -16,7 +16,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from hexgraph.db.models import Project, Target
+from hexgraph.db.models import Finding, Project, Target
 from hexgraph.db.session import init_db, session_scope
 
 
@@ -29,9 +29,19 @@ def _cmd_init(args: argparse.Namespace) -> int:
 
 
 def _cmd_ingest(args: argparse.Namespace) -> int:
-    from hexgraph.engine.ingest import create_project, ingest_file
+    from hexgraph.engine.ingest import create_project
+    from hexgraph.engine.pipeline import ingest_and_analyze
+    from hexgraph.sandbox.runner import SandboxRunner, docker_available
 
     init_db()
+    if not args.no_recon and not docker_available():
+        print(
+            "error: Docker is required for the recon sandbox. Start Docker, or pass "
+            "--no-recon to register the target without analysis.",
+            file=sys.stderr,
+        )
+        return 1
+
     with session_scope() as session:
         if args.project:
             project = session.get(Project, args.project)
@@ -44,10 +54,27 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
                 name=args.name or args.path.split("/")[-1],
                 llm_backend=args.backend,
             )
-        target = ingest_file(session, project, args.path, name=args.name)
-        # Recon auto-runs on ingest in M2 (zero model calls).
-        print(f"project {project.id}")
-        print(f"target  {target.id}  {target.name}")
+        project_id = project.id
+
+        if args.no_recon:
+            from hexgraph.engine.ingest import ingest_file
+
+            target = ingest_file(session, project, args.path, name=args.name)
+            print(f"project {project_id}")
+            print(f"target  {target.id}  {target.name}  (recon skipped)")
+            return 0
+
+        summary = ingest_and_analyze(
+            session, project, args.path, name=args.name, runner=SandboxRunner()
+        )
+        print(f"project {project_id}")
+        print(f"target  {summary['root_target_id']}  {summary['name']}")
+        for child in summary["children"]:
+            print(f"  child {child['target_id']}  {child['name']}")
+        print(
+            f"recon complete: {1 + len(summary['children'])} target(s), "
+            f"{summary['links_against_edges']} links_against edge(s)"
+        )
     return 0
 
 
@@ -61,6 +88,31 @@ def _cmd_targets(args: argparse.Namespace) -> int:
         for t in rows:
             parent = f"  parent={t.parent_id}" if t.parent_id else ""
             print(f"{t.id}  {t.kind.value:16} {t.name}{parent}")
+    return 0
+
+
+def _cmd_findings(args: argparse.Namespace) -> int:
+    init_db()
+    with session_scope() as session:
+        q = session.query(Finding).filter(Finding.project_id == args.project)
+        if args.status:
+            q = q.filter(Finding.status == args.status)
+        rows = q.all()
+        if not rows:
+            print("(no findings)")
+            return 0
+        for f in rows:
+            print(f"{f.id}  [{f.severity:8}] {f.category:14} {f.title}  ({f.status.value})")
+    return 0
+
+
+def _cmd_graph(args: argparse.Namespace) -> int:
+    from hexgraph.engine.graph import export_graph
+
+    init_db()
+    with session_scope() as session:
+        out = export_graph(session, args.project, args.export)
+    print(f"wrote {out}")
     return 0
 
 
@@ -90,6 +142,7 @@ def build_parser() -> argparse.ArgumentParser:
     pi.add_argument("--name")
     pi.add_argument("--project", help="add to an existing project instead of creating one")
     pi.add_argument("--backend", default="mock", choices=["mock", "anthropic", "claude_code"])
+    pi.add_argument("--no-recon", action="store_true", help="register the target without running recon")
     pi.set_defaults(func=_cmd_ingest)
 
     pt = sub.add_parser("targets", help="list targets in a project")
@@ -107,12 +160,12 @@ def build_parser() -> argparse.ArgumentParser:
     pf = sub.add_parser("findings", help="list findings in a project")
     pf.add_argument("project")
     pf.add_argument("--status")
-    pf.set_defaults(func=_not_yet("M3"))
+    pf.set_defaults(func=_cmd_findings)
 
     pg = sub.add_parser("graph", help="export the project graph as JSON")
     pg.add_argument("project")
     pg.add_argument("--export", required=True)
-    pg.set_defaults(func=_not_yet("M2"))
+    pg.set_defaults(func=_cmd_graph)
 
     ps = sub.add_parser("serve", help="start the loopback-only API/UI")
     ps.add_argument("--host", default=None)

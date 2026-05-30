@@ -19,16 +19,13 @@ test: ## Run the test suite against the mock backend
 	$(PY) -m pytest -q
 
 demo: ## Full offline loop on bundled fixtures (mock backend, no key/network), exit 0
-	@echo "make demo lands in M2 — ingest -> recon -> finding -> graph -> spawn"
-	@exit 1
+	$(PY) -m hexgraph.demo
 
 fixtures: ## (Re)build the test target binaries/firmware under tests/fixtures
-	@echo "tests/fixtures/build.sh lands in M2-T8"
-	@exit 1
+	tests/fixtures/build.sh
 
-sandbox-build: ## Build the analysis sandbox Docker image
-	@echo "Dockerfile.sandbox lands in M2-T1"
-	@exit 1
+sandbox-build: ## Build the analysis sandbox Docker image (add WITH_GHIDRA=1 to include Ghidra)
+	docker build -f Dockerfile.sandbox -t hexgraph-sandbox:latest .
 
 serve: ## Start the loopback-only API/UI (lands in M1-T5)
 	$(PY) -m hexgraph.cli serve

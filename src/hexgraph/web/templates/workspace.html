@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}{{ project.name }} — HexGraph{% endblock %}
+{% block content %}
+<div class="workspace" data-project="{{ project.id }}">
+  <aside class="pane tree">
+    <h2>Targets</h2>
+    <div id="tree" class="scroll"></div>
+  </aside>
+  <section class="pane graph">
+    <h2>Graph <button id="refresh" class="btn" title="Reload">⟳</button></h2>
+    <div id="cy"></div>
+    <div class="legend">
+      <span class="dot t-firmware_image"></span>firmware
+      <span class="dot t-executable"></span>executable
+      <span class="dot t-shared_library"></span>library
+      <span class="dot f-critical"></span>finding
+    </div>
+  </section>
+  <aside class="pane detail">
+    <h2>Findings</h2>
+    <div id="findings" class="scroll"></div>
+    <div id="detail"></div>
+  </aside>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/vendor/cytoscape.min.js"></script>
+<script src="/static/workspace.js"></script>
+{% endblock %}

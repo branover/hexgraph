@@ -4,10 +4,10 @@ The durable, resumable record of this build. **A new session should read this fi
 then run the resume verifier, then continue at the next unchecked task.
 
 ## ▶ RESUME HERE
-- **Current milestone:** M2 — Recon loop (sandbox + recon + firmware unpack + graph + UI)
-- **Next task:** M2-T1 — `Dockerfile.sandbox` (file/binwalk/strings/pyelftools/lief/radare2; Ghidra opt-in)
-- **Last verified:** `make test` → 39 passed (M0 + M1 complete); CLI init/ingest/targets smoke-tested
-- **How to re-verify:** `make test` (or `.venv/bin/python -m pytest -q`)
+- **Current milestone:** M3 — LLM tasks via the interface
+- **Next task:** M3-T1 — `sandbox/decompiler.py` (Decompiler seam + R2Decompiler; add radare2 to the image)
+- **Last verified:** `make test` → 44 passed; `make demo` exits 0 (M0+M1+M2 complete)
+- **How to re-verify:** `make test` then `make demo` (needs Docker + `make sandbox-build` once)
 - **Open notes / gotchas:**
   - **Docker is installed** and `jonsnow` is in the `docker` group (M2 unblocked).
     Verify with `docker run --rm hello-world` before M2-T1; a fresh shell may be needed
@@ -47,15 +47,20 @@ then run the resume verifier, then continue at the next unchecked task.
 - [x] M1-T5 `api/app.py` FastAPI loopback assertion + `hexgraph serve` (+ `api/loopback.py`)
 - [x] M1-T6 `docker-compose.yml` + `Dockerfile` loopback UI service (build not yet smoke-tested)
 
-## M2 — Recon loop  *(core loop demonstrable with ZERO model calls)*
-- [ ] M2-T1 `Dockerfile.sandbox` (file/binwalk/strings/pyelftools/lief/radare2; Ghidra opt-in build arg)
-- [ ] M2-T2 `sandbox/runner.py` docker run --network none + resource caps + timeout; never exec target
-- [ ] M2-T3 `tasks/recon.py` deterministic facts → one recon finding/target; auto-run on ingest
-- [ ] M2-T4 Firmware ingest: binwalk unpack → child targets + contains edges; links_against edges
-- [ ] M2-T5 `engine/worker.py` asyncio worker + SQLite job table; POST /tasks
-- [ ] M2-T6 `engine/graph.py` + GET /graph/{project}
-- [ ] M2-T7 Minimal HTMX UI (tree / Cytoscape graph / findings; dark theme)
-- [ ] M2-T8 `tests/fixtures/build.sh` (vuln_httpd, libupnp.so, synthetic_fw.bin); first `make demo`
+## M2 — Recon loop  *(core loop demonstrable with ZERO model calls)* ✅
+- [x] M2-T1 `Dockerfile.sandbox` (file/binwalk/strings/pyelftools/lief; Ghidra opt-in build arg).
+      **radare2 deferred to M3-T1** (not in bookworm-slim apt; install from upstream there).
+- [x] M2-T2 `sandbox/runner.py` docker run --network none --read-only + mem/cpu/pids caps + tmpfs +
+      timeout (docker kill); HOME/TMP→/scratch; probes baked in (dev-mount via HEXGRAPH_SANDBOX_DEV=1)
+- [x] M2-T3 `tasks` recon via `engine/recon.py` + `sandbox/probes/recon_probe.py`; one recon finding/target
+- [x] M2-T4 Firmware unpack (`engine/unpack.py` + `unpack_probe.py`): children + contains edges; links_against
+- [x] M2-T5 `engine/worker.py` asyncio worker over task table; POST /api/tasks
+- [x] M2-T6 `engine/graph.py` + GET /graph/{project}
+- [x] M2-T7 UI: target tree / Cytoscape graph / findings + detail panel; dark theme.
+      **Deviation:** vanilla JS (fetch) instead of HTMX — one vendored lib (Cytoscape) kept the UI fully
+      offline; HTMX added no value over plain fetch here. Cytoscape vendored at web/static/vendor/.
+- [x] M2-T8 `tests/fixtures/build.sh` (vuln_httpd, libupnp.so, synthetic_fw.bin built+committed);
+      `make demo` runs ingest→recon→finding→graph offline, exit 0
 
 ## M3 — LLM tasks via the interface
 - [ ] M3-T1 `sandbox/decompiler.py` Decompiler seam + R2Decompiler
@@ -82,6 +87,10 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-05-30: **M2 complete** — sandbox runner (locked-down docker), recon + firmware-unpack probes,
+  engine (recon/unpack/graph/worker/pipeline), JSON API + offline Cytoscape UI, fixtures built,
+  `make demo` exits 0. 44 tests pass (Docker-gated tests skip without the sandbox image).
+  Sandbox image: `make sandbox-build` (radare2 deferred to M3). UI uses vanilla JS not HTMX (noted).
 - 2026-05-30: **M1 complete** — config (no-key-leak), SQLAlchemy models + session, ingest,
   CLI (init/ingest/targets), FastAPI on loopback + bind guard, docker-compose/Dockerfile.
   39 tests pass. git ownership fixed by user.

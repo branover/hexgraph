@@ -38,6 +38,15 @@ hexgraph = "hexgraph.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+hexgraph = [
+    "web/templates/*.html",
+    "web/static/*.css",
+    "web/static/*.js",
+    "web/static/vendor/*.js",
+    "sandbox/probes/*.py",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # Tests default to the mock backend (set in tests/conftest.py): zero key, zero network (SPEC §1).

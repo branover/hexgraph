@@ -12,12 +12,16 @@ This repo is **mid-build**. The MVP described in `context/SPEC.md` is being impl
 3. Continue at the next unchecked task. **Update `PROGRESS.md` as tasks complete** (check the box, refresh `▶ RESUME HERE`, append to the session log) and commit it alongside the code it describes. Commit messages are prefixed with the task id (e.g. `M2-T3: ...`).
 4. Keep this CLAUDE.md current as durable facts land (real commands, final layout, gotchas). When a workflow becomes repetitive, capture it as a skill under `.claude/skills/` and note it in `PROGRESS.md`.
 
-**Dev commands (live as of M1):**
-- `make install` — create `.venv` and install `-e ".[dev]"` (+`server` extra is installed too).
-- `make test` / `.venv/bin/python -m pytest -q` — full suite, mock backend, offline.
-- `.venv/bin/hexgraph init | ingest <path> [--name] [--project] | targets <project> | serve` — working CLI; `run`/`findings`/`graph` are stubbed to their milestone.
-- `make demo`, `make fixtures`, `make sandbox-build` — placeholders that land in M2.
-- Source lives under `src/hexgraph/` (package layout in `PROGRESS.md`). Runtime data: `~/.hexgraph/` (`hexgraph.db` + `projects/<id>/artifacts/`); override home with `HEXGRAPH_HOME`, db with `HEXGRAPH_DB_PATH`.
+**Dev commands (live as of M2):**
+- `make install` — create `.venv`, install `-e ".[dev]"` (+`server` extra). Also `pip install pyelftools` if running probes on host.
+- `make sandbox-build` — build the `hexgraph-sandbox:latest` analysis image (needed for recon/unpack/demo). Add `WITH_GHIDRA=1` later.
+- `make test` / `.venv/bin/python -m pytest -q` — full suite, mock backend, offline. Docker-gated tests (recon/unpack/demo) skip automatically if the sandbox image is absent.
+- `make demo` — full offline loop (ingest→recon→finding→graph) on bundled fixtures, exits 0. Needs Docker + sandbox image.
+- `make fixtures` — rebuild `tests/fixtures/{vuln_httpd,libupnp.so,synthetic_fw.bin}` (committed; only re-run when sources change).
+- CLI (all working): `hexgraph init | ingest <path> [--name] [--project] [--no-recon] | targets <p> | findings <p> [--status] | graph <p> --export f.json | serve`. `run` lands in M3.
+- Runtime data under `~/.hexgraph/` (`hexgraph.db` + `projects/<id>/{artifacts,tasks}/`); override home with `HEXGRAPH_HOME`, db with `HEXGRAPH_DB_PATH`.
+
+**Key seams as built:** target bytes are touched ONLY by probe scripts in `src/hexgraph/sandbox/probes/` run via `sandbox/runner.py` (docker `--network none --read-only` + caps + timeout). `engine/pipeline.py` orchestrates ingest→recon→unpack→recon-children. The UI is vanilla JS + a vendored Cytoscape (offline), not HTMX.
 
 **Read before writing code, in this order:**
 1. `context/SPEC.md` — the source of truth (constraints, data model, task types, milestones, acceptance criteria).

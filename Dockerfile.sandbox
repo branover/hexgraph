@@ -1,0 +1,45 @@
+# HexGraph analysis sandbox (SPEC §3, §7). One image with the static-analysis
+# toolchain. Run ONLY via sandbox/runner.py with --network none + resource caps.
+# Build:  docker build -f Dockerfile.sandbox -t hexgraph-sandbox:latest .
+#         add --build-arg WITH_GHIDRA=1 to include Ghidra headless (large).
+FROM debian:bookworm-slim
+
+ARG WITH_GHIDRA=0
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        file \
+        binutils \
+        binwalk \
+        squashfs-tools \
+        cpio \
+        python3 \
+        python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# radare2 (the v1 decompiler) is added in M3-T1 — it is not in the slim base's
+# apt sources, so it will be installed from the upstream installer there. M2
+# (recon + firmware unpack) does not need it.
+
+# Static-analysis Python libs. --break-system-packages: this is a single-purpose
+# disposable image, not a shared host.
+RUN pip3 install --no-cache-dir --break-system-packages \
+        pyelftools \
+        lief \
+        python-magic
+
+# Ghidra is opt-in (decompiler workhorse, large). The R2Decompiler is the v1
+# default; this hook lets Ghidra drop in later without changing task code.
+RUN if [ "$WITH_GHIDRA" = "1" ]; then \
+        echo "TODO: install Ghidra headless here when WITH_GHIDRA=1"; \
+    fi
+
+# Bake the probe scripts into the image (no code is mounted at run time, except
+# in HEXGRAPH_SANDBOX_DEV mode).
+COPY src/hexgraph/sandbox/probes/ /opt/hexgraph/
+
+# Drop privileges: probes never need root.
+RUN useradd --create-home --uid 1000 analyst
+USER analyst
+
+ENTRYPOINT []
+CMD ["python3", "--version"]
