@@ -10,7 +10,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -41,6 +41,28 @@ async def _lifespan(app: FastAPI):
 
 class StatusUpdate(BaseModel):
     status: str
+
+
+class ProjectCreate(BaseModel):
+    name: str
+    backend: str | None = "mock"
+
+
+class NodeCreate(BaseModel):
+    node_type: str
+    name: str
+    target_id: str | None = None
+    address: str | None = None
+    attrs: dict | None = None
+
+
+class EdgeCreate(BaseModel):
+    src_kind: str
+    src_id: str
+    dst_kind: str
+    dst_id: str
+    type: str
+    attrs: dict | None = None
 
 
 class TaskCreate(BaseModel):
@@ -123,6 +145,87 @@ def create_app() -> FastAPI:
     def api_projects():
         with session_scope() as s:
             return [_project_dict(p) for p in s.query(Project).all()]
+
+    # --- Authoring (web app = no CLI required) ---
+    @app.post("/api/projects")
+    def api_create_project(body: ProjectCreate):
+        from hexgraph.engine.ingest import create_project
+
+        if not (body.name or "").strip():
+            raise HTTPException(400, "project name is required")
+        with session_scope() as s:
+            p = create_project(s, name=body.name.strip(), llm_backend=body.backend or "mock")
+            return _project_dict(p)
+
+    @app.post("/api/projects/{project_id}/targets")
+    def api_add_target(
+        project_id: str,
+        file: UploadFile = File(...),
+        name: str | None = Form(None),
+        recon: bool = Form(True),
+    ):
+        """Upload real bytes → ingest → (sandboxed) recon populates the facts and,
+        for firmware, unpacks child targets. Targets only ever come from bytes."""
+        import os
+        import shutil
+        import tempfile
+
+        from hexgraph.engine.ingest import ingest_file
+        from hexgraph.engine.pipeline import analyze_target
+        from hexgraph.engine.unpack import build_links_against
+        from hexgraph.sandbox.executor import get_executor
+        from hexgraph.sandbox.runner import docker_available
+
+        fd, tmp = tempfile.mkstemp(suffix=os.path.splitext(file.filename or "")[1])
+        with os.fdopen(fd, "wb") as out:
+            shutil.copyfileobj(file.file, out)
+        try:
+            with session_scope() as s:
+                project = s.get(Project, project_id)
+                if project is None:
+                    raise HTTPException(404, "project not found")
+                if recon and not docker_available():
+                    raise HTTPException(400, "Docker is required to analyze a target. Start Docker, "
+                                             "or upload with recon=false to register bytes only.")
+                target = ingest_file(s, project, tmp, name=name or file.filename)
+                result = {"target_id": target.id, "name": target.name, "recon": recon}
+                if recon:
+                    summary = analyze_target(s, project, target, get_executor())
+                    build_links_against(s, project)
+                    result["children"] = summary.get("children", [])
+                return result
+        finally:
+            os.unlink(tmp)
+
+    @app.post("/api/projects/{project_id}/nodes")
+    def api_create_node(project_id: str, body: NodeCreate):
+        from hexgraph.engine.authoring import InvariantError, create_node
+
+        with session_scope() as s:
+            project = s.get(Project, project_id)
+            if project is None:
+                raise HTTPException(404, "project not found")
+            try:
+                n = create_node(s, project, node_type=body.node_type, name=body.name,
+                                target_id=body.target_id, address=body.address, attrs=body.attrs)
+            except InvariantError as exc:
+                raise HTTPException(400, str(exc))
+            return {"id": n.id, "node_type": n.node_type, "name": n.name, "target_id": n.target_id}
+
+    @app.post("/api/projects/{project_id}/edges")
+    def api_create_edge(project_id: str, body: EdgeCreate):
+        from hexgraph.engine.authoring import InvariantError, create_edge
+
+        with session_scope() as s:
+            project = s.get(Project, project_id)
+            if project is None:
+                raise HTTPException(404, "project not found")
+            try:
+                e = create_edge(s, project, src_kind=body.src_kind, src_id=body.src_id,
+                                dst_kind=body.dst_kind, dst_id=body.dst_id, type=body.type, attrs=body.attrs)
+            except InvariantError as exc:
+                raise HTTPException(400, str(exc))
+            return {"id": e.id, "type": e.type, "src_id": e.src_id, "dst_id": e.dst_id}
 
     @app.get("/api/projects/{project_id}")
     def api_project(project_id: str):

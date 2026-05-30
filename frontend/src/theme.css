@@ -180,3 +180,14 @@ select.sel { background: var(--bg); color: var(--fg); border: 1px solid var(--bo
 .fade-in { animation: fade .2s ease both; }
 @keyframes fade { from { opacity: 0; transform: translateY(3px) } to { opacity: 1; transform: none } }
 .spin { animation: sp 1s linear infinite; } @keyframes sp { to { transform: rotate(360deg) } }
+
+/* modal */
+.modal-backdrop { position: fixed; inset: 0; background: rgba(4,6,11,.6); backdrop-filter: blur(3px); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.modal { background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: var(--sh-2); width: 440px; max-width: 92vw; padding: 18px; }
+.modal h3 { margin: 0 0 14px; display: flex; align-items: center; gap: 8px; }
+.modal .field { margin-bottom: 11px; }
+.modal label { display: block; font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 5px; }
+.modal input, .modal select { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 7px; padding: 8px 10px; font: inherit; }
+.modal input:focus, .modal select:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
+.modal .err { color: #ff8a93; font-size: 12px; margin: 6px 0; }
+.modal .foot { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }

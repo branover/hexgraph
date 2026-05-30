@@ -10,6 +10,11 @@ The MVP described in `context/SPEC.md` is **complete** — all milestones M0–M
 
 **P0 landed** (foundations & seams):
 - **Migrations:** Alembic (`alembic.ini`, `migrations/`, baseline rev `bbdb1d98bf54`). `hexgraph init` and `hexgraph db upgrade` run `db/migrate.py::prepare_database` (fresh→upgrade from baseline; legacy create_all'd DB→stamp; backs up to `<db>.bak` before upgrading). **Tests use `init_db()` (create_all) on throwaway DBs and never migrate; persistent DBs use migrations.** Discipline: any schema change ships an `alembic revision --autogenerate` migration committed alongside the model change.
+**Web authoring (no CLI required)** — `engine/authoring.py` + API, with enforced invariants:
+- `POST /api/projects` (create), `POST /api/projects/{id}/targets` (multipart **file upload** → ingest → sandboxed recon populates facts + unpacks firmware; sync endpoint, needs Docker), `POST /api/projects/{id}/nodes`, `POST /api/projects/{id}/edges`.
+- **Invariants** (`InvariantError`→400): targets exist only from real uploaded bytes (kind/arch/hashes come from recon, never the caller); function/symbol/string/struct nodes **require an existing `target_id`**; `target`/`task` aren't hand-creatable as nodes; edges must connect entities that exist in the project; no self-edges; valid `EdgeType` only. Human-authored nodes/edges get `origin="human"`.
+- SPA: Projects "New project" form; Targets-pane "**+ Add**" upload; graph-toolbar "**+ Node**" / "**Edge**" modals (`components/Author.tsx`) with the binary-required invariant surfaced. Needs `python-multipart` (in `server` extra).
+
 **P7 landed (backend)** — search, report, cross-target:
 - `engine/search.py` `search_project()` (LIKE over findings+nodes; **coverage-honest** — undecompiled code isn't searchable yet; FTS5 is a later optimization) → `GET /api/projects/{id}/search?q=`.
 - `engine/report.py` `build_report_md()` — Markdown over confirmed/reported findings, **provenance embedded** (task/backend/model/bundle) → `GET /api/projects/{id}/report` (text/markdown).

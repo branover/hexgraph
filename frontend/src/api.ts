@@ -47,6 +47,18 @@ export const api = {
   search: (pid: string, q: string) => getJSON<{ findings: any[]; nodes: any[]; coverage: any }>(`/api/projects/${pid}/search?q=${encodeURIComponent(q)}`),
   linkSameCode: (pid: string) => postJSON<{ created: number }>(`/api/projects/${pid}/link-same-code`, {}),
   reportUrl: (pid: string) => `/api/projects/${pid}/report`,
+  // Authoring (no CLI required)
+  createProject: (name: string, backend: string) => postJSON<Project>("/api/projects", { name, backend }),
+  createNode: (pid: string, body: any) => postJSON<any>(`/api/projects/${pid}/nodes`, body),
+  createEdge: (pid: string, body: any) => postJSON<any>(`/api/projects/${pid}/edges`, body),
+  async addTarget(pid: string, file: File, recon: boolean): Promise<any> {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("recon", String(recon));
+    const r = await fetch(`/api/projects/${pid}/targets`, { method: "POST", body: fd });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `${r.status}`);
+    return r.json();
+  },
 };
 
 export const SEV_ORDER = ["critical", "high", "medium", "low", "info"];

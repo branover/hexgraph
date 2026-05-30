@@ -137,6 +137,10 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-05-30: **Web authoring (no CLI needed)** — `engine/authoring.py` + API (create project, upload
+  target→recon, create node, create edge) with enforced invariants (targets only from real bytes;
+  code nodes require an existing binary; edges can't dangle). SPA: New-project form, +Add upload,
+  +Node/+Edge modals. 114 tests pass; e2e verified via Playwright (create→upload→recon→graph).
 - 2026-05-30: **UI-sexiness pass** (`docs/ui-sexiness.md`, all items done) — design-system refresh,
   inline SVG icons, graph halos + color-coded edges + fit/zoom controls, "Run ▾" launcher popover,
   polished findings/inspector, global search + Report + Same-code toolbar, richer projects cards.

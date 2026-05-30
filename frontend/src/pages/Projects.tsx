@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api, Project } from "../api";
 import Header from "../components/Header";
 import { Icon } from "../components/Icon";
@@ -7,8 +7,18 @@ import { Icon } from "../components/Icon";
 type Row = Project & { targets?: number; findings?: number };
 
 export default function Projects() {
+  const nav = useNavigate();
   const [projects, setProjects] = useState<Row[] | null>(null);
   const [err, setErr] = useState<string>();
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState("");
+  const [backend, setBackend] = useState("mock");
+
+  const create = async () => {
+    if (!name.trim()) return;
+    try { const p = await api.createProject(name.trim(), backend); nav(`/projects/${p.id}`); }
+    catch (e: any) { setErr(String(e.message || e)); }
+  };
 
   useEffect(() => {
     api.projects().then(async (ps) => {
@@ -25,8 +35,30 @@ export default function Projects() {
     <>
       <Header />
       <main>
-        <h1>Projects</h1>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <h1>Projects</h1>
+          <span className="grow" />
+          <button className="btn primary" onClick={() => setCreating((c) => !c)}><Icon name="plus" size={14} /> New project</button>
+        </div>
         <p className="muted" style={{ marginTop: 4 }}>Local-only vulnerability-research workbench — point it at a binary or firmware image.</p>
+        {creating && (
+          <div className="card fade-in" style={{ marginTop: 14, display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
+            <div style={{ flex: 1, minWidth: 200 }}>
+              <label className="muted" style={{ fontSize: 11, display: "block", marginBottom: 4 }}>NAME</label>
+              <div className="input">
+                <input value={name} autoFocus onChange={(e) => setName(e.target.value)}
+                       onKeyDown={(e) => e.key === "Enter" && create()} placeholder="acme-router firmware" />
+              </div>
+            </div>
+            <div>
+              <label className="muted" style={{ fontSize: 11, display: "block", marginBottom: 4 }}>BACKEND</label>
+              <select className="sel" value={backend} onChange={(e) => setBackend(e.target.value)}>
+                {["mock", "anthropic", "claude_code"].map((b) => <option key={b} value={b}>{b}</option>)}
+              </select>
+            </div>
+            <button className="btn primary" onClick={create} disabled={!name.trim()}>Create →</button>
+          </div>
+        )}
         {err && <p className="muted">{err}</p>}
         {projects && projects.length === 0 && (
           <div className="card empty" style={{ marginTop: 18 }}>

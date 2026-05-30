@@ -7,6 +7,7 @@ import FindingsPanel from "../components/FindingsPanel";
 import Inspector from "../components/Inspector";
 import { TasksPanel, TaskDetail } from "../components/TasksPanel";
 import Launcher from "../components/Launcher";
+import { AddNodeModal, AddEdgeModal } from "../components/Author";
 import { Icon, NODE_ICON } from "../components/Icon";
 
 export default function Workspace() {
@@ -22,7 +23,9 @@ export default function Workspace() {
   const [selTask, setSelTask] = useState<string>();
   const [q, setQ] = useState("");
   const [results, setResults] = useState<any | null>(null);
+  const [modal, setModal] = useState<"node" | "edge" | null>(null);
   const searchTimer = useRef<any>();
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     if (!projectId) return;
@@ -65,6 +68,12 @@ export default function Workspace() {
     setBusy("linking…"); const r = await api.linkSameCode(projectId); setBusy(undefined);
     await load(); alert(`Linked ${r.created} same-code pair(s).`);
   };
+  const onUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0]; if (!f || !projectId) return;
+    setBusy(`analyzing ${f.name}…`);
+    try { await api.addTarget(projectId, f, true); } catch (err: any) { alert(String(err.message || err)); }
+    setBusy(undefined); e.target.value = ""; await load();
+  };
 
   if (!detail || !graph) {
     return <><Header /><div className="workspace">{[0, 1, 2].map((i) => <div key={i} className="pane skel" />)}</div></>;
@@ -94,8 +103,16 @@ export default function Workspace() {
       <Header project={detail.project} cost={detail.cost} />
       <div className="workspace">
         <aside className="pane">
-          <div className="pane-h"><Icon name="chip" size={14} /><span className="ttl">Targets</span></div>
-          <div className="scroll">{roots.map((t) => TreeRow(t, false))}</div>
+          <div className="pane-h">
+            <Icon name="chip" size={14} /><span className="ttl">Targets</span>
+            <span className="grow" />
+            <button className="btn sm" onClick={() => fileRef.current?.click()}><Icon name="plus" size={12} /> Add</button>
+            <input ref={fileRef} type="file" style={{ display: "none" }} onChange={onUpload} />
+          </div>
+          <div className="scroll">
+            {roots.length === 0 && <div className="empty">No targets. Click <b>Add</b> to upload a binary or firmware image.</div>}
+            {roots.map((t) => TreeRow(t, false))}
+          </div>
         </aside>
 
         <section className="pane">
@@ -104,6 +121,8 @@ export default function Workspace() {
               <Icon name="search" size={14} />
               <input placeholder="Search functions, strings, findings…" value={q} onChange={(e) => doSearch(e.target.value)} />
             </div>
+            <button className="btn sm" onClick={() => setModal("node")}><Icon name="plus" size={12} /> Node</button>
+            <button className="btn sm" onClick={() => setModal("edge")}><Icon name="link" size={13} /> Edge</button>
             <button className="btn sm" onClick={() => window.open(api.reportUrl(projectId!), "_blank")}><Icon name="doc" size={13} /> Report</button>
             <button className="btn sm" onClick={linkSameCode}><Icon name="link" size={13} /> Same-code</button>
             {busy && <span className="badge"><Icon name="refresh" size={12} className="spin" /> {busy}</span>}
@@ -161,6 +180,8 @@ export default function Workspace() {
           </div>
         </aside>
       </div>
+      {modal === "node" && <AddNodeModal projectId={projectId!} targets={detail.targets} onClose={() => setModal(null)} onDone={load} />}
+      {modal === "edge" && <AddEdgeModal projectId={projectId!} graph={graph} onClose={() => setModal(null)} onDone={load} />}
     </>
   );
 }
