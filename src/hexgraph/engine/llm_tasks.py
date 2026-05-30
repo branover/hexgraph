@@ -159,10 +159,21 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
     if decomp:
         ctx.tool_outputs["decompilation"] = decomp
         _materialize_decomp_graph(session, project.id, target.id, decomp)
-    prompt = _build_prompt(target, ctx, decomp)
-    backend = get_backend(task.backend if task.backend not in (None, "none") else None)
 
-    findings, usage = run_findings(backend, ctx.build_request(prompt=prompt))
+    # Assemble the content bundle (the frozen, content-addressed input).
+    from hexgraph.engine.context import build_context_bundle, estimate_tokens
+    from hexgraph.llm.cassette import maybe_wrap_cassette
+    from hexgraph.llm.prompting import system_prompt
+
+    bundle = build_context_bundle(session, project, target, task, ctx)
+    task.context_bundle_id = bundle.row.id
+
+    backend = get_backend(task.backend if task.backend not in (None, "none") else None)
+    backend = maybe_wrap_cassette(backend, project)
+    req = ctx.build_request(prompt=bundle.prompt)
+    req.cache_key = bundle.row.bundle_sha
+
+    findings, usage = run_findings(backend, req)
 
     if task.type == "harness_generation":
         _compile_harnesses(findings)
@@ -173,7 +184,18 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
 
     record_usage(f"task.{task.type}", usage, task_id=task.id)
 
-    write_trace(task, "prompt.txt", prompt)
+    write_trace(task, "prompt.txt", bundle.prompt)
+    write_trace(task, "system.txt", system_prompt(task.type))
+    write_trace(task, "bundle.json", {
+        "bundle_sha": bundle.row.bundle_sha, "token_estimate": bundle.row.token_estimate,
+        "token_budget": bundle.row.token_budget, "dropped": [d.kind for d in bundle.dropped],
+        "items": [{"kind": it.kind, "est_tokens": estimate_tokens(it.text)} for it in bundle.included],
+    })
+    write_trace(task, "response.json", {
+        "findings": [f.to_payload() for f in findings],
+        "usage": {"input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens,
+                  "cost_source": usage.cost_source, "cost_usd": usage.cost_usd},
+    })
     write_trace(task, "usage.json", {
         "input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens,
         "cost_source": usage.cost_source, "cost_usd": usage.cost_usd,
@@ -211,4 +233,12 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
 
     if findings and low_confidence:
         task.status = TaskStatus.needs_triage
+
+    # Group this execution as an analysis_run for run-to-run comparison.
+    from hexgraph.engine.runs import record_run
+
+    record_run(
+        session, project_id=project.id, anchor_kind="target", anchor_id=target.id,
+        task=task, bundle_sha=bundle.row.bundle_sha, finding_count=len(findings),
+    )
     return len(findings)

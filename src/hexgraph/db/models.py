@@ -194,6 +194,8 @@ class Task(Base):
     objective_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Free-form task params (e.g. {"mock_scenario": ..., "function": ..., "sink": ...}).
     params_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # The frozen context this task ran on (P2). Plain id (app-level provenance).
+    context_bundle_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     status: Mapped[TaskStatus] = mapped_column(Enum(TaskStatus), default=TaskStatus.queued)
     backend: Mapped[str | None] = mapped_column(String(50), nullable=True)
     model: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -228,4 +230,58 @@ class Finding(Base):
     related_target_refs_json: Mapped[list[Any]] = mapped_column(JSON, default=list)
 
     status: Mapped[FindingStatus] = mapped_column(Enum(FindingStatus), default=FindingStatus.new)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ContextBundle(Base):
+    """A frozen, content-addressed context assembled for one task run (P2)."""
+
+    __tablename__ = "context_bundle"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("project.id"), index=True)
+    task_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    bundle_sha: Mapped[str] = mapped_column(String(64), index=True)
+    assembler_version: Mapped[str] = mapped_column(String(20), default="1")
+    token_estimate: Mapped[int] = mapped_column(default=0)
+    token_budget: Mapped[int] = mapped_column(default=0)
+    item_count: Mapped[int] = mapped_column(default=0)
+    dropped_count: Mapped[int] = mapped_column(default=0)
+    deps_json: Mapped[list[Any]] = mapped_column(JSON, default=list)  # dependency fingerprints (staleness)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ContextItem(Base):
+    __tablename__ = "context_item"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    bundle_id: Mapped[str] = mapped_column(ForeignKey("context_bundle.id"), index=True)
+    order_index: Mapped[int] = mapped_column(default=0)
+    kind: Mapped[str] = mapped_column(String(40))
+    src_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    src_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    content_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)  # CAS sha
+    preview: Mapped[str | None] = mapped_column(Text, nullable=True)
+    est_tokens: Mapped[int] = mapped_column(default=0)
+    priority: Mapped[int] = mapped_column(default=0)
+    included: Mapped[bool] = mapped_column(default=True)
+
+
+class AnalysisRun(Base):
+    """Groups one task execution's inputs + outputs so runs over the same anchor
+    are comparable (run-to-run finding diff)."""
+
+    __tablename__ = "analysis_run"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("project.id"), index=True)
+    anchor_kind: Mapped[str] = mapped_column(String(16), default="target")
+    anchor_id: Mapped[str] = mapped_column(String(36), index=True)
+    task_id: Mapped[str] = mapped_column(String(36))
+    task_type: Mapped[str] = mapped_column(String(50))
+    backend: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    params_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    bundle_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    finding_count: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

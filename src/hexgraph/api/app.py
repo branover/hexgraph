@@ -217,6 +217,32 @@ def create_app() -> FastAPI:
         await get_worker().enqueue(task_id)
         return {"task_id": task_id, "status": "queued", "target_id": target_id}
 
+    @app.get("/api/targets/{target_id}/runs")
+    def api_target_runs(target_id: str):
+        from hexgraph.db.models import AnalysisRun
+
+        with session_scope() as s:
+            runs = (
+                s.query(AnalysisRun).filter(AnalysisRun.anchor_id == target_id)
+                .order_by(AnalysisRun.created_at.desc()).all()
+            )
+            return [
+                {"id": r.id, "task_id": r.task_id, "task_type": r.task_type, "backend": r.backend,
+                 "model": r.model, "bundle_sha": r.bundle_sha, "finding_count": r.finding_count,
+                 "created_at": r.created_at}
+                for r in runs
+            ]
+
+    @app.post("/api/runs/diff")
+    def api_runs_diff(body: dict):
+        from hexgraph.engine.runs import diff_runs
+
+        with session_scope() as s:
+            try:
+                return diff_runs(s, body["run_a"], body["run_b"])
+            except (KeyError, ValueError) as exc:
+                raise HTTPException(400, str(exc))
+
     @app.get("/api/tasks/{task_id}")
     def api_task(task_id: str):
         with session_scope() as s:

@@ -74,6 +74,8 @@ class LLMRequest:
     model: str | None = None
     mock_scenario: str | None = None
     template_vars: dict[str, Any] = field(default_factory=dict)
+    # Stable key for response caching (the context bundle_sha). Set by the engine.
+    cache_key: str | None = None
 
 
 @dataclass

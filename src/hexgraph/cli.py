@@ -176,6 +176,21 @@ def _cmd_graph(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_prune(args: argparse.Namespace) -> int:
+    from hexgraph.engine import cas
+
+    init_db()
+    with session_scope() as session:
+        project = session.get(Project, args.project)
+        if project is None:
+            print(f"error: project {args.project} not found", file=sys.stderr)
+            return 1
+        report = cas.size_report(project)
+    print(f"CAS: {report['objects']} objects, {report['bytes']} bytes at {report['dir']}")
+    print("(v1: manual review only; no auto-eviction)")
+    return 0
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     from hexgraph.api.app import run_server
 
@@ -227,6 +242,10 @@ def build_parser() -> argparse.ArgumentParser:
     pg.add_argument("project")
     pg.add_argument("--export", required=True)
     pg.set_defaults(func=_cmd_graph)
+
+    pp = sub.add_parser("prune", help="report the project's content-addressed store size")
+    pp.add_argument("project")
+    pp.set_defaults(func=_cmd_prune)
 
     ps = sub.add_parser("serve", help="start the loopback-only API/UI")
     ps.add_argument("--host", default=None)
