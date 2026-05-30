@@ -21,8 +21,12 @@ test: ## Run the test suite against the mock backend
 demo: ## Full offline loop on bundled fixtures (mock backend, no key/network), exit 0
 	$(PY) -m hexgraph.demo
 
+test-live: ## Scored real-key detection test (needs ANTHROPIC_API_KEY + sandbox image; ~cents, cassette-backed)
+	$(PY) -m pytest -q tests/test_p8_realkey.py -k real_key -rs
+
 fixtures: ## (Re)build the test target binaries/firmware under tests/fixtures
 	tests/fixtures/build.sh
+	tests/fixtures/vuln_fw/build.sh
 
 sandbox-build: ## Build the analysis sandbox Docker image (add WITH_GHIDRA=1 to include Ghidra)
 	docker build -f Dockerfile.sandbox -t hexgraph-sandbox:latest .

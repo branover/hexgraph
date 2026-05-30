@@ -10,6 +10,11 @@ The MVP described in `context/SPEC.md` is **complete** — all milestones M0–M
 
 **P0 landed** (foundations & seams):
 - **Migrations:** Alembic (`alembic.ini`, `migrations/`, baseline rev `bbdb1d98bf54`). `hexgraph init` and `hexgraph db upgrade` run `db/migrate.py::prepare_database` (fresh→upgrade from baseline; legacy create_all'd DB→stamp; backs up to `<db>.bak` before upgrading). **Tests use `init_db()` (create_all) on throwaway DBs and never migrate; persistent DBs use migrations.** Discipline: any schema change ships an `alembic revision --autogenerate` migration committed alongside the model change.
+**P8 landed** — cheap real-key validation harness:
+- `tests/fixtures/vuln_fw/` — tiny ELFs each planting one statically-findable bug (cgi=strcpy overflow, cmd=system injection, creds=hardcoded secret) + `expectations.json` (binary→category, min rate); built by its `build.sh` (also `make fixtures`).
+- `hexgraph/eval.py` `run_scored_eval()`/`score_detection()` — ingest→recon→static_analysis per binary, score vs expectations (manages its own sessions: commit before `run_task_sync`).
+- `make test-live` / `tests/test_p8_realkey.py`: live test **skips without `ANTHROPIC_API_KEY`**; with a key, runs the real backend with `HEXGRAPH_CASSETTE=auto` (record once → replay $0) under a tight budget. No-key CI proves bugs are statically present (recon) + the scoring logic. Commit recorded cassettes for $0 CI replay.
+
 **P6 landed (core)** — HITL triage + feedback:
 - **Widened triage** `FindingStatus` = new|triaging|confirmed|dismissed|reported (now a **String** column, no CHECK — migration `0005_triage_envelope` rebuilds `finding`, maps legacy `accepted`→`confirmed`). HITL envelope columns: `origin` (agent|human|agent_edited), `dismissed_reason`, `supersedes_id`, `human_notes`.
 - `POST /api/findings/{id}/status` + `PATCH /api/findings/{id}` (light edit stashes the agent's original severity/confidence in `evidence.extra.agent_original`, sets `origin=agent_edited`).

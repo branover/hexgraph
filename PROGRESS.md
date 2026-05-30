@@ -6,11 +6,11 @@ then run the resume verifier, then continue at the next unchecked task.
 ## ▶ RESUME HERE
 - **Current milestone:** v2 build — see [`docs/implementation-plan.md`](docs/implementation-plan.md)
   (built from [`docs/design-vision.md`](docs/design-vision.md)). MVP (M0–M5) is the foundation.
-- **Next task:** **P8** — cheap multi-vuln test firmware + scored, cassette-replayed real-key test
-  (`make test-live`). (Or **P7** search/report/cross-target.) **P6 remaining sub-items**: annotation
-  table (rename/note/tag) + confirmed-rename rewrites tool output; hypothesis lifecycle UI; richer gates.
-- **Last verified:** `make test` → 100 passed; `make demo` exits 0. P6 core: widened triage + HITL
-  envelope + PATCH + feedback-into-context (confirmed→authoritative, dismissed→do-not-report).
+- **Next task:** **P7** — search (FTS5) + run-compare UI + report export + cross-target same-code-as.
+  Then **P6 remaining**: annotation table (rename/note/tag) + confirmed-rename rewrites tool output;
+  hypothesis lifecycle UI; richer approval gates. (P0–P5, P6-core, P8 complete.)
+- **Last verified:** `make test` → 102 passed, 1 skipped (live, no key); `make demo` exits 0.
+  P8: `make test-live` (key-gated, cassette-backed) scores real-backend detection on `tests/fixtures/vuln_fw/`.
 - **UI quickstart (updated):** `make ui` once → `make sandbox-build` once →
   `hexgraph ingest tests/fixtures/synthetic_fw.bin --name demo` → `hexgraph serve` → http://127.0.0.1:8765.
 - **How to re-verify:** `make test`; or run the UI (see UI quickstart below).
@@ -120,7 +120,9 @@ then run the resume verifier, then continue at the next unchecked task.
   feedback-into-context (analyst_confirmed / do_not_report). **Remaining:** annotation table
   (rename/note/tag) + confirmed-rename rewrites tool output; hypothesis lifecycle; richer approval gates.
 - [ ] P7 Search (FTS5) + run-compare + report export + cross-target same-code-as (+ deferrable CVE/dataflow/dedup)
-- [ ] P8 Real-key validation: cheap multi-vuln test firmware + scored bounded `make test-live` (cassette replay $0 in CI)
+- [x] P8 Real-key validation: `tests/fixtures/vuln_fw/` (cgi/cmd/creds planted bugs + expectations.json);
+  `hexgraph/eval.py` scored harness; `make test-live` (key-gated, cassette-backed, tight budget); no-key CI
+  proves bugs statically present + scoring logic. 102 pass / 1 skipped.
 
 ## UI backlog
 - Visual review done (headless Chromium screenshots). Requirements captured in
