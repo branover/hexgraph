@@ -7,7 +7,7 @@ export interface Finding {
   title: string; severity: string; confidence: string; category: string;
   summary: string; reasoning: string; evidence: any;
   suggested_followups?: any[]; related_target_refs?: string[]; created_at?: string;
-  origin?: string; dismissed_reason?: string | null; human_notes?: string | null;
+  origin?: string; dismissed_reason?: string | null; human_notes?: string | null; tags?: string[];
 }
 export interface GraphNode { id: string; type: "target" | "node" | "finding"; label: string; [k: string]: any; }
 export interface GraphEdge { id: string; source: string; target: string; type: string; src_kind?: string; dst_kind?: string; origin?: string; confidence?: number | null; }
@@ -53,6 +53,9 @@ export const api = {
   createProject: (name: string, backend: string) => postJSON<Project>("/api/projects", { name, backend }),
   createNode: (pid: string, body: any) => postJSON<any>(`/api/projects/${pid}/nodes`, body),
   createEdge: (pid: string, body: any) => postJSON<any>(`/api/projects/${pid}/edges`, body),
+  createAnnotation: (pid: string, body: any) => postJSON<any>(`/api/projects/${pid}/annotations`, body),
+  annotations: (nodeKind: string, nodeId: string) => getJSON<any[]>(`/api/annotations/${nodeKind}/${nodeId}`),
+  setAnnotationStatus: (id: string, status: string) => postJSON<any>(`/api/annotations/${id}/status`, { status }),
   async addTarget(pid: string, file: File, recon: boolean): Promise<any> {
     const fd = new FormData();
     fd.append("file", file);

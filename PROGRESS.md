@@ -137,6 +137,11 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-05-30: **Researcher depth — Chunk A: annotations** (P6). `annotation` table (migration `0006`),
+  rename/note/tag on target|node|finding; human→confirmed, agent→proposed (confirm/reject); confirmed
+  rename updates node display name (keeps fq_name identity + name_history); confirmed renames/notes feed
+  the agent-context loop; tags are a findings filter facet. API + `Annotations` SPA panel in both
+  inspectors. 123 tests pass. (Next in this direction: hypothesis lifecycle; report/run-compare UI.)
 - 2026-05-30: **Web authoring (no CLI needed)** — `engine/authoring.py` + API (create project, upload
   target→recon, create node, create edge) with enforced invariants (targets only from real bytes;
   code nodes require an existing binary; edges can't dangle). SPA: New-project form, +Add upload,

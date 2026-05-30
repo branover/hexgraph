@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, Finding } from "../api";
 import { Icon } from "./Icon";
+import Annotations from "./Annotations";
 
 const LIFECYCLE = ["new", "triaging", "confirmed", "reported"];
 function Lifecycle({ status }: { status: string }) {
@@ -21,8 +22,8 @@ function Lifecycle({ status }: { status: string }) {
 }
 
 // Detail + triage + follow-on launch + provenance for a selected finding.
-export default function Inspector({ finding, onChanged, onLaunch, onViewTask, onHighlight }: {
-  finding: Finding | null; onChanged: () => void; onLaunch: (taskId: string) => void;
+export default function Inspector({ finding, projectId, onChanged, onLaunch, onViewTask, onHighlight }: {
+  finding: Finding | null; projectId?: string; onChanged: () => void; onLaunch: (taskId: string) => void;
   onViewTask?: (taskId: string) => void; onHighlight?: (ids: string[]) => void;
 }) {
   const [sugg, setSugg] = useState<any[]>([]);
@@ -120,6 +121,8 @@ export default function Inspector({ finding, onChanged, onLaunch, onViewTask, on
           </div>
         </>
       )}
+
+      {projectId && <Annotations projectId={projectId} nodeKind="finding" nodeId={finding.id} onChanged={onChanged} />}
     </div>
   );
 }

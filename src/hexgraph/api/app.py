@@ -43,6 +43,13 @@ class StatusUpdate(BaseModel):
     status: str
 
 
+class AnnotationCreate(BaseModel):
+    node_kind: str
+    node_id: str
+    kind: str  # rename | note | tag | type_decl
+    value: str
+
+
 class ProjectCreate(BaseModel):
     name: str
     backend: str | None = "mock"
@@ -238,10 +245,17 @@ def create_app() -> FastAPI:
             tasks = s.query(Task).filter(Task.project_id == project_id).all()
             total_cost = round(sum(t.cost_estimate or 0.0 for t in tasks), 6)
             cost_source = "mock" if project.llm_backend.value == "mock" else project.llm_backend.value
+            # tags on findings (annotation kind=tag, node_kind=finding) → filter facet
+            from hexgraph.db.models import Annotation
+
+            tags: dict[str, list[str]] = {}
+            for a in s.query(Annotation).filter(Annotation.project_id == project_id, Annotation.kind == "tag",
+                                                Annotation.node_kind == "finding").all():
+                tags.setdefault(a.node_id, []).append(a.value)
             return {
                 "project": _project_dict(project),
                 "targets": [_target_dict(t) for t in targets],
-                "findings": [_finding_dict(f) for f in findings],
+                "findings": [{**_finding_dict(f), "tags": tags.get(f.id, [])} for f in findings],
                 "cost": {
                     "total_usd": total_cost,
                     "cost_source": cost_source,
@@ -353,6 +367,44 @@ def create_app() -> FastAPI:
             if s.get(Project, project_id) is None:
                 raise HTTPException(404, "project not found")
             return {"created": link_same_code(s, project_id)}
+
+    # --- Annotations (rename/note/tag) ---
+    def _ann_dict(a):
+        return {"id": a.id, "node_kind": a.node_kind, "node_id": a.node_id, "kind": a.kind,
+                "value": a.value, "origin": a.origin, "status": a.status, "created_at": a.created_at}
+
+    @app.post("/api/projects/{project_id}/annotations")
+    def api_create_annotation(project_id: str, body: AnnotationCreate):
+        from hexgraph.engine.annotations import AnnotationError, create_annotation
+
+        with session_scope() as s:
+            if s.get(Project, project_id) is None:
+                raise HTTPException(404, "project not found")
+            try:
+                a = create_annotation(s, project_id, node_kind=body.node_kind, node_id=body.node_id,
+                                      kind=body.kind, value=body.value)
+            except AnnotationError as exc:
+                raise HTTPException(400, str(exc))
+            return _ann_dict(a)
+
+    @app.get("/api/annotations/{node_kind}/{node_id}")
+    def api_list_annotations(node_kind: str, node_id: str):
+        from hexgraph.db.models import Annotation
+
+        with session_scope() as s:
+            anns = s.query(Annotation).filter(Annotation.node_kind == node_kind, Annotation.node_id == node_id).all()
+            return [_ann_dict(a) for a in anns]
+
+    @app.post("/api/annotations/{annotation_id}/status")
+    def api_annotation_status(annotation_id: str, body: StatusUpdate):
+        from hexgraph.engine.annotations import AnnotationError, set_status
+
+        with session_scope() as s:
+            try:
+                a = set_status(s, annotation_id, body.status)
+            except AnnotationError as exc:
+                raise HTTPException(400, str(exc))
+            return _ann_dict(a)
 
     @app.get("/api/capabilities")
     def api_capabilities():

@@ -246,6 +246,24 @@ class Finding(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class Annotation(Base):
+    """Human/agent annotation on a graph entity (P6): rename | note | tag | type_decl.
+    Keyed by (node_kind, node_id) over target|node|finding. Confirmed renames apply
+    to the node's display name; confirmed renames/notes feed back into agent context."""
+
+    __tablename__ = "annotation"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("project.id"), index=True)
+    node_kind: Mapped[str] = mapped_column(String(16))   # target | node | finding
+    node_id: Mapped[str] = mapped_column(String(36), index=True)
+    kind: Mapped[str] = mapped_column(String(16))        # rename | note | tag | type_decl
+    value: Mapped[str] = mapped_column(Text)
+    origin: Mapped[str] = mapped_column(String(16), default="human")     # human | agent_proposed
+    status: Mapped[str] = mapped_column(String(16), default="confirmed")  # proposed | confirmed | rejected
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class ContextBundle(Base):
     """A frozen, content-addressed context assembled for one task run (P2)."""
 

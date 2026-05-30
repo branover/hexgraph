@@ -17,7 +17,9 @@ export default function FindingsPanel({
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("all");
   const [sev, setSev] = useState("all");
+  const [tagF, setTagF] = useState("all");
   const [group, setGroup] = useState(true);
+  const allTags = useMemo(() => Array.from(new Set(findings.flatMap((f) => f.tags || []))).sort(), [findings]);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const toggle = (id: string) => setPicked((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const bulk = (st: string) => { onBulk?.([...picked], st); setPicked(new Set()); };
@@ -29,10 +31,11 @@ export default function FindingsPanel({
     let fs = findings.slice();
     if (status !== "all") fs = fs.filter((f) => f.status === status);
     if (sev !== "all") fs = fs.filter((f) => f.severity === sev);
-    if (q) fs = fs.filter((f) => (f.title + f.category).toLowerCase().includes(q.toLowerCase()));
+    if (tagF !== "all") fs = fs.filter((f) => (f.tags || []).includes(tagF));
+    if (q) fs = fs.filter((f) => (f.title + f.category + (f.tags || []).join(" ")).toLowerCase().includes(q.toLowerCase()));
     fs.sort((a, b) => SEV_ORDER.indexOf(a.severity) - SEV_ORDER.indexOf(b.severity));
     return fs;
-  }, [findings, status, sev, q]);
+  }, [findings, status, sev, tagF, q]);
 
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
@@ -65,6 +68,7 @@ export default function FindingsPanel({
           <span>{f.category}</span><span>· {f.confidence}</span>
           <span className="tag">{f.status}</span>
           {!group && <span>· {targetName(f.target_id)}</span>}
+          {(f.tags || []).map((tg) => <span key={tg} className="tag" style={{ color: "var(--accent)" }}>#{tg}</span>)}
         </div>
       </div>
     </div>
@@ -84,6 +88,12 @@ export default function FindingsPanel({
         <select className="sel" value={status} onChange={(e) => setStatus(e.target.value)}>
           {["all", "new", "triaging", "confirmed", "dismissed", "reported"].map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
+        {allTags.length > 0 && (
+          <select className="sel" value={tagF} onChange={(e) => setTagF(e.target.value)} title="filter by tag">
+            <option value="all">tag</option>
+            {allTags.map((tg) => <option key={tg} value={tg}>#{tg}</option>)}
+          </select>
+        )}
         <button className="btn sm" onClick={() => setGroup(!group)}>{group ? "ungroup" : "group"}</button>
       </div>
       <div className="sevsummary">

@@ -1,12 +1,13 @@
 import { GraphNode, TargetNode } from "../api";
 import { Icon, NODE_ICON } from "./Icon";
 import Launcher from "./Launcher";
+import Annotations from "./Annotations";
 
 // Node-type-aware detail shown when a target/function/symbol/string node is
 // selected in the graph (findings use the richer Inspector instead).
-export default function NodeInspector({ node, target, allowed, onLaunch }: {
-  node: GraphNode; target?: TargetNode; allowed: string[]; isMock?: boolean;
-  onLaunch: (type: string) => void;
+export default function NodeInspector({ node, target, allowed, projectId, onLaunch, onChanged }: {
+  node: GraphNode; target?: TargetNode; allowed: string[]; isMock?: boolean; projectId?: string;
+  onLaunch: (type: string) => void; onChanged?: () => void;
 }) {
   const icon = node.type === "target" ? NODE_ICON[node.kind] : NODE_ICON[node.node_type] || "fn";
 
@@ -51,6 +52,11 @@ export default function NodeInspector({ node, target, allowed, onLaunch }: {
             Tip: launch a task from the binary in the Targets pane to analyze this {node.node_type}.
           </div>
         </>
+      )}
+
+      {projectId && (
+        <Annotations projectId={projectId} nodeKind={node.type === "target" ? "target" : "node"} nodeId={node.id}
+                     allowRename={node.type === "node" && node.node_type === "function"} onChanged={onChanged} />
       )}
     </div>
   );

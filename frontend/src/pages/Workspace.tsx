@@ -148,10 +148,10 @@ export default function Workspace() {
     if (selNode) {
       const tgt = selNode.type === "target" ? detail.targets.find((t) => t.id === selNode.id) : undefined;
       const allowed = tgt ? (caps.target?.[tgt.kind] ?? ["recon"]) : [];
-      return <NodeInspector node={selNode} target={tgt} allowed={allowed} isMock={isMock}
-                            onLaunch={(type) => tgt && setLaunchFor({ target: tgt, type })} />;
+      return <NodeInspector node={selNode} target={tgt} allowed={allowed} isMock={isMock} projectId={projectId}
+                            onChanged={load} onLaunch={(type) => tgt && setLaunchFor({ target: tgt, type })} />;
     }
-    return <Inspector finding={selFinding} onChanged={load} onLaunch={pollThenReload}
+    return <Inspector finding={selFinding} projectId={projectId} onChanged={load} onLaunch={pollThenReload}
                       onViewTask={viewTask} onHighlight={(ids) => ids[0] && setSelGraphId(ids[0])} />;
   };
 
