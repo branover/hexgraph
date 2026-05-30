@@ -149,7 +149,7 @@ def _cmd_findings(args: argparse.Namespace) -> int:
             payloads = [
                 {
                     "id": f.id, "target_id": f.target_id, "task_id": f.task_id,
-                    "status": f.status.value, "created_at": f.created_at.isoformat(),
+                    "status": f.status, "created_at": f.created_at.isoformat(),
                     **row_to_payload(f),
                 }
                 for f in rows
@@ -162,7 +162,7 @@ def _cmd_findings(args: argparse.Namespace) -> int:
             print("(no findings)")
             return 0
         for f in rows:
-            print(f"{f.id}  [{f.severity:8}] {f.category:14} {f.title}  ({f.status.value})")
+            print(f"{f.id}  [{f.severity:8}] {f.category:14} {f.title}  ({f.status})")
     return 0
 
 

@@ -34,10 +34,10 @@ def test_accept_dismiss_status(hg_home):
         pid, fid = project.id, finding.id
 
     client = TestClient(create_app())
-    r = client.post(f"/api/findings/{fid}/status", json={"status": "accepted"})
-    assert r.status_code == 200 and r.json()["status"] == "accepted"
+    r = client.post(f"/api/findings/{fid}/status", json={"status": "confirmed"})
+    assert r.status_code == 200 and r.json()["status"] == "confirmed"
     with session_scope() as s:
-        assert s.get(Finding, fid).status == FindingStatus.accepted
+        assert s.get(Finding, fid).status == FindingStatus.confirmed
 
     bad = client.post(f"/api/findings/{fid}/status", json={"status": "bogus"})
     assert bad.status_code == 400

@@ -6,11 +6,11 @@ then run the resume verifier, then continue at the next unchecked task.
 ## ▶ RESUME HERE
 - **Current milestone:** v2 build — see [`docs/implementation-plan.md`](docs/implementation-plan.md)
   (built from [`docs/design-vision.md`](docs/design-vision.md)). MVP (M0–M5) is the foundation.
-- **Next task:** **P6** — status-widening migration (new/triaging/confirmed/dismissed/reported),
-  annotation table (rename/note/tag), hypothesis nodes, approval gates, feedback-into-context.
-  Then **P7** (search/report/cross-target), **P8** (cheap real-key vuln target + cassette-replay test).
-- **Last verified:** `make test` → 97 passed; `make demo` exits 0. SPA (`make ui`) verified via Playwright:
-  graph hub + inspector + findings management + Tasks tab with full provenance (bundle id + trace files).
+- **Next task:** **P8** — cheap multi-vuln test firmware + scored, cassette-replayed real-key test
+  (`make test-live`). (Or **P7** search/report/cross-target.) **P6 remaining sub-items**: annotation
+  table (rename/note/tag) + confirmed-rename rewrites tool output; hypothesis lifecycle UI; richer gates.
+- **Last verified:** `make test` → 100 passed; `make demo` exits 0. P6 core: widened triage + HITL
+  envelope + PATCH + feedback-into-context (confirmed→authoritative, dismissed→do-not-report).
 - **UI quickstart (updated):** `make ui` once → `make sandbox-build` once →
   `hexgraph ingest tests/fixtures/synthetic_fw.bin --name demo` → `hexgraph serve` → http://127.0.0.1:8765.
 - **How to re-verify:** `make test`; or run the UI (see UI quickstart below).
@@ -115,7 +115,10 @@ then run the resume verifier, then continue at the next unchecked task.
 - [x] P5 Finding/task management: API (project tasks, task detail+trace, rerun, finding components, bulk-status);
   SPA Findings|Tasks tabs, TasksPanel/TaskDetail (provenance: bundle id + trace + produced findings + re-run),
   bulk triage, Inspector provenance (↗ task, ◉ components). 97 tests pass. (Tags/notes → P6 annotations; virtualization deferred.)
-- [ ] P6 HITL/triage/annotation/hypotheses + approval gates + feedback-into-context
+- [~] P6 HITL — **core done**: widened triage (String status; migration `0005`), HITL envelope
+  (origin/dismissed_reason/supersedes/human_notes), `PATCH /api/findings/{id}` (agent_original stash),
+  feedback-into-context (analyst_confirmed / do_not_report). **Remaining:** annotation table
+  (rename/note/tag) + confirmed-rename rewrites tool output; hypothesis lifecycle; richer approval gates.
 - [ ] P7 Search (FTS5) + run-compare + report export + cross-target same-code-as (+ deferrable CVE/dataflow/dedup)
 - [ ] P8 Real-key validation: cheap multi-vuln test firmware + scored bounded `make test-live` (cassette replay $0 in CI)
 

@@ -41,7 +41,7 @@ def build_graph(session: Session, project_id: str) -> dict:
         nodes.append(
             {
                 "id": f.id, "type": "finding", "label": f.title, "severity": f.severity,
-                "category": f.category, "confidence": f.confidence, "status": f.status.value,
+                "category": f.category, "confidence": f.confidence, "status": f.status,
                 "target_id": f.target_id,
             }
         )

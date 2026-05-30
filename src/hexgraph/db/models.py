@@ -97,9 +97,12 @@ class TaskStatus(str, enum.Enum):
 
 
 class FindingStatus(str, enum.Enum):
+    # Single widened triage axis (design ruling #9). Stored as a String column.
     new = "new"
-    accepted = "accepted"
+    triaging = "triaging"
+    confirmed = "confirmed"
     dismissed = "dismissed"
+    reported = "reported"
 
 
 # --- tables --------------------------------------------------------------------
@@ -233,7 +236,13 @@ class Finding(Base):
     suggested_followups_json: Mapped[list[Any]] = mapped_column(JSON, default=list)
     related_target_refs_json: Mapped[list[Any]] = mapped_column(JSON, default=list)
 
-    status: Mapped[FindingStatus] = mapped_column(Enum(FindingStatus), default=FindingStatus.new)
+    # String column (no CHECK) so the triage vocabulary can widen without migration pain.
+    status: Mapped[str] = mapped_column(String(20), default=FindingStatus.new.value)
+    # HITL envelope (design §8): provenance + supersession + human edits.
+    origin: Mapped[str] = mapped_column(String(16), default="agent")  # agent|human|agent_edited
+    dismissed_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    supersedes_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    human_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

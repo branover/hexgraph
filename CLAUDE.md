@@ -10,6 +10,12 @@ The MVP described in `context/SPEC.md` is **complete** — all milestones M0–M
 
 **P0 landed** (foundations & seams):
 - **Migrations:** Alembic (`alembic.ini`, `migrations/`, baseline rev `bbdb1d98bf54`). `hexgraph init` and `hexgraph db upgrade` run `db/migrate.py::prepare_database` (fresh→upgrade from baseline; legacy create_all'd DB→stamp; backs up to `<db>.bak` before upgrading). **Tests use `init_db()` (create_all) on throwaway DBs and never migrate; persistent DBs use migrations.** Discipline: any schema change ships an `alembic revision --autogenerate` migration committed alongside the model change.
+**P6 landed (core)** — HITL triage + feedback:
+- **Widened triage** `FindingStatus` = new|triaging|confirmed|dismissed|reported (now a **String** column, no CHECK — migration `0005_triage_envelope` rebuilds `finding`, maps legacy `accepted`→`confirmed`). HITL envelope columns: `origin` (agent|human|agent_edited), `dismissed_reason`, `supersedes_id`, `human_notes`.
+- `POST /api/findings/{id}/status` + `PATCH /api/findings/{id}` (light edit stashes the agent's original severity/confidence in `evidence.extra.agent_original`, sets `origin=agent_edited`).
+- **Feedback-into-context** (`engine/context.py`): confirmed findings → an `analyst_confirmed` (authoritative) context item; dismissed → a `do_not_report` item. Human ground truth flows into later agent context. **NOTE:** `f.status` is a plain string now — never `.status.value` (task status is still an Enum).
+- **Remaining P6:** annotation table (rename/note/tag) + confirmed-rename rewrites tool output; hypothesis-node lifecycle UI; richer approval gates (review-on-output / plan / spend).
+
 **P5 landed** (finding & task management at scale):
 - API: `GET /api/projects/{id}/tasks`, `GET /api/tasks/{id}/detail` (task + produced findings + trace files), `POST /api/tasks/{id}/rerun`, `GET /api/findings/{id}/components` (the `about` graph entities), `POST /api/findings/bulk-status`.
 - SPA: right-pane **Findings | Tasks** tabs; `TasksPanel`/`TaskDetail` (status/cost/model, context-bundle id, trace files, findings produced, Re-run); FindingsPanel bulk select + bulk Accept/Dismiss; Inspector provenance (↗ producing task, ◉ highlight components on graph); finding↔task↔components navigation.

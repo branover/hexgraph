@@ -72,12 +72,25 @@ def _gather_items(session: Session, project: Project, target: Target, task, ctx)
         items.append(_Item("decompilation.focus", f"{focus['name']}:\n{focus['pseudocode']}", 85,
                            "node", None))
 
-    # Prior findings on this target (context the model should not re-report).
+    # Feedback loop (design §8): human ground truth flows into agent context.
     prior = session.query(Finding).filter(Finding.target_id == target.id).all()
-    if prior:
-        summary = "; ".join(f"[{f.severity}] {f.title}" for f in prior[:10])
-        items.append(_Item("prior_findings.this_node", f"Already reported here: {summary}", 70,
-                           "target", target.id))
+    confirmed = [f for f in prior if f.status in ("confirmed", "reported")]
+    dismissed = [f for f in prior if f.status == "dismissed"]
+    other = [f for f in prior if f not in confirmed and f not in dismissed]
+    if confirmed:
+        items.append(_Item(
+            "analyst_confirmed",
+            "ANALYST-CONFIRMED (authoritative): " + "; ".join(f"[{f.severity}] {f.title}" for f in confirmed[:10]),
+            95, "target", target.id))
+    if dismissed:
+        items.append(_Item(
+            "do_not_report",
+            "Analyst DISMISSED — do not re-report: " + "; ".join(f.title for f in dismissed[:10]),
+            80, "target", target.id))
+    if other:
+        items.append(_Item("prior_findings.this_node",
+                           "Already reported here: " + "; ".join(f"[{f.severity}] {f.title}" for f in other[:10]),
+                           70, "target", target.id))
 
     imports = meta.get("imports", [])
     if imports:

@@ -90,10 +90,22 @@ def _finding_dict(f: Finding) -> dict:
         "id": f.id,
         "target_id": f.target_id,
         "task_id": f.task_id,
-        "status": f.status.value,
+        "status": f.status,
+        "origin": f.origin,
+        "dismissed_reason": f.dismissed_reason,
+        "human_notes": f.human_notes,
         "created_at": f.created_at,
         **row_to_payload(f),
     }
+
+
+class FindingPatch(BaseModel):
+    severity: str | None = None
+    confidence: str | None = None
+    title: str | None = None
+    human_notes: str | None = None
+    dismissed_reason: str | None = None
+    status: str | None = None
 
 
 def create_app() -> FastAPI:
@@ -149,8 +161,39 @@ def create_app() -> FastAPI:
             f = s.get(Finding, finding_id)
             if f is None:
                 raise HTTPException(404, "finding not found")
-            f.status = new_status
+            f.status = new_status.value
             return {"id": f.id, "status": new_status.value}
+
+    @app.patch("/api/findings/{finding_id}")
+    def api_patch_finding(finding_id: str, body: FindingPatch):
+        with session_scope() as s:
+            f = s.get(Finding, finding_id)
+            if f is None:
+                raise HTTPException(404, "finding not found")
+            # Light edit: stash the agent's original severity/confidence, mark edited.
+            if (body.severity and body.severity != f.severity) or (body.confidence and body.confidence != f.confidence):
+                ev = dict(f.evidence_json or {})
+                extra = dict(ev.get("extra") or {})
+                extra.setdefault("agent_original", {"severity": f.severity, "confidence": f.confidence})
+                ev["extra"] = extra
+                f.evidence_json = ev
+                f.origin = "agent_edited"
+            if body.severity:
+                f.severity = body.severity
+            if body.confidence:
+                f.confidence = body.confidence
+            if body.title:
+                f.title = body.title
+            if body.human_notes is not None:
+                f.human_notes = body.human_notes
+            if body.dismissed_reason is not None:
+                f.dismissed_reason = body.dismissed_reason
+            if body.status:
+                try:
+                    f.status = FindingStatus(body.status).value
+                except ValueError:
+                    raise HTTPException(400, f"invalid status {body.status!r}")
+            return _finding_dict(f)
 
     @app.post("/api/projects/{project_id}/dedup")
     def api_dedup(project_id: str):
@@ -350,7 +393,7 @@ def create_app() -> FastAPI:
             for fid in body.ids:
                 f = s.get(Finding, fid)
                 if f is not None:
-                    f.status = new_status
+                    f.status = new_status.value
                     updated += 1
             return {"updated": updated, "status": new_status.value}
 
