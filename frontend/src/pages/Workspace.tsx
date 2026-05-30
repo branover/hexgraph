@@ -5,6 +5,7 @@ import Header from "../components/Header";
 import GraphView from "../components/GraphView";
 import FindingsPanel from "../components/FindingsPanel";
 import Inspector from "../components/Inspector";
+import { TasksPanel, TaskDetail } from "../components/TasksPanel";
 
 const SCENARIOS = ["(default)", "critical_overflow", "no_findings", "malformed_then_valid", "error_rate_limit"];
 
@@ -16,12 +17,19 @@ export default function Workspace() {
   const [selFinding, setSelFinding] = useState<Finding | null>(null);
   const [selGraphId, setSelGraphId] = useState<string>();
   const [busy, setBusy] = useState<string>();
+  const [tab, setTab] = useState<"findings" | "tasks">("findings");
+  const [tasks, setTasks] = useState<any[]>([]);
+  const [selTask, setSelTask] = useState<string>();
 
   const load = useCallback(async () => {
     if (!projectId) return;
-    const [d, g] = await Promise.all([api.project(projectId), api.graph(projectId)]);
-    setDetail(d); setGraph(g);
+    const [d, g, tk] = await Promise.all([api.project(projectId), api.graph(projectId), api.projectTasks(projectId)]);
+    setDetail(d); setGraph(g); setTasks(tk);
   }, [projectId]);
+
+  const viewTask = (tid: string) => { setSelTask(tid); setTab("tasks"); };
+  const viewFinding = (fid: string) => { setSelTask(undefined); api.finding(fid).then((f) => { setSelFinding(f); setSelGraphId(f.id); }); };
+  const bulk = async (ids: string[], status: string) => { await api.bulkStatus(ids, status); await load(); };
 
   useEffect(() => { load(); api.capabilities().then(setCaps).catch(() => {}); }, [load]);
 
@@ -88,12 +96,24 @@ export default function Workspace() {
           </div>
         </section>
         <aside className="pane">
-          <h2>Findings · {detail.findings.length}</h2>
-          <FindingsPanel findings={detail.findings} targets={detail.targets}
-                         selectedId={selFinding?.id}
-                         onSelect={(f) => { setSelFinding(f); setSelGraphId(f.id); }} />
-          <div style={{ borderTop: "1px solid var(--border)", maxHeight: "42%", display: "flex", flexDirection: "column" }}>
-            <Inspector finding={selFinding} onChanged={load} onLaunch={pollThenReload} />
+          <div className="toolbar" style={{ paddingBottom: 0 }}>
+            <button className={"btn sm" + (tab === "findings" ? " primary" : "")} onClick={() => setTab("findings")}>Findings · {detail.findings.length}</button>
+            <button className={"btn sm" + (tab === "tasks" ? " primary" : "")} onClick={() => setTab("tasks")}>Tasks · {tasks.length}</button>
+          </div>
+          {tab === "findings" ? (
+            <FindingsPanel findings={detail.findings} targets={detail.targets}
+                           selectedId={selFinding?.id} onBulk={bulk}
+                           onSelect={(f) => { setSelTask(undefined); setSelFinding(f); setSelGraphId(f.id); }} />
+          ) : (
+            <TasksPanel tasks={tasks} selectedId={selTask} onSelect={setSelTask} />
+          )}
+          <div style={{ borderTop: "1px solid var(--border)", maxHeight: "44%", display: "flex", flexDirection: "column" }}>
+            {selTask ? (
+              <TaskDetail taskId={selTask} onViewFinding={viewFinding} onRerun={pollThenReload} />
+            ) : (
+              <Inspector finding={selFinding} onChanged={load} onLaunch={pollThenReload}
+                         onViewTask={viewTask} onHighlight={(ids) => ids[0] && setSelGraphId(ids[0])} />
+            )}
           </div>
         </aside>
       </div>

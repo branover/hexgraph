@@ -4,14 +4,18 @@ import { Finding, SEV_ORDER, TargetNode } from "../api";
 // First-class finding management: sort by severity, filter by status/severity/text,
 // group by target. Built to stay usable at hundreds+ of findings.
 export default function FindingsPanel({
-  findings, targets, selectedId, onSelect,
+  findings, targets, selectedId, onSelect, onBulk,
 }: {
   findings: Finding[]; targets: TargetNode[]; selectedId?: string; onSelect: (f: Finding) => void;
+  onBulk?: (ids: string[], status: string) => void;
 }) {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("all");
   const [sev, setSev] = useState("all");
   const [group, setGroup] = useState(true);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const toggle = (id: string) => setPicked((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const bulk = (st: string) => { onBulk?.([...picked], st); setPicked(new Set()); };
   const targetName = (id: string) => targets.find((t) => t.id === id)?.name ?? id.slice(0, 8);
 
   const filtered = useMemo(() => {
@@ -38,6 +42,10 @@ export default function FindingsPanel({
 
   const Card = (f: Finding) => (
     <div key={f.id} className={"finding" + (f.id === selectedId ? " sel" : "")} onClick={() => onSelect(f)}>
+      {onBulk && (
+        <input type="checkbox" checked={picked.has(f.id)} onClick={(e) => e.stopPropagation()}
+               onChange={() => toggle(f.id)} style={{ marginRight: 6, verticalAlign: "middle" }} />
+      )}
       <span className={"chip sev-" + f.severity}>{f.severity}</span>
       <span className="ttl">{f.title}</span>
       <div className="mt">{f.category} · {f.confidence} · {f.status} · {targetName(f.target_id)}</div>
@@ -57,6 +65,14 @@ export default function FindingsPanel({
         </select>
         <button className="btn sm" onClick={() => setGroup(!group)}>{group ? "ungroup" : "group"}</button>
       </div>
+      {onBulk && picked.size > 0 && (
+        <div className="toolbar" style={{ borderTop: "1px solid var(--border)" }}>
+          <span className="muted">{picked.size} selected</span>
+          <span className="grow" />
+          <button className="btn sm" onClick={() => bulk("confirmed")}>Accept</button>
+          <button className="btn sm" onClick={() => bulk("dismissed")}>Dismiss</button>
+        </div>
+      )}
       <div className="scroll">
         {filtered.length === 0 && <div className="empty">No findings match.</div>}
         {groups.map(([g, fs]) => (

@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { api, Finding } from "../api";
 
-// Detail + triage + follow-on launch for a selected finding (provenance to its
-// task/components comes with P5). `onLaunch` polls + refreshes the workspace.
-export default function Inspector({ finding, onChanged, onLaunch }: {
+// Detail + triage + follow-on launch + provenance for a selected finding.
+// `onLaunch` polls + refreshes; `onViewTask`/`onHighlight` drive navigation.
+export default function Inspector({ finding, onChanged, onLaunch, onViewTask, onHighlight }: {
   finding: Finding | null; onChanged: () => void; onLaunch: (taskId: string) => void;
+  onViewTask?: (taskId: string) => void; onHighlight?: (ids: string[]) => void;
 }) {
   const [sugg, setSugg] = useState<any[]>([]);
   useEffect(() => {
@@ -30,6 +31,15 @@ export default function Inspector({ finding, onChanged, onLaunch }: {
         <span className="muted">status: <b>{finding.status}</b></span>
         <button className="btn sm" onClick={() => setStatus("confirmed")}>Accept</button>
         <button className="btn sm" onClick={() => setStatus("dismissed")}>Dismiss</button>
+      </div>
+      <div className="actions">
+        {onViewTask && <button className="btn sm" onClick={() => onViewTask(finding.task_id)}>↗ producing task</button>}
+        {onHighlight && (
+          <button className="btn sm" onClick={async () => {
+            const comps = await api.components(finding.id);
+            onHighlight(comps.map((c: any) => c.id).filter(Boolean));
+          }}>◉ components</button>
+        )}
       </div>
       <p>{finding.summary}</p>
       <div className="kv">Reasoning</div>

@@ -38,6 +38,11 @@ export const api = {
   launch: (body: any) => postJSON<{ task_id: string; status: string }>("/api/tasks", body),
   spawnFollowup: (fid: string, i: number) => postJSON<{ task_id: string }>(`/api/findings/${fid}/followups/${i}`, {}),
   task: (tid: string) => getJSON<{ id: string; status: string; type: string }>(`/api/tasks/${tid}`),
+  projectTasks: (pid: string) => getJSON<any[]>(`/api/projects/${pid}/tasks`),
+  taskDetail: (tid: string) => getJSON<{ task: any; findings: Finding[]; trace_files: string[] }>(`/api/tasks/${tid}/detail`),
+  rerun: (tid: string) => postJSON<{ task_id: string }>(`/api/tasks/${tid}/rerun`, {}),
+  components: (fid: string) => getJSON<any[]>(`/api/findings/${fid}/components`),
+  bulkStatus: (ids: string[], status: string) => postJSON<{ updated: number }>("/api/findings/bulk-status", { ids, status }),
 };
 
 export const SEV_ORDER = ["critical", "high", "medium", "low", "info"];

@@ -6,13 +6,11 @@ then run the resume verifier, then continue at the next unchecked task.
 ## ▶ RESUME HERE
 - **Current milestone:** v2 build — see [`docs/implementation-plan.md`](docs/implementation-plan.md)
   (built from [`docs/design-vision.md`](docs/design-vision.md)). MVP (M0–M5) is the foundation.
-- **Next task:** **P5** — deepen finding/task management (task workspace + provenance navigation:
-  finding→task→components→follow-ons; virtualized list; bulk triage). Much of the findings list
-  (sort/filter/group/counts) + accept/dismiss + suggestions already shipped in the P4 SPA.
-  Then **P6** (status-widening migration, annotations, hypotheses, gates, feedback-into-context),
-  **P7** (search/report/cross-target), **P8** (cheap real-key vuln target + cassette-replay test).
-- **Last verified:** `make test` → 93 passed; `make demo` exits 0. SPA builds (`make ui`) and renders
-  the workspace (verified via Playwright screenshots): graph hub + inspector + findings management.
+- **Next task:** **P6** — status-widening migration (new/triaging/confirmed/dismissed/reported),
+  annotation table (rename/note/tag), hypothesis nodes, approval gates, feedback-into-context.
+  Then **P7** (search/report/cross-target), **P8** (cheap real-key vuln target + cassette-replay test).
+- **Last verified:** `make test` → 97 passed; `make demo` exits 0. SPA (`make ui`) verified via Playwright:
+  graph hub + inspector + findings management + Tasks tab with full provenance (bundle id + trace files).
 - **UI quickstart (updated):** `make ui` once → `make sandbox-build` once →
   `hexgraph ingest tests/fixtures/synthetic_fw.bin --name demo` → `hexgraph serve` → http://127.0.0.1:8765.
 - **How to re-verify:** `make test`; or run the UI (see UI quickstart below).
@@ -114,7 +112,9 @@ then run the resume verifier, then continue at the next unchecked task.
   progressive disclosure, Inspector (detail/triage/followups/suggestions), capability-filtered launchers,
   findings management (sort/filter/group/counts), cost badge. Verified via Playwright. `make ui` builds it.
   **Deferred:** SSE live activity (polls now), pre-flight context preview, non-finding node detail.
-- [ ] P5 Finding/task management at scale: virtualized findings workspace (sort/filter/group/bulk/saved filters), provenance navigation, task workspace, tags/notes
+- [x] P5 Finding/task management: API (project tasks, task detail+trace, rerun, finding components, bulk-status);
+  SPA Findings|Tasks tabs, TasksPanel/TaskDetail (provenance: bundle id + trace + produced findings + re-run),
+  bulk triage, Inspector provenance (↗ task, ◉ components). 97 tests pass. (Tags/notes → P6 annotations; virtualization deferred.)
 - [ ] P6 HITL/triage/annotation/hypotheses + approval gates + feedback-into-context
 - [ ] P7 Search (FTS5) + run-compare + report export + cross-target same-code-as (+ deferrable CVE/dataflow/dedup)
 - [ ] P8 Real-key validation: cheap multi-vuln test firmware + scored bounded `make test-live` (cassette replay $0 in CI)

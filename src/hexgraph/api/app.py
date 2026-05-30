@@ -69,6 +69,22 @@ def _target_dict(t: Target) -> dict:
     }
 
 
+def _task_dict(t: Task) -> dict:
+    return {
+        "id": t.id, "type": t.type, "status": t.status.value, "target_id": t.target_id,
+        "anchor_kind": t.anchor_kind, "anchor_id": t.anchor_id,
+        "backend": t.backend, "model": t.model, "cost_estimate": t.cost_estimate,
+        "objective": t.objective_text, "params": t.params_json or {},
+        "parent_finding_id": t.parent_finding_id, "context_bundle_id": t.context_bundle_id,
+        "created_at": t.created_at, "finished_at": t.finished_at,
+    }
+
+
+class BulkStatus(BaseModel):
+    ids: list[str]
+    status: str
+
+
 def _finding_dict(f: Finding) -> dict:
     return {
         "id": f.id,
@@ -251,6 +267,92 @@ def create_app() -> FastAPI:
             if t is None:
                 raise HTTPException(404, "task not found")
             return {"id": t.id, "type": t.type, "status": t.status.value, "target_id": t.target_id}
+
+    # --- P5: task workspace + provenance navigation ---
+    @app.get("/api/projects/{project_id}/tasks")
+    def api_project_tasks(project_id: str):
+        with session_scope() as s:
+            tasks = (
+                s.query(Task).filter(Task.project_id == project_id)
+                .order_by(Task.created_at.desc()).all()
+            )
+            counts = {}
+            for f in s.query(Finding).filter(Finding.project_id == project_id).all():
+                counts[f.task_id] = counts.get(f.task_id, 0) + 1
+            return [{**_task_dict(t), "finding_count": counts.get(t.id, 0)} for t in tasks]
+
+    @app.get("/api/tasks/{task_id}/detail")
+    def api_task_detail(task_id: str):
+        from pathlib import Path as _P
+
+        with session_scope() as s:
+            t = s.get(Task, task_id)
+            if t is None:
+                raise HTTPException(404, "task not found")
+            findings = s.query(Finding).filter(Finding.task_id == task_id).all()
+            trace = []
+            if t.log_path and _P(t.log_path).is_dir():
+                trace = sorted(p.name for p in _P(t.log_path).iterdir() if p.is_file())
+            return {
+                "task": _task_dict(t),
+                "findings": [_finding_dict(f) for f in findings],
+                "trace_files": trace,
+            }
+
+    @app.post("/api/tasks/{task_id}/rerun")
+    async def api_task_rerun(task_id: str):
+        with session_scope() as s:
+            t = s.get(Task, task_id)
+            if t is None:
+                raise HTTPException(404, "task not found")
+            project = s.get(Project, t.project_id)
+            clone = create_task(
+                s, project=project, target_id=t.target_id, type=t.type,
+                objective=t.objective_text, model=t.model, backend=t.backend,
+                params=dict(t.params_json or {}), parent_finding_id=t.parent_finding_id,
+                anchor_kind=t.anchor_kind, anchor_id=t.anchor_id,
+            )
+            new_id = clone.id
+        await get_worker().enqueue(new_id)
+        return {"task_id": new_id, "status": "queued"}
+
+    @app.get("/api/findings/{finding_id}/components")
+    def api_finding_components(finding_id: str):
+        """The graph entities this finding is `about` (for highlight/navigation)."""
+        from hexgraph.db.models import Edge, Node
+
+        with session_scope() as s:
+            f = s.get(Finding, finding_id)
+            if f is None:
+                raise HTTPException(404, "finding not found")
+            out = [{"kind": "target", "id": f.target_id, "role": "target"}]
+            edges = s.query(Edge).filter(
+                Edge.src_kind == "finding", Edge.src_id == finding_id
+            ).all()
+            for e in edges:
+                entry = {"kind": e.dst_kind, "id": e.dst_id, "role": (e.attrs_json or {}).get("role")}
+                if e.dst_kind == "node":
+                    n = s.get(Node, e.dst_id)
+                    if n is not None:
+                        entry["label"] = n.name
+                        entry["node_type"] = n.node_type
+                out.append(entry)
+            return out
+
+    @app.post("/api/findings/bulk-status")
+    def api_bulk_status(body: BulkStatus):
+        try:
+            new_status = FindingStatus(body.status)
+        except ValueError:
+            raise HTTPException(400, f"invalid status {body.status!r}")
+        with session_scope() as s:
+            updated = 0
+            for fid in body.ids:
+                f = s.get(Finding, fid)
+                if f is not None:
+                    f.status = new_status
+                    updated += 1
+            return {"updated": updated, "status": new_status.value}
 
     # --- SPA (built by `frontend/`; served at / with client-side routing fallback) ---
     dist = _WEB / "dist"

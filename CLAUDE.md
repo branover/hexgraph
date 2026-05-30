@@ -10,6 +10,10 @@ The MVP described in `context/SPEC.md` is **complete** — all milestones M0–M
 
 **P0 landed** (foundations & seams):
 - **Migrations:** Alembic (`alembic.ini`, `migrations/`, baseline rev `bbdb1d98bf54`). `hexgraph init` and `hexgraph db upgrade` run `db/migrate.py::prepare_database` (fresh→upgrade from baseline; legacy create_all'd DB→stamp; backs up to `<db>.bak` before upgrading). **Tests use `init_db()` (create_all) on throwaway DBs and never migrate; persistent DBs use migrations.** Discipline: any schema change ships an `alembic revision --autogenerate` migration committed alongside the model change.
+**P5 landed** (finding & task management at scale):
+- API: `GET /api/projects/{id}/tasks`, `GET /api/tasks/{id}/detail` (task + produced findings + trace files), `POST /api/tasks/{id}/rerun`, `GET /api/findings/{id}/components` (the `about` graph entities), `POST /api/findings/bulk-status`.
+- SPA: right-pane **Findings | Tasks** tabs; `TasksPanel`/`TaskDetail` (status/cost/model, context-bundle id, trace files, findings produced, Re-run); FindingsPanel bulk select + bulk Accept/Dismiss; Inspector provenance (↗ producing task, ◉ highlight components on graph); finding↔task↔components navigation.
+
 **P4 landed** (the analyst-notebook SPA — React + Vite + TS):
 - **`frontend/`** is the SPA (React + react-router + Cytoscape/dagre). `make ui` (= `npm install && npm run build`) builds it into `src/hexgraph/web/dist`, which FastAPI serves at `/` with a client-side-routing fallback (assets at `/assets`). **Build artifacts are gitignored — run `make ui` before `hexgraph serve`** (the app Dockerfile builds the SPA in a Node stage). The old vanilla `web/templates`+`web/static` UI is removed.
 - Structure: `src/api.ts` (typed client — the only backend contract), `src/theme.css` (dark design system), `pages/{Projects,Workspace}.tsx`, `components/{Header,GraphView,FindingsPanel,Inspector}.tsx`.
