@@ -191,6 +191,10 @@ class Task(Base):
     project_id: Mapped[str] = mapped_column(ForeignKey("project.id"))
     target_id: Mapped[str] = mapped_column(ForeignKey("target.id"))
     type: Mapped[str] = mapped_column(String(50))
+    # The thing this task interrogates (P3): NODE|EDGE|SELECTION|HYPOTHESIS|TARGET.
+    # `target_id` stays the resolved primary target the sandbox/decompiler operate on.
+    anchor_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)  # None == "target"
+    anchor_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     objective_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Free-form task params (e.g. {"mock_scenario": ..., "function": ..., "sink": ...}).
     params_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)

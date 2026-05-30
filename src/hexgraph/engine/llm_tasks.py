@@ -86,6 +86,20 @@ def _build_context(session: Session, project: Project, target: Target, task: Tas
     risky = sorted(set(meta.get("imports", [])) & RISKY_SINKS)
 
     sibling = pick_sibling(session, project.id, target)
+    # Edge-anchored task: prefer the edge's other endpoint as the sibling/context,
+    # and surface the relationship in the objective (design §5 relational tasks).
+    if task.anchor_kind == "edge" and task.anchor_id:
+        from hexgraph.db.models import Edge
+
+        edge = session.get(Edge, task.anchor_id)
+        if edge is not None:
+            other_kind, other_id = (
+                (edge.dst_kind, edge.dst_id) if edge.src_id == target.id else (edge.src_kind, edge.src_id)
+            )
+            if other_kind == "target":
+                other = session.get(Target, other_id)
+                if other is not None:
+                    sibling = other
     return TaskContext(
         task_id=task.id,
         task_type=task.type,
@@ -228,7 +242,11 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
                 src=("target", target.id), dst=("target", dst.id),
                 type=edge_type, origin="llm", confidence=finding.confidence,
                 created_by_task_id=task.id,
-                attrs={"finding_id": row.id, "matched_from_finding_id": row.id},
+                attrs={
+                    "finding_id": row.id,
+                    # B3: link the match back to the seed finding that triggered the sweep.
+                    "matched_from_finding_id": task.parent_finding_id or row.id,
+                },
             )
 
     if findings and low_confidence:

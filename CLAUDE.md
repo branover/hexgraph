@@ -10,6 +10,12 @@ The MVP described in `context/SPEC.md` is **complete** — all milestones M0–M
 
 **P0 landed** (foundations & seams):
 - **Migrations:** Alembic (`alembic.ini`, `migrations/`, baseline rev `bbdb1d98bf54`). `hexgraph init` and `hexgraph db upgrade` run `db/migrate.py::prepare_database` (fresh→upgrade from baseline; legacy create_all'd DB→stamp; backs up to `<db>.bak` before upgrading). **Tests use `init_db()` (create_all) on throwaway DBs and never migrate; persistent DBs use migrations.** Discipline: any schema change ships an `alembic revision --autogenerate` migration committed alongside the model change.
+**P3 landed** (task anchors + capabilities + suggester seam):
+- **Task anchor**: `task.anchor_kind`/`anchor_id` (NODE|EDGE|SELECTION|HYPOTHESIS|TARGET; null⇒target). `target_id` stays the resolved primary target. Edge-anchored tasks pull the other endpoint as sibling context. Migration `0004_task_anchor`.
+- **Capability table** `engine/capabilities.py` (`capabilities_for(anchor_kind, subtype)`, `GET /api/capabilities`) — task *types* stay canonical; relational work is an anchor (ruling #8).
+- **Suggester seam** `engine/suggester.py`: `FollowupSuggester` + `RuleBasedSuggester` default; `GET /api/findings/{id}/suggestions` (entitlement-gated `suggest.followups`). **Future paid `LLMSuggester` drops in via `get_suggester()`** — don't build it; the seam is here.
+- `pattern_sweep` instance_of_pattern edge now carries `matched_from_finding_id` = the seed finding (B3).
+
 **P2 landed** (context bundle + CAS + caching + runs — the spine):
 - **CAS** `engine/cas.py` (`<data_dir>/cas/<sha256>`, dedup): tool outputs, bundles, response traces.
 - **Context Bundle** `engine/context.py`: `build_context_bundle()` walks the graph, packs typed items under a token budget (`estimate_tokens` ≈ chars/4 — the *one* estimator), records drops, stores items in CAS, computes a deterministic `bundle_sha`, renders the prompt. Tables `context_bundle`/`context_item`; `task.context_bundle_id` links the run. `execute_llm_task` now builds the bundle (replacing the ad-hoc prompt) and writes a full trace under the task log: `prompt.txt`, `system.txt`, `bundle.json`, `response.json`, `usage.json`.

@@ -38,12 +38,16 @@ def create_task(
     model: str | None = None,
     params: dict | None = None,
     parent_finding_id: str | None = None,
+    anchor_kind: str | None = None,
+    anchor_id: str | None = None,
     status: TaskStatus = TaskStatus.queued,
 ) -> Task:
     task = Task(
         project_id=project.id,
         target_id=target_id,
         type=type,
+        anchor_kind=anchor_kind or "target",
+        anchor_id=anchor_id or target_id,
         objective_text=objective,
         backend=backend,
         model=model,

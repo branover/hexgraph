@@ -50,6 +50,8 @@ class TaskCreate(BaseModel):
     mock_scenario: str | None = None
     params: dict | None = None
     parent_finding_id: str | None = None
+    anchor_kind: str | None = None
+    anchor_id: str | None = None
 
 
 def _project_dict(p: Project) -> dict:
@@ -177,6 +179,24 @@ def create_app() -> FastAPI:
                 "findings": [_finding_dict(f) for f in findings],
             }
 
+    @app.get("/api/capabilities")
+    def api_capabilities():
+        from hexgraph.engine.capabilities import capability_table
+
+        return capability_table()
+
+    @app.get("/api/findings/{finding_id}/suggestions")
+    def api_finding_suggestions(finding_id: str):
+        from hexgraph.entitlements import require
+        from hexgraph.engine.suggester import suggest_followups
+
+        require("suggest.followups")  # no-op locally; the paid-feature gate
+        with session_scope() as s:
+            f = s.get(Finding, finding_id)
+            if f is None:
+                raise HTTPException(404, "finding not found")
+            return [fu.model_dump(exclude_none=True) for fu in suggest_followups(f)]
+
     @app.get("/graph/{project_id}")
     def api_graph(project_id: str):
         with session_scope() as s:
@@ -199,6 +219,7 @@ def create_app() -> FastAPI:
                 objective=body.objective, model=body.model,
                 backend=body.backend or project.llm_backend.value,
                 params=params, parent_finding_id=body.parent_finding_id,
+                anchor_kind=body.anchor_kind, anchor_id=body.anchor_id,
             )
             task_id = task.id
         await get_worker().enqueue(task_id)
