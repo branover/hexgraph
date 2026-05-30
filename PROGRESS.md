@@ -4,13 +4,16 @@ The durable, resumable record of this build. **A new session should read this fi
 then run the resume verifier, then continue at the next unchecked task.
 
 ## ▶ RESUME HERE
-- **Current milestone:** ✅ MVP complete (M0–M5). Remaining work is polish/hardening.
-- **Next task:** UI polish from `docs/ui-backlog.md` (P1s first). Other candidates: cassette
-  record/replay (M0-T9 hook), Ghidra decompiler (build arg), Celery/Redis queue swap, Docker Compose
-  end-to-end smoke test, license decision.
-- **Last verified:** `make test` → 69 passed; `make demo` exits 0 with the full
-  ingest→recon→AI-finding→graph→**spawn** chain (mock backend, no key/network).
+- **Current milestone:** v2 build — see [`docs/implementation-plan.md`](docs/implementation-plan.md)
+  (built from [`docs/design-vision.md`](docs/design-vision.md)). MVP (M0–M5) is the foundation.
+- **Next task:** **P0-1** — adopt Alembic migrations + `schema_version` + backup-on-migrate
+  (migrations are the committed prerequisite for all schema-extending v2 work).
+- **Last verified:** `make test` → 69 passed; `make demo` exits 0 (full ingest→recon→AI→graph→spawn).
 - **How to re-verify:** `make test`; or run the UI (see UI quickstart below).
+- **v2 sequencing:** P0 seams/migrations → P1 typed graph → P2 context bundle/CAS → P3 task anchors →
+  P4 React notebook UI → P5 finding/task management → P6 HITL/triage → P7 search/report/cross-target →
+  P8 real-key vuln-target test. Thin future-proofing seams (entitlements, metering, executor, policy,
+  principal, suggester) land in P0 with local defaults — **ask a seam, never branch on backend/tier/executor.**
 - **UI quickstart:** `make sandbox-build` once → `hexgraph ingest tests/fixtures/synthetic_fw.bin --name demo`
   → `hexgraph serve` → open http://127.0.0.1:8765 → click a target, pick task type + scenario, Run.
 - **Open notes / gotchas:**
@@ -95,6 +98,17 @@ then run the resume verifier, then continue at the next unchecked task.
       graph export (`hexgraph graph --export`, from M2)
 - [x] M5-T4 README finalized (markers flipped; CLI/UI/backends/roadmap accurate); `make demo` is the
       documented acceptance run (ends with the spawn chain)
+
+## v2 execution — phases (detail in `docs/implementation-plan.md`)
+- [ ] P0 Foundations & seams: Alembic migrations + schema_version/backup; Executor / Entitlements+Metering / analysis-Policy / Principal / (Suggester in P3) seams with local defaults
+- [ ] P1 Typed graph core: `node` table + content_hash identity; polymorphic attributed `edge`; findings attach via `about` edge; recon/decompile populate function/symbol/string nodes + calls/xref edges
+- [ ] P2 Context Bundle + CAS: content-addressed store, ContextBuilder + token estimator, full trace, 3-tier cache incl. response cassette, analysis_run + run-diff, staleness
+- [ ] P3 Task anchors + relational tasks + capability table; pattern_sweep provenance fix; FollowupSuggester seam (rule-based default)
+- [ ] P4 Analyst-notebook UI (React+Vite+TS): graph hub + visual grammar, Inspector, SSE activity, launch dialog + pre-flight context preview
+- [ ] P5 Finding/task management at scale: virtualized findings workspace (sort/filter/group/bulk/saved filters), provenance navigation, task workspace, tags/notes
+- [ ] P6 HITL/triage/annotation/hypotheses + approval gates + feedback-into-context
+- [ ] P7 Search (FTS5) + run-compare + report export + cross-target same-code-as (+ deferrable CVE/dataflow/dedup)
+- [ ] P8 Real-key validation: cheap multi-vuln test firmware + scored bounded `make test-live` (cassette replay $0 in CI)
 
 ## UI backlog
 - Visual review done (headless Chromium screenshots). Requirements captured in

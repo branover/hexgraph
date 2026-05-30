@@ -4,7 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project state
 
-The MVP described in `context/SPEC.md` is **complete** — all milestones M0–M5 are implemented, tested (69 passing), and committed on branch `build/hexgraph-mvp`. `make demo` runs the full loop offline and exits 0. Remaining work is polish/hardening (UI backlog in `docs/ui-backlog.md`; optional: cassette record/replay, Ghidra, Celery/Redis, Docker Compose smoke test, license).
+The MVP described in `context/SPEC.md` is **complete** — all milestones M0–M5 are implemented, tested (69 passing), and committed on branch `build/hexgraph-mvp`. `make demo` runs the full loop offline and exits 0.
+
+**Now executing v2.** The target shape is in **`docs/design-vision.md`**; the sequenced, trackable build is in **`docs/implementation-plan.md`** (phases P0–P8). `PROGRESS.md` tracks per-phase status; **next task = P0-1 (Alembic migrations)**.
+
+**Forward-looking seam rule (from the plan):** today's constraints (local-only, BYOK/mock, static-only, single-user) are temporary. Phase 0 installs *thin* seams — **Entitlements, Metering, Executor, analysis Policy, Principal**, and (P3) **Suggester** — with local defaults that allow/grant everything. Feature code must **ask a seam, never branch on backend identity, license tier, or executor**. This is how future paid-credits features, fuzzing/dynamic/exploit tasks, k8s scale, and enterprise/multi-user land additively. The **Finding schema stays frozen**; new structure lives in the DB envelope. **Migrations are mandatory** for any schema change — the project DB is durable researcher knowledge, never silently reset.
 
 **▶ RESUME PROTOCOL — do this first, every session:**
 1. Read **`PROGRESS.md`** (repo root). Its `▶ RESUME HERE` block names the current state, the next task, and how to re-verify. The `[ ]/[~]/[x]/[!]` checklist is the source of truth for what's done.
