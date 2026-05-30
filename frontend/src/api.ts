@@ -7,6 +7,7 @@ export interface Finding {
   title: string; severity: string; confidence: string; category: string;
   summary: string; reasoning: string; evidence: any;
   suggested_followups?: any[]; related_target_refs?: string[]; created_at?: string;
+  origin?: string; dismissed_reason?: string | null; human_notes?: string | null;
 }
 export interface GraphNode { id: string; type: "target" | "node" | "finding"; label: string; [k: string]: any; }
 export interface GraphEdge { id: string; source: string; target: string; type: string; src_kind?: string; dst_kind?: string; origin?: string; confidence?: number | null; }
@@ -43,6 +44,9 @@ export const api = {
   rerun: (tid: string) => postJSON<{ task_id: string }>(`/api/tasks/${tid}/rerun`, {}),
   components: (fid: string) => getJSON<any[]>(`/api/findings/${fid}/components`),
   bulkStatus: (ids: string[], status: string) => postJSON<{ updated: number }>("/api/findings/bulk-status", { ids, status }),
+  search: (pid: string, q: string) => getJSON<{ findings: any[]; nodes: any[]; coverage: any }>(`/api/projects/${pid}/search?q=${encodeURIComponent(q)}`),
+  linkSameCode: (pid: string) => postJSON<{ created: number }>(`/api/projects/${pid}/link-same-code`, {}),
+  reportUrl: (pid: string) => `/api/projects/${pid}/report`,
 };
 
 export const SEV_ORDER = ["critical", "high", "medium", "low", "info"];

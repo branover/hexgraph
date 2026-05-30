@@ -137,6 +137,11 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-05-30: **UI-sexiness pass** (`docs/ui-sexiness.md`, all items done) — design-system refresh,
+  inline SVG icons, graph halos + color-coded edges + fit/zoom controls, "Run ▾" launcher popover,
+  polished findings/inspector, global search + Report + Same-code toolbar, richer projects cards.
+  Verified via Playwright (no page errors). Also **fixed a serve bug**: legacy/create_all'd DBs are now
+  migrated forward (not stamped at head); `serve` lifespan runs `prepare_database`. 107 tests pass.
 - 2026-05-30: **Design vision authored** → [`docs/design-vision.md`](docs/design-vision.md). Multi-agent
   workflow (ground → 8 design dimensions → 3 adversarial critiques → synthesis) producing the v2 target
   shape: typed graph (`target` artifacts + `node` concepts + polymorphic `edge`), task anchors

@@ -1,5 +1,10 @@
 import { useMemo, useState } from "react";
 import { Finding, SEV_ORDER, TargetNode } from "../api";
+import { Icon } from "./Icon";
+
+const SEV_VAR: Record<string, string> = {
+  info: "var(--info)", low: "var(--low)", medium: "var(--medium)", high: "var(--high)", critical: "var(--critical)",
+};
 
 // First-class finding management: sort by severity, filter by status/severity/text,
 // group by target. Built to stay usable at hundreds+ of findings.
@@ -41,43 +46,61 @@ export default function FindingsPanel({
   }, [filtered, group, targets]);
 
   const Card = (f: Finding) => (
-    <div key={f.id} className={"finding" + (f.id === selectedId ? " sel" : "")} onClick={() => onSelect(f)}>
-      {onBulk && (
-        <input type="checkbox" checked={picked.has(f.id)} onClick={(e) => e.stopPropagation()}
-               onChange={() => toggle(f.id)} style={{ marginRight: 6, verticalAlign: "middle" }} />
-      )}
-      <span className={"chip sev-" + f.severity}>{f.severity}</span>
-      <span className="ttl">{f.title}</span>
-      <div className="mt">{f.category} · {f.confidence} · {f.status} · {targetName(f.target_id)}</div>
+    <div key={f.id} className={"finding fade-in" + (f.id === selectedId ? " sel" : "")} onClick={() => onSelect(f)}
+         style={{ ["--sev" as any]: SEV_VAR[f.severity] }}>
+      <div className="rail" />
+      <div className="body">
+        <div className="row1">
+          {onBulk && (
+            <input type="checkbox" checked={picked.has(f.id)} onClick={(e) => e.stopPropagation()}
+                   onChange={() => toggle(f.id)} />
+          )}
+          <span className={"chip sev-" + f.severity}><span className="d" />{f.severity}</span>
+          <span className="ttl">{f.title}</span>
+        </div>
+        <div className="mt">
+          <span>{f.category}</span><span>· {f.confidence}</span>
+          <span className="tag">{f.status}</span>
+          {!group && <span>· {targetName(f.target_id)}</span>}
+        </div>
+      </div>
     </div>
   );
 
   return (
     <>
-      <div className="toolbar">
-        <input placeholder="filter…" value={q} onChange={(e) => setQ(e.target.value)} style={{ flex: 1 }} />
-        <select value={sev} onChange={(e) => setSev(e.target.value)}>
-          <option value="all">sev: all</option>
+      <div className="fbar">
+        <div className="input" style={{ flex: 1 }}>
+          <Icon name="search" size={13} />
+          <input placeholder="filter findings…" value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
+        <select className="sel" value={sev} onChange={(e) => setSev(e.target.value)}>
+          <option value="all">sev</option>
           {SEV_ORDER.map((s) => <option key={s} value={s}>{s}{counts[s] ? ` (${counts[s]})` : ""}</option>)}
         </select>
-        <select value={status} onChange={(e) => setStatus(e.target.value)}>
-          {["all", "new", "triaging", "confirmed", "dismissed"].map((s) => <option key={s} value={s}>{s}</option>)}
+        <select className="sel" value={status} onChange={(e) => setStatus(e.target.value)}>
+          {["all", "new", "triaging", "confirmed", "dismissed", "reported"].map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
         <button className="btn sm" onClick={() => setGroup(!group)}>{group ? "ungroup" : "group"}</button>
       </div>
+      <div className="sevsummary">
+        {SEV_ORDER.filter((s) => counts[s]).map((s) => (
+          <span key={s} className={"chip sev-" + s}><span className="d" />{counts[s]}</span>
+        ))}
+      </div>
       {onBulk && picked.size > 0 && (
-        <div className="toolbar" style={{ borderTop: "1px solid var(--border)" }}>
+        <div className="fbar" style={{ borderTop: "1px solid var(--border)" }}>
           <span className="muted">{picked.size} selected</span>
           <span className="grow" />
-          <button className="btn sm" onClick={() => bulk("confirmed")}>Accept</button>
-          <button className="btn sm" onClick={() => bulk("dismissed")}>Dismiss</button>
+          <button className="btn sm" onClick={() => bulk("confirmed")}><Icon name="check" size={12} /> Accept</button>
+          <button className="btn sm danger" onClick={() => bulk("dismissed")}><Icon name="x" size={12} /> Dismiss</button>
         </div>
       )}
       <div className="scroll">
         {filtered.length === 0 && <div className="empty">No findings match.</div>}
         {groups.map(([g, fs]) => (
           <div key={g || "all"}>
-            {group && g && <div className="group-h">{g} · {fs.length}</div>}
+            {group && g && <div className="group-h"><Icon name="binary" size={12} />{g} · {fs.length}<span className="ln" /></div>}
             {fs.map(Card)}
           </div>
         ))}
