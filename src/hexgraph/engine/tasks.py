@@ -36,6 +36,7 @@ def create_task(
     objective: str | None = None,
     backend: str | None = None,
     model: str | None = None,
+    params: dict | None = None,
     parent_finding_id: str | None = None,
     status: TaskStatus = TaskStatus.queued,
 ) -> Task:
@@ -46,6 +47,7 @@ def create_task(
         objective_text=objective,
         backend=backend,
         model=model,
+        params_json=params or {},
         parent_finding_id=parent_finding_id,
         status=status,
     )

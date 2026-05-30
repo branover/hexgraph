@@ -118,6 +118,8 @@ class Task(Base):
     target_id: Mapped[str] = mapped_column(ForeignKey("target.id"))
     type: Mapped[str] = mapped_column(String(50))
     objective_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Free-form task params (e.g. {"mock_scenario": ..., "function": ..., "sink": ...}).
+    params_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     status: Mapped[TaskStatus] = mapped_column(Enum(TaskStatus), default=TaskStatus.queued)
     backend: Mapped[str | None] = mapped_column(String(50), nullable=True)
     model: Mapped[str | None] = mapped_column(String(100), nullable=True)

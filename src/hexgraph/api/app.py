@@ -42,7 +42,10 @@ class TaskCreate(BaseModel):
     type: str = "recon"
     objective: str | None = None
     model: str | None = None
+    backend: str | None = None
     mock_scenario: str | None = None
+    params: dict | None = None
+    parent_finding_id: str | None = None
 
 
 def _project_dict(p: Project) -> dict:
@@ -140,9 +143,14 @@ def create_app() -> FastAPI:
             if target is None:
                 raise HTTPException(404, "target not found")
             project = s.get(Project, target.project_id)
+            params = dict(body.params or {})
+            if body.mock_scenario:
+                params["mock_scenario"] = body.mock_scenario
             task = create_task(
                 s, project=project, target_id=target.id, type=body.type,
                 objective=body.objective, model=body.model,
+                backend=body.backend or project.llm_backend.value,
+                params=params, parent_finding_id=body.parent_finding_id,
             )
             task_id = task.id
         await get_worker().enqueue(task_id)

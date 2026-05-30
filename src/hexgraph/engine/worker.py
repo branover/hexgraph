@@ -14,6 +14,9 @@ from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Project, Target, Task, TaskStatus
 from hexgraph.db.session import session_scope
+from datetime import datetime, timezone
+
+from hexgraph.engine.llm_tasks import LLM_TASK_TYPES, execute_llm_task
 from hexgraph.engine.recon import execute_recon
 from hexgraph.engine.tasks import mark_failed, mark_running, mark_succeeded
 from hexgraph.sandbox.runner import SandboxRunner
@@ -23,9 +26,10 @@ def _dispatch(session: Session, project: Project, target: Target, task: Task) ->
     if task.type == "recon":
         execute_recon(session, project, target, task, SandboxRunner())
         return
-    # static_analysis / reverse_engineering / pattern_sweep / harness_generation
-    # are wired to the LLM backends in M3–M4.
-    raise NotImplementedError(f"task type {task.type!r} is available in M3+")
+    if task.type in LLM_TASK_TYPES:
+        execute_llm_task(session, project, target, task)
+        return
+    raise NotImplementedError(f"unknown task type {task.type!r}")
 
 
 def run_task_sync(task_id: str) -> str:
@@ -41,6 +45,9 @@ def run_task_sync(task_id: str) -> str:
             _dispatch(session, project, target, task)
             if task.status == TaskStatus.running:
                 mark_succeeded(task)
+            elif task.finished_at is None:
+                # e.g. a handler set needs_triage; still stamp completion time.
+                task.finished_at = datetime.now(timezone.utc)
         except Exception as exc:  # noqa: BLE001 — any failure marks the task failed
             mark_failed(task, f"{type(exc).__name__}: {exc}")
         return task.status.value

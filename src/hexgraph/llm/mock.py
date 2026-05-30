@@ -95,8 +95,11 @@ class MockLLMBackend:
         env = os.environ.get("HEXGRAPH_MOCK_SCENARIO")
         if env:
             return env
-        # 3) deterministic hash(task_id) % len(pool)
-        pool = self._scenario_pool(req.task_type)
+        # 3) deterministic hash(task_id) % len(pool) for a realistic demo mix.
+        # Exclude error_* scenarios here: faults are reachable explicitly (arg/env),
+        # but the auto-pick should land on a *successful* scenario so interactive
+        # runs and demos don't fail at random.
+        pool = [s for s in self._scenario_pool(req.task_type) if not s.startswith("error_")]
         if not pool:
             return self._default_scenario(req.task_type)
         idx = self._stable_hash(req.task_id) % len(pool)

@@ -4,10 +4,13 @@ The durable, resumable record of this build. **A new session should read this fi
 then run the resume verifier, then continue at the next unchecked task.
 
 ## ▶ RESUME HERE
-- **Current milestone:** M3 — LLM tasks via the interface
-- **Next task:** M3-T1 — `sandbox/decompiler.py` (Decompiler seam + R2Decompiler; add radare2 to the image)
-- **Last verified:** `make test` → 44 passed; `make demo` exits 0 (M0+M1+M2 complete)
-- **How to re-verify:** `make test` then `make demo` (needs Docker + `make sandbox-build` once)
+- **Current milestone:** M3 — LLM tasks via the interface (mock path done; real backends + decompiler left)
+- **Next task:** M3-T1 `sandbox/decompiler.py` (R2Decompiler; add radare2 to image) AND M3-T5
+  (`llm/anthropic_api.py` + `llm/claude_code.py`) — both wire behind the existing seam.
+- **Last verified:** `make test` → 51 passed; live server drives mock static_analysis→critical finding.
+- **How to re-verify:** `make test`; or run the UI (see "Running the UI" below).
+- **UI quickstart:** `make sandbox-build` once → `hexgraph ingest tests/fixtures/synthetic_fw.bin --name demo`
+  → `hexgraph serve` → open http://127.0.0.1:8765 → click a target, pick task type + scenario, Run.
 - **Open notes / gotchas:**
   - **Docker is installed** and `jonsnow` is in the `docker` group (M2 unblocked).
     Verify with `docker run --rm hello-world` before M2-T1; a fresh shell may be needed
@@ -62,14 +65,16 @@ then run the resume verifier, then continue at the next unchecked task.
 - [x] M2-T8 `tests/fixtures/build.sh` (vuln_httpd, libupnp.so, synthetic_fw.bin built+committed);
       `make demo` runs ingest→recon→finding→graph offline, exit 0
 
-## M3 — LLM tasks via the interface
-- [ ] M3-T1 `sandbox/decompiler.py` Decompiler seam + R2Decompiler
-- [ ] M3-T2 `tasks/static_analysis.py`
-- [ ] M3-T3 `tasks/reverse_engineering.py`
-- [ ] M3-T4 `cli.py run` + per-task model/backend override
-- [ ] M3-T5 `llm/anthropic_api.py` + `llm/claude_code.py` + registry selection
-- [ ] M3-T6 Cost display per-task + per-project; prompt/response trace under log_path
-- [ ] M3-T7 Tests: static_analysis finding + fault-scenario handling
+## M3 — LLM tasks via the interface  *(mock path complete; real backends + decompiler remain)*
+- [ ] M3-T1 `sandbox/decompiler.py` Decompiler seam + R2Decompiler (add radare2 to sandbox image)
+- [x] M3-T2 static_analysis via `engine/llm_tasks.py` (backend-agnostic; mock critical_overflow/no_findings/malformed)
+- [x] M3-T3 reverse_engineering (info annotation findings) via same path
+- [x] M3-T4 `cli.py run` + `--type/--objective/--model/--backend/--function/--mock-scenario`; API POST /api/tasks
+- [ ] M3-T5 `llm/anthropic_api.py` + `llm/claude_code.py` (registry already lazy-loads them)
+- [~] M3-T6 Cost: per-task `cost_estimate` stored + usage trace under log_path; project total + UI display LEFT
+- [x] M3-T7 Tests: static_analysis critical finding, no_findings, malformed-retry, error→failed, RE annotation
+- NOTE: hash-fallback scenario pick now excludes `error_*` (faults reachable only via explicit arg/env) so
+  interactive runs/demos don't fail at random — small documented deviation from "hash % full pool".
 
 ## M4 — Spawn the next thing
 - [ ] M4-T1 `engine/followups.py` one-click launch + wire parent_finding_id
@@ -87,6 +92,10 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-05-30: **M3 mock path** — `engine/llm_tasks.py` runs static_analysis/reverse_engineering/
+  pattern_sweep/harness_generation through the backend seam (mock); related_to edges from
+  related_target_refs; CLI `run`; API task launch + UI task launcher (type+scenario). 51 tests pass.
+  Live server verified driving the critical_overflow flow. Real backends (T5) + decompiler (T1) left.
 - 2026-05-30: **M2 complete** — sandbox runner (locked-down docker), recon + firmware-unpack probes,
   engine (recon/unpack/graph/worker/pipeline), JSON API + offline Cytoscape UI, fixtures built,
   `make demo` exits 0. 44 tests pass (Docker-gated tests skip without the sandbox image).

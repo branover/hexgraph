@@ -91,6 +91,40 @@ def _cmd_targets(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_run(args: argparse.Namespace) -> int:
+    from hexgraph.engine.tasks import create_task
+    from hexgraph.engine.worker import run_task_sync
+
+    init_db()
+    with session_scope() as session:
+        target = session.get(Target, args.target)
+        if target is None:
+            print(f"error: target {args.target} not found", file=sys.stderr)
+            return 1
+        project = session.get(Project, target.project_id)
+        params = {}
+        if args.mock_scenario:
+            params["mock_scenario"] = args.mock_scenario
+        if getattr(args, "function", None):
+            params["function"] = args.function
+        task = create_task(
+            session, project=project, target_id=target.id, type=args.type,
+            objective=args.objective, model=args.model,
+            backend=args.backend or project.llm_backend.value, params=params,
+        )
+        task_id = task.id
+
+    status = run_task_sync(task_id)
+    print(f"task {task_id}  [{status}]")
+    with session_scope() as session:
+        rows = session.query(Finding).filter(Finding.task_id == task_id).all()
+        if not rows:
+            print("  (no findings)")
+        for f in rows:
+            print(f"  {f.id}  [{f.severity:8}] {f.category:14} {f.title}")
+    return 0 if status in ("succeeded", "needs_triage") else 1
+
+
 def _cmd_findings(args: argparse.Namespace) -> int:
     init_db()
     with session_scope() as session:
@@ -123,14 +157,6 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
-def _not_yet(milestone: str):
-    def _run(args: argparse.Namespace) -> int:
-        print(f"`{args._cmd}` lands in {milestone}.", file=sys.stderr)
-        return 2
-
-    return _run
-
-
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="hexgraph", description="Local-only vuln-research workbench")
     sub = p.add_subparsers(dest="_cmd", required=True)
@@ -154,8 +180,10 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--type", required=True)
     pr.add_argument("--objective")
     pr.add_argument("--model")
-    pr.add_argument("--mock-scenario")
-    pr.set_defaults(func=_not_yet("M3"))
+    pr.add_argument("--backend", choices=["mock", "anthropic", "claude_code"])
+    pr.add_argument("--function", help="focus function (templated into the prompt/mock)")
+    pr.add_argument("--mock-scenario", dest="mock_scenario")
+    pr.set_defaults(func=_cmd_run)
 
     pf = sub.add_parser("findings", help="list findings in a project")
     pf.add_argument("project")

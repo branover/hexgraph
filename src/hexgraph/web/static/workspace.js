@@ -28,17 +28,30 @@ function renderTree(targets) {
   tree.innerHTML = "";
   const roots = targets.filter((t) => !t.parent_id);
   const childrenOf = (id) => targets.filter((t) => t.parent_id === id);
+  const TASK_TYPES = ["recon", "static_analysis", "reverse_engineering", "pattern_sweep", "harness_generation"];
+  const SCENARIOS = ["(default)", "critical_overflow", "no_findings", "malformed_then_valid", "error_rate_limit", "error_timeout"];
   const row = (t, isChild) => {
     const div = document.createElement("div");
     div.className = "node-row" + (isChild ? " child" : "");
     div.innerHTML =
       `<div class="name">${t.name}</div>` +
       `<div class="meta">${t.kind}${t.arch ? " · " + t.arch : ""}</div>`;
+    const controls = document.createElement("div");
+    controls.className = "task-controls";
+    const typeSel = document.createElement("select");
+    TASK_TYPES.forEach((tt) => typeSel.add(new Option(tt, tt)));
+    const scenSel = document.createElement("select");
+    SCENARIOS.forEach((sc) => scenSel.add(new Option(sc, sc)));
+    scenSel.title = "mock scenario (mock backend only)";
     const btn = document.createElement("button");
     btn.className = "btn";
-    btn.textContent = "Run recon";
-    btn.onclick = () => launch(t.id, "recon");
-    div.appendChild(btn);
+    btn.textContent = "Run";
+    btn.onclick = () => {
+      const scenario = scenSel.value === "(default)" ? null : scenSel.value;
+      launch(t.id, typeSel.value, scenario);
+    };
+    controls.append(typeSel, scenSel, btn);
+    div.appendChild(controls);
     tree.appendChild(div);
     childrenOf(t.id).forEach((c) => row(c, true));
   };
@@ -91,8 +104,10 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 }
 
-async function launch(targetId, type) {
-  const { task_id } = await postJSON("/api/tasks", { target_id: targetId, type });
+async function launch(targetId, type, scenario) {
+  const body = { target_id: targetId, type };
+  if (scenario) body.mock_scenario = scenario;
+  const { task_id } = await postJSON("/api/tasks", body);
   // Poll until the task leaves running/queued, then refresh.
   for (let i = 0; i < 60; i++) {
     await new Promise((r) => setTimeout(r, 700));

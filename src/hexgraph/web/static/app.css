@@ -42,6 +42,11 @@ pre { background: var(--panel); padding: 10px 12px; border-radius: 6px; border: 
 .node-row .name { font-weight: 600; }
 .node-row .meta { color: var(--muted); font-size: 11px; }
 .node-row .btn { margin-top: 4px; }
+.task-controls { display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
+.task-controls select {
+  background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 4px; font-size: 11px; padding: 2px;
+}
 
 /* Findings list */
 .finding { padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px; cursor: pointer; background: var(--panel2); }
