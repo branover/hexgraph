@@ -99,6 +99,50 @@ Keep scope tight (SPEC §12): no auth/multi-user/cloud, no auto-router, no live 
 - CLI: `hexgraph init | ingest | targets | run | findings | graph | serve` (full signature in "Dev commands").
 - `docker compose up` — brings up the loopback-only UI (builds the app image; needs the sandbox image built on the host first; not yet end-to-end smoke-tested).
 
+## Assessing the UI visually (Playwright)
+
+There is **no Chrome/browser MCP connector in this environment**, and `WebFetch` can't reach
+`127.0.0.1`. To actually *see* the rendered UI (the workspace is JS-driven, so fetching HTML isn't
+enough), drive **headless Chromium via Playwright** and screenshot. Playwright is a **dev-only, one-off
+tool — intentionally NOT in `pyproject` deps**. Findings from a review go in `docs/ui-backlog.md`.
+
+Setup (once):
+```bash
+.venv/bin/pip install playwright
+.venv/bin/playwright install chromium     # ~110MB, downloads to ~/.cache/ms-playwright
+```
+
+Seed data + start the server on a spare port with an isolated home, then screenshot:
+```bash
+export HEXGRAPH_HOME=$(mktemp -d)/hg
+PROJ=$(.venv/bin/hexgraph ingest tests/fixtures/synthetic_fw.bin --name demo | awk '/^project/{print $2}')
+HTTPD=$(.venv/bin/hexgraph targets "$PROJ" | awk '/sbin\/httpd/{print $1}')
+.venv/bin/hexgraph run "$HTTPD" --type static_analysis --mock-scenario critical_overflow --function cgi_handler >/dev/null
+.venv/bin/hexgraph run "$HTTPD" --type pattern_sweep --mock-scenario match_found >/dev/null
+.venv/bin/hexgraph serve --port 8801 >/tmp/serve.log 2>&1 &   # remember to kill the PID after
+```
+```python
+# .venv/bin/python this; chromium needs --no-sandbox in this WSL/container env.
+import asyncio
+from playwright.async_api import async_playwright
+PROJ, BASE, OUT = "<project-id>", "http://127.0.0.1:8801", "/tmp/ui"
+async def main():
+    async with async_playwright() as p:
+        b = await p.chromium.launch(args=["--no-sandbox"])
+        pg = await b.new_page(viewport={"width": 1440, "height": 900})
+        await pg.goto(f"{BASE}/projects/{PROJ}", wait_until="networkidle")
+        await pg.wait_for_timeout(1500)                 # let fetches + Cytoscape settle
+        await pg.screenshot(path=f"{OUT}/workspace.png")
+        await pg.get_by_text("Stack buffer overflow", exact=False).first.click()
+        await pg.wait_for_timeout(500)
+        await pg.locator(".pane.detail").screenshot(path=f"{OUT}/detail.png")
+        await b.close()
+asyncio.run(main())
+```
+Then **view the PNGs with the Read tool** (it renders images). Gotchas: `--no-sandbox` is required here;
+use `wait_until="networkidle"` + a short `wait_for_timeout` so the JS-rendered graph/findings are present;
+kill the backgrounded `serve` PID when done.
+
 ## Test fixtures (SPEC §11, `context/fixtures/targets/README.md`)
 
 Built and committed under `tests/fixtures/` (regenerate with `make fixtures` / `tests/fixtures/build.sh`):
