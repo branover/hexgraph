@@ -42,6 +42,8 @@ export const api = {
   projectTasks: (pid: string) => getJSON<any[]>(`/api/projects/${pid}/tasks`),
   taskDetail: (tid: string) => getJSON<{ task: any; findings: Finding[]; trace_files: string[] }>(`/api/tasks/${tid}/detail`),
   rerun: (tid: string) => postJSON<{ task_id: string }>(`/api/tasks/${tid}/rerun`, {}),
+  previewTask: (body: any) => postJSON<any>("/api/tasks/preview", body),
+  clearTasks: (pid: string) => postJSON<{ removed: number }>(`/api/projects/${pid}/tasks/clear`, {}),
   components: (fid: string) => getJSON<any[]>(`/api/findings/${fid}/components`),
   bulkStatus: (ids: string[], status: string) => postJSON<{ updated: number }>("/api/findings/bulk-status", { ids, status }),
   search: (pid: string, q: string) => getJSON<{ findings: any[]; nodes: any[]; coverage: any }>(`/api/projects/${pid}/search?q=${encodeURIComponent(q)}`),

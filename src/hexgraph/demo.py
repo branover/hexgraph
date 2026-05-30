@@ -78,7 +78,9 @@ def main() -> int:
         print(f"   root: {summary['name']} → {len(children)} child target(s):")
         for c in children:
             print(f"      └─ {c['name']}")
-        contains = s.query(Edge).filter(Edge.project_id == pid, Edge.type == EdgeType.contains).count()
+        contains = s.query(Edge).filter(
+            Edge.project_id == pid, Edge.type == EdgeType.contains, Edge.dst_kind == "target"
+        ).count()
         findings = s.query(Finding).filter(Finding.project_id == pid).count()
         graph = build_graph(s, pid)
         print(f"   contains edges: {contains}   findings: {findings}")

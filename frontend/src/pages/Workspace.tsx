@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
-import { api, Finding, Graph, ProjectDetail, TargetNode } from "../api";
+import { api, Finding, Graph, GraphNode, ProjectDetail, TargetNode } from "../api";
 import Header from "../components/Header";
 import GraphView from "../components/GraphView";
 import FindingsPanel from "../components/FindingsPanel";
 import Inspector from "../components/Inspector";
+import NodeInspector from "../components/NodeInspector";
 import { TasksPanel, TaskDetail } from "../components/TasksPanel";
 import Launcher from "../components/Launcher";
+import LaunchModal from "../components/LaunchModal";
 import { AddNodeModal, AddEdgeModal } from "../components/Author";
 import { Icon, NODE_ICON } from "../components/Icon";
 
@@ -16,6 +18,7 @@ export default function Workspace() {
   const [graph, setGraph] = useState<Graph | null>(null);
   const [caps, setCaps] = useState<Record<string, Record<string, string[]>>>({});
   const [selFinding, setSelFinding] = useState<Finding | null>(null);
+  const [selNode, setSelNode] = useState<GraphNode | null>(null);
   const [selGraphId, setSelGraphId] = useState<string>();
   const [busy, setBusy] = useState<string>();
   const [tab, setTab] = useState<"findings" | "tasks">("findings");
@@ -24,6 +27,8 @@ export default function Workspace() {
   const [q, setQ] = useState("");
   const [results, setResults] = useState<any | null>(null);
   const [modal, setModal] = useState<"node" | "edge" | null>(null);
+  const [launchFor, setLaunchFor] = useState<{ target: TargetNode; type: string } | null>(null);
+  const [maxed, setMaxed] = useState(false);
   const searchTimer = useRef<any>();
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -37,7 +42,7 @@ export default function Workspace() {
 
   const pollThenReload = async (taskId: string) => {
     setBusy("running task…");
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 90; i++) {
       await new Promise((r) => setTimeout(r, 700));
       const t = await api.task(taskId);
       if (t.status !== "queued" && t.status !== "running") break;
@@ -45,17 +50,33 @@ export default function Workspace() {
     setBusy(undefined);
     await load();
     if (selFinding) api.finding(selFinding.id).then(setSelFinding).catch(() => {});
+    setSelTask(taskId); // surface the new task (scrolls into view when the Tasks tab is showing)
   };
 
-  const launch = async (target: TargetNode, type: string, scenario?: string) => {
-    const body: any = { target_id: target.id, type };
-    if (scenario) body.mock_scenario = scenario;
-    const { task_id } = await api.launch(body);
-    pollThenReload(task_id);
-  };
+  const findingCounts = useMemo(() => {
+    const m: Record<string, { n: number; hot: boolean }> = {};
+    (detail?.findings || []).forEach((f) => {
+      const e = (m[f.target_id] ??= { n: 0, hot: false });
+      e.n++; if (f.severity === "critical" || f.severity === "high") e.hot = true;
+    });
+    return m;
+  }, [detail]);
+
   const viewTask = (tid: string) => { setSelTask(tid); setTab("tasks"); };
-  const viewFinding = (fid: string) => { setSelTask(undefined); api.finding(fid).then((f) => { setSelFinding(f); setSelGraphId(f.id); }); };
+  const viewFinding = (fid: string) => { setSelTask(undefined); setSelNode(null); api.finding(fid).then((f) => { setSelFinding(f); setSelGraphId(f.id); }); };
   const bulk = async (ids: string[], status: string) => { await api.bulkStatus(ids, status); await load(); };
+  const clearTasks = async () => { if (projectId) { await api.clearTasks(projectId); setSelTask(undefined); await load(); } };
+
+  const onGraphSelect = (id: string, type: string) => {
+    setSelGraphId(id); setSelTask(undefined);
+    if (type === "finding") {
+      const f = detail!.findings.find((x) => x.id === id);
+      if (f) { setSelNode(null); setSelFinding(f); }
+    } else {
+      const n = graph!.nodes.find((x) => x.id === id);
+      if (n) { setSelFinding(null); setSelNode(n); }
+    }
+  };
 
   const doSearch = (text: string) => {
     setQ(text);
@@ -85,17 +106,53 @@ export default function Workspace() {
 
   const TreeRow = (t: TargetNode, child: boolean) => {
     const allowed = caps.target?.[t.kind] ?? ["recon"];
+    const fc = findingCounts[t.id];
     return (
       <div key={t.id}>
         <div className={"tree-row" + (child ? " child" : "") + (selGraphId === t.id ? " sel" : "")}
-             onClick={() => setSelGraphId(t.id)}>
-          <div className="nm"><Icon name={NODE_ICON[t.kind] || "binary"} size={15} /> {t.name}</div>
+             onClick={() => onGraphSelect(t.id, "target")}>
+          <div className="nm">
+            <Icon name={NODE_ICON[t.kind] || "binary"} size={15} /> {t.name}
+            {fc && <span className={"tbadge" + (fc.hot ? " hot" : "")} style={{ marginLeft: "auto" }}>{fc.n}</span>}
+          </div>
           <div className="mt">{t.kind}{t.arch ? " · " + t.arch : ""}</div>
-          <Launcher allowed={allowed} isMock={isMock} onLaunch={(type, sc) => launch(t, type, sc)} />
+          <Launcher allowed={allowed} onChoose={(type) => setLaunchFor({ target: t, type })} />
         </div>
         {childrenOf(t.id).map((c) => TreeRow(c, true))}
       </div>
     );
+  };
+
+  const renderTabs = () => (
+    <div className="pane-h">
+      <button className={"btn sm" + (tab === "findings" ? " primary" : " ghost")} onClick={() => setTab("findings")}>
+        <Icon name="bug" size={12} /> Findings · {detail.findings.length}
+      </button>
+      <button className={"btn sm" + (tab === "tasks" ? " primary" : " ghost")} onClick={() => setTab("tasks")}>
+        <Icon name="task" size={12} /> Tasks · {tasks.length}
+      </button>
+      <span className="grow" />
+      <button className="btn sm icon" title={maxed ? "Restore" : "Expand to full screen"} onClick={() => setMaxed((m) => !m)}>
+        <Icon name={maxed ? "minus" : "fit"} size={13} />
+      </button>
+    </div>
+  );
+  const renderList = () => tab === "findings" ? (
+    <FindingsPanel findings={detail.findings} targets={detail.targets} selectedId={selFinding?.id} onBulk={bulk}
+                   onSelect={(f) => { setSelTask(undefined); setSelNode(null); setSelFinding(f); setSelGraphId(f.id); }} />
+  ) : (
+    <TasksPanel tasks={tasks} selectedId={selTask} onSelect={(id) => setSelTask(id)} onClear={clearTasks} />
+  );
+  const renderDetail = () => {
+    if (selTask) return <TaskDetail taskId={selTask} onViewFinding={viewFinding} onRerun={pollThenReload} />;
+    if (selNode) {
+      const tgt = selNode.type === "target" ? detail.targets.find((t) => t.id === selNode.id) : undefined;
+      const allowed = tgt ? (caps.target?.[tgt.kind] ?? ["recon"]) : [];
+      return <NodeInspector node={selNode} target={tgt} allowed={allowed} isMock={isMock}
+                            onLaunch={(type) => tgt && setLaunchFor({ target: tgt, type })} />;
+    }
+    return <Inspector finding={selFinding} onChanged={load} onLaunch={pollThenReload}
+                      onViewTask={viewTask} onHighlight={(ids) => ids[0] && setSelGraphId(ids[0])} />;
   };
 
   return (
@@ -135,7 +192,7 @@ export default function Workspace() {
                 </div>
               ))}
               {results.nodes.map((n: any) => (
-                <div className="res" key={n.id} onClick={() => { setResults(null); setQ(""); setSelGraphId(n.id); }}>
+                <div className="res" key={n.id} onClick={() => { setResults(null); setQ(""); onGraphSelect(n.id, "node"); }}>
                   <Icon name={NODE_ICON[n.node_type] || "fn"} size={13} /> {n.name} <span className="muted">{n.node_type}</span>
                 </div>
               ))}
@@ -143,11 +200,7 @@ export default function Workspace() {
               <div className="cov">{results.coverage?.note}</div>
             </div>
           )}
-          <GraphView graph={graph} selectedId={selGraphId}
-                     onSelect={(id, type) => {
-                       setSelGraphId(id);
-                       if (type === "finding") { const f = detail.findings.find((x) => x.id === id); if (f) { setSelTask(undefined); setSelFinding(f); } }
-                     }} />
+          <GraphView graph={graph} selectedId={selGraphId} onSelect={onGraphSelect} />
           <div className="legend">
             {[["firmware", "#a371f7"], ["executable", "#6aa3ff"], ["library", "#39c5cf"], ["function", "#7ee787"], ["finding", "#ff5d6c"]].map(([l, c]) => (
               <span className="it" key={l}><span className="sw" style={{ background: c as string }} />{l}</span>
@@ -155,33 +208,30 @@ export default function Workspace() {
           </div>
         </section>
 
-        <aside className="pane">
-          <div className="pane-h">
-            <button className={"btn sm" + (tab === "findings" ? " primary" : " ghost")} onClick={() => setTab("findings")}>
-              <Icon name="bug" size={12} /> Findings · {detail.findings.length}
-            </button>
-            <button className={"btn sm" + (tab === "tasks" ? " primary" : " ghost")} onClick={() => setTab("tasks")}>
-              <Icon name="task" size={12} /> Tasks · {tasks.length}
-            </button>
-          </div>
-          {tab === "findings" ? (
-            <FindingsPanel findings={detail.findings} targets={detail.targets} selectedId={selFinding?.id} onBulk={bulk}
-                           onSelect={(f) => { setSelTask(undefined); setSelFinding(f); setSelGraphId(f.id); }} />
-          ) : (
-            <TasksPanel tasks={tasks} selectedId={selTask} onSelect={setSelTask} />
-          )}
-          <div style={{ borderTop: "1px solid var(--border)", maxHeight: "46%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-            {selTask ? (
-              <TaskDetail taskId={selTask} onViewFinding={viewFinding} onRerun={pollThenReload} />
-            ) : (
-              <Inspector finding={selFinding} onChanged={load} onLaunch={pollThenReload}
-                         onViewTask={viewTask} onHighlight={(ids) => ids[0] && setSelGraphId(ids[0])} />
-            )}
-          </div>
-        </aside>
+        {!maxed && (
+          <aside className="pane">
+            {renderTabs()}
+            {renderList()}
+            <div style={{ borderTop: "1px solid var(--border)", maxHeight: "46%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+              {renderDetail()}
+            </div>
+          </aside>
+        )}
       </div>
+
+      {maxed && (
+        <div className="maxscreen">
+          <div className="pane">{renderTabs()}{renderList()}</div>
+          <div className="pane"><div className="pane-h"><span className="ttl">Detail</span></div>{renderDetail()}</div>
+        </div>
+      )}
+
       {modal === "node" && <AddNodeModal projectId={projectId!} targets={detail.targets} onClose={() => setModal(null)} onDone={load} />}
       {modal === "edge" && <AddEdgeModal projectId={projectId!} graph={graph} onClose={() => setModal(null)} onDone={load} />}
+      {launchFor && (
+        <LaunchModal target={launchFor.target} taskType={launchFor.type} isMock={isMock}
+                     onClose={() => setLaunchFor(null)} onLaunched={pollThenReload} />
+      )}
     </>
   );
 }

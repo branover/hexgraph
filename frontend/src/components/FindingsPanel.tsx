@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Finding, SEV_ORDER, TargetNode } from "../api";
 import { Icon } from "./Icon";
 
@@ -22,6 +22,8 @@ export default function FindingsPanel({
   const toggle = (id: string) => setPicked((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const bulk = (st: string) => { onBulk?.([...picked], st); setPicked(new Set()); };
   const targetName = (id: string) => targets.find((t) => t.id === id)?.name ?? id.slice(0, 8);
+  const selRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { selRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [selectedId]);
 
   const filtered = useMemo(() => {
     let fs = findings.slice();
@@ -46,7 +48,8 @@ export default function FindingsPanel({
   }, [filtered, group, targets]);
 
   const Card = (f: Finding) => (
-    <div key={f.id} className={"finding fade-in" + (f.id === selectedId ? " sel" : "")} onClick={() => onSelect(f)}
+    <div key={f.id} ref={f.id === selectedId ? selRef : undefined}
+         className={"finding fade-in" + (f.id === selectedId ? " sel" : "")} onClick={() => onSelect(f)}
          style={{ ["--sev" as any]: SEV_VAR[f.severity] }}>
       <div className="rail" />
       <div className="body">

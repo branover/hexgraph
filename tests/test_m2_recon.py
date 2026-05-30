@@ -61,8 +61,9 @@ def test_firmware_unpack_creates_children_and_edges(hg_home, sandbox):
         assert len(summary["children"]) == 2  # httpd + libupnp.so
 
     with session_scope() as s:
+        # firmware→child containment (target→target); excludes binary→symbol/string contains
         contains = s.query(Edge).filter(
-            Edge.project_id == pid, Edge.type == EdgeType.contains
+            Edge.project_id == pid, Edge.type == EdgeType.contains, Edge.dst_kind == "target"
         ).all()
         assert len(contains) == 2
         # one recon finding per target (3 total)

@@ -64,6 +64,16 @@ def get_or_create_node(
     )
     session.add(node)
     session.flush()
+    # Tie code nodes back to the binary/library they live in (target ─contains→ node)
+    # so functions/symbols are connected to their target in the graph, not floating.
+    if target_id and nt in ("function", "symbol", "string", "struct"):
+        from hexgraph.db.models import EdgeType
+        from hexgraph.engine.edges import add_edge
+
+        add_edge(
+            session, project_id=project_id, src=("target", target_id), dst=("node", node.id),
+            type=EdgeType.contains, origin="derived", confidence=1.0, attrs={"declares": nt},
+        )
     return node
 
 

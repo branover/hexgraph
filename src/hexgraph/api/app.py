@@ -379,6 +379,49 @@ def create_app() -> FastAPI:
                 raise HTTPException(404, "project not found")
             return build_graph(s, project_id)
 
+    @app.post("/api/tasks/preview")
+    def api_task_preview(body: TaskCreate):
+        """Pre-flight: show the exact context bundle (prompt + items + token estimate)
+        a task would run on, before spending anything."""
+        from hexgraph.engine.llm_tasks import preview_context
+
+        params = dict(body.params or {})
+        if body.mock_scenario:
+            params["mock_scenario"] = body.mock_scenario
+        with session_scope() as s:
+            target = s.get(Target, body.target_id)
+            if target is None:
+                raise HTTPException(404, "target not found")
+            preview = preview_context(s, s.get(Project, target.project_id), target,
+                                      task_type=body.type, objective=body.objective, params=params)
+            preview["backend"] = body.backend or "mock"
+            preview["model"] = body.model
+            return preview
+
+    @app.post("/api/projects/{project_id}/tasks/clear")
+    def api_clear_tasks(project_id: str):
+        """Remove tasks that produced no findings (recon/empty/failed noise) + their
+        analysis_runs and context bundles. Tasks with findings are kept for provenance."""
+        from hexgraph.db.models import AnalysisRun, ContextBundle, ContextItem
+
+        with session_scope() as s:
+            if s.get(Project, project_id) is None:
+                raise HTTPException(404, "project not found")
+            with_findings = {f.task_id for f in s.query(Finding).filter(Finding.project_id == project_id).all()}
+            removed = 0
+            for t in s.query(Task).filter(Task.project_id == project_id).all():
+                if t.id in with_findings:
+                    continue
+                if t.context_bundle_id:
+                    s.query(ContextItem).filter(ContextItem.bundle_id == t.context_bundle_id).delete(synchronize_session=False)
+                    cb = s.get(ContextBundle, t.context_bundle_id)
+                    if cb:
+                        s.delete(cb)
+                s.query(AnalysisRun).filter(AnalysisRun.task_id == t.id).delete(synchronize_session=False)
+                s.delete(t)
+                removed += 1
+            return {"removed": removed}
+
     @app.post("/api/tasks")
     async def api_create_task(body: TaskCreate):
         with session_scope() as s:

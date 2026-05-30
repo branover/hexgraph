@@ -54,7 +54,7 @@ def _gather_items(session: Session, project: Project, target: Target, task, ctx)
     meta = target.metadata_json or {}
 
     if ctx.objective:
-        items.append(_Item("objective", ctx.objective, 100, "task", task.id))
+        items.append(_Item("objective", ctx.objective, 100, "task", getattr(task, "id", None)))
 
     items.append(
         _Item(
@@ -129,6 +129,20 @@ def _bundle_sha(included: list[_Item]) -> str:
 
 def render_prompt(included: list[_Item]) -> str:
     return "\n\n".join(f"## {it.kind}\n{it.text}" for it in included)
+
+
+def preview_context(session: Session, project: Project, target: Target, ctx, *, budget: int = DEFAULT_BUDGET) -> dict:
+    """Assemble the bundle WITHOUT persisting — for the pre-flight launch preview.
+    `ctx.task_id` may be a throwaway id; nothing is written to the DB or CAS."""
+    included, dropped = _pack(_gather_items(session, project, target, None, ctx), budget)
+    return {
+        "prompt": render_prompt(included),
+        "bundle_sha": _bundle_sha(included),
+        "token_estimate": sum(estimate_tokens(it.text) for it in included),
+        "token_budget": budget,
+        "items": [{"kind": it.kind, "est_tokens": estimate_tokens(it.text), "preview": it.text[:160]} for it in included],
+        "dropped": [it.kind for it in dropped],
+    }
 
 
 def build_context_bundle(

@@ -118,6 +118,28 @@ def _build_context(session: Session, project: Project, target: Target, task: Tas
     )
 
 
+def preview_context(session: Session, project: Project, target: Target, *, task_type: str,
+                    objective: str | None = None, params: dict | None = None) -> dict:
+    """Build a transient TaskContext from request params (no Task row) and assemble
+    the bundle for a pre-flight launch preview. Decompilation is omitted (added at
+    run time) to keep the preview fast/offline."""
+    from hexgraph.engine.context import preview_context as assemble
+
+    params = params or {}
+    meta = target.metadata_json or {}
+    risky = sorted(set(meta.get("imports", [])) & RISKY_SINKS)
+    sibling = pick_sibling(session, project.id, target)
+    ctx = TaskContext(
+        task_id="preview", task_type=task_type, project_id=project.id, target_id=target.id,
+        target_name=target.name, objective=objective, function=params.get("function"),
+        sink=params.get("sink") or (risky[0] if risky else None),
+        sibling_target_id=sibling.id if sibling else None,
+        sibling_name=sibling.name if sibling else None,
+        target_format=target.format, arch=target.arch, mock_scenario=params.get("mock_scenario"),
+    )
+    return assemble(session, project, target, ctx)
+
+
 def _compile_harnesses(findings) -> None:
     """For harness_generation findings, actually build the emitted source in the
     sandbox and record the real result. Best-effort + env/docker-gated."""

@@ -2,6 +2,24 @@ import { useEffect, useState } from "react";
 import { api, Finding } from "../api";
 import { Icon } from "./Icon";
 
+const LIFECYCLE = ["new", "triaging", "confirmed", "reported"];
+function Lifecycle({ status }: { status: string }) {
+  const dismissed = status === "dismissed";
+  const idx = LIFECYCLE.indexOf(status);
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 4, margin: "8px 0", flexWrap: "wrap" }}>
+      {LIFECYCLE.map((s, i) => (
+        <span key={s} style={{
+          fontSize: 10.5, padding: "2px 8px", borderRadius: 999,
+          background: !dismissed && i <= idx ? "var(--accent-grad)" : "var(--surface-3)",
+          color: !dismissed && i <= idx ? "#0a0c12" : "var(--muted)", fontWeight: 700,
+        }}>{s}</span>
+      ))}
+      {dismissed && <span className="chip sev-info">dismissed</span>}
+    </div>
+  );
+}
+
 // Detail + triage + follow-on launch + provenance for a selected finding.
 export default function Inspector({ finding, onChanged, onLaunch, onViewTask, onHighlight }: {
   finding: Finding | null; onChanged: () => void; onLaunch: (taskId: string) => void;
@@ -38,6 +56,7 @@ export default function Inspector({ finding, onChanged, onLaunch, onViewTask, on
         <span className="tag">{finding.status}</span>
         {finding.origin && finding.origin !== "agent" && <span className="tag">{finding.origin}</span>}
       </div>
+      <Lifecycle status={finding.status} />
       <div className="actions">
         <button className="btn sm" onClick={() => setStatus("confirmed")}><Icon name="check" size={12} /> Accept</button>
         <button className="btn sm danger" onClick={() => setStatus("dismissed")}><Icon name="x" size={12} /> Dismiss</button>
