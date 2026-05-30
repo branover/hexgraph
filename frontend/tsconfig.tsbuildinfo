@@ -1,0 +1,1 @@
+{"root":["./src/api.ts","./src/main.tsx","./src/types.d.ts","./src/components/FindingsPanel.tsx","./src/components/GraphView.tsx","./src/components/Header.tsx","./src/components/Inspector.tsx","./src/pages/Projects.tsx","./src/pages/Workspace.tsx"],"version":"5.9.3"}

@@ -27,6 +27,9 @@ fixtures: ## (Re)build the test target binaries/firmware under tests/fixtures
 sandbox-build: ## Build the analysis sandbox Docker image (add WITH_GHIDRA=1 to include Ghidra)
 	docker build -f Dockerfile.sandbox -t hexgraph-sandbox:latest .
 
+ui: ## Build the React SPA into the package (needs Node/npm)
+	cd frontend && npm install && npm run build
+
 serve: ## Start the loopback-only API/UI (lands in M1-T5)
 	$(PY) -m hexgraph.cli serve
 

@@ -47,10 +47,8 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 hexgraph = [
-    "web/templates/*.html",
-    "web/static/*.css",
-    "web/static/*.js",
-    "web/static/vendor/*.js",
+    "web/dist/index.html",
+    "web/dist/assets/*",
     "sandbox/probes/*.py",
 ]
 

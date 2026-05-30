@@ -6,11 +6,15 @@ then run the resume verifier, then continue at the next unchecked task.
 ## ▶ RESUME HERE
 - **Current milestone:** v2 build — see [`docs/implementation-plan.md`](docs/implementation-plan.md)
   (built from [`docs/design-vision.md`](docs/design-vision.md)). MVP (M0–M5) is the foundation.
-- **Next task:** **P4-0** — stand up the React+Vite+TS SPA shell served by FastAPI (the analyst
-  notebook). **Needs Node/npm on the host** — verify/install before starting. (P0–P3 complete.)
-- **Last verified:** `make test` → 93 passed; `make demo` exits 0.
-  P3 acceptance: tasks carry an anchor; `/api/capabilities` filters launch options; rule-based
-  follow-up suggestions via `/api/findings/{id}/suggestions`; pattern_sweep edge carries seed link.
+- **Next task:** **P5** — deepen finding/task management (task workspace + provenance navigation:
+  finding→task→components→follow-ons; virtualized list; bulk triage). Much of the findings list
+  (sort/filter/group/counts) + accept/dismiss + suggestions already shipped in the P4 SPA.
+  Then **P6** (status-widening migration, annotations, hypotheses, gates, feedback-into-context),
+  **P7** (search/report/cross-target), **P8** (cheap real-key vuln target + cassette-replay test).
+- **Last verified:** `make test` → 93 passed; `make demo` exits 0. SPA builds (`make ui`) and renders
+  the workspace (verified via Playwright screenshots): graph hub + inspector + findings management.
+- **UI quickstart (updated):** `make ui` once → `make sandbox-build` once →
+  `hexgraph ingest tests/fixtures/synthetic_fw.bin --name demo` → `hexgraph serve` → http://127.0.0.1:8765.
 - **How to re-verify:** `make test`; or run the UI (see UI quickstart below).
 - **v2 sequencing:** P0 seams/migrations → P1 typed graph → P2 context bundle/CAS → P3 task anchors →
   P4 React notebook UI → P5 finding/task management → P6 HITL/triage → P7 search/report/cross-target →
@@ -106,7 +110,10 @@ then run the resume verifier, then continue at the next unchecked task.
 - [x] P1 Typed graph core: `node` table + content_hash identity (`engine/nodes.py`); polymorphic attributed `edge` (`engine/edges.py`, String type cols, no CHECK); findings attach via `about` edge; recon materializes bounded symbol/string nodes; decompile makes function nodes + `calls` edges; migration `0002_typed_graph`. 83 tests pass.
 - [x] P2 Context Bundle + CAS: `engine/cas.py` content-addressed store; `engine/context.py` ContextBuilder (graph-walk + budget pack + drop tracking + deterministic `bundle_sha`); full trace (prompt/system/bundle/response/usage); `llm/cassette.py` response cassette keyed by bundle_sha (record/replay/auto); `engine/runs.py` analysis_run + diff_runs; CLI `prune`; migration `0003_context_runs`. 88 tests pass. (Staleness: deps recorded on bundle; UI surfacing deferred.)
 - [x] P3 Task anchors (`anchor_kind`/`anchor_id`, migration `0004`) + edge-anchored context; `engine/capabilities.py` + `/api/capabilities`; `engine/suggester.py` FollowupSuggester+RuleBasedSuggester + `/api/findings/{id}/suggestions` (entitlement-gated); pattern_sweep edge carries `matched_from_finding_id`. 93 tests pass.
-- [ ] P4 Analyst-notebook UI (React+Vite+TS): graph hub + visual grammar, Inspector, SSE activity, launch dialog + pre-flight context preview
+- [x] P4 Analyst-notebook UI (React+Vite+TS in `frontend/`, served at `/`): graph hub + visual grammar +
+  progressive disclosure, Inspector (detail/triage/followups/suggestions), capability-filtered launchers,
+  findings management (sort/filter/group/counts), cost badge. Verified via Playwright. `make ui` builds it.
+  **Deferred:** SSE live activity (polls now), pre-flight context preview, non-finding node detail.
 - [ ] P5 Finding/task management at scale: virtualized findings workspace (sort/filter/group/bulk/saved filters), provenance navigation, task workspace, tags/notes
 - [ ] P6 HITL/triage/annotation/hypotheses + approval gates + feedback-into-context
 - [ ] P7 Search (FTS5) + run-compare + report export + cross-target same-code-as (+ deferrable CVE/dataflow/dedup)

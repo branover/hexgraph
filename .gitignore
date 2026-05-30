@@ -17,3 +17,8 @@ dist/
 # OS
 .DS_Store
 *.bak
+
+# Frontend build artifacts (run `make ui` to build the SPA)
+frontend/node_modules/
+frontend/dist/
+src/hexgraph/web/dist/

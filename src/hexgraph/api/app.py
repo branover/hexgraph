@@ -1,7 +1,8 @@
-"""FastAPI app on loopback (SPEC §3, §8): JSON API + HTMX/JS workspace UI.
+"""FastAPI app on loopback (SPEC §3, §8): JSON API + the React SPA (P4).
 
-Endpoints: health, projects/targets/findings reads, graph JSON, task launch +
-status. The graph renders offline via a vendored Cytoscape.js (no CDN).
+Endpoints: health, projects/targets/findings reads, graph JSON, capabilities,
+suggestions, runs, task launch + status. The built SPA (frontend/, `make ui`) is
+served at / with a client-side-routing fallback; all assets are local (offline).
 """
 
 from __future__ import annotations
@@ -9,10 +10,9 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from hexgraph import __version__
@@ -26,7 +26,6 @@ from hexgraph.engine.tasks import create_task
 from hexgraph.engine.worker import get_worker
 
 _WEB = Path(__file__).resolve().parent.parent / "web"
-templates = Jinja2Templates(directory=str(_WEB / "templates"))
 
 
 @asynccontextmanager
@@ -83,29 +82,10 @@ def _finding_dict(f: Finding) -> dict:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="HexGraph", version=__version__, lifespan=_lifespan)
-    app.mount("/static", StaticFiles(directory=str(_WEB / "static")), name="static")
 
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "version": __version__}
-
-    # --- UI ---
-    @app.get("/", response_class=HTMLResponse)
-    def index(request: Request):
-        with session_scope() as s:
-            projects = [_project_dict(p) for p in s.query(Project).all()]
-        return templates.TemplateResponse(
-            request, "index.html", {"projects": projects, "version": __version__}
-        )
-
-    @app.get("/projects/{project_id}", response_class=HTMLResponse)
-    def workspace(request: Request, project_id: str):
-        with session_scope() as s:
-            project = s.get(Project, project_id)
-            if project is None:
-                raise HTTPException(404, "project not found")
-            ctx = {"project": _project_dict(project), "version": __version__}
-        return templates.TemplateResponse(request, "workspace.html", ctx)
 
     # --- JSON API ---
     @app.get("/api/projects")
@@ -271,6 +251,18 @@ def create_app() -> FastAPI:
             if t is None:
                 raise HTTPException(404, "task not found")
             return {"id": t.id, "type": t.type, "status": t.status.value, "target_id": t.target_id}
+
+    # --- SPA (built by `frontend/`; served at / with client-side routing fallback) ---
+    dist = _WEB / "dist"
+    if (dist / "index.html").exists():
+        if (dist / "assets").is_dir():
+            app.mount("/assets", StaticFiles(directory=str(dist / "assets")), name="assets")
+
+        @app.get("/{full_path:path}", include_in_schema=False)
+        def spa(full_path: str):
+            # All /api, /graph, /health routes are matched above; everything else is
+            # the single-page app (so client-side routes like /projects/<id> work).
+            return FileResponse(dist / "index.html")
 
     return app
 
