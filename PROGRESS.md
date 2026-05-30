@@ -137,6 +137,14 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-05-30: **Researcher depth — Chunk B: hypothesis lifecycle** (P6). `engine/hypotheses.py` +
+  API (`/api/projects/{id}/hypotheses`, `/api/hypotheses/{id}/{evidence,status}`). A hypothesis is a
+  `hypothesis` node; findings attach as `supports`/`refutes` evidence (finding→node edges). Status is
+  *derived* (open→supported/refuted/contested) unless a human pins confirmed/rejected (sticky until
+  reopened). Open/supported/contested hypotheses anchored (`about`) to a target feed that target's
+  task context (`open_hypotheses` item). UI: `HypothesisPanel` in NodeInspector + "New from
+  finding"/link-to-existing controls in the finding Inspector; distinct graph color + bulb icon.
+  128 tests pass. (Next: C — report viewer + run-compare UI.)
 - 2026-05-30: **Researcher depth — Chunk A: annotations** (P6). `annotation` table (migration `0006`),
   rename/note/tag on target|node|finding; human→confirmed, agent→proposed (confirm/reject); confirmed
   rename updates node display name (keeps fq_name identity + name_history); confirmed renames/notes feed

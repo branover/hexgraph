@@ -101,6 +101,14 @@ def _gather_items(session: Session, project: Project, target: Target, task, ctx)
                            "ANALYST-CONFIRMED (authoritative): " + "; ".join(ann_facts[:15]),
                            96, "target", target.id))
 
+    from hexgraph.engine.hypotheses import open_for_target
+    hyps = open_for_target(session, project.id, target.id)
+    if hyps:
+        items.append(_Item("open_hypotheses",
+                           "Open research questions to weigh evidence for/against: "
+                           + "; ".join(f"[{h['status']}] {h['statement']}" for h in hyps[:10]),
+                           92, "target", target.id))
+
     imports = meta.get("imports", [])
     if imports:
         items.append(_Item("imports", "Imports: " + ", ".join(imports[:40]), 60, "target", target.id))

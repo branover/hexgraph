@@ -9,6 +9,11 @@ export interface Finding {
   suggested_followups?: any[]; related_target_refs?: string[]; created_at?: string;
   origin?: string; dismissed_reason?: string | null; human_notes?: string | null; tags?: string[];
 }
+export interface EvidenceRef { finding_id: string; title: string; severity: string; status: string; origin: string; }
+export interface Hypothesis {
+  id: string; statement: string; rationale?: string | null; status: string; status_origin: string;
+  supports: EvidenceRef[]; refutes: EvidenceRef[];
+}
 export interface GraphNode { id: string; type: "target" | "node" | "finding"; label: string; [k: string]: any; }
 export interface GraphEdge { id: string; source: string; target: string; type: string; src_kind?: string; dst_kind?: string; origin?: string; confidence?: number | null; }
 export interface Graph { project_id: string; nodes: GraphNode[]; edges: GraphEdge[]; }
@@ -56,6 +61,11 @@ export const api = {
   createAnnotation: (pid: string, body: any) => postJSON<any>(`/api/projects/${pid}/annotations`, body),
   annotations: (nodeKind: string, nodeId: string) => getJSON<any[]>(`/api/annotations/${nodeKind}/${nodeId}`),
   setAnnotationStatus: (id: string, status: string) => postJSON<any>(`/api/annotations/${id}/status`, { status }),
+  // Hypotheses (research questions evidenced by findings)
+  createHypothesis: (pid: string, body: any) => postJSON<Hypothesis>(`/api/projects/${pid}/hypotheses`, body),
+  hypothesis: (hid: string) => getJSON<Hypothesis>(`/api/hypotheses/${hid}`),
+  linkEvidence: (hid: string, finding_id: string, relation: string) => postJSON<Hypothesis>(`/api/hypotheses/${hid}/evidence`, { finding_id, relation }),
+  setHypothesisStatus: (hid: string, status: string) => postJSON<Hypothesis>(`/api/hypotheses/${hid}/status`, { status }),
   async addTarget(pid: string, file: File, recon: boolean): Promise<any> {
     const fd = new FormData();
     fd.append("file", file);

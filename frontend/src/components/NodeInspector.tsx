@@ -2,13 +2,15 @@ import { GraphNode, TargetNode } from "../api";
 import { Icon, NODE_ICON } from "./Icon";
 import Launcher from "./Launcher";
 import Annotations from "./Annotations";
+import HypothesisPanel from "./HypothesisPanel";
 
 // Node-type-aware detail shown when a target/function/symbol/string node is
 // selected in the graph (findings use the richer Inspector instead).
-export default function NodeInspector({ node, target, allowed, projectId, onLaunch, onChanged }: {
+export default function NodeInspector({ node, target, allowed, projectId, onLaunch, onChanged, onViewFinding }: {
   node: GraphNode; target?: TargetNode; allowed: string[]; isMock?: boolean; projectId?: string;
-  onLaunch: (type: string) => void; onChanged?: () => void;
+  onLaunch: (type: string) => void; onChanged?: () => void; onViewFinding?: (fid: string) => void;
 }) {
+  const isHypothesis = node.type === "node" && node.node_type === "hypothesis";
   const icon = node.type === "target" ? NODE_ICON[node.kind] : NODE_ICON[node.node_type] || "fn";
 
   return (
@@ -39,7 +41,11 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
         </>
       )}
 
-      {node.type === "node" && (
+      {isHypothesis && (
+        <HypothesisPanel hypothesisId={node.id} onViewFinding={onViewFinding} onChanged={onChanged} />
+      )}
+
+      {node.type === "node" && !isHypothesis && (
         <>
           <div className="sec">Attributes</div>
           <div className="kvs">
@@ -54,7 +60,7 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
         </>
       )}
 
-      {projectId && (
+      {projectId && !isHypothesis && (
         <Annotations projectId={projectId} nodeKind={node.type === "target" ? "target" : "node"} nodeId={node.id}
                      allowRename={node.type === "node" && node.node_type === "function"} onChanged={onChanged} />
       )}

@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from hexgraph import __version__
 from hexgraph.api.loopback import assert_loopback
 from hexgraph.config import load_config
-from hexgraph.db.models import Finding, FindingStatus, Project, Target, Task
+from hexgraph.db.models import Finding, FindingStatus, Node, Project, Target, Task
 from hexgraph.db.session import init_db, session_scope
 from hexgraph.engine.findings import row_to_payload
 from hexgraph.engine.graph import build_graph
@@ -48,6 +48,17 @@ class AnnotationCreate(BaseModel):
     node_id: str
     kind: str  # rename | note | tag | type_decl
     value: str
+
+
+class HypothesisCreate(BaseModel):
+    statement: str
+    rationale: str | None = None
+    target_id: str | None = None
+
+
+class EvidenceLink(BaseModel):
+    finding_id: str
+    relation: str  # supports | refutes
 
 
 class ProjectCreate(BaseModel):
@@ -405,6 +416,59 @@ def create_app() -> FastAPI:
             except AnnotationError as exc:
                 raise HTTPException(400, str(exc))
             return _ann_dict(a)
+
+    # --- Hypotheses (research questions evidenced by findings) ---
+    @app.post("/api/projects/{project_id}/hypotheses")
+    def api_create_hypothesis(project_id: str, body: HypothesisCreate):
+        from hexgraph.engine.hypotheses import HypothesisError, create_hypothesis, summary
+
+        with session_scope() as s:
+            project = s.get(Project, project_id)
+            if project is None:
+                raise HTTPException(404, "project not found")
+            try:
+                node = create_hypothesis(s, project, statement=body.statement,
+                                         rationale=body.rationale, target_id=body.target_id)
+                return summary(s, node.id)
+            except HypothesisError as exc:
+                raise HTTPException(400, str(exc))
+
+    @app.get("/api/hypotheses/{hypothesis_id}")
+    def api_hypothesis(hypothesis_id: str):
+        from hexgraph.engine.hypotheses import HypothesisError, summary
+
+        with session_scope() as s:
+            try:
+                return summary(s, hypothesis_id)
+            except HypothesisError as exc:
+                raise HTTPException(404, str(exc))
+
+    @app.post("/api/hypotheses/{hypothesis_id}/evidence")
+    def api_hypothesis_evidence(hypothesis_id: str, body: EvidenceLink):
+        from hexgraph.engine.hypotheses import HypothesisError, link_evidence, summary
+
+        with session_scope() as s:
+            node = s.get(Node, hypothesis_id)
+            project = s.get(Project, node.project_id) if node is not None else None
+            if project is None:
+                raise HTTPException(404, "hypothesis not found")
+            try:
+                link_evidence(s, project, hypothesis_id=hypothesis_id, finding_id=body.finding_id,
+                              relation=body.relation)
+            except HypothesisError as exc:
+                raise HTTPException(400, str(exc))
+            return summary(s, hypothesis_id)
+
+    @app.post("/api/hypotheses/{hypothesis_id}/status")
+    def api_hypothesis_status(hypothesis_id: str, body: StatusUpdate):
+        from hexgraph.engine.hypotheses import HypothesisError, set_status, summary
+
+        with session_scope() as s:
+            try:
+                set_status(s, hypothesis_id, body.status)
+            except HypothesisError as exc:
+                raise HTTPException(400, str(exc))
+            return summary(s, hypothesis_id)
 
     @app.get("/api/capabilities")
     def api_capabilities():

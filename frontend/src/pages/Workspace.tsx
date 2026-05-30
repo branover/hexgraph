@@ -62,6 +62,13 @@ export default function Workspace() {
     return m;
   }, [detail]);
 
+  const hypotheses = useMemo(
+    () => (graph?.nodes || [])
+      .filter((n) => n.type === "node" && n.node_type === "hypothesis")
+      .map((n) => ({ id: n.id, statement: (n.attrs?.statement as string) || n.label })),
+    [graph],
+  );
+
   const viewTask = (tid: string) => { setSelTask(tid); setTab("tasks"); };
   const viewFinding = (fid: string) => { setSelTask(undefined); setSelNode(null); api.finding(fid).then((f) => { setSelFinding(f); setSelGraphId(f.id); }); };
   const bulk = async (ids: string[], status: string) => { await api.bulkStatus(ids, status); await load(); };
@@ -149,10 +156,12 @@ export default function Workspace() {
       const tgt = selNode.type === "target" ? detail.targets.find((t) => t.id === selNode.id) : undefined;
       const allowed = tgt ? (caps.target?.[tgt.kind] ?? ["recon"]) : [];
       return <NodeInspector node={selNode} target={tgt} allowed={allowed} isMock={isMock} projectId={projectId}
-                            onChanged={load} onLaunch={(type) => tgt && setLaunchFor({ target: tgt, type })} />;
+                            onChanged={load} onViewFinding={viewFinding}
+                            onLaunch={(type) => tgt && setLaunchFor({ target: tgt, type })} />;
     }
-    return <Inspector finding={selFinding} projectId={projectId} onChanged={load} onLaunch={pollThenReload}
-                      onViewTask={viewTask} onHighlight={(ids) => ids[0] && setSelGraphId(ids[0])} />;
+    return <Inspector finding={selFinding} projectId={projectId} hypotheses={hypotheses} onChanged={load}
+                      onLaunch={pollThenReload} onViewTask={viewTask}
+                      onHighlight={(ids) => ids[0] && setSelGraphId(ids[0])} />;
   };
 
   return (

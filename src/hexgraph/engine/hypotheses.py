@@ -1,0 +1,172 @@
+"""Hypotheses: the researcher's open questions, evidenced over time (P6).
+
+A hypothesis is a first-class `hypothesis` node ("the CGI handler trusts a
+length field from the network"). Findings attach to it as evidence via
+`supports`/`refutes` edges (finding → hypothesis). The node's `status` is
+*derived* from that evidence (open → supported / refuted / contested) unless a
+human pins a verdict (confirmed / rejected), which is sticky.
+
+Open and supported hypotheses about a target flow into that target's task
+context (engine/context.py) so the agent reasons against the live question set —
+the same human-ground-truth feedback loop annotations use.
+"""
+
+from __future__ import annotations
+
+from sqlalchemy.orm import Session
+
+from hexgraph.db.models import Edge, EdgeType, Finding, Node, NodeType, Project, Target
+from hexgraph.engine.edges import add_edge
+from hexgraph.engine.nodes import get_or_create_node
+
+# Evidence relations (stored as edge types). `contradicts` reads as refuting.
+SUPPORTS = "supports"
+REFUTES = "refutes"
+RELATIONS = {SUPPORTS: EdgeType.supports, REFUTES: EdgeType.refutes}
+_REFUTING = (EdgeType.refutes.value, EdgeType.contradicts.value)
+
+# Derived states + the two sticky human verdicts.
+DERIVED = ("open", "supported", "refuted", "contested")
+HUMAN_VERDICTS = ("confirmed", "rejected")
+STATUSES = DERIVED + HUMAN_VERDICTS
+
+
+class HypothesisError(ValueError):
+    pass
+
+
+def create_hypothesis(
+    session: Session, project: Project, *, statement: str, rationale: str | None = None,
+    target_id: str | None = None, origin: str = "human",
+) -> Node:
+    statement = (statement or "").strip()
+    if not statement:
+        raise HypothesisError("a hypothesis needs a statement")
+    if target_id is not None:
+        t = session.get(Target, target_id)
+        if t is None or t.project_id != project.id:
+            raise HypothesisError(f"target {target_id} does not exist in this project")
+    node = get_or_create_node(
+        session, project_id=project.id, node_type=NodeType.hypothesis,
+        name=statement[:120], fq_name=statement,
+        attrs={"statement": statement, "rationale": rationale, "status": "open",
+               "status_origin": "derived"},
+        created_by=origin,
+    )
+    if target_id:
+        add_edge(session, project_id=project.id, src=("node", node.id), dst=("target", target_id),
+                 type=EdgeType.about, origin=origin, confidence=0.9)
+    return node
+
+
+def _require_hypothesis(session: Session, hypothesis_id: str) -> Node:
+    node = session.get(Node, hypothesis_id)
+    if node is None or node.node_type != NodeType.hypothesis.value:
+        raise HypothesisError(f"{hypothesis_id} is not a hypothesis node")
+    return node
+
+
+def link_evidence(
+    session: Session, project: Project, *, hypothesis_id: str, finding_id: str,
+    relation: str, origin: str = "human",
+) -> Edge:
+    if relation not in RELATIONS:
+        raise HypothesisError(f"relation must be one of {sorted(RELATIONS)}")
+    node = _require_hypothesis(session, hypothesis_id)
+    f = session.get(Finding, finding_id)
+    if f is None or f.project_id != project.id:
+        raise HypothesisError(f"finding {finding_id} does not exist in this project")
+    edge = add_edge(
+        session, project_id=project.id, src=("finding", finding_id), dst=("node", node.id),
+        type=RELATIONS[relation], origin=origin, confidence=0.7,
+    )
+    recompute_status(session, node)
+    return edge
+
+
+def set_status(session: Session, hypothesis_id: str, status: str, *, origin: str = "human") -> Node:
+    if status not in STATUSES:
+        raise HypothesisError(f"invalid status {status!r} (allowed: {list(STATUSES)})")
+    node = _require_hypothesis(session, hypothesis_id)
+    attrs = dict(node.attrs_json or {})
+    attrs["status"] = status
+    attrs["status_origin"] = origin
+    node.attrs_json = attrs
+    # A human reopening to a derived state hands control back to the evidence.
+    if origin == "human" and status in DERIVED:
+        recompute_status(session, node)
+    return node
+
+
+def _evidence_edges(session: Session, node_id: str) -> list[Edge]:
+    return (
+        session.query(Edge)
+        .filter(Edge.dst_kind == "node", Edge.dst_id == node_id, Edge.src_kind == "finding",
+                Edge.type.in_((EdgeType.supports.value, *_REFUTING)))
+        .all()
+    )
+
+
+def recompute_status(session: Session, node: Node) -> str:
+    """Derive status from supporting/refuting findings — unless a human pinned a
+    verdict (confirmed/rejected), which stays put until they reopen it."""
+    attrs = dict(node.attrs_json or {})
+    if attrs.get("status_origin") == "human" and attrs.get("status") in HUMAN_VERDICTS:
+        return attrs["status"]
+    edges = _evidence_edges(session, node.id)
+    s = sum(1 for e in edges if e.type == EdgeType.supports.value)
+    r = sum(1 for e in edges if e.type in _REFUTING)
+    if s and r:
+        status = "contested"
+    elif s:
+        status = "supported"
+    elif r:
+        status = "refuted"
+    else:
+        status = "open"
+    attrs["status"] = status
+    attrs["status_origin"] = "derived"
+    node.attrs_json = attrs
+    return status
+
+
+def summary(session: Session, hypothesis_id: str) -> dict:
+    node = _require_hypothesis(session, hypothesis_id)
+    attrs = node.attrs_json or {}
+    supports, refutes = [], []
+    for e in _evidence_edges(session, node.id):
+        f = session.get(Finding, e.src_id)
+        if f is None:
+            continue
+        item = {"finding_id": f.id, "title": f.title, "severity": f.severity,
+                "status": f.status, "origin": e.origin}
+        (supports if e.type == EdgeType.supports.value else refutes).append(item)
+    return {
+        "id": node.id,
+        "statement": attrs.get("statement", node.name),
+        "rationale": attrs.get("rationale"),
+        "status": attrs.get("status", "open"),
+        "status_origin": attrs.get("status_origin", "derived"),
+        "supports": supports,
+        "refutes": refutes,
+    }
+
+
+def open_for_target(session: Session, project_id: str, target_id: str) -> list[dict]:
+    """Open/supported/contested hypotheses anchored (`about`) to a target — the
+    live question set fed into that target's task context."""
+    edges = (
+        session.query(Edge)
+        .filter(Edge.project_id == project_id, Edge.type == EdgeType.about.value,
+                Edge.src_kind == "node", Edge.dst_kind == "target", Edge.dst_id == target_id)
+        .all()
+    )
+    out = []
+    for e in edges:
+        n = session.get(Node, e.src_id)
+        if n is None or n.node_type != NodeType.hypothesis.value:
+            continue
+        attrs = n.attrs_json or {}
+        if attrs.get("status") in ("open", "supported", "contested"):
+            out.append({"statement": attrs.get("statement", n.name), "status": attrs.get("status")})
+    return out

@@ -22,14 +22,16 @@ function Lifecycle({ status }: { status: string }) {
 }
 
 // Detail + triage + follow-on launch + provenance for a selected finding.
-export default function Inspector({ finding, projectId, onChanged, onLaunch, onViewTask, onHighlight }: {
-  finding: Finding | null; projectId?: string; onChanged: () => void; onLaunch: (taskId: string) => void;
+export default function Inspector({ finding, projectId, hypotheses = [], onChanged, onLaunch, onViewTask, onHighlight }: {
+  finding: Finding | null; projectId?: string; hypotheses?: { id: string; statement: string }[];
+  onChanged: () => void; onLaunch: (taskId: string) => void;
   onViewTask?: (taskId: string) => void; onHighlight?: (ids: string[]) => void;
 }) {
   const [sugg, setSugg] = useState<any[]>([]);
   const [copied, setCopied] = useState(false);
+  const [hypId, setHypId] = useState("");
   useEffect(() => {
-    setSugg([]); setCopied(false);
+    setSugg([]); setCopied(false); setHypId("");
     if (finding) api.suggestions(finding.id).then(setSugg).catch(() => setSugg([]));
   }, [finding?.id]);
 
@@ -43,6 +45,15 @@ export default function Inspector({ finding, projectId, onChanged, onLaunch, onV
     onLaunch(task_id);
   };
   const copy = () => { navigator.clipboard?.writeText(ev.decompiled_snippet || ""); setCopied(true); setTimeout(() => setCopied(false), 1200); };
+  const newHypothesis = async () => {
+    if (!projectId) return;
+    const statement = window.prompt("New hypothesis (this finding becomes supporting evidence):", finding.title);
+    if (!statement?.trim()) return;
+    const h = await api.createHypothesis(projectId, { statement: statement.trim(), target_id: finding.target_id });
+    await api.linkEvidence(h.id, finding.id, "supports");
+    onChanged();
+  };
+  const linkHyp = async (relation: string) => { if (hypId) { await api.linkEvidence(hypId, finding.id, relation); setHypId(""); onChanged(); } };
 
   return (
     <div className="insp scroll fade-in">
@@ -121,6 +132,21 @@ export default function Inspector({ finding, projectId, onChanged, onLaunch, onV
           </div>
         </>
       )}
+
+      <div className="sec">Hypotheses</div>
+      <div className="actions" style={{ flexWrap: "wrap" }}>
+        <button className="btn sm" onClick={newHypothesis}><Icon name="plus" size={11} /> New from finding</button>
+        {hypotheses.length > 0 && (
+          <>
+            <select className="sel" value={hypId} onChange={(e) => setHypId(e.target.value)}>
+              <option value="">link to existing…</option>
+              {hypotheses.map((h) => <option key={h.id} value={h.id}>{h.statement.slice(0, 60)}</option>)}
+            </select>
+            <button className="btn sm" disabled={!hypId} onClick={() => linkHyp("supports")}><Icon name="check" size={11} /> supports</button>
+            <button className="btn sm danger" disabled={!hypId} onClick={() => linkHyp("refutes")}><Icon name="x" size={11} /> refutes</button>
+          </>
+        )}
+      </div>
 
       {projectId && <Annotations projectId={projectId} nodeKind="finding" nodeId={finding.id} onChanged={onChanged} />}
     </div>
