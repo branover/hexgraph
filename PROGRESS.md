@@ -6,12 +6,13 @@ then run the resume verifier, then continue at the next unchecked task.
 ## ▶ RESUME HERE
 - **Current milestone:** v2 build — see [`docs/implementation-plan.md`](docs/implementation-plan.md)
   (built from [`docs/design-vision.md`](docs/design-vision.md)). MVP (M0–M5) is the foundation.
-- **Current state:** **P0–P8 all delivered** (core). Remaining are documented sub-items, not whole phases:
-  P6 (annotation table + confirmed-rename tool-output rewrite; hypothesis lifecycle UI; richer approval
-  gates), P7 (search/report UI + FTS5; P7-5 offline CVE / bounded dataflow / reviewable dedup), P4
-  (SSE live activity; pre-flight context preview).
-- **Last verified:** `make test` → 106 passed, 1 skipped (live, no key); `make demo` exits 0.
-  P7: search (coverage-honest), report export (provenance-embedded), cross-target same-code linking.
+- **Current state:** **P0–P8 all delivered** (core) + **researcher depth (P6/P7) complete**: annotations
+  (rename/note/tag, agent-proposed→confirm, confirmed facts feed context), hypothesis lifecycle
+  (evidence-derived status, sticky human verdict, open hypotheses feed context), in-app report viewer +
+  run-compare diff UI. Remaining documented sub-items (not whole phases): richer approval gates (review-on-
+  output / plan / spend), P7-5 (offline CVE / bounded dataflow / reviewable dedup), FTS5 search,
+  SSE live activity, real-key cassette recording (`make test-live`), Ghidra decompiler.
+- **Last verified:** `.venv/bin/python -m pytest -q` → 128 passed, 1 skipped (live, no key); SPA builds clean.
 - **UI quickstart (updated):** `make ui` once → `make sandbox-build` once →
   `hexgraph ingest tests/fixtures/synthetic_fw.bin --name demo` → `hexgraph serve` → http://127.0.0.1:8765.
 - **How to re-verify:** `make test`; or run the UI (see UI quickstart below).
@@ -137,6 +138,12 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-05-30: **Researcher depth — Chunk C: P7 viewer UI** (frontend only; backend endpoints already
+  existed). `ReportModal` renders the project report (`/api/projects/{id}/report` markdown) in-app via
+  a tiny offline md→HTML renderer (`.markdown` theme styles), with copy + download-.md. `RunCompareModal`
+  picks a target, lists its `analysis_run`s, and diffs two (`/api/runs/diff`) into added / dropped /
+  severity-changed. Workspace toolbar Report button now opens the modal (was raw new-tab); new Compare
+  button. **P6/P7 researcher depth complete.** Build clean; backend suite still 128 pass.
 - 2026-05-30: **Researcher depth — Chunk B: hypothesis lifecycle** (P6). `engine/hypotheses.py` +
   API (`/api/projects/{id}/hypotheses`, `/api/hypotheses/{id}/{evidence,status}`). A hypothesis is a
   `hypothesis` node; findings attach as `supports`/`refutes` evidence (finding→node edges). Status is

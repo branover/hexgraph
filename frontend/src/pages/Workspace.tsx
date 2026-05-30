@@ -10,6 +10,8 @@ import { TasksPanel, TaskDetail } from "../components/TasksPanel";
 import Launcher from "../components/Launcher";
 import LaunchModal from "../components/LaunchModal";
 import { AddNodeModal, AddEdgeModal } from "../components/Author";
+import ReportModal from "../components/ReportModal";
+import RunCompareModal from "../components/RunCompareModal";
 import { Icon, NODE_ICON } from "../components/Icon";
 
 export default function Workspace() {
@@ -26,7 +28,7 @@ export default function Workspace() {
   const [selTask, setSelTask] = useState<string>();
   const [q, setQ] = useState("");
   const [results, setResults] = useState<any | null>(null);
-  const [modal, setModal] = useState<"node" | "edge" | null>(null);
+  const [modal, setModal] = useState<"node" | "edge" | "report" | "compare" | null>(null);
   const [launchFor, setLaunchFor] = useState<{ target: TargetNode; type: string } | null>(null);
   const [maxed, setMaxed] = useState(false);
   const searchTimer = useRef<any>();
@@ -189,7 +191,8 @@ export default function Workspace() {
             </div>
             <button className="btn sm" onClick={() => setModal("node")}><Icon name="plus" size={12} /> Node</button>
             <button className="btn sm" onClick={() => setModal("edge")}><Icon name="link" size={13} /> Edge</button>
-            <button className="btn sm" onClick={() => window.open(api.reportUrl(projectId!), "_blank")}><Icon name="doc" size={13} /> Report</button>
+            <button className="btn sm" onClick={() => setModal("report")}><Icon name="doc" size={13} /> Report</button>
+            <button className="btn sm" onClick={() => setModal("compare")}><Icon name="refresh" size={13} /> Compare</button>
             <button className="btn sm" onClick={linkSameCode}><Icon name="link" size={13} /> Same-code</button>
             {busy && <span className="badge"><Icon name="refresh" size={12} className="spin" /> {busy}</span>}
           </div>
@@ -237,6 +240,8 @@ export default function Workspace() {
 
       {modal === "node" && <AddNodeModal projectId={projectId!} targets={detail.targets} onClose={() => setModal(null)} onDone={load} />}
       {modal === "edge" && <AddEdgeModal projectId={projectId!} graph={graph} onClose={() => setModal(null)} onDone={load} />}
+      {modal === "report" && <ReportModal projectId={projectId!} projectName={detail.project.name} onClose={() => setModal(null)} />}
+      {modal === "compare" && <RunCompareModal targets={detail.targets} onClose={() => setModal(null)} />}
       {launchFor && (
         <LaunchModal target={launchFor.target} taskType={launchFor.type} isMock={isMock}
                      onClose={() => setLaunchFor(null)} onLaunched={pollThenReload} />

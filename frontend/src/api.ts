@@ -14,6 +14,16 @@ export interface Hypothesis {
   id: string; statement: string; rationale?: string | null; status: string; status_origin: string;
   supports: EvidenceRef[]; refutes: EvidenceRef[];
 }
+export interface AnalysisRunRow {
+  id: string; task_id: string; task_type: string; backend: string; model?: string | null;
+  bundle_sha?: string | null; finding_count: number; created_at: string;
+}
+export interface RunDiff {
+  run_a: string; run_b: string;
+  added: { title: string; severity: string; category: string }[];
+  dropped: { title: string; severity: string; category: string }[];
+  changed: { title: string; from: string; to: string }[];
+}
 export interface GraphNode { id: string; type: "target" | "node" | "finding"; label: string; [k: string]: any; }
 export interface GraphEdge { id: string; source: string; target: string; type: string; src_kind?: string; dst_kind?: string; origin?: string; confidence?: number | null; }
 export interface Graph { project_id: string; nodes: GraphNode[]; edges: GraphEdge[]; }
@@ -54,6 +64,13 @@ export const api = {
   search: (pid: string, q: string) => getJSON<{ findings: any[]; nodes: any[]; coverage: any }>(`/api/projects/${pid}/search?q=${encodeURIComponent(q)}`),
   linkSameCode: (pid: string) => postJSON<{ created: number }>(`/api/projects/${pid}/link-same-code`, {}),
   reportUrl: (pid: string) => `/api/projects/${pid}/report`,
+  async report(pid: string): Promise<string> {
+    const r = await fetch(`/api/projects/${pid}/report`);
+    if (!r.ok) throw new Error(`${r.status}`);
+    return r.text();
+  },
+  targetRuns: (tid: string) => getJSON<AnalysisRunRow[]>(`/api/targets/${tid}/runs`),
+  runsDiff: (run_a: string, run_b: string) => postJSON<RunDiff>("/api/runs/diff", { run_a, run_b }),
   // Authoring (no CLI required)
   createProject: (name: string, backend: string) => postJSON<Project>("/api/projects", { name, backend }),
   createNode: (pid: string, body: any) => postJSON<any>(`/api/projects/${pid}/nodes`, body),

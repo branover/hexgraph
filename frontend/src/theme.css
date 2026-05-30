@@ -193,6 +193,22 @@ select.sel { background: var(--bg); color: var(--fg); border: 1px solid var(--bo
 .modal .foot { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 .modal textarea:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
 
+/* rendered markdown (report viewer) */
+.markdown { font-size: 13px; line-height: 1.6; color: var(--fg-dim); }
+.markdown h1 { font-size: 19px; color: var(--fg); margin: 4px 0 10px; }
+.markdown h2 { font-size: 16px; color: var(--fg); margin: 18px 0 8px; border-bottom: 1px solid var(--border); padding-bottom: 5px; }
+.markdown h3 { font-size: 13.5px; color: var(--fg); margin: 14px 0 6px; }
+.markdown h4 { font-size: 12.5px; color: var(--muted); margin: 12px 0 5px; text-transform: uppercase; letter-spacing: .05em; }
+.markdown p { margin: 7px 0; }
+.markdown ul { margin: 7px 0; padding-left: 20px; }
+.markdown li { margin: 3px 0; }
+.markdown hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+.markdown code { background: var(--surface-3); padding: 1px 5px; border-radius: 5px; font-size: 12px; }
+.markdown pre { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; overflow: auto; }
+.markdown pre code { background: none; padding: 0; }
+.markdown a { color: var(--accent); }
+.markdown strong { color: var(--fg); }
+
 /* full-screen findings/tasks management view */
 .maxscreen { position: fixed; inset: 56px 0 0 0; background: var(--bg); display: grid;
   grid-template-columns: 1.45fr 1fr; gap: 12px; padding: 12px; z-index: 40; }
