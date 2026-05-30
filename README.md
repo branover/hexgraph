@@ -17,10 +17,11 @@ Three principles are non-negotiable:
   Docker container with no network and strict resource limits. **HexGraph never executes the target**
   (static/RE only).
 
-> ### Project status — pre-1.0
-> The full MVP loop works today: **ingest → recon → AI analysis → finding → graph → spawn follow-up**,
-> across the mock and real backends, with triage and export. See [Roadmap](#roadmap) for milestone
-> status. This is still pre-1.0 — expect rough edges (UI polish in particular; see `docs/ui-backlog.md`).
+> ### Project status — pre-1.0, v2 in progress
+> The MVP loop works (ingest → recon → AI analysis → finding → graph → spawn). The **v2** build
+> (typed graph, content-addressed context bundles, React analyst-notebook UI, task/finding management,
+> HITL triage, search/report) is well underway — see `docs/implementation-plan.md` and `PROGRESS.md`
+> for exact phase status. Build the UI with `make ui`. Still pre-1.0 — expect rough edges.
 
 ---
 

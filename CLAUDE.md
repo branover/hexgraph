@@ -10,6 +10,13 @@ The MVP described in `context/SPEC.md` is **complete** — all milestones M0–M
 
 **P0 landed** (foundations & seams):
 - **Migrations:** Alembic (`alembic.ini`, `migrations/`, baseline rev `bbdb1d98bf54`). `hexgraph init` and `hexgraph db upgrade` run `db/migrate.py::prepare_database` (fresh→upgrade from baseline; legacy create_all'd DB→stamp; backs up to `<db>.bak` before upgrading). **Tests use `init_db()` (create_all) on throwaway DBs and never migrate; persistent DBs use migrations.** Discipline: any schema change ships an `alembic revision --autogenerate` migration committed alongside the model change.
+**P7 landed (backend)** — search, report, cross-target:
+- `engine/search.py` `search_project()` (LIKE over findings+nodes; **coverage-honest** — undecompiled code isn't searchable yet; FTS5 is a later optimization) → `GET /api/projects/{id}/search?q=`.
+- `engine/report.py` `build_report_md()` — Markdown over confirmed/reported findings, **provenance embedded** (task/backend/model/bundle) → `GET /api/projects/{id}/report` (text/markdown).
+- `engine/crosstarget.py` `link_same_code()` — `similar_to` edges between same-`content_hash` function nodes in *different* targets (n-day primitive) → `POST /api/projects/{id}/link-same-code`.
+- **Node identity rule (corrected here):** within a target, identity is `(target, fq_name)`; `content_hash` is a cross-target *matching* attribute (so the same function in two binaries is two nodes linkable by `similar_to`, not one). `materialize_function(..., pseudocode=…)` upgrades the hash to the body hash (`force_hash`).
+- **Deferred P7:** search/report UI + FTS5; P7-5 (offline CVE correlation, bounded dataflow hints, reviewable dedup).
+
 **P8 landed** — cheap real-key validation harness:
 - `tests/fixtures/vuln_fw/` — tiny ELFs each planting one statically-findable bug (cgi=strcpy overflow, cmd=system injection, creds=hardcoded secret) + `expectations.json` (binary→category, min rate); built by its `build.sh` (also `make fixtures`).
 - `hexgraph/eval.py` `run_scored_eval()`/`score_detection()` — ingest→recon→static_analysis per binary, score vs expectations (manages its own sessions: commit before `run_task_sync`).

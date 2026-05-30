@@ -6,11 +6,12 @@ then run the resume verifier, then continue at the next unchecked task.
 ## ▶ RESUME HERE
 - **Current milestone:** v2 build — see [`docs/implementation-plan.md`](docs/implementation-plan.md)
   (built from [`docs/design-vision.md`](docs/design-vision.md)). MVP (M0–M5) is the foundation.
-- **Next task:** **P7** — search (FTS5) + run-compare UI + report export + cross-target same-code-as.
-  Then **P6 remaining**: annotation table (rename/note/tag) + confirmed-rename rewrites tool output;
-  hypothesis lifecycle UI; richer approval gates. (P0–P5, P6-core, P8 complete.)
-- **Last verified:** `make test` → 102 passed, 1 skipped (live, no key); `make demo` exits 0.
-  P8: `make test-live` (key-gated, cassette-backed) scores real-backend detection on `tests/fixtures/vuln_fw/`.
+- **Current state:** **P0–P8 all delivered** (core). Remaining are documented sub-items, not whole phases:
+  P6 (annotation table + confirmed-rename tool-output rewrite; hypothesis lifecycle UI; richer approval
+  gates), P7 (search/report UI + FTS5; P7-5 offline CVE / bounded dataflow / reviewable dedup), P4
+  (SSE live activity; pre-flight context preview).
+- **Last verified:** `make test` → 106 passed, 1 skipped (live, no key); `make demo` exits 0.
+  P7: search (coverage-honest), report export (provenance-embedded), cross-target same-code linking.
 - **UI quickstart (updated):** `make ui` once → `make sandbox-build` once →
   `hexgraph ingest tests/fixtures/synthetic_fw.bin --name demo` → `hexgraph serve` → http://127.0.0.1:8765.
 - **How to re-verify:** `make test`; or run the UI (see UI quickstart below).
@@ -119,7 +120,9 @@ then run the resume verifier, then continue at the next unchecked task.
   (origin/dismissed_reason/supersedes/human_notes), `PATCH /api/findings/{id}` (agent_original stash),
   feedback-into-context (analyst_confirmed / do_not_report). **Remaining:** annotation table
   (rename/note/tag) + confirmed-rename rewrites tool output; hypothesis lifecycle; richer approval gates.
-- [ ] P7 Search (FTS5) + run-compare + report export + cross-target same-code-as (+ deferrable CVE/dataflow/dedup)
+- [x] P7 (backend) Search (LIKE, coverage-honest) + report export (provenance-embedded MD) + cross-target
+  same-code-as (`similar_to` via content_hash); run-compare backend from P2. 106 tests pass.
+  Deferred: search/report UI + FTS5; P7-5 (CVE/dataflow/dedup-review).
 - [x] P8 Real-key validation: `tests/fixtures/vuln_fw/` (cgi/cmd/creds planted bugs + expectations.json);
   `hexgraph/eval.py` scored harness; `make test-live` (key-gated, cassette-backed, tight budget); no-key CI
   proves bugs statically present + scoring logic. 102 pass / 1 skipped.

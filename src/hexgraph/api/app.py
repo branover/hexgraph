@@ -218,6 +218,36 @@ def create_app() -> FastAPI:
                 "findings": [_finding_dict(f) for f in findings],
             }
 
+    @app.get("/api/projects/{project_id}/search")
+    def api_search(project_id: str, q: str = ""):
+        from hexgraph.engine.search import search_project
+
+        with session_scope() as s:
+            if s.get(Project, project_id) is None:
+                raise HTTPException(404, "project not found")
+            return search_project(s, project_id, q)
+
+    @app.get("/api/projects/{project_id}/report")
+    def api_report(project_id: str):
+        from fastapi.responses import PlainTextResponse
+        from hexgraph.engine.report import build_report_md
+
+        with session_scope() as s:
+            try:
+                md = build_report_md(s, project_id)
+            except ValueError:
+                raise HTTPException(404, "project not found")
+        return PlainTextResponse(md, media_type="text/markdown")
+
+    @app.post("/api/projects/{project_id}/link-same-code")
+    def api_link_same_code(project_id: str):
+        from hexgraph.engine.crosstarget import link_same_code
+
+        with session_scope() as s:
+            if s.get(Project, project_id) is None:
+                raise HTTPException(404, "project not found")
+            return {"created": link_same_code(s, project_id)}
+
     @app.get("/api/capabilities")
     def api_capabilities():
         from hexgraph.engine.capabilities import capability_table
