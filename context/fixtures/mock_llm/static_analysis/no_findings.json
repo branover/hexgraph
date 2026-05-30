@@ -1,0 +1,6 @@
+{
+  "_scenario": "no_findings",
+  "_note": "Clean target. Exercises the empty-result path (must render as 'no issues found', not an error).",
+  "usage": { "input_tokens": 3100, "output_tokens": 90, "cost_source": "mock", "cost_usd": 0.0 },
+  "findings": []
+}

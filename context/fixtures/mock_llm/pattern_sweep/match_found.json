@@ -1,0 +1,25 @@
+{
+  "_scenario": "match_found",
+  "_note": "Pattern sweep across sibling targets. Demonstrates the graph payoff: creates related_to edges and a new finding on a sibling. {{sibling_target_id}} / {{sibling_name}} come from the real project's other targets via TaskContext.",
+  "usage": { "input_tokens": 7400, "output_tokens": 300, "cost_source": "mock", "cost_usd": 0.0 },
+  "findings": [
+    {
+      "title": "Same {{sink|strcpy}} sink pattern in {{sibling_name|libupnp.so}}",
+      "severity": "high",
+      "confidence": "medium",
+      "category": "memory-safety",
+      "summary": "The unbounded {{sink|strcpy}} pattern from the seed finding also appears in {{sibling_name|libupnp.so}}'s SSDP parser.",
+      "reasoning": "Signature match on the copy-into-fixed-buffer shape, confirmed by inspecting the sibling's decompilation. Same exploit primitive likely applies.",
+      "evidence": {
+        "function": "ssdp_recv",
+        "file": "{{sibling_name|/usr/lib/libupnp.so}}",
+        "sink": "{{sink|strcpy}}",
+        "decompiled_snippet": "char buf[512]; {{sink|strcpy}}(buf, pkt->location); // unbounded"
+      },
+      "related_target_refs": ["{{sibling_target_id}}"],
+      "suggested_followups": [
+        { "task_type": "static_analysis", "label": "Deep-dive ssdp_recv in {{sibling_name|libupnp.so}}", "target_ref": "{{sibling_target_id}}", "params": { "function": "ssdp_recv" } }
+      ]
+    }
+  ]
+}

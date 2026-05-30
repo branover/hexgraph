@@ -1,0 +1,27 @@
+{
+  "_scenario": "malformed_then_valid",
+  "_note": "Exercises JSON-repair/retry. On the FIRST complete() call for a task, the mock returns raw_text_first (invalid JSON) so the parser must reject+retry; on the SECOND call it returns the valid object in 'on_retry'. Implement by tracking attempt count per task_id in the mock.",
+  "raw_text_first": "Sure! Here is the analysis:\n```\n{ findings: [ {title: 'oops not valid json', severity: high } ]  // trailing comment and unquoted keys\n```",
+  "on_retry": {
+    "usage": { "input_tokens": 5300, "output_tokens": 210, "cost_source": "mock", "cost_usd": 0.0 },
+    "findings": [
+      {
+        "title": "Format-string in log_event()",
+        "severity": "medium",
+        "confidence": "medium",
+        "category": "memory-safety",
+        "summary": "User-controlled data passed directly as the format argument to a printf-family call.",
+        "reasoning": "After the malformed first response, the corrected reply identifies log_event passing r->ua straight into syslog() as the format string.",
+        "evidence": {
+          "function": "log_event",
+          "file": "{{target_name|/sbin/httpd}}",
+          "sink": "syslog",
+          "decompiled_snippet": "syslog(LOG_INFO, r->ua); // ua is attacker-controlled"
+        },
+        "suggested_followups": [
+          { "task_type": "reverse_engineering", "label": "Annotate callers of log_event", "params": { "function": "log_event" } }
+        ]
+      }
+    ]
+  }
+}

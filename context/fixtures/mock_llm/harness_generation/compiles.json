@@ -1,0 +1,24 @@
+{
+  "_scenario": "compiles",
+  "_note": "Harness generation. The mock returns harness source; the task layer attempts to compile it in the sandbox. Keep the source trivially compilable so the build path succeeds in CI.",
+  "usage": { "input_tokens": 6100, "output_tokens": 520, "cost_source": "mock", "cost_usd": 0.0 },
+  "findings": [
+    {
+      "title": "libFuzzer harness for {{function|parse_request}}",
+      "severity": "info",
+      "confidence": "high",
+      "category": "annotation",
+      "summary": "Generated a libFuzzer harness that feeds fuzz input into {{function|parse_request}}; compiles cleanly.",
+      "reasoning": "Wrapped the parser entry point in LLVMFuzzerTestOneInput, copying the fuzz buffer into a NUL-terminated heap buffer before the call.",
+      "evidence": {
+        "function": "{{function|parse_request}}",
+        "file": "{{target_name|/sbin/httpd}}",
+        "decompiled_snippet": "#include <stdint.h>\n#include <stdlib.h>\n#include <string.h>\nextern void parse_request(char*);\nint LLVMFuzzerTestOneInput(const uint8_t*d,size_t n){char*b=malloc(n+1);memcpy(b,d,n);b[n]=0;parse_request(b);free(b);return 0;}",
+        "extra": { "build": { "compiler": "clang -fsanitize=fuzzer,address", "result": "ok", "artifact": "harness_parse_request" } }
+      },
+      "suggested_followups": [
+        { "task_type": "pattern_sweep", "label": "Find other parsers with the same shape", "params": {} }
+      ]
+    }
+  ]
+}

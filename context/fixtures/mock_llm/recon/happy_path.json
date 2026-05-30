@@ -1,0 +1,23 @@
+{
+  "_scenario": "happy_path",
+  "_note": "recon is deterministic and normally needs NO LLM call. This fixture is only used when the user opts into an LLM-written recon SUMMARY. The structured recon facts themselves come from the real tools (lief/pyelftools/strings), not from here.",
+  "usage": { "input_tokens": 1400, "output_tokens": 120, "cost_source": "mock", "cost_usd": 0.0 },
+  "findings": [
+    {
+      "title": "Attack-surface summary for {{target_name|/sbin/httpd}}",
+      "severity": "info",
+      "confidence": "high",
+      "category": "recon",
+      "summary": "Network-facing {{format|ELF}} {{arch|MIPS}} binary with weak mitigations; exposes an HTTP/CGI interface and links a custom parsing library.",
+      "reasoning": "Imports include socket/recv/strcpy/system; no stack canary and no PIE per mitigation flags; strings reference '/cgi-bin/' and 'admin.cgi'. Good first targets: request parsing and CGI dispatch.",
+      "evidence": {
+        "file": "{{target_name|/sbin/httpd}}",
+        "strings": ["/cgi-bin/", "admin.cgi", "Content-Length", "token="],
+        "extra": { "mitigations": { "nx": true, "canary": false, "pie": false, "relro": "partial" } }
+      },
+      "suggested_followups": [
+        { "task_type": "static_analysis", "label": "Static-analyze the CGI request handler", "params": {} }
+      ]
+    }
+  ]
+}

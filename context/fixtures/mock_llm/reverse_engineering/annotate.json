@@ -1,0 +1,24 @@
+{
+  "_scenario": "annotate",
+  "_note": "RE annotation produces info-severity documentation findings. May surface a related_to edge when shared code is detected.",
+  "usage": { "input_tokens": 4200, "output_tokens": 380, "cost_source": "mock", "cost_usd": 0.0 },
+  "findings": [
+    {
+      "title": "Function map: {{function|cgi_handler}} and request dispatch",
+      "severity": "info",
+      "confidence": "medium",
+      "category": "annotation",
+      "summary": "{{function|cgi_handler}} parses CGI form fields then dispatches by command; FUN_00401abc is the request struct constructor.",
+      "reasoning": "Renamed FUN_00401abc -> parse_request based on field offsets and the strcpy/atoi usage; cgi_handler reads 'token' and 'user' then branches on 'cmd'. The parsing routine resembles code seen in {{sibling_target_id}}.",
+      "evidence": {
+        "function": "{{function|cgi_handler}}",
+        "file": "{{target_name|/sbin/httpd}}",
+        "decompiled_snippet": "req_t* parse_request(char *body){ ... atoi(...); strcpy(...); }"
+      },
+      "related_target_refs": ["{{sibling_target_id}}"],
+      "suggested_followups": [
+        { "task_type": "static_analysis", "label": "Static-analyze parse_request for memory safety", "params": { "function": "parse_request" } }
+      ]
+    }
+  ]
+}

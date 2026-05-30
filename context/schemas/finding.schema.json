@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hexgraph.local/schemas/finding.schema.json",
+  "title": "HexGraph Finding",
+  "description": "Canonical structured finding emitted by every task type and every LLM backend (mock and real). The contract test validates all fixtures and recorded responses against this schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["title", "severity", "confidence", "category", "summary", "evidence", "reasoning"],
+  "properties": {
+    "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "severity": { "type": "string", "enum": ["info", "low", "medium", "high", "critical"] },
+    "confidence": { "type": "string", "enum": ["low", "medium", "high"] },
+    "category": {
+      "type": "string",
+      "description": "Coarse class of finding.",
+      "enum": ["recon", "memory-safety", "command-injection", "unsafe-parsing", "weak-crypto", "hardcoded-secret", "auth", "info-leak", "annotation", "other"]
+    },
+    "summary": { "type": "string", "minLength": 1, "description": "One or two sentence human summary." },
+    "reasoning": { "type": "string", "description": "The agent's reasoning trace that led to this finding." },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Concrete, auditable support for the finding. At least one field should be present for non-recon findings.",
+      "properties": {
+        "function": { "type": "string", "description": "Symbol/function name the finding concerns." },
+        "file": { "type": "string", "description": "Path within the target (e.g. /sbin/httpd)." },
+        "address": { "type": "string", "description": "Address/offset, e.g. 0x4a21c." },
+        "line": { "type": ["integer", "null"] },
+        "decompiled_snippet": { "type": "string", "description": "Relevant pseudocode/disassembly." },
+        "reproducer": { "type": "string", "description": "Input or command that triggers the issue." },
+        "backtrace": { "type": "array", "items": { "type": "string" } },
+        "sink": { "type": "string", "description": "The dangerous call/sink, e.g. strcpy." },
+        "strings": { "type": "array", "items": { "type": "string" } },
+        "extra": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "suggested_followups": {
+      "type": "array",
+      "description": "Next agent tasks the user can launch in one click.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["task_type", "label"],
+        "properties": {
+          "task_type": { "type": "string", "enum": ["static_analysis", "reverse_engineering", "harness_generation", "pattern_sweep", "recon"] },
+          "label": { "type": "string" },
+          "target_ref": { "type": "string", "description": "Optional target id or name the follow-up should run against (e.g. a sibling). Templated by the mock from real TaskContext." },
+          "params": { "type": "object", "additionalProperties": true }
+        }
+      }
+    },
+    "related_target_refs": {
+      "type": "array",
+      "description": "Sibling/related targets this finding implicates; the engine creates related_to edges for each.",
+      "items": { "type": "string" }
+    }
+  }
+}

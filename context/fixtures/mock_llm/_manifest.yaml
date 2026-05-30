@@ -1,0 +1,37 @@
+# Mock LLM fixture manifest.
+# Maps each task type to its default scenario and the scenarios available.
+# The mock backend resolves a scenario per docs/mock-llm-provider.md §3:
+#   1) explicit per-task arg (--mock-scenario / mock_scenario=)
+#   2) env HEXGRAPH_MOCK_SCENARIO
+#   3) deterministic hash(task_id) % len(scenarios) for a realistic demo mix
+#
+# Scenario files live at: fixtures/mock_llm/<task_type>/<scenario>.json
+# Files may contain {{placeholders}} filled from the TaskContext (Layer 2 templating):
+#   {{target_name}} {{target_id}} {{function}} {{sibling_target_id}} {{a_string}}
+# Error scenarios (prefix error_) carry no file; the mock raises the matching exception.
+
+recon:
+  default: happy_path
+  scenarios: [happy_path]
+
+static_analysis:
+  default: critical_overflow
+  scenarios:
+    - critical_overflow      # one critical memory-safety finding + followups
+    - no_findings            # clean target, empty result
+    - malformed_then_valid   # first reply invalid JSON, second valid (retry path)
+    # behavioral-only scenarios (no file needed):
+    - error_rate_limit
+    - error_timeout
+
+reverse_engineering:
+  default: annotate
+  scenarios: [annotate]
+
+harness_generation:
+  default: compiles
+  scenarios: [compiles]
+
+pattern_sweep:
+  default: match_found
+  scenarios: [match_found]

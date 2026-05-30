@@ -1,0 +1,33 @@
+{
+  "_scenario": "critical_overflow",
+  "_note": "Layer-2 templated. {{...}} are filled from TaskContext so evidence references real symbols/targets and downstream graph+spawn logic runs. Falls back to the literal defaults shown if a placeholder is unavailable.",
+  "usage": { "input_tokens": 5120, "output_tokens": 640, "cost_source": "mock", "cost_usd": 0.0 },
+  "findings": [
+    {
+      "title": "Stack buffer overflow in {{function|cgi_handler}}()",
+      "severity": "critical",
+      "confidence": "high",
+      "category": "memory-safety",
+      "summary": "Unbounded copy of attacker-controlled input into a fixed stack buffer in {{function|cgi_handler}} allows overwriting the saved return address.",
+      "reasoning": "The decompiled body copies the request 'token' field into a 1040-byte stack buffer using {{sink|strcpy}} with no length check. The source is network-reachable and pre-auth. No stack canary is present per recon mitigation flags, so the saved return address is controllable; this is very likely exploitable via ROP.",
+      "evidence": {
+        "function": "{{function|cgi_handler}}",
+        "file": "{{target_name|/sbin/httpd}}",
+        "address": "0x4a21c",
+        "sink": "{{sink|strcpy}}",
+        "decompiled_snippet": "void {{function|cgi_handler}}(req_t *r){\n  char buf[1040];\n  {{sink|strcpy}}(buf, r->token); // unbounded\n  ...\n}",
+        "reproducer": "POST /cgi-bin/admin.cgi  token=AAAA...[1064 bytes]",
+        "backtrace": [
+          "#0 {{function|cgi_handler}} httpd.c:412",
+          "#1 dispatch_request httpd.c:301",
+          "#2 handle_connection httpd.c:188"
+        ]
+      },
+      "suggested_followups": [
+        { "task_type": "harness_generation", "label": "Generate a fuzz harness for {{function|cgi_handler}}", "params": { "function": "{{function|cgi_handler}}" } },
+        { "task_type": "pattern_sweep", "label": "Sweep sibling targets for the same {{sink|strcpy}} sink", "params": { "sink": "{{sink|strcpy}}" } }
+      ],
+      "related_target_refs": ["{{sibling_target_id}}"]
+    }
+  ]
+}
