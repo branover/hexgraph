@@ -89,10 +89,19 @@ then run the resume verifier, then continue at the next unchecked task.
 - [~] M5-T4 `README.md` written ahead of schedule (full structure; unbuilt features marked
       "🚧 Not yet implemented"). Keep it updated as M3-T5/M4/M5 land; finalize `make demo` section.
 
+## UI backlog
+- Visual review done (headless Chromium screenshots). Requirements captured in
+  [`docs/ui-backlog.md`](docs/ui-backlog.md) — P1/P2/P3, to tackle with M5 polish (some overlap M4 + M3-T6).
+  Top P1s: graph finding-label overlap, non-interactive graph nodes, cramped detail panel,
+  missing target-detail view, no live task feedback, no cost display.
+
 ## Project-specific skills created (note here as added)
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-05-30: **UI review** — no Chrome MCP connector in this env; drove the UI via ad-hoc headless
+  Chromium (Playwright, dev-only, not added to deps). UI is solid for an MVP; captured refinements in
+  docs/ui-backlog.md. Next: M3-T5 (real backends) + M3-T1 (radare2 decompiler).
 - 2026-05-30: **M3 mock path** — `engine/llm_tasks.py` runs static_analysis/reverse_engineering/
   pattern_sweep/harness_generation through the backend seam (mock); related_to edges from
   related_target_refs; CLI `run`; API task launch + UI task launcher (type+scenario). 51 tests pass.
