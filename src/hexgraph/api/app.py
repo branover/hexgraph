@@ -115,10 +115,18 @@ def create_app() -> FastAPI:
                 raise HTTPException(404, "project not found")
             targets = s.query(Target).filter(Target.project_id == project_id).all()
             findings = s.query(Finding).filter(Finding.project_id == project_id).all()
+            tasks = s.query(Task).filter(Task.project_id == project_id).all()
+            total_cost = round(sum(t.cost_estimate or 0.0 for t in tasks), 6)
+            cost_source = "mock" if project.llm_backend.value == "mock" else project.llm_backend.value
             return {
                 "project": _project_dict(project),
                 "targets": [_target_dict(t) for t in targets],
                 "findings": [_finding_dict(f) for f in findings],
+                "cost": {
+                    "total_usd": total_cost,
+                    "cost_source": cost_source,
+                    "task_count": len(tasks),
+                },
             }
 
     @app.get("/api/findings/{finding_id}")

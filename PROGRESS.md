@@ -4,11 +4,13 @@ The durable, resumable record of this build. **A new session should read this fi
 then run the resume verifier, then continue at the next unchecked task.
 
 ## ▶ RESUME HERE
-- **Current milestone:** M3 — LLM tasks via the interface (mock path done; real backends + decompiler left)
-- **Next task:** M3-T1 `sandbox/decompiler.py` (R2Decompiler; add radare2 to image) AND M3-T5
-  (`llm/anthropic_api.py` + `llm/claude_code.py`) — both wire behind the existing seam.
-- **Last verified:** `make test` → 51 passed; live server drives mock static_analysis→critical finding.
-- **How to re-verify:** `make test`; or run the UI (see "Running the UI" below).
+- **Current milestone:** M4 — Spawn the next thing (one-click follow-ups; pattern_sweep; harness_generation)
+- **Next task:** M4-T1 `engine/followups.py` — one-click launch from a finding's suggested_followups,
+  wiring `task.parent_finding_id` (the API field already exists; UI follow-up buttons exist but don't
+  pass parent/target_ref yet).
+- **Last verified:** `make test` → 62 passed; `make demo` exits 0; real-backend exception mapping
+  tested offline; radare2 decompiler verified in-sandbox.
+- **How to re-verify:** `make test`; or run the UI (see UI quickstart below).
 - **UI quickstart:** `make sandbox-build` once → `hexgraph ingest tests/fixtures/synthetic_fw.bin --name demo`
   → `hexgraph serve` → open http://127.0.0.1:8765 → click a target, pick task type + scenario, Run.
 - **Open notes / gotchas:**
@@ -65,16 +67,18 @@ then run the resume verifier, then continue at the next unchecked task.
 - [x] M2-T8 `tests/fixtures/build.sh` (vuln_httpd, libupnp.so, synthetic_fw.bin built+committed);
       `make demo` runs ingest→recon→finding→graph offline, exit 0
 
-## M3 — LLM tasks via the interface  *(mock path complete; real backends + decompiler remain)*
-- [ ] M3-T1 `sandbox/decompiler.py` Decompiler seam + R2Decompiler (add radare2 to sandbox image)
+## M3 — LLM tasks via the interface ✅
+- [x] M3-T1 `sandbox/decompiler.py` Decompiler seam + R2Decompiler; `decompile_probe.py`; radare2 6.1.4 in image
 - [x] M3-T2 static_analysis via `engine/llm_tasks.py` (backend-agnostic; mock critical_overflow/no_findings/malformed)
 - [x] M3-T3 reverse_engineering (info annotation findings) via same path
 - [x] M3-T4 `cli.py run` + `--type/--objective/--model/--backend/--function/--mock-scenario`; API POST /api/tasks
-- [ ] M3-T5 `llm/anthropic_api.py` + `llm/claude_code.py` (registry already lazy-loads them)
-- [~] M3-T6 Cost: per-task `cost_estimate` stored + usage trace under log_path; project total + UI display LEFT
-- [x] M3-T7 Tests: static_analysis critical finding, no_findings, malformed-retry, error→failed, RE annotation
-- NOTE: hash-fallback scenario pick now excludes `error_*` (faults reachable only via explicit arg/env) so
-  interactive runs/demos don't fail at random — small documented deviation from "hash % full pool".
+- [x] M3-T5 `llm/anthropic_api.py` (BYOK, exception mapping, cost) + `llm/claude_code.py` (CLI, graceful fail);
+      shared `llm/prompting.py` embeds the schema; registry lazy-loads both
+- [x] M3-T6 Cost: per-task `cost_estimate` + usage trace under log_path; project total in API + UI cost readout
+- [x] M3-T7 Tests: static_analysis critical, no_findings, malformed-retry, error→failed, RE annotation,
+      real-backend mapping (fake client), decompiler (sandboxed), cost
+- NOTES: decompilation is best-effort, env-gated (`HEXGRAPH_DISABLE_DECOMPILE=1` in tests; gated on docker
+  availability, never on backend identity). hash-fallback scenario pick excludes `error_*`.
 
 ## M4 — Spawn the next thing
 - [ ] M4-T1 `engine/followups.py` one-click launch + wire parent_finding_id
@@ -99,6 +103,10 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-05-30: **M3 complete** — radare2 decompiler seam (probe + R2Decompiler, image rebuilt with r2 6.1.4);
+  real backends `anthropic` (BYOK, SDK exception mapping, cost estimate) + `claude_code` (CLI, graceful);
+  shared schema-embedding system prompt; per-task + per-project cost (API + UI readout). 62 tests pass.
+  Anthropic SDK added to dev/byok extras. Real backends tested offline via injected fake client.
 - 2026-05-30: **UI review** — no Chrome MCP connector in this env; drove the UI via ad-hoc headless
   Chromium (Playwright, dev-only, not added to deps). UI is solid for an MVP; captured refinements in
   docs/ui-backlog.md. Next: M3-T5 (real backends) + M3-T1 (radare2 decompiler).

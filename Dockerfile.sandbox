@@ -5,6 +5,8 @@
 FROM debian:bookworm-slim
 
 ARG WITH_GHIDRA=0
+# radare2 isn't in bookworm-slim's apt sources, so install the upstream .deb.
+ARG R2_VERSION=6.1.4
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         file \
@@ -14,18 +16,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         cpio \
         python3 \
         python3-pip \
+        curl \
+        ca-certificates \
+    && curl -fsSL -o /tmp/radare2.deb \
+        "https://github.com/radareorg/radare2/releases/download/${R2_VERSION}/radare2_${R2_VERSION}_amd64.deb" \
+    && (dpkg -i /tmp/radare2.deb || apt-get install -fy --no-install-recommends) \
+    && rm -f /tmp/radare2.deb \
     && rm -rf /var/lib/apt/lists/*
-
-# radare2 (the v1 decompiler) is added in M3-T1 — it is not in the slim base's
-# apt sources, so it will be installed from the upstream installer there. M2
-# (recon + firmware unpack) does not need it.
 
 # Static-analysis Python libs. --break-system-packages: this is a single-purpose
 # disposable image, not a shared host.
 RUN pip3 install --no-cache-dir --break-system-packages \
         pyelftools \
         lief \
-        python-magic
+        python-magic \
+        r2pipe
 
 # Ghidra is opt-in (decompiler workhorse, large). The R2Decompiler is the v1
 # default; this hook lets Ghidra drop in later without changing task code.

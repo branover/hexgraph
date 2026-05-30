@@ -135,10 +135,18 @@ identical across backends — only the backend boundary changes.
 | Backend | Status | Notes |
 |---|---|---|
 | `mock` | ✅ Working | Deterministic, schema-valid findings from bundled fixtures. No key, no network. The default for dev, CI, and `make demo`. |
-| `anthropic` | 🚧 Not yet implemented (M3) | BYOK via `ANTHROPIC_API_KEY` (env or config). Real token/cost telemetry. |
-| `claude_code` | 🚧 Not yet implemented (M3) | Uses a local Claude Code session. |
+| `anthropic` | ✅ Working | BYOK via `ANTHROPIC_API_KEY` (env or config). Real token usage + cost estimate. Install with `pip install -e ".[byok]"` (or `anthropic`). |
+| `claude_code` | ✅ Working | Uses your local `claude` CLI (headless print mode); fails clearly if the CLI isn't installed. |
 
-HexGraph **never logs or stores your API key**.
+HexGraph **never logs or stores your API key**. To use a real backend:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+hexgraph run <target> --type static_analysis --backend anthropic --function cgi_handler
+```
+
+Target decompilation (radare2, in the sandbox) is fed to real backends as prompt context; the LLM
+never sees raw target bytes. The decompiler is behind a seam so Ghidra can be added later.
 
 ---
 
@@ -248,7 +256,7 @@ what's done and what's next. Start there if you're picking up the build.
 | **M0** | Mock backend, `LLMBackend` seam, `Finding` model, contract test | ✅ Done |
 | **M1** | Config, SQLite models, ingest, CLI, FastAPI on loopback | ✅ Done |
 | **M2** | Sandbox + `recon`, firmware unpack, graph endpoint, web UI | ✅ Done |
-| **M3** | `static_analysis` + `reverse_engineering`; real backends; per-task model/cost | 🟡 Mock path done; real backends + decompiler + cost UI pending |
+| **M3** | `static_analysis` + `reverse_engineering`; real backends; decompiler; per-task model/cost | ✅ Done |
 | **M4** | One-click follow-up spawn; `pattern_sweep`; `harness_generation` | ⏳ Planned |
 | **M5** | Accept/dismiss triage, dedup, findings export, polish | ⏳ Planned |
 

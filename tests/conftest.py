@@ -5,6 +5,8 @@ import pytest
 
 # Tests run against the mock backend: zero key, zero network (SPEC §1).
 os.environ.setdefault("HEXGRAPH_LLM_BACKEND", "mock")
+# Keep LLM-task unit tests fast + docker-free; the decompiler has its own gated test.
+os.environ.setdefault("HEXGRAPH_DISABLE_DECOMPILE", "1")
 
 
 def _sandbox_ready() -> bool:

@@ -151,8 +151,18 @@ async function loadGraph() {
   });
 }
 
+function renderSummary(data) {
+  const el = $("#summary");
+  if (!el) return;
+  const cost = data.cost || {};
+  const usd = (cost.total_usd || 0).toFixed(4);
+  const src = cost.cost_source === "mock" ? "mock · $0" : `${cost.cost_source} · $${usd}`;
+  el.textContent = `· ${data.findings.length} findings · ${cost.task_count || 0} tasks · ${src}`;
+}
+
 async function loadAll() {
   const data = await getJSON(`/api/projects/${PROJECT}`);
+  renderSummary(data);
   renderTree(data.targets);
   renderFindings(data.findings);
   await loadGraph();

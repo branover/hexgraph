@@ -27,9 +27,14 @@ analysis = [
     "lief>=0.14",
     "pyelftools>=0.31",
 ]
+# Real Anthropic backend (BYOK). The mock backend needs none of this.
+byok = [
+    "anthropic>=0.40",
+]
 dev = [
     "pytest>=8.0",
     "httpx>=0.27",
+    "anthropic>=0.40",
 ]
 
 [project.scripts]

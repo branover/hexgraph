@@ -14,11 +14,12 @@ Findings' `related_target_refs` become `related_to` edges and
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from hexgraph.db.models import Edge, EdgeType, FindingStatus, Project, Target, Task, TaskStatus
+from hexgraph.db.models import Edge, EdgeType, Project, Target, TargetKind, Task, TaskStatus
 from hexgraph.engine.findings import persist_finding
 from hexgraph.engine.recon import RISKY_SINKS
 from hexgraph.engine.tasks import write_trace
@@ -27,11 +28,34 @@ from hexgraph.llm.runner import run_findings
 from hexgraph.tasks.base import TaskContext
 
 LLM_TASK_TYPES = {"static_analysis", "reverse_engineering", "pattern_sweep", "harness_generation"}
+_DECOMPILE_TYPES = {"static_analysis", "reverse_engineering"}
+_DECOMPILABLE_KINDS = {TargetKind.executable, TargetKind.shared_library}
 
 
-def _build_prompt(target: Target, ctx: TaskContext) -> str:
-    """A deterministic prompt from recon facts. The mock ignores it; real
-    backends use it. Decompiled pseudocode is added in M3-T5 (decompiler seam)."""
+def _gather_decompilation(target: Target, ctx: TaskContext) -> dict | None:
+    """Best-effort decompilation to enrich the prompt (real backends use it; the
+    mock ignores it). Gated on the environment — never on the backend identity —
+    so the backend seam stays clean. Silently skipped if the sandbox is absent."""
+    if os.environ.get("HEXGRAPH_DISABLE_DECOMPILE") == "1":
+        return None
+    if ctx.task_type not in _DECOMPILE_TYPES or target.kind not in _DECOMPILABLE_KINDS:
+        return None
+    from hexgraph.sandbox.runner import docker_available
+
+    if not docker_available():
+        return None
+    try:
+        from hexgraph.sandbox.decompiler import get_decompiler
+
+        return get_decompiler().decompile(target.path, ctx.function)
+    except Exception:  # noqa: BLE001 — decompilation is best-effort enrichment
+        return None
+
+
+def _build_prompt(target: Target, ctx: TaskContext, decomp: dict | None = None) -> str:
+    """A deterministic prompt from recon facts + decompilation. The mock ignores
+    it; real backends reason over it. The LLM only ever sees tool output here,
+    never raw target bytes."""
     meta = target.metadata_json or {}
     lines = [
         f"Target: {target.name} ({target.format} {target.arch}, {target.kind.value})",
@@ -42,6 +66,12 @@ def _build_prompt(target: Target, ctx: TaskContext) -> str:
         lines.append(f"Objective: {ctx.objective}")
     if ctx.function:
         lines.append(f"Focus function: {ctx.function}")
+    if decomp:
+        focus = decomp.get("focus")
+        if focus and focus.get("pseudocode"):
+            lines.append(f"Decompiled {focus['name']}:\n{focus['pseudocode']}")
+        elif decomp.get("functions"):
+            lines.append(f"Functions: {', '.join(decomp['functions'][:40])}")
     lines.append(
         f"Emit findings as JSON ({ctx.task_type}). Each finding must match the HexGraph finding schema."
     )
@@ -95,7 +125,10 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
     Sets the task status to needs_triage if any finding has low confidence.
     """
     ctx = _build_context(session, project, target, task)
-    prompt = _build_prompt(target, ctx)
+    decomp = _gather_decompilation(target, ctx)
+    if decomp:
+        ctx.tool_outputs["decompilation"] = decomp
+    prompt = _build_prompt(target, ctx, decomp)
     backend = get_backend(task.backend if task.backend not in (None, "none") else None)
 
     findings, usage = run_findings(backend, ctx.build_request(prompt=prompt))
