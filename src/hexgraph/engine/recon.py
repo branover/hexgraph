@@ -15,7 +15,7 @@ from hexgraph.db.models import Task
 from hexgraph.engine.findings import persist_finding
 from hexgraph.engine.tasks import create_task, mark_running, mark_succeeded, write_trace
 from hexgraph.models.finding import Evidence, Finding, FollowupSuggestion
-from hexgraph.sandbox.runner import SandboxRunner
+from hexgraph.sandbox.executor import Executor, get_executor
 
 # Dangerous libc sinks worth a static-analysis follow-up if imported.
 RISKY_SINKS = {"strcpy", "strcat", "sprintf", "gets", "scanf", "system", "popen", "exec", "memcpy"}
@@ -97,7 +97,7 @@ def execute_recon(
     runner: SandboxRunner | None = None,
 ) -> tuple[FindingRow, dict]:
     """Run recon for an existing task row. Returns (finding row, raw facts)."""
-    runner = runner or SandboxRunner()
+    runner = runner or get_executor()
     facts = runner.run_json_probe("recon_probe.py", target.path)
     write_trace(task, "recon_facts.json", facts)
 

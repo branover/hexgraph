@@ -17,7 +17,7 @@ from hexgraph.db.models import Project, Target
 from hexgraph.engine.ingest import ingest_file
 from hexgraph.engine.recon import run_recon
 from hexgraph.engine.unpack import build_links_against, unpack_firmware
-from hexgraph.sandbox.runner import SandboxRunner
+from hexgraph.sandbox.executor import Executor, get_executor
 
 _FIRMWARE_FORMATS = {"squashfs", "cpio"}
 
@@ -26,7 +26,7 @@ def analyze_target(
     session: Session,
     project: Project,
     target: Target,
-    runner: SandboxRunner,
+    runner: Executor,
 ) -> dict:
     """Recon a target; if it's firmware, unpack and recon each child."""
     _finding, facts = run_recon(session, project, target, runner)
@@ -46,9 +46,9 @@ def ingest_and_analyze(
     src_path: str | Path,
     *,
     name: str | None = None,
-    runner: SandboxRunner | None = None,
+    runner: Executor | None = None,
 ) -> dict:
-    runner = runner or SandboxRunner()
+    runner = runner or get_executor()
     root = ingest_file(session, project, src_path, name=name)
     summary = analyze_target(session, project, root, runner)
     links = build_links_against(session, project)

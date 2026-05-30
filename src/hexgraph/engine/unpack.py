@@ -13,17 +13,17 @@ from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Edge, EdgeType, Project, Target, TargetKind
 from hexgraph.engine.ingest import ingest_file
-from hexgraph.sandbox.runner import SandboxRunner
+from hexgraph.sandbox.executor import Executor, get_executor
 
 
 def unpack_firmware(
     session: Session,
     project: Project,
     parent: Target,
-    runner: SandboxRunner | None = None,
+    runner: Executor | None = None,
 ) -> list[Target]:
     """Unpack `parent` and create a child target + `contains` edge per ELF found."""
-    runner = runner or SandboxRunner()
+    runner = runner or get_executor()
     children: list[Target] = []
 
     with tempfile.TemporaryDirectory(prefix="hexgraph-unpack-") as tmp:

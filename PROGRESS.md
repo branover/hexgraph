@@ -6,9 +6,9 @@ then run the resume verifier, then continue at the next unchecked task.
 ## ▶ RESUME HERE
 - **Current milestone:** v2 build — see [`docs/implementation-plan.md`](docs/implementation-plan.md)
   (built from [`docs/design-vision.md`](docs/design-vision.md)). MVP (M0–M5) is the foundation.
-- **Next task:** **P0-1** — adopt Alembic migrations + `schema_version` + backup-on-migrate
-  (migrations are the committed prerequisite for all schema-extending v2 work).
-- **Last verified:** `make test` → 69 passed; `make demo` exits 0 (full ingest→recon→AI→graph→spawn).
+- **Next task:** **P1-1** — `node` table (`NodeType` + content_hash identity + lazy materialization)
+  + `engine/nodes.py`. (P0 foundations & seams complete.)
+- **Last verified:** `make test` → 78 passed; `make demo` exits 0 (full ingest→recon→AI→graph→spawn).
 - **How to re-verify:** `make test`; or run the UI (see UI quickstart below).
 - **v2 sequencing:** P0 seams/migrations → P1 typed graph → P2 context bundle/CAS → P3 task anchors →
   P4 React notebook UI → P5 finding/task management → P6 HITL/triage → P7 search/report/cross-target →
@@ -100,7 +100,7 @@ then run the resume verifier, then continue at the next unchecked task.
       documented acceptance run (ends with the spawn chain)
 
 ## v2 execution — phases (detail in `docs/implementation-plan.md`)
-- [ ] P0 Foundations & seams: Alembic migrations + schema_version/backup; Executor / Entitlements+Metering / analysis-Policy / Principal / (Suggester in P3) seams with local defaults
+- [x] P0 Foundations & seams: Alembic migrations (baseline `bbdb1d98bf54`) + `hexgraph db upgrade` (backup + legacy-adopt); seams `sandbox/executor.py` (get_executor), `policy.py`, `entitlements.py`, `metering.py`, `principal.py` with local defaults; reserved `HEXGRAPH_API_KEY`. 78 tests pass.
 - [ ] P1 Typed graph core: `node` table + content_hash identity; polymorphic attributed `edge`; findings attach via `about` edge; recon/decompile populate function/symbol/string nodes + calls/xref edges
 - [ ] P2 Context Bundle + CAS: content-addressed store, ContextBuilder + token estimator, full trace, 3-tier cache incl. response cassette, analysis_run + run-diff, staleness
 - [ ] P3 Task anchors + relational tasks + capability table; pattern_sweep provenance fix; FollowupSuggester seam (rule-based default)

@@ -143,6 +143,12 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
     if task.type == "harness_generation":
         _compile_harnesses(findings)
 
+    # Metering seam: log usage per task (BYOK = user's own spend; the hook a future
+    # credits sink uses). No-op-ish locally.
+    from hexgraph.metering import record_usage
+
+    record_usage(f"task.{task.type}", usage, task_id=task.id)
+
     write_trace(task, "prompt.txt", prompt)
     write_trace(task, "usage.json", {
         "input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens,

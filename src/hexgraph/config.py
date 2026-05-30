@@ -77,6 +77,15 @@ def get_anthropic_api_key() -> str | None:
     return _load_toml().get("anthropic", {}).get("api_key")
 
 
+def get_hexgraph_api_key() -> str | None:
+    """Reserved (v2): the HexGraph account key for future paid/credits features.
+    Read from env or config like any provider key; never logged or stored. Unused today."""
+    env = os.environ.get("HEXGRAPH_API_KEY")
+    if env:
+        return env
+    return _load_toml().get("hexgraph", {}).get("api_key")
+
+
 def ensure_dirs() -> None:
     """Create the runtime directories if missing (idempotent)."""
     hexgraph_home().mkdir(parents=True, exist_ok=True)

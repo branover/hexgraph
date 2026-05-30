@@ -19,12 +19,12 @@ from datetime import datetime, timezone
 from hexgraph.engine.llm_tasks import LLM_TASK_TYPES, execute_llm_task
 from hexgraph.engine.recon import execute_recon
 from hexgraph.engine.tasks import mark_failed, mark_running, mark_succeeded
-from hexgraph.sandbox.runner import SandboxRunner
+from hexgraph.sandbox.executor import Executor, get_executor
 
 
 def _dispatch(session: Session, project: Project, target: Target, task: Task) -> None:
     if task.type == "recon":
-        execute_recon(session, project, target, task, SandboxRunner())
+        execute_recon(session, project, target, task, get_executor())
         return
     if task.type in LLM_TASK_TYPES:
         execute_llm_task(session, project, target, task)
@@ -40,6 +40,10 @@ def run_task_sync(task_id: str) -> str:
             raise ValueError(f"task {task_id} not found")
         project = session.get(Project, task.project_id)
         target = session.get(Target, task.target_id)
+        # Entitlement gate (no-op in the local/BYOK build; the seam for paid features).
+        from hexgraph.entitlements import require
+
+        require(f"task.{task.type}")
         mark_running(task)
         try:
             _dispatch(session, project, target, task)

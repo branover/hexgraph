@@ -22,9 +22,18 @@ from hexgraph.db.session import init_db, session_scope
 
 def _cmd_init(args: argparse.Namespace) -> int:
     from hexgraph.config import hexgraph_home
+    from hexgraph.db.migrate import prepare_database
 
-    init_db()
-    print(f"Initialized HexGraph at {hexgraph_home()}")
+    res = prepare_database()
+    print(f"Initialized HexGraph at {hexgraph_home()} (schema {res['action']}, rev {res['revision']})")
+    return 0
+
+
+def _cmd_db_upgrade(args: argparse.Namespace) -> int:
+    from hexgraph.db.migrate import prepare_database
+
+    res = prepare_database(backup=not args.no_backup)
+    print(f"DB {res['action']} → rev {res['revision']}  ({res['db']})")
     return 0
 
 
@@ -178,7 +187,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="hexgraph", description="Local-only vuln-research workbench")
     sub = p.add_subparsers(dest="_cmd", required=True)
 
-    sub.add_parser("init", help="initialize HexGraph (DB + dirs)").set_defaults(func=_cmd_init)
+    sub.add_parser("init", help="initialize HexGraph (DB + dirs, via migrations)").set_defaults(func=_cmd_init)
+
+    pdb = sub.add_parser("db", help="database maintenance")
+    dbsub = pdb.add_subparsers(dest="_dbcmd", required=True)
+    pup = dbsub.add_parser("upgrade", help="migrate the project DB to the latest schema (backs up first)")
+    pup.add_argument("--no-backup", action="store_true", help="skip the pre-upgrade backup")
+    pup.set_defaults(func=_cmd_db_upgrade)
 
     pi = sub.add_parser("ingest", help="ingest a binary/firmware as a target")
     pi.add_argument("path")

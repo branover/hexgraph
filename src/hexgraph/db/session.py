@@ -27,6 +27,16 @@ def _resolve_db_path() -> Path:
     return Path(override) if override else db_path()
 
 
+def resolve_db_path() -> Path:
+    """Public: the SQLite file path in effect (honors HEXGRAPH_DB_PATH)."""
+    return _resolve_db_path()
+
+
+def db_url() -> str:
+    """SQLAlchemy/Alembic URL for the current DB."""
+    return f"sqlite:///{_resolve_db_path()}"
+
+
 def get_engine() -> Engine:
     global _engine, _Session
     if _engine is None:

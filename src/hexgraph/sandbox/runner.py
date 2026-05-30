@@ -61,12 +61,19 @@ class SandboxRunner:
         *,
         outdir: str | Path | None = None,
         extra_args: list[str] | None = None,
+        requires_execution: bool = False,
     ) -> RunResult:
         """Run a probe script over `artifact` inside the sandbox.
 
         `outdir` (host dir) is bind-mounted read-write at /out when a probe needs
         to write extracted files; otherwise only stdout is captured.
+        `requires_execution` is the policy hook for future dynamic probes; in the
+        static-only v1 policy it raises, so the target is never executed.
         """
+        if requires_execution:
+            from hexgraph.policy import assert_allows_execution
+
+            assert_allows_execution()
         artifact = Path(artifact).resolve()
         if not artifact.is_file():
             raise SandboxError(f"artifact not found: {artifact}")
@@ -126,9 +133,12 @@ class SandboxRunner:
         *,
         outdir: str | Path | None = None,
         extra_args: list[str] | None = None,
+        requires_execution: bool = False,
     ) -> dict:
         """Run a probe whose stdout is a single JSON object, and parse it."""
-        result = self.run_probe(probe, artifact, outdir=outdir, extra_args=extra_args)
+        result = self.run_probe(
+            probe, artifact, outdir=outdir, extra_args=extra_args, requires_execution=requires_execution
+        )
         try:
             return json.loads(result.stdout)
         except json.JSONDecodeError as exc:

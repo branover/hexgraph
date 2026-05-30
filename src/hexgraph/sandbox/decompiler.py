@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 from abc import ABC, abstractmethod
 
-from hexgraph.sandbox.runner import SandboxRunner
+from hexgraph.sandbox.executor import Executor, get_executor
 
 
 class Decompiler(ABC):
@@ -25,8 +25,8 @@ class Decompiler(ABC):
 class R2Decompiler(Decompiler):
     name = "radare2"
 
-    def __init__(self, runner: SandboxRunner | None = None) -> None:
-        self.runner = runner or SandboxRunner()
+    def __init__(self, runner: Executor | None = None) -> None:
+        self.runner = runner or get_executor()
 
     def decompile(self, artifact: str, function: str | None = None) -> dict:
         args = [function] if function else None

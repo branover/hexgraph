@@ -10,12 +10,12 @@ from __future__ import annotations
 import os
 import tempfile
 
-from hexgraph.sandbox.runner import SandboxRunner
+from hexgraph.sandbox.executor import Executor, get_executor
 
 
-def compile_harness_source(source: str, runner: SandboxRunner | None = None) -> dict:
+def compile_harness_source(source: str, runner: Executor | None = None) -> dict:
     """Compile harness C source in the sandbox; return the build-result dict."""
-    runner = runner or SandboxRunner()
+    runner = runner or get_executor()
     fd, path = tempfile.mkstemp(suffix=".c", prefix="hexgraph-harness-")
     try:
         with os.fdopen(fd, "w") as fh:
