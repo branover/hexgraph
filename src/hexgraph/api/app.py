@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from hexgraph import __version__
 from hexgraph.api.loopback import assert_loopback
 from hexgraph.config import load_config
-from hexgraph.db.models import Finding, Project, Target, Task
+from hexgraph.db.models import Finding, FindingStatus, Project, Target, Task
 from hexgraph.db.session import init_db, session_scope
 from hexgraph.engine.findings import row_to_payload
 from hexgraph.engine.graph import build_graph
@@ -35,6 +35,10 @@ async def _lifespan(app: FastAPI):
     await get_worker().start()
     yield
     await get_worker().stop()
+
+
+class StatusUpdate(BaseModel):
+    status: str
 
 
 class TaskCreate(BaseModel):
@@ -136,6 +140,42 @@ def create_app() -> FastAPI:
             if f is None:
                 raise HTTPException(404, "finding not found")
             return _finding_dict(f)
+
+    @app.post("/api/findings/{finding_id}/status")
+    def api_set_finding_status(finding_id: str, body: StatusUpdate):
+        try:
+            new_status = FindingStatus(body.status)
+        except ValueError:
+            raise HTTPException(400, f"invalid status {body.status!r}")
+        with session_scope() as s:
+            f = s.get(Finding, finding_id)
+            if f is None:
+                raise HTTPException(404, "finding not found")
+            f.status = new_status
+            return {"id": f.id, "status": new_status.value}
+
+    @app.post("/api/projects/{project_id}/dedup")
+    def api_dedup(project_id: str):
+        from hexgraph.engine.dedup import dedupe_findings
+
+        with session_scope() as s:
+            if s.get(Project, project_id) is None:
+                raise HTTPException(404, "project not found")
+            removed = dedupe_findings(s, project_id)
+            return {"removed": removed}
+
+    @app.get("/api/projects/{project_id}/export")
+    def api_export(project_id: str):
+        with session_scope() as s:
+            project = s.get(Project, project_id)
+            if project is None:
+                raise HTTPException(404, "project not found")
+            findings = s.query(Finding).filter(Finding.project_id == project_id).all()
+            return {
+                "project": _project_dict(project),
+                "graph": build_graph(s, project_id),
+                "findings": [_finding_dict(f) for f in findings],
+            }
 
     @app.get("/graph/{project_id}")
     def api_graph(project_id: str):

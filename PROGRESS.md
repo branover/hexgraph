@@ -4,11 +4,12 @@ The durable, resumable record of this build. **A new session should read this fi
 then run the resume verifier, then continue at the next unchecked task.
 
 ## ▶ RESUME HERE
-- **Current milestone:** M5 — Polish (accept/dismiss, dedup, findings export, README finalize)
-- **Next task:** M5-T1 — accept/dismiss finding status (API endpoint + UI controls); status enum already
-  on the Finding model (new|accepted|dismissed) and surfaced in the API.
-- **Last verified:** `make test` → 66 passed; `make demo` exits 0 with the full
-  ingest→recon→finding→graph→**spawn** chain (pattern_sweep homes a finding on the sibling + related_to).
+- **Current milestone:** ✅ MVP complete (M0–M5). Remaining work is polish/hardening.
+- **Next task:** UI polish from `docs/ui-backlog.md` (P1s first). Other candidates: cassette
+  record/replay (M0-T9 hook), Ghidra decompiler (build arg), Celery/Redis queue swap, Docker Compose
+  end-to-end smoke test, license decision.
+- **Last verified:** `make test` → 69 passed; `make demo` exits 0 with the full
+  ingest→recon→AI-finding→graph→**spawn** chain (mock backend, no key/network).
 - **How to re-verify:** `make test`; or run the UI (see UI quickstart below).
 - **UI quickstart:** `make sandbox-build` once → `hexgraph ingest tests/fixtures/synthetic_fw.bin --name demo`
   → `hexgraph serve` → open http://127.0.0.1:8765 → click a target, pick task type + scenario, Run.
@@ -88,12 +89,13 @@ then run the resume verifier, then continue at the next unchecked task.
 - [x] M4-T4 `make demo` extended: static_analysis → spawn pattern_sweep follow-up → sibling finding +
       related_to + parent_finding_id. 66 tests pass.
 
-## M5 — Polish
-- [ ] M5-T1 Accept/dismiss finding status (API + UI)
-- [ ] M5-T2 `engine/dedup.py`
-- [ ] M5-T3 graph + findings export  (graph export done in M2; findings export left)
-- [~] M5-T4 `README.md` written ahead of schedule (full structure; unbuilt features marked
-      "🚧 Not yet implemented"). Keep it updated as M3-T5/M4/M5 land; finalize `make demo` section.
+## M5 — Polish ✅
+- [x] M5-T1 Accept/dismiss finding status: POST /api/findings/{id}/status + UI Accept/Dismiss buttons
+- [x] M5-T2 `engine/dedup.py` (signature = target+category+title+function+sink) + POST /api/projects/{id}/dedup
+- [x] M5-T3 Export: `hexgraph findings <p> --export f.json`, GET /api/projects/{id}/export (graph+findings),
+      graph export (`hexgraph graph --export`, from M2)
+- [x] M5-T4 README finalized (markers flipped; CLI/UI/backends/roadmap accurate); `make demo` is the
+      documented acceptance run (ends with the spawn chain)
 
 ## UI backlog
 - Visual review done (headless Chromium screenshots). Requirements captured in
@@ -105,6 +107,9 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-05-30: **M5 complete → MVP done (M0–M5).** Accept/dismiss status (API+UI), dedup engine+endpoint,
+  findings/project export (CLI + API), README finalized. 69 tests pass; `make demo` green. Remaining
+  work is polish (see UI backlog) + optional hardening (cassettes, Ghidra, Celery, compose smoke test).
 - 2026-05-30: **M4 complete** — follow-up spawner (endpoint + UI + parent_finding_id), pattern_sweep
   homes findings on the matched sibling with related_to edges, harness_generation compiles the emitted
   source in the sandbox (gcc in image), demo extended to show the spawn chain. 66 tests pass.

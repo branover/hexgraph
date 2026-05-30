@@ -77,7 +77,13 @@ function renderFindings(findings) {
 async function showDetail(fid) {
   const f = await getJSON(`/api/findings/${fid}`);
   const ev = f.evidence || {};
-  const parts = [`<h3>${f.title}</h3>`, `<p>${f.summary}</p>`];
+  const parts = [`<h3>${f.title}</h3>`];
+  parts.push(
+    `<div class="triage">status: <b>${f.status}</b> ` +
+    `<button class="btn" data-status="accepted">Accept</button> ` +
+    `<button class="btn" data-status="dismissed">Dismiss</button></div>`
+  );
+  parts.push(`<p>${f.summary}</p>`);
   parts.push(`<p class="kv">Reasoning:</p><p>${f.reasoning}</p>`);
   if (ev.function) parts.push(`<p class="kv">function: <code>${ev.function}</code></p>`);
   if (ev.sink) parts.push(`<p class="kv">sink: <code>${ev.sink}</code></p>`);
@@ -94,6 +100,13 @@ async function showDetail(fid) {
   detail.innerHTML = parts.join("");
   detail.querySelectorAll("button[data-fu]").forEach((b) => {
     b.onclick = () => spawnFollowup(f.id, +b.dataset.fu);
+  });
+  detail.querySelectorAll("button[data-status]").forEach((b) => {
+    b.onclick = async () => {
+      await postJSON(`/api/findings/${f.id}/status`, { status: b.dataset.status });
+      await loadAll();
+      await showDetail(f.id);
+    };
   });
 }
 

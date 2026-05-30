@@ -17,11 +17,10 @@ Three principles are non-negotiable:
   Docker container with no network and strict resource limits. **HexGraph never executes the target**
   (static/RE only).
 
-> ### Project status — pre-1.0, under active construction
-> The core loop works today: **ingest → recon → finding → graph**, plus AI analysis tasks against the
-> **mock** backend. Real model backends and the later triage/export features are still being built.
-> See [Roadmap](#roadmap) for exactly what's done. Sections below marked **🚧 Not yet implemented**
-> describe planned behavior.
+> ### Project status — pre-1.0
+> The full MVP loop works today: **ingest → recon → AI analysis → finding → graph → spawn follow-up**,
+> across the mock and real backends, with triage and export. See [Roadmap](#roadmap) for milestone
+> status. This is still pre-1.0 — expect rough edges (UI polish in particular; see `docs/ui-backlog.md`).
 
 ---
 
@@ -99,9 +98,7 @@ Open `http://127.0.0.1:8765` after `hexgraph serve`. The workspace has three pan
 Click a finding's **suggested follow-up** button to spawn the next task in one click — it runs against
 the resolved target (e.g. a sibling), with the parent finding recorded. `pattern_sweep` adds a finding
 on the matched sibling and a `related_to` edge; `harness_generation` compiles the generated harness in
-the sandbox.
-
-> 🚧 **Not yet implemented:** accept/dismiss triage controls in the UI (Roadmap M5).
+the sandbox. Use **Accept / Dismiss** in the detail panel to triage a finding.
 
 ---
 
@@ -122,6 +119,7 @@ hexgraph run <target> --type T             Run an analysis task against a target
              [--function F]                …focus function
              [--mock-scenario S]           …force a specific mock scenario
 hexgraph findings <project> [--status S]   List findings (optionally filter by new|accepted|dismissed)
+                 [--export FILE]           …or write the findings as JSON to FILE
 hexgraph graph <project> --export FILE     Export the project graph as JSON (nodes + edges)
 hexgraph serve [--host H] [--port P]       Start the loopback-only API/UI (default 127.0.0.1:8765)
 ```
@@ -262,7 +260,7 @@ what's done and what's next. Start there if you're picking up the build.
 | **M2** | Sandbox + `recon`, firmware unpack, graph endpoint, web UI | ✅ Done |
 | **M3** | `static_analysis` + `reverse_engineering`; real backends; decompiler; per-task model/cost | ✅ Done |
 | **M4** | One-click follow-up spawn; `pattern_sweep`; `harness_generation` | ✅ Done |
-| **M5** | Accept/dismiss triage, dedup, findings export, polish | ⏳ Planned |
+| **M5** | Accept/dismiss triage, dedup, findings export, polish | ✅ Done (UI polish backlog in `docs/ui-backlog.md`) |
 
 Out of scope (by design): accounts/multi-user, cloud/hosted compute, live fuzzing, dynamic/emulated
 execution, exploit generation, Neo4j, Kubernetes.

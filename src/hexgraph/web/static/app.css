@@ -55,6 +55,7 @@ pre { background: var(--panel); padding: 10px 12px; border-radius: 6px; border: 
 .chip { display: inline-block; font-size: 10px; text-transform: uppercase; padding: 1px 6px; border-radius: 10px; margin-right: 4px; color: #0e1117; font-weight: 700; }
 .sev-info{background:var(--info)} .sev-low{background:var(--low)} .sev-medium{background:var(--medium)} .sev-high{background:var(--high)} .sev-critical{background:var(--critical)}
 
+.triage { margin: 6px 0; font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
 #detail { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 8px; overflow:auto; max-height: 45%; }
 #detail code, #detail pre { font-size: 12px; }
 .kv { color: var(--muted); }

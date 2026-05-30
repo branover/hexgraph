@@ -132,6 +132,23 @@ def _cmd_findings(args: argparse.Namespace) -> int:
         if args.status:
             q = q.filter(Finding.status == args.status)
         rows = q.all()
+        if args.export:
+            import json
+
+            from hexgraph.engine.findings import row_to_payload
+
+            payloads = [
+                {
+                    "id": f.id, "target_id": f.target_id, "task_id": f.task_id,
+                    "status": f.status.value, "created_at": f.created_at.isoformat(),
+                    **row_to_payload(f),
+                }
+                for f in rows
+            ]
+            with open(args.export, "w") as fh:
+                json.dump(payloads, fh, indent=2)
+            print(f"wrote {len(payloads)} finding(s) to {args.export}")
+            return 0
         if not rows:
             print("(no findings)")
             return 0
@@ -188,6 +205,7 @@ def build_parser() -> argparse.ArgumentParser:
     pf = sub.add_parser("findings", help="list findings in a project")
     pf.add_argument("project")
     pf.add_argument("--status")
+    pf.add_argument("--export", help="write findings as JSON to this file instead of listing")
     pf.set_defaults(func=_cmd_findings)
 
     pg = sub.add_parser("graph", help="export the project graph as JSON")
