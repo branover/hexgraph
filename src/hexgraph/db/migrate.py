@@ -23,6 +23,10 @@ from hexgraph.db.session import db_url, resolve_db_path
 from hexgraph.paths import repo_root
 
 CORE_TABLES = {"project", "target", "edge", "task", "finding"}
+BASELINE = "bbdb1d98bf54"
+# Columns that only exist once all migrations have run — used to tell a
+# create_all'd-at-HEAD DB (stamp head) from a legacy MVP-schema DB (stamp baseline + upgrade).
+_HEAD_MARKERS = {"edge": "src_kind", "task": "anchor_kind", "finding": "origin"}
 
 
 def _alembic_config() -> Config:
@@ -55,19 +59,28 @@ def prepare_database(*, backup: bool = True) -> dict:
 
     engine = create_engine(db_url())
     try:
-        existing = set(inspect(engine).get_table_names())
+        insp = inspect(engine)
+        existing = set(insp.get_table_names())
+        at_head = all(
+            tbl in existing and col in {c["name"] for c in insp.get_columns(tbl)}
+            for tbl, col in _HEAD_MARKERS.items()
+        )
     finally:
         engine.dispose()
 
     versioned = "alembic_version" in existing
     has_core = bool(CORE_TABLES & existing)
 
-    if has_core and not versioned:
+    if has_core and not versioned and at_head:
+        # create_all'd by current code (e.g. tests): already current → just record it.
         command.stamp(cfg, "head")
         action = "stamped"
     else:
         if backup and path.exists() and path.stat().st_size > 0:
             shutil.copy2(path, path.with_name(path.name + ".bak"))
+        if has_core and not versioned:
+            # Legacy MVP-schema DB (pre-Alembic): adopt at baseline, then migrate forward.
+            command.stamp(cfg, BASELINE)
         command.upgrade(cfg, "head")
         action = "upgraded"
 

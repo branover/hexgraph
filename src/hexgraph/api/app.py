@@ -30,7 +30,10 @@ _WEB = Path(__file__).resolve().parent.parent / "web"
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    init_db()
+    # Migrate the persistent DB to head (backs up first; adopts legacy/create_all'd DBs).
+    from hexgraph.db.migrate import prepare_database
+
+    prepare_database(backup=True)
     await get_worker().start()
     yield
     await get_worker().stop()

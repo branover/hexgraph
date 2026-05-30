@@ -41,6 +41,30 @@ def test_legacy_create_all_db_is_adopted(tmp_path, monkeypatch):
     reset_engine_for_tests()
 
 
+def test_legacy_mvp_schema_db_upgrades_forward(tmp_path, monkeypatch):
+    """A pre-Alembic create_all'd MVP-schema DB (old edge, no alembic_version) is
+    adopted at baseline and migrated forward — not wrongly stamped at head."""
+    monkeypatch.setenv("HEXGRAPH_DB_PATH", str(tmp_path / "legacy.db"))
+    from alembic import command
+    from sqlalchemy import create_engine, inspect, text
+
+    from hexgraph.db.migrate import BASELINE, _alembic_config, prepare_database
+    from hexgraph.db.session import db_url, reset_engine_for_tests
+
+    reset_engine_for_tests()
+    command.upgrade(_alembic_config(), BASELINE)  # build the old MVP schema
+    e = create_engine(db_url())
+    with e.begin() as c:
+        c.execute(text("DROP TABLE alembic_version"))  # mimic pre-migrations DB
+    e.dispose()
+
+    res = prepare_database(backup=False)
+    assert res["action"] == "upgraded" and res["revision"]
+    cols = {c["name"] for c in inspect(create_engine(db_url())).get_columns("edge")}
+    assert "src_kind" in cols  # the typed-graph rewrite actually ran
+    reset_engine_for_tests()
+
+
 def test_backup_written_on_upgrade(tmp_path, monkeypatch):
     db = tmp_path / "hg.db"
     monkeypatch.setenv("HEXGRAPH_DB_PATH", str(db))
