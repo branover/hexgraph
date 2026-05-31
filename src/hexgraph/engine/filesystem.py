@@ -69,6 +69,46 @@ class FilesystemError(ValueError):
     pass
 
 
+# Bytes of a file we'll surface to the UI viewer (config files etc.). The human is
+# VIEWING content, not executing or parsing the target — and the bytes already sit on
+# the host disk from unpack — so reading them is bounded and read-only, not a sandbox
+# escape. A hard cap keeps a huge/again-firmware file from blowing up the response.
+MAX_VIEW_BYTES = 256 * 1024
+
+
+def read_file(project: Project, firmware: Target, rel: str, *, max_bytes: int = MAX_VIEW_BYTES) -> dict:
+    """Read a file from the firmware's unpacked tree for the in-UI viewer. Returns
+    {rel, size, encoding: 'text'|'binary', content, truncated}. Path-traversal safe:
+    the resolved path must stay within the firmware's extracted root."""
+    fs = (firmware.metadata_json or {}).get("filesystem")
+    if not fs:
+        raise FilesystemError("this target has no unpacked filesystem")
+    entry = next((f for f in fs["files"] if f["rel"] == rel), None)
+    if entry is None:
+        raise FilesystemError(f"{rel!r} is not in the unpacked filesystem")
+
+    root = _host_root(project, firmware).resolve()
+    path = (root / rel).resolve()
+    if root not in path.parents and path != root:
+        raise FilesystemError("path escapes the unpacked filesystem")
+    if not path.is_file():
+        raise FilesystemError(f"{rel!r} is no longer on disk; re-unpack the firmware")
+
+    size = path.stat().st_size
+    raw = path.read_bytes()[: max_bytes + 1]
+    truncated = len(raw) > max_bytes
+    raw = raw[:max_bytes]
+    # Treat as text if it decodes cleanly and has no NULs; otherwise hand back a hex dump.
+    if b"\x00" not in raw:
+        try:
+            return {"rel": rel, "size": size, "encoding": "text",
+                    "content": raw.decode("utf-8"), "truncated": truncated}
+        except UnicodeDecodeError:
+            pass
+    return {"rel": rel, "size": size, "encoding": "binary",
+            "content": raw.hex(), "truncated": truncated}
+
+
 def add_file_as_target(session: Session, project: Project, firmware: Target, rel: str, runner=None):
     """Ingest a file from the firmware's unpacked tree as a child target (real
     bytes → recon if Docker is up). Idempotent per `rel` (returns the existing

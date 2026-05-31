@@ -17,7 +17,32 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
   const icon = node.type === "target" ? NODE_ICON[node.kind] : NODE_ICON[node.node_type] || "fn";
   const [added, setAdded] = useState<Set<string>>(new Set());
   const [decomp, setDecomp] = useState<{ loading: boolean; focus?: any; detail?: string } | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [eName, setEName] = useState("");
+  const [eAddr, setEAddr] = useState("");
+  const [eAttrs, setEAttrs] = useState("");
+  const [eErr, setEErr] = useState<string>();
+  const [eSaving, setESaving] = useState(false);
   const exports: string[] = (target?.metadata?.exports as string[]) || [];
+
+  const startEdit = () => {
+    setEName(node.label);
+    setEAddr(node.address || "");
+    setEAttrs(JSON.stringify(node.attrs || {}, null, 2));
+    setEErr(undefined); setEditing(true);
+  };
+  const saveEdit = async () => {
+    if (!projectId) return;
+    let attrs: any;
+    try { attrs = eAttrs.trim() ? JSON.parse(eAttrs) : {}; }
+    catch { setEErr("attributes must be valid JSON"); return; }
+    setESaving(true); setEErr(undefined);
+    try {
+      await api.patchNode(projectId, node.id, { name: eName, address: eAddr, attrs });
+      setEditing(false); onChanged?.();
+    } catch (e: any) { setEErr(String(e.message || e)); }
+    finally { setESaving(false); }
+  };
 
   const doDecompile = async () => {
     if (!node.target_id) return;
@@ -114,13 +139,35 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
 
       {node.type === "node" && !isHypothesis && (
         <>
-          <div className="sec">Attributes</div>
-          <div className="kvs">
-            {node.address && <><span className="k">address</span><code>{node.address}</code></>}
-            {Object.entries(node.attrs || {}).map(([k, v]) => (
-              <span key={k} style={{ display: "contents" }}><span className="k">{k}</span><code>{String(typeof v === "object" ? JSON.stringify(v) : v)}</code></span>
-            ))}
+          <div className="sec" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span>Attributes</span>
+            <span style={{ flex: 1 }} />
+            {projectId && !editing && (
+              <button className="btn sm ghost" onClick={startEdit}><Icon name="sliders" size={11} /> Edit</button>
+            )}
           </div>
+          {editing ? (
+            <div className="edit-finding" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <label className="fld"><span className="k">name</span>
+                <input value={eName} onChange={(e) => setEName(e.target.value)} /></label>
+              <label className="fld"><span className="k">address</span>
+                <input value={eAddr} onChange={(e) => setEAddr(e.target.value)} placeholder="e.g. 0x401200" /></label>
+              <label className="fld"><span className="k">attributes (JSON)</span>
+                <textarea rows={6} value={eAttrs} onChange={(e) => setEAttrs(e.target.value)} style={{ fontFamily: "monospace", fontSize: 11 }} /></label>
+              {eErr && <div className="err">{eErr}</div>}
+              <div className="actions">
+                <button className="btn sm primary" onClick={saveEdit} disabled={eSaving}><Icon name="check" size={12} /> {eSaving ? "saving…" : "Save"}</button>
+                <button className="btn sm ghost" onClick={() => { setEditing(false); setEErr(undefined); }} disabled={eSaving}><Icon name="x" size={12} /> Discard</button>
+              </div>
+            </div>
+          ) : (
+            <div className="kvs">
+              {node.address && <><span className="k">address</span><code>{node.address}</code></>}
+              {Object.entries(node.attrs || {}).map(([k, v]) => (
+                <span key={k} style={{ display: "contents" }}><span className="k">{k}</span><code>{String(typeof v === "object" ? JSON.stringify(v) : v)}</code></span>
+              ))}
+            </div>
+          )}
           <div className="muted" style={{ fontSize: 11, marginTop: 12 }}>
             {["function", "symbol", "string", "struct"].includes(node.node_type)
               ? `Tip: launch a task from the binary in the Targets pane to analyze this ${node.node_type}.`

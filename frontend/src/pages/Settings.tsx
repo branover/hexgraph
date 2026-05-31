@@ -156,16 +156,16 @@ export default function Settings() {
             {v.settings.features.fuzzing.enabled && (
               <div className="grid2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                 <div className="row"><label>max fuzz time (s)</label>
-                  <input className="inp" type="number" defaultValue={v.settings.features.fuzzing.max_total_time}
+                  <input className="inp num-input" type="number" defaultValue={v.settings.features.fuzzing.max_total_time}
                          onBlur={(e) => patch({ "features.fuzzing.max_total_time": parseInt(e.target.value) || 60 })} /></div>
                 <div className="row"><label>max input (bytes)</label>
-                  <input className="inp" type="number" defaultValue={v.settings.features.fuzzing.max_len}
+                  <input className="inp num-input" type="number" defaultValue={v.settings.features.fuzzing.max_len}
                          onBlur={(e) => patch({ "features.fuzzing.max_len": parseInt(e.target.value) || 4096 })} /></div>
                 <div className="row"><label>max crashes</label>
-                  <input className="inp" type="number" defaultValue={v.settings.features.fuzzing.max_crashes}
+                  <input className="inp num-input" type="number" defaultValue={v.settings.features.fuzzing.max_crashes}
                          onBlur={(e) => patch({ "features.fuzzing.max_crashes": parseInt(e.target.value) || 10 })} /></div>
                 <div className="row"><label>sandbox timeout (s)</label>
-                  <input className="inp" type="number" defaultValue={v.settings.features.fuzzing.timeout}
+                  <input className="inp num-input" type="number" defaultValue={v.settings.features.fuzzing.timeout}
                          onBlur={(e) => patch({ "features.fuzzing.timeout": parseInt(e.target.value) || 300 })} /></div>
               </div>
             )}
@@ -208,7 +208,7 @@ export default function Settings() {
             </p>
             {v.settings.features.network.enabled && (
               <div className="row"><label>probe timeout (s)</label>
-                <input className="inp" type="number" defaultValue={v.settings.features.network.timeout}
+                <input className="inp num-input" type="number" defaultValue={v.settings.features.network.timeout}
                        onBlur={(e) => patch({ "features.network.timeout": parseInt(e.target.value) || 30 })} /></div>
             )}
           </section>

@@ -148,6 +148,11 @@ select.sel, .settings select.sel {
 select.sel:hover, .settings select.sel:hover { border-color: var(--border-strong); }
 select.sel:focus, .settings select.sel:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
 
+.edit-finding .fld { display: flex; flex-direction: column; gap: 4px; }
+.edit-finding .fld .k { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.edit-finding input, .edit-finding textarea { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 7px; padding: 6px 9px; font: inherit; font-size: 12px; resize: vertical; }
+.edit-finding input:focus, .edit-finding textarea:focus, .edit-finding select:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
+
 /* search results dropdown */
 .search-pop { position: absolute; z-index: 50; top: 46px; left: 11px; right: 11px; max-height: 320px; overflow: auto;
   background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); box-shadow: var(--sh-2); padding: 6px; }
@@ -213,6 +218,7 @@ select.sel:focus, .settings select.sel:focus { outline: none; border-color: var(
 .modal input, .modal select { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 7px; padding: 8px 10px; font: inherit; }
 .modal input:focus, .modal select:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
 .modal .err { color: #ff8a93; font-size: 12px; margin: 6px 0; }
+.modal .modal-help { font-size: 11px; color: var(--muted); line-height: 1.5; margin-top: 6px; text-transform: none; letter-spacing: 0; }
 .modal .foot { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 .modal textarea:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
 .modal textarea { width: 100%; resize: vertical; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 7px; padding: 8px 10px; font: inherit; }
@@ -257,6 +263,7 @@ select.sel:focus, .settings select.sel:focus { outline: none; border-color: var(
 .settings .row label { width: 160px; font-size: 12px; color: var(--muted); flex: none; }
 .settings .inp, .settings .sel { flex: 1; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 7px; padding: 7px 10px; font: inherit; }
 .settings .inp:focus, .settings .sel:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
+.settings .inp.num-input { flex: none; max-width: 110px; }
 .settings .hint { font-size: 11.5px; color: var(--muted); line-height: 1.55; margin: 10px 0 0; }
 .settings .hint code, .settings .paths code { background: var(--surface-3); padding: 1px 5px; border-radius: 4px; font-size: 11px; }
 .settings .keys { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
