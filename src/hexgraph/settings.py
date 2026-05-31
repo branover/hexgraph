@@ -45,6 +45,16 @@ DEFAULTS: dict[str, Any] = {
             "max_crashes": 10,           # cap on unique-crash findings per run
             "timeout": 300,              # sandbox wall-clock (>= compile + max_total_time)
         },
+        "mcp": {
+            # Which `hexgraph mcp` tool groups are exposed to a connected coding
+            # agent. Trim these so the agent's tool list (its context) stays small
+            # when you only want part of HexGraph (e.g. write-only to populate the
+            # graph from a UI-driven session). read=inspect, write=graph/findings,
+            # run=execute sandboxed tasks.
+            "read": True,
+            "write": True,
+            "run": True,
+        },
     },
 }
 
@@ -66,6 +76,9 @@ ALLOWED: dict[str, tuple[Any, set | None]] = {
     "features.fuzzing.max_len": (int, None),
     "features.fuzzing.max_crashes": (int, None),
     "features.fuzzing.timeout": (int, None),
+    "features.mcp.read": (bool, None),
+    "features.mcp.write": (bool, None),
+    "features.mcp.run": (bool, None),
 }
 
 

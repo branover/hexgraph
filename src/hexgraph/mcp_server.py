@@ -13,10 +13,20 @@ from __future__ import annotations
 
 import json
 
-from hexgraph.engine.mcp_tools import catalog
+from hexgraph.engine.mcp_tools import GROUPS, catalog
 
 
-def serve_stdio() -> None:
+def enabled_groups(override: set[str] | None = None) -> set[str]:
+    """Tool groups to expose: an explicit override, else the Settings toggles
+    (features.mcp.{read,write,run}); default all."""
+    if override is not None:
+        return {g for g in override if g in GROUPS}
+    from hexgraph import settings
+
+    return {g for g in GROUPS if settings.get(f"features.mcp.{g}", True)}
+
+
+def serve_stdio(groups: set[str] | None = None) -> None:
     """Run the MCP server on stdio until the client disconnects."""
     try:
         import anyio
@@ -29,7 +39,7 @@ def serve_stdio() -> None:
             f"({exc})"
         )
 
-    tools = {t["name"]: t for t in catalog()}
+    tools = {t["name"]: t for t in catalog(enabled_groups(groups))}
     server = Server("hexgraph")
 
     @server.list_tools()

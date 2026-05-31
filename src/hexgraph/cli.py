@@ -245,7 +245,10 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
     # default: serve the MCP server on stdio
     from hexgraph.mcp_server import serve_stdio
 
-    serve_stdio()
+    groups = None
+    if getattr(args, "tools", None):
+        groups = {g.strip() for g in args.tools.split(",") if g.strip()}
+    serve_stdio(groups)
     return 0
 
 
@@ -322,6 +325,7 @@ def build_parser() -> argparse.ArgumentParser:
     ps.set_defaults(func=_cmd_serve)
 
     pm = sub.add_parser("mcp", help="MCP server for coding agents (stdio); `mcp install` prints setup")
+    pm.add_argument("--tools", help="comma-separated tool groups to expose: read,write,run (default: Settings)")
     msub = pm.add_subparsers(dest="_mcpcmd")  # no subcommand → serve
     mi = msub.add_parser("install", help="print how to register HexGraph with claude/codex/gemini")
     mi.add_argument("--agent", choices=["claude", "codex", "gemini"], default=None)

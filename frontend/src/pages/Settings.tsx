@@ -171,6 +171,24 @@ export default function Settings() {
             )}
           </section>
 
+          {/* MCP — coding-agent integration */}
+          <section className="card2">
+            <h3><Icon name="link" size={15} /> Coding-agent tools (MCP) <span className="muted">· optional</span></h3>
+            <p className="hint">
+              Run <code>hexgraph mcp install</code> to connect Claude Code / Codex / gemini-cli. These toggles
+              decide which tool groups the agent sees — trim them so its context isn't filled with tools you
+              won't use. <b>read</b>: inspect the graph/target · <b>write</b>: populate findings/nodes/edges ·
+              <b> run</b>: execute sandboxed tasks.
+            </p>
+            {(["read", "write", "run"] as const).map((g) => (
+              <label key={g} className="switch" style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                <input type="checkbox" checked={v.settings.features.mcp[g]}
+                       onChange={(e) => patch({ [`features.mcp.${g}`]: e.target.checked })} />
+                <span><code>{g}</code> tools</span>
+              </label>
+            ))}
+          </section>
+
           {/* Server */}
           <section className="card2">
             <h3>Server</h3>

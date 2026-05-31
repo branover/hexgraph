@@ -62,6 +62,47 @@ def test_run_task_static_analysis_offline(hg_home):
     assert any(f["severity"] == "critical" for f in res["findings"])
 
 
+def test_write_tools_populate_graph(hg_home):
+    from hexgraph.db.models import Edge, Node
+    with session_scope() as s:
+        p = create_project(s, name="w")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        pid, tid = p.id, t.id
+
+    n = mcp_tools.create_node(pid, "function", "ssdp_recv", target_id=tid)
+    assert n.get("id") and n["node_type"] == "function"
+    # node bound to a missing target is rejected by the invariant
+    assert "error" in mcp_tools.create_node(pid, "function", "x", target_id="nope")
+    h = mcp_tools.create_hypothesis(pid, "parser overruns a buffer", target_id=tid)
+    assert h.get("id") and h["status"] == "open"
+    e = mcp_tools.create_edge(pid, "node", n["id"], "target", tid, "contains")
+    assert e.get("id")
+    with session_scope() as s:
+        assert s.query(Node).filter(Node.project_id == pid, Node.name == "ssdp_recv").count() == 1
+        assert s.query(Edge).filter(Edge.project_id == pid, Edge.type == "contains").count() >= 1
+
+
+def test_catalog_group_filtering():
+    read_only = {t["name"] for t in mcp_tools.catalog({"read"})}
+    assert "decompile_function" in read_only
+    assert "record_finding" not in read_only and "create_node" not in read_only and "run_task" not in read_only
+    write_only = {t["name"] for t in mcp_tools.catalog({"write"})}
+    assert {"record_finding", "create_node", "create_edge"} <= write_only
+    assert "decompile_function" not in write_only
+    # every catalog entry is tagged with a known group
+    assert all(t["group"] in mcp_tools.GROUPS for t in mcp_tools.catalog())
+
+
+def test_enabled_groups_from_settings(hg_home):
+    from hexgraph import settings as st
+    from hexgraph.mcp_server import enabled_groups
+
+    assert enabled_groups() == {"read", "write", "run"}  # default all
+    st.update_settings({"features.mcp.run": False, "features.mcp.write": False})
+    assert enabled_groups() == {"read"}
+    assert enabled_groups({"write"}) == {"write"}  # explicit override wins
+
+
 def test_install_help_for_each_agent():
     from hexgraph.agent_setup import install_help
 
