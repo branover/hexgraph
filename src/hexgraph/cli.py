@@ -191,6 +191,51 @@ def _cmd_prune(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_config(args: argparse.Namespace) -> int:
+    """Read/write managed settings (optional features + non-secret prefs).
+    Secrets (API keys) are reported as status only and are never written here."""
+    import json
+
+    from hexgraph import settings as st
+
+    if args._cfgcmd == "list":
+        view = st.read_settings()
+        print(json.dumps(view["settings"], indent=2))
+        print("\nsecrets (status only — never stored here):")
+        for name, s in view["secrets"].items():
+            print(f"  {name}: {'present' if s['present'] else 'absent'}"
+                  + (f" (from {s['source']})" if s["source"] else ""))
+        return 0
+    if args._cfgcmd == "get":
+        val = st.get(args.path, None)
+        print(json.dumps(val))
+        return 0
+    if args._cfgcmd == "set":
+        # Coerce the string value to bool/int where the schema expects it.
+        raw = args.value
+        typ = st.ALLOWED.get(args.path, (str, None))[0]
+        types = typ if isinstance(typ, tuple) else (typ,)
+        value: object = raw
+        if bool in types or raw.lower() in ("true", "false"):
+            if raw.lower() in ("true", "false"):
+                value = raw.lower() == "true"
+        if int in types and not isinstance(value, bool):
+            try:
+                value = int(raw)
+            except ValueError:
+                pass
+        if raw == "" and (type(None) in types):
+            value = None
+        try:
+            st.update_settings({args.path: value})  # dotted keys are accepted as-is
+        except st.SettingsError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(f"{args.path} = {json.dumps(value)}")
+        return 0
+    return 1
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     from hexgraph.api.app import run_server
 
@@ -246,6 +291,17 @@ def build_parser() -> argparse.ArgumentParser:
     pp = sub.add_parser("prune", help="report the project's content-addressed store size")
     pp.add_argument("project")
     pp.set_defaults(func=_cmd_prune)
+
+    pc = sub.add_parser("config", help="read/write managed settings (optional features, prefs)")
+    csub = pc.add_subparsers(dest="_cfgcmd", required=True)
+    csub.add_parser("list", help="print all settings + secret status").set_defaults(func=_cmd_config)
+    cg = csub.add_parser("get", help="print one setting (dotted path)")
+    cg.add_argument("path")
+    cg.set_defaults(func=_cmd_config)
+    cs = csub.add_parser("set", help="set one setting (e.g. features.ghidra.enabled true)")
+    cs.add_argument("path")
+    cs.add_argument("value")
+    cs.set_defaults(func=_cmd_config)
 
     ps = sub.add_parser("serve", help="start the loopback-only API/UI")
     ps.add_argument("--host", default=None)

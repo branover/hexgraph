@@ -57,15 +57,29 @@ def _load_toml() -> dict:
 
 
 def load_config() -> Config:
-    """Resolve config: env overrides TOML overrides defaults."""
+    """Resolve config with precedence: env > managed settings.json > config.toml > defaults.
+
+    The managed layer (settings.json) is what the web Settings UI / `hexgraph
+    config` write; config.toml stays the user's hand-authored file + secret store."""
+    from hexgraph import settings as _settings
+
     toml = _load_toml()
     llm = toml.get("llm", {})
     api = toml.get("api", {})
+
+    def layered(env: str, managed_path: str, toml_val, default):
+        if env in os.environ:
+            return os.environ[env]
+        m = _settings.managed_only(managed_path)
+        if m is not None:
+            return m
+        return toml_val if toml_val is not None else default
+
     return Config(
-        llm_backend=os.environ.get("HEXGRAPH_LLM_BACKEND", llm.get("backend", "mock")),
-        model_pref=os.environ.get("HEXGRAPH_MODEL", llm.get("model")),
-        host=os.environ.get("HEXGRAPH_HOST", api.get("host", DEFAULT_HOST)),
-        port=int(os.environ.get("HEXGRAPH_PORT", api.get("port", DEFAULT_PORT))),
+        llm_backend=layered("HEXGRAPH_LLM_BACKEND", "llm.backend", llm.get("backend"), "mock"),
+        model_pref=layered("HEXGRAPH_MODEL", "llm.model", llm.get("model"), None),
+        host=layered("HEXGRAPH_HOST", "server.host", api.get("host"), DEFAULT_HOST),
+        port=int(layered("HEXGRAPH_PORT", "server.port", api.get("port"), DEFAULT_PORT)),
     )
 
 

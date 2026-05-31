@@ -470,6 +470,29 @@ def create_app() -> FastAPI:
                 raise HTTPException(400, str(exc))
             return summary(s, hypothesis_id)
 
+    # --- Settings (optional features + non-secret prefs; secrets are status-only) ---
+    @app.get("/api/settings")
+    def api_get_settings():
+        from hexgraph import settings as st
+
+        return st.read_settings()
+
+    @app.patch("/api/settings")
+    def api_patch_settings(body: dict):
+        from hexgraph import settings as st
+
+        try:
+            return st.update_settings(body)
+        except st.SettingsError as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.post("/api/settings/ghidra/test")
+    def api_ghidra_test():
+        """Best-effort check of the configured Ghidra integration (no target needed)."""
+        from hexgraph.engine.ghidra import check_ghidra
+
+        return check_ghidra()
+
     @app.get("/api/capabilities")
     def api_capabilities():
         from hexgraph.engine.capabilities import capability_table
