@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+.pytest_cache/
+.mypy_cache/
+
+# HexGraph runtime data (never commit projects/artifacts/keys)
+.hexgraph/
+*.db
+*.sqlite3
+
+# OS
+.DS_Store
+*.bak
+
+# Frontend build artifacts (run `make ui` to build the SPA)
+frontend/node_modules/
+frontend/dist/
+src/hexgraph/web/dist/

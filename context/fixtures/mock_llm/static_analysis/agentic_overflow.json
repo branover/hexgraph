@@ -1,0 +1,30 @@
+{
+  "_scenario": "agentic_overflow",
+  "_note": "Tool-use scenario. On the first turn (no tool results yet) the mock requests tool calls; once HexGraph returns the results it emits the finding. Exercises the agent loop offline at $0. Same finding shape as critical_overflow.",
+  "thinking": "Let me read the function body and imports before judging.",
+  "tool_calls": [
+    { "name": "decompile_function", "input": { "function": "{{function|cgi_handler}}" } },
+    { "name": "read_imports", "input": {} }
+  ],
+  "usage": { "input_tokens": 5120, "output_tokens": 640, "cost_source": "mock", "cost_usd": 0.0 },
+  "findings": [
+    {
+      "title": "Stack buffer overflow in {{function|cgi_handler}}()",
+      "severity": "critical",
+      "confidence": "high",
+      "category": "memory-safety",
+      "summary": "Unbounded copy of attacker-controlled input into a fixed stack buffer in {{function|cgi_handler}} allows overwriting the saved return address.",
+      "reasoning": "After decompiling {{function|cgi_handler}} and reading the imports, the body copies the request 'token' field into a 1040-byte stack buffer using {{sink|strcpy}} with no length check. The source is network-reachable and pre-auth; recon shows no stack canary, so the saved return address is controllable.",
+      "evidence": {
+        "function": "{{function|cgi_handler}}",
+        "file": "{{target_name|/sbin/httpd}}",
+        "sink": "{{sink|strcpy}}",
+        "decompiled_snippet": "void {{function|cgi_handler}}(req_t *r){\n  char buf[1040];\n  {{sink|strcpy}}(buf, r->token); // unbounded\n}",
+        "reproducer": "POST /cgi-bin/admin.cgi  token=AAAA...[1064 bytes]"
+      },
+      "suggested_followups": [
+        { "task_type": "harness_generation", "label": "Generate a fuzz harness for {{function|cgi_handler}}", "params": { "function": "{{function|cgi_handler}}" } }
+      ]
+    }
+  ]
+}

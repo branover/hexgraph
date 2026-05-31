@@ -1,0 +1,9 @@
+{
+  "_note": "Expected finding category per binary for the scored real-key test (P8). A run 'detects' a binary if static_analysis emits a finding whose category is in `categories`.",
+  "targets": [
+    { "binary": "cgi",   "function": "handle", "categories": ["memory-safety"] },
+    { "binary": "cmd",    "function": "ping",   "categories": ["command-injection"] },
+    { "binary": "creds",  "function": "login",  "categories": ["hardcoded-secret", "auth"] }
+  ],
+  "min_detection_rate": 0.66
+}

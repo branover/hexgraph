@@ -1,0 +1,36 @@
+# Brings up the loopback-only HexGraph UI:  docker compose up
+#
+# SECURITY: the `ports` mapping below publishes ONLY to the host's 127.0.0.1.
+# That host-loopback publish is what keeps HexGraph local-only. The in-container
+# bind uses 0.0.0.0 (the only way a published port reaches the process), which
+# trips the app's non-loopback guard, so HEXGRAPH_I_KNOW_WHAT_IM_DOING=1 is set
+# here deliberately — the real exposure control is the 127.0.0.1 publish, not
+# the in-container bind address.
+services:
+  hexgraph:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: hexgraph:dev
+    environment:
+      HEXGRAPH_HOST: "0.0.0.0"
+      HEXGRAPH_PORT: "8765"
+      HEXGRAPH_I_KNOW_WHAT_IM_DOING: "1"
+      HEXGRAPH_LLM_BACKEND: "${HEXGRAPH_LLM_BACKEND:-mock}"
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - hexgraph_data:/root/.hexgraph
+      # Launch the disposable analysis sandbox via docker-out-of-docker.
+      # ⚠ SECURITY: mounting the daemon socket grants this container
+      # host-equivalent (root) control of Docker — any RCE in the app would
+      # escalate to the host. Acceptable for a single-user local box; for a
+      # hardened/shared deployment put a restricted socket-proxy (e.g.
+      # tecnativa/docker-socket-proxy, allowing only container create/run/kill)
+      # in front of it, or use a rootless-Docker socket. The venv run path
+      # (make serve) avoids the socket entirely.
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: ["hexgraph", "serve"]
+
+volumes:
+  hexgraph_data:

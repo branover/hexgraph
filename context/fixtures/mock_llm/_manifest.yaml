@@ -18,6 +18,7 @@ static_analysis:
   default: critical_overflow
   scenarios:
     - critical_overflow      # one critical memory-safety finding + followups
+    - agentic_overflow       # tool-use: decompile + read imports, then the finding
     - no_findings            # clean target, empty result
     - malformed_then_valid   # first reply invalid JSON, second valid (retry path)
     # behavioral-only scenarios (no file needed):
@@ -35,3 +36,7 @@ harness_generation:
 pattern_sweep:
   default: match_found
   scenarios: [match_found]
+
+poc:
+  default: command_injection
+  scenarios: [command_injection]   # returns a runnable PoC spec (not a findings envelope)
