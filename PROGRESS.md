@@ -31,6 +31,20 @@ then run the resume verifier, then continue at the next unchecked task.
   the new types; modernised selects + pill toggle switches; endpoint/param hand-authoring; search ranks
   nodes first. Deferred items (egress-audit view, schema-driven edge-attr form, a11y) tracked in
   `docs/ui-backlog.md`. A committed vulnerable web target (`tests/fixtures/vulnrouter/`) backs live testing.
+  **Phase 3 (dynamic web assessment) DONE — live targets are solvable end-to-end:** `http_probe.py` sends
+  crafted request(s) from the sandbox (single-request for the `http_request` MCP tool; multi-step+oracle
+  with a CookieJar for web PoCs, so auth flows work). `surfaces.run_http_request`/`run_web_poc` share an
+  `_egress_gate` (policy + per-target local-only NetworkScope + EgressEvent audit). `poc.verify_poc`
+  branches web_app→HTTP oracle (`body_contains`/`status_is`/`status_differs`, gated by features.network)
+  vs binary→exec (features.poc); `{{NONCE}}` shared so a web RCE is unforgeable. SKILL §2b +
+  `docs/engagement-vulnrouter.md` + `make vulnrouter`. **Validated**: an agent (MCP only, no source) solved
+  vulnrouter — auth bypass + RCE verified → 6 findings/11 nodes/29 edges. Plus **graph-quality + tool
+  contracts**: every target-bound node gets a `contains` edge (no orphans); `engine/node_schemas.py`
+  advertised via `get_schemas` with per-type `use_when`/recommended attrs + the sink-vs-symbol rule;
+  `run_task` folds dupes; `test_tool_contract.py` locks it. `make sandbox-build` now forwards
+  `--build-arg WITH_GHIDRA`. UI: PoC verification panel + re-verify, edit-any-field (finding+node),
+  firmware file viewer, search-includes-targets, edge inspector, Author modals (`name·type·target` +
+  type help + draw-to-connect), tighter Settings inputs.
 - **Current state:** **P0–P8 all delivered** (core) + **researcher depth (P6/P7) complete**: annotations
   (rename/note/tag, agent-proposed→confirm, confirmed facts feed context), hypothesis lifecycle
   (evidence-derived status, sticky human verdict, open hypotheses feed context), in-app report viewer +
