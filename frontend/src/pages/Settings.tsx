@@ -189,6 +189,42 @@ export default function Settings() {
             ))}
           </section>
 
+          {/* Delegate to a coding agent */}
+          <section className="card2">
+            <div className="h3row">
+              <h3><Icon name="run" size={15} /> Delegate to a coding agent <span className="muted">· optional</span></h3>
+              <label className="switch">
+                <input type="checkbox" checked={v.settings.features.agent.enabled}
+                       onChange={(e) => patch({ "features.agent.enabled": e.target.checked })} />
+                <span>{v.settings.features.agent.enabled ? "enabled" : "disabled"}</span>
+              </label>
+            </div>
+            <p className="hint">
+              When enabled, an <b>agent_delegate</b> task appears in the Run menu: HexGraph launches your
+              coding agent headless, wired to the HexGraph MCP server + VR skill and <b>restricted to
+              HexGraph's sandboxed tools</b> (no shell on the target). Register the server first:
+              <code> hexgraph mcp install</code>.
+            </p>
+            {v.settings.features.agent.enabled && (
+              <>
+                <div className="row"><label>Agent CLI</label>
+                  <select className="sel" value={v.settings.features.agent.cli}
+                          onChange={(e) => patch({ "features.agent.cli": e.target.value })}>
+                    {["claude", "codex", "gemini"].map((c) => <option key={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div className="row"><label>Binary (optional)</label>
+                  <input className="inp" defaultValue={v.settings.features.agent.binary} placeholder="(cli name on PATH)"
+                         onBlur={(e) => patch({ "features.agent.binary": e.target.value.trim() })} />
+                </div>
+                <div className="row"><label>Timeout (s)</label>
+                  <input className="inp" type="number" defaultValue={v.settings.features.agent.timeout}
+                         onBlur={(e) => patch({ "features.agent.timeout": parseInt(e.target.value) || 900 })} />
+                </div>
+              </>
+            )}
+          </section>
+
           {/* Server */}
           <section className="card2">
             <h3>Server</h3>

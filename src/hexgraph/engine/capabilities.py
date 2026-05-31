@@ -40,13 +40,21 @@ _EDGE = {
 _FUZZABLE_TARGETS = {"executable", "shared_library"}
 
 
-def _fuzzing_enabled() -> bool:
+def _flag(path: str) -> bool:
     try:
         from hexgraph import settings
 
-        return bool(settings.get("features.fuzzing.enabled"))
+        return bool(settings.get(path))
     except Exception:  # noqa: BLE001
         return False
+
+
+def _fuzzing_enabled() -> bool:
+    return _flag("features.fuzzing.enabled")
+
+
+def _agent_enabled() -> bool:
+    return _flag("features.agent.enabled")
 
 
 def capabilities_for(anchor_kind: str, subtype: str | None = None) -> list[str]:
@@ -54,11 +62,15 @@ def capabilities_for(anchor_kind: str, subtype: str | None = None) -> list[str]:
         caps = list(_TARGET.get(subtype or "unknown", ["recon"]))
         if _fuzzing_enabled() and subtype in _FUZZABLE_TARGETS:
             caps.append("fuzzing")
+        if _agent_enabled() and subtype in _FUZZABLE_TARGETS:
+            caps.append("agent_delegate")
         return caps
     if anchor_kind == "node":
         caps = list(_NODE.get(subtype or "", []))
         if _fuzzing_enabled() and subtype == "function":
             caps.append("fuzzing")
+        if _agent_enabled() and subtype == "function":
+            caps.append("agent_delegate")
         return caps
     if anchor_kind == "edge":
         return _EDGE.get(subtype or "_default", _EDGE["_default"])
@@ -66,8 +78,17 @@ def capabilities_for(anchor_kind: str, subtype: str | None = None) -> list[str]:
 
 
 def capability_table() -> dict:
-    """Full table for the UI (fuzzing folded in per-kind when enabled in Settings)."""
-    fuzz = _fuzzing_enabled()
-    targets = {k: (v + ["fuzzing"] if fuzz and k in _FUZZABLE_TARGETS else v) for k, v in _TARGET.items()}
-    nodes = {k: (v + ["fuzzing"] if fuzz and k == "function" else v) for k, v in _NODE.items()}
+    """Full table for the UI (fuzzing/agent_delegate folded in when enabled in Settings)."""
+    fuzz, agent = _fuzzing_enabled(), _agent_enabled()
+
+    def extra(kind: str, base: list[str]) -> list[str]:
+        out = list(base)
+        if fuzz and (kind in _FUZZABLE_TARGETS or kind == "function"):
+            out.append("fuzzing")
+        if agent and (kind in _FUZZABLE_TARGETS or kind == "function"):
+            out.append("agent_delegate")
+        return out
+
+    targets = {k: extra(k, v) for k, v in _TARGET.items()}
+    nodes = {k: extra(k, v) for k, v in _NODE.items()}
     return {"target": targets, "node": nodes, "edge": _EDGE}

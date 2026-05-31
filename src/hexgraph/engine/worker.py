@@ -31,6 +31,11 @@ def _dispatch(session: Session, project: Project, target: Target, task: Task) ->
 
         execute_fuzzing(session, project, target, task, get_executor())
         return
+    if task.type == "agent_delegate":
+        from hexgraph.engine.agent_delegate import execute_delegate
+
+        execute_delegate(session, project, target, task)
+        return
     if task.type in LLM_TASK_TYPES:
         execute_llm_task(session, project, target, task)
         return

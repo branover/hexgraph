@@ -94,8 +94,11 @@ def list_findings(project_id: str) -> list[dict]:
                  "function": (f.evidence_json or {}).get("function")} for f in rows]
 
 
-def record_finding(project_id: str, target_id: str, finding: dict) -> dict:
-    """Persist an agent-produced finding (validated against the frozen schema)."""
+def record_finding(project_id: str, target_id: str, finding: dict, task_id: str | None = None) -> dict:
+    """Persist an agent-produced finding (validated against the frozen schema).
+    Pass the HexGraph `task_id` you were given (delegate mode) to attribute it to
+    that task; otherwise a fresh agent_delegate task is created for provenance."""
+    from hexgraph.db.models import Task
     from hexgraph.engine.findings import persist_finding
     from hexgraph.engine.tasks import create_task
 
@@ -108,8 +111,9 @@ def record_finding(project_id: str, target_id: str, finding: dict) -> dict:
         target = s.get(Target, target_id)
         if project is None or target is None:
             return {"error": "project or target not found"}
-        # Attribute it to a task so provenance holds (agent-delegate origin).
-        task = create_task(s, project=project, target_id=target.id, type="agent_delegate", backend="agent")
+        task = s.get(Task, task_id) if task_id else None
+        if task is None or task.project_id != project.id:
+            task = create_task(s, project=project, target_id=target.id, type="agent_delegate", backend="agent")
         row = persist_finding(s, project_id=project.id, target_id=target.id, task_id=task.id, finding=model)
         row.origin = "agent"
         return {"id": row.id, "title": row.title, "severity": row.severity}
@@ -229,8 +233,8 @@ _CATALOG = [
      {"type": "object", "properties": {"project_id": {"type": "string"}, "q": {"type": "string"}}, "required": ["project_id", "q"]}),
     ("read", "list_findings", list_findings, "Existing findings in a project.",
      {"type": "object", "properties": {"project_id": {"type": "string"}}, "required": ["project_id"]}),
-    ("write", "record_finding", record_finding, "Record a new finding (must match the Finding schema).",
-     {"type": "object", "properties": {"project_id": {"type": "string"}, "target_id": {"type": "string"}, "finding": {"type": "object"}}, "required": ["project_id", "target_id", "finding"]}),
+    ("write", "record_finding", record_finding, "Record a new finding (must match the Finding schema). Pass the given task_id in delegate mode.",
+     {"type": "object", "properties": {"project_id": {"type": "string"}, "target_id": {"type": "string"}, "finding": {"type": "object"}, "task_id": {"type": "string"}}, "required": ["project_id", "target_id", "finding"]}),
     ("write", "create_node", create_node, "Add a node (function/symbol/string/struct/hypothesis/pattern) to the graph.",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "node_type": {"type": "string"}, "name": {"type": "string"}, "target_id": {"type": "string"}, "attrs": {"type": "object"}}, "required": ["project_id", "node_type", "name"]}),
     ("write", "create_edge", create_edge, "Connect two graph entities (target|node|finding|task).",

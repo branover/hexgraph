@@ -55,6 +55,16 @@ DEFAULTS: dict[str, Any] = {
             "write": True,
             "run": True,
         },
+        "agent": {
+            # Delegate a task to a coding agent from the UI (HexGraph launches the
+            # agent CLI headless, wired to the MCP server + skill, restricted to
+            # HexGraph tools). OFF by default. Register the server first with
+            # `hexgraph mcp install`.
+            "enabled": False,
+            "cli": "claude",            # claude | codex | gemini
+            "binary": "",               # override the executable name/path (optional)
+            "timeout": 900,
+        },
     },
 }
 
@@ -79,6 +89,10 @@ ALLOWED: dict[str, tuple[Any, set | None]] = {
     "features.mcp.read": (bool, None),
     "features.mcp.write": (bool, None),
     "features.mcp.run": (bool, None),
+    "features.agent.enabled": (bool, None),
+    "features.agent.cli": (str, {"claude", "codex", "gemini"}),
+    "features.agent.binary": (str, None),
+    "features.agent.timeout": (int, None),
 }
 
 

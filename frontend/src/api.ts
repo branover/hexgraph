@@ -34,6 +34,7 @@ export interface SettingsView {
       ghidra: { enabled: boolean; mode: string; enrich_recon: boolean; timeout: number; bridge: { host: string; port: number } };
       fuzzing: { enabled: boolean; max_total_time: number; max_len: number; max_crashes: number; timeout: number };
       mcp: { read: boolean; write: boolean; run: boolean };
+      agent: { enabled: boolean; cli: string; binary: string; timeout: number };
     };
   };
   secrets: Record<string, SecretStatus>;
