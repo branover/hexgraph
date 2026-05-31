@@ -103,6 +103,7 @@ export const api = {
     return r.json();
   },
   createNode: (pid: string, body: any) => postJSON<any>(`/api/projects/${pid}/nodes`, body),
+  decompile: (tid: string, fn: string) => postJSON<{ available: boolean; detail?: string; focus?: any; functions?: string[] }>(`/api/targets/${tid}/decompile`, { function: fn }),
   filesystem: (tid: string) => getJSON<{ unpacked: boolean; method?: string; files: FsEntry[] }>(`/api/targets/${tid}/filesystem`),
   addFromFs: (pid: string, fwId: string, rel: string) => postJSON<any>(`/api/projects/${pid}/targets/${fwId}/add-from-fs`, { rel }),
   createEdge: (pid: string, body: any) => postJSON<any>(`/api/projects/${pid}/edges`, body),

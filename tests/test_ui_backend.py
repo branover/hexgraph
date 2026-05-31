@@ -61,3 +61,15 @@ def test_clear_tasks_keeps_finding_bearing(hg_home):
     with session_scope() as s:
         assert s.get(Task, empty_id) is None
         assert s.get(Task, keep_id) is not None
+
+
+def test_decompile_endpoint_degrades_without_docker(hg_home, monkeypatch):
+    monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: False)
+    with session_scope() as s:
+        p = create_project(s, name="dc")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        tid = t.id
+    c = TestClient(create_app())
+    r = c.post(f"/api/targets/{tid}/decompile", json={"function": "cgi_handler"})
+    assert r.status_code == 200 and r.json()["available"] is False
+    assert c.post("/api/targets/nope/decompile", json={"function": "x"}).status_code == 404

@@ -16,7 +16,17 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
   const isFunction = node.type === "node" && node.node_type === "function";
   const icon = node.type === "target" ? NODE_ICON[node.kind] : NODE_ICON[node.node_type] || "fn";
   const [added, setAdded] = useState<Set<string>>(new Set());
+  const [decomp, setDecomp] = useState<{ loading: boolean; focus?: any; detail?: string } | null>(null);
   const exports: string[] = (target?.metadata?.exports as string[]) || [];
+
+  const doDecompile = async () => {
+    if (!node.target_id) return;
+    setDecomp({ loading: true });
+    try {
+      const r = await api.decompile(node.target_id, node.label);
+      setDecomp({ loading: false, focus: r.focus, detail: r.available ? (r.focus ? undefined : "function not found in the binary") : r.detail });
+    } catch (e: any) { setDecomp({ loading: false, detail: String(e.message || e) }); }
+  };
 
   const addNode = async (name: string, kind: string) => {
     if (!projectId || !target) return;
@@ -74,11 +84,25 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
         <HypothesisPanel hypothesisId={node.id} onViewFinding={onViewFinding} onChanged={onChanged} />
       )}
 
-      {isFunction && allowed.length > 0 && (
-        <div className="actions">
-          <Launcher allowed={allowed} onChoose={onLaunch} />
-          <span className="muted" style={{ fontSize: 11, alignSelf: "center" }}>run a task focused on this function</span>
-        </div>
+      {isFunction && (
+        <>
+          <div className="actions">
+            {allowed.length > 0 && <Launcher allowed={allowed} onChoose={onLaunch} />}
+            {node.target_id && (
+              <button className="btn sm ghost" onClick={doDecompile} disabled={decomp?.loading}>
+                <Icon name="fn" size={12} /> {decomp?.loading ? "decompiling…" : "Decompile"}
+              </button>
+            )}
+          </div>
+          {decomp && !decomp.loading && (
+            decomp.focus?.pseudocode ? (
+              <>
+                <div className="sec">Decompiled {decomp.focus.callees?.length ? `· calls: ${decomp.focus.callees.join(", ")}` : ""}</div>
+                <pre className="codewrap" style={{ whiteSpace: "pre-wrap" }}>{decomp.focus.pseudocode}</pre>
+              </>
+            ) : <div className="muted" style={{ fontSize: 11 }}>{decomp.detail || "no pseudocode"}</div>
+          )}
+        </>
       )}
 
       {node.type === "node" && !isHypothesis && (

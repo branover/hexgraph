@@ -254,6 +254,26 @@ def create_app() -> FastAPI:
             except ValueError as exc:
                 raise HTTPException(404, str(exc))
 
+    @app.post("/api/targets/{target_id}/decompile")
+    def api_decompile(target_id: str, body: dict):
+        """Decompile a function on demand for the in-app viewer (sandboxed). Returns
+        {available, focus|detail}. Degrades gracefully when Docker/sandbox is absent."""
+        from hexgraph.sandbox.runner import docker_available
+
+        with session_scope() as s:
+            t = s.get(Target, target_id)
+            if t is None:
+                raise HTTPException(404, "target not found")
+            if not docker_available():
+                return {"available": False, "detail": "Docker/sandbox not running — decompilation needs it."}
+            try:
+                from hexgraph.sandbox.decompiler import get_decompiler
+
+                out = get_decompiler().decompile(t.path, body.get("function"))
+            except Exception as exc:  # noqa: BLE001
+                return {"available": False, "detail": f"decompilation failed: {exc}"}
+            return {"available": True, "functions": out.get("functions", []), "focus": out.get("focus")}
+
     @app.get("/api/targets/{target_id}/filesystem")
     def api_target_filesystem(target_id: str):
         """The unpacked filesystem manifest of a firmware target (browsable tree)."""
