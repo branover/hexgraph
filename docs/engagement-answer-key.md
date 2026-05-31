@@ -47,6 +47,12 @@ is a squashfs rootfs with one genuinely exploitable bug planted in a CGI binary.
   so `verify_poc` is allowed to execute the target in the sandbox.
 - Install the MCP server + skill (`hexgraph mcp install --write-skill ~/.claude/skills`,
   `claude mcp add hexgraph -- hexgraph mcp`).
+- **Do NOT ingest the firmware yourself** — the agent must do it via the `ingest`
+  tool. Start from a clean `HEXGRAPH_HOME` (no projects) so "did the agent ingest"
+  is checkable. Make sure the `run` MCP tool group is enabled (default) so `ingest`
+  is exposed, and that the agent can reach the file: either run the MCP server from
+  the repo root, or give the agent the **absolute path** to
+  `tests/fixtures/eval_fw/eval_fw.bin` (the MCP server resolves the path itself).
 
 ## Expected verified PoC
 
@@ -58,6 +64,10 @@ working against this firmware.
 
 ## How to grade (check HexGraph after the run)
 
+0. **Did the ingest itself:** a project + the `eval`/firmware target tree exists
+   that didn't before the run (it called `ingest`, which unpacked
+   `sbin/busybox` + `www/cgi-bin/diagnostic` as children). If you started from a
+   clean home, any project present means the agent loaded it.
 1. **Found the real bug:** a finding on target `…/diagnostic`, function
    `run_diagnostic` (or `main`), **category `command-injection`**, high/critical
    severity, with evidence naming the `system` sink and the `QUERY_STRING`/`host`

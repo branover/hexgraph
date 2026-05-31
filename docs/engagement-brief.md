@@ -28,9 +28,15 @@ task is done only when `verify_poc` returns `verified: true` for your PoC.
 
 ## What to do
 
-1. **Bring the firmware into HexGraph.** Use the `ingest` tool with the path
-   above. It unpacks the image into child targets and runs recon. Note the
-   `project_id` and the child target ids it returns.
+0. **Confirm the starting state.** Call `list_projects`. The firmware has **not**
+   been loaded for you — there should be no project for it yet. Bringing it in is
+   your job.
+1. **Ingest the firmware yourself.** Call `ingest(path="<the path above>")`. It
+   unpacks the image into child targets and runs recon in the sandbox. Note the
+   `project_id` and child target ids it returns, then `list_targets(project_id)`
+   to see what came out. (If `ingest` reports the file isn't found, the path is
+   relative to the MCP server's working directory — ask the operator for the
+   absolute path and use that.)
 2. **Map the attack surface.** For each child binary, read its recon facts
    (`target_facts`, `read_imports`) and `list_functions`. Decide what is
    reachable from untrusted input (network / HTTP / CGI).
