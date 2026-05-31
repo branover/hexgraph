@@ -83,6 +83,7 @@ class EdgeType(str, enum.Enum):
     annotates = "annotates"
     dataflow_hint = "dataflow_hint"
     taints = "taints"          # untrusted data flows from src into dst (source→sink)
+    bypasses = "bypasses"      # attacker input defeats/weakens a control (auth/logic bugs)
     related_to = "related_to"  # generic fallback (kept for back-compat)
 
 

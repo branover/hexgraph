@@ -156,6 +156,24 @@ def list_findings(project_id: str) -> list[dict]:
         return out
 
 
+def get_finding(finding_id: str) -> dict:
+    """Read ONE finding back in full — including the complete `evidence` (with
+    evidence.extra, where verify_poc stores the PoC spec + verification result).
+    Use this to confirm a write landed (the finding analog of get_node): after
+    verify_poc(finding_id=…), get_finding shows evidence.extra.verification."""
+    with session_scope() as s:
+        f = s.get(Finding, finding_id)
+        if f is None:
+            return {"error": "finding not found"}
+        ev = f.evidence_json or {}
+        verified = bool(((ev.get("extra") or {}).get("verification") or {}).get("verified"))
+        return {"id": f.id, "title": f.title, "severity": f.severity, "confidence": f.confidence,
+                "category": f.category, "status": f.status, "finding_type": f.finding_type,
+                "origin": f.origin, "target_id": f.target_id, "task_id": f.task_id,
+                "summary": f.summary, "reasoning": f.reasoning, "evidence": ev,
+                "human_notes": f.human_notes, "verified": verified}
+
+
 def record_finding(project_id: str, target_id: str, finding: dict, task_id: str | None = None,
                    finding_type: str | None = None) -> dict:
     """Persist an agent-produced finding (the `finding` dict must match the frozen
@@ -588,6 +606,8 @@ _CATALOG = [
      {"type": "object", "properties": {"project_id": {"type": "string"}, "q": {"type": "string"}}, "required": ["project_id", "q"]}),
     ("read", "list_findings", list_findings, "Existing findings in a project (with finding_type + verified flag).",
      {"type": "object", "properties": {"project_id": {"type": "string"}}, "required": ["project_id"]}),
+    ("read", "get_finding", get_finding, "Read ONE finding in full incl. complete evidence (evidence.extra holds the verify_poc result) — confirm a write landed (finding analog of get_node).",
+     {"type": "object", "properties": {"finding_id": {"type": "string"}}, "required": ["finding_id"]}),
     ("read", "get_node", get_node, "Read a node back in full (address + attrs/params you set) — confirm what you wrote.",
      {"type": "object", "properties": {"node_id": {"type": "string"}}, "required": ["node_id"]}),
     ("read", "list_nodes", list_nodes, "List graph nodes (filter by target/node_type) with address + attrs.",

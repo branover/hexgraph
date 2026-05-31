@@ -48,6 +48,13 @@ def test_record_finding_validates_and_persists(hg_home):
     findings = mcp_tools.list_findings(pid)
     assert any(f["title"] == "Hardcoded key in init" and f["function"] == "init" for f in findings)
 
+    # get_finding reads ONE finding back in full, including evidence.extra (where
+    # verify_poc stores its result) — the finding analog of get_node.
+    full = mcp_tools.get_finding(good["id"])
+    assert full["title"] == "Hardcoded key in init"
+    assert full["evidence"]["function"] == "init" and full["finding_type"]
+    assert mcp_tools.get_finding("nope").get("error")
+
 
 def test_run_task_static_analysis_offline(hg_home):
     with session_scope() as s:
