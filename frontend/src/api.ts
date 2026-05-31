@@ -103,6 +103,8 @@ export const api = {
     return r.json();
   },
   testGhidra: () => postJSON<GhidraStatus>("/api/settings/ghidra/test", {}),
+  ghidraPrograms: () => getJSON<{ name: string; path: string; language: string; functions: number }[]>("/api/ghidra/programs"),
+  ghidraImport: (pid: string, path: string, name?: string) => postJSON<any>(`/api/projects/${pid}/ghidra/import`, { path, name }),
   async addTarget(pid: string, file: File, recon: boolean): Promise<any> {
     const fd = new FormData();
     fd.append("file", file);

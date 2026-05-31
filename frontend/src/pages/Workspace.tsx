@@ -12,6 +12,7 @@ import LaunchModal from "../components/LaunchModal";
 import { AddNodeModal, AddEdgeModal } from "../components/Author";
 import ReportModal from "../components/ReportModal";
 import RunCompareModal from "../components/RunCompareModal";
+import GhidraImportModal from "../components/GhidraImportModal";
 import { Icon, NODE_ICON } from "../components/Icon";
 
 export default function Workspace() {
@@ -28,7 +29,8 @@ export default function Workspace() {
   const [selTask, setSelTask] = useState<string>();
   const [q, setQ] = useState("");
   const [results, setResults] = useState<any | null>(null);
-  const [modal, setModal] = useState<"node" | "edge" | "report" | "compare" | null>(null);
+  const [modal, setModal] = useState<"node" | "edge" | "report" | "compare" | "ghidra" | null>(null);
+  const [ghidraBridge, setGhidraBridge] = useState(false);
   const [launchFor, setLaunchFor] = useState<{ target: TargetNode; type: string; objective?: string; params?: any; parentFindingId?: string } | null>(null);
   const [maxed, setMaxed] = useState(false);
   const [detailBig, setDetailBig] = useState(false);
@@ -41,7 +43,14 @@ export default function Workspace() {
     setDetail(d); setGraph(g); setTasks(tk);
   }, [projectId]);
 
-  useEffect(() => { load(); api.capabilities().then(setCaps).catch(() => {}); }, [load]);
+  useEffect(() => {
+    load();
+    api.capabilities().then(setCaps).catch(() => {});
+    api.getSettings().then((s) => {
+      const g = s.settings.features.ghidra;
+      setGhidraBridge(g.enabled && g.mode === "bridge");
+    }).catch(() => {});
+  }, [load]);
 
   const pollThenReload = async (taskId: string) => {
     setBusy("running task…");
@@ -183,6 +192,11 @@ export default function Workspace() {
             <Icon name="chip" size={14} /><span className="ttl">Targets</span>
             <span className="grow" />
             <button className="btn sm" onClick={() => fileRef.current?.click()}><Icon name="plus" size={12} /> Add</button>
+            {ghidraBridge && (
+              <button className="btn sm" title="Import a program open in Ghidra" onClick={() => setModal("ghidra")}>
+                <Icon name="bulb" size={12} /> Ghidra
+              </button>
+            )}
             <input ref={fileRef} type="file" style={{ display: "none" }} onChange={onUpload} />
           </div>
           <div className="scroll">
@@ -265,6 +279,7 @@ export default function Workspace() {
       {modal === "edge" && <AddEdgeModal projectId={projectId!} graph={graph} onClose={() => setModal(null)} onDone={load} />}
       {modal === "report" && <ReportModal projectId={projectId!} projectName={detail.project.name} onClose={() => setModal(null)} />}
       {modal === "compare" && <RunCompareModal targets={detail.targets} onClose={() => setModal(null)} />}
+      {modal === "ghidra" && <GhidraImportModal projectId={projectId!} onClose={() => setModal(null)} onDone={load} />}
       {launchFor && (
         <LaunchModal target={launchFor.target} taskType={launchFor.type} isMock={isMock}
                      initialObjective={launchFor.objective} initialParams={launchFor.params}
