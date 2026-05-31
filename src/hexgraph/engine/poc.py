@@ -29,6 +29,25 @@ from hexgraph.sandbox.executor import Executor, get_executor
 NONCE_PLACEHOLDER = "{{NONCE}}"
 
 
+def _find_sysroot(root):
+    """The firmware's FHS root for use as a qemu `-L` sysroot. The unpack root often
+    sits ABOVE the real rootfs (binwalk nests it under `_artifact.extracted/
+    squashfs-root/`), so locate the directory whose `lib/` holds the dynamic loader
+    (ld-*.so* / libc.so*) and return that. Falls back to `root`."""
+    from pathlib import Path
+
+    root = Path(root)
+    if not root.is_dir():
+        return None
+    # The dir whose lib/ has the loader IS the rootfs.
+    for libdir in [root / "lib", *root.rglob("lib")]:
+        if not libdir.is_dir():
+            continue
+        if any(libdir.glob("ld-*.so*")) or any(libdir.glob("libc.so*")) or any(libdir.glob("ld-uClibc*")):
+            return libdir.parent
+    return root
+
+
 def _substitute(obj, nonce: str):
     if isinstance(obj, str):
         return obj.replace(NONCE_PLACEHOLDER, nonce)
@@ -54,10 +73,24 @@ def verify_poc(session: Session, project: Project, target: Target, spec: dict,
 
     nonce = "HEXGRAPH_PWNED_" + secrets.token_hex(6)
     live = _substitute(copy.deepcopy(spec or {}), nonce)
+
+    # Foreign-arch firmware binaries run under qemu-user (poc_probe picks qemu-<arch>
+    # from the ELF header). A dynamically-linked one needs its sibling libs, so mount
+    # the parent firmware's extracted rootfs as the qemu sysroot.
+    extra_mounts: list[tuple[str, str]] = []
+    if target.parent_id and not live.get("sysroot"):
+        from hexgraph.engine.filesystem import host_root
+        fw = session.get(Target, target.parent_id)
+        if fw is not None and (fw.metadata_json or {}).get("filesystem"):
+            root = _find_sysroot(host_root(project, fw))
+            if root is not None and root.is_dir():
+                extra_mounts.append((str(root), "/sysroot"))
+                live["sysroot"] = "/sysroot"
+
     out = tempfile.mkdtemp(prefix="hexgraph-poc-")
     result = runner.run_json_probe(
         "poc_probe.py", target.path, outdir=out, extra_args=["--spec", json.dumps(live)],
-        requires_execution=True,
+        requires_execution=True, extra_ro_mounts=extra_mounts or None,
     )
     return {**result, "nonce": nonce, "spec": live}
 

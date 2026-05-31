@@ -20,16 +20,34 @@ def _run(cmd: list[str]) -> tuple[int, str]:
     return proc.returncode, (proc.stdout + proc.stderr)
 
 
+def _have(tool: str) -> bool:
+    return subprocess.run(["which", tool], capture_output=True).returncode == 0
+
+
+def _squashfs(artifact: str, root: str) -> str:
+    """Extract a squashfs. Prefer sasquatch (handles vendor/non-standard LZMA that
+    stock unsquashfs rejects); fall back to unsquashfs."""
+    if _have("sasquatch"):
+        rc, _out = _run(["sasquatch", "-f", "-d", root, artifact])
+        if rc == 0 and os.path.isdir(root) and os.listdir(root):
+            return "sasquatch"
+    _run(["unsquashfs", "-f", "-d", root, artifact])
+    return "unsquashfs"
+
+
 def _extract(artifact: str, out: str) -> tuple[str, str]:
-    """Return (method, root_dir). root_dir is where extracted files live."""
+    """Return (method, root_dir). root_dir is where extracted files live.
+
+    Bare filesystems (squashfs/cpio) extract directly; wrapped/real vendor firmware
+    (TRX/uImage/vendor header → squashfs/jffs2/ubifs/cramfs, often nested) goes to
+    binwalk's RECURSIVE (matryoshka) extraction, which drives sasquatch/jefferson/
+    ubi_reader to peel every layer."""
     with open(artifact, "rb") as fh:
         magic = fh.read(6)
 
     root = os.path.join(out, "root")
-    if magic[:4] in (b"hsqs", b"sqsh"):
-        # squashfs (LE/BE). unsquashfs writes into root.
-        _run(["unsquashfs", "-f", "-d", root, artifact])
-        return "unsquashfs", root
+    if magic[:4] in (b"hsqs", b"sqsh", b"shsq", b"qshs"):
+        return _squashfs(artifact, root), root
     if magic in (b"070701", b"070702", b"070707"):
         os.makedirs(root, exist_ok=True)
         proc = subprocess.run(
@@ -40,8 +58,11 @@ def _extract(artifact: str, out: str) -> tuple[str, str]:
         )
         _ = proc.returncode
         return "cpio", root
-    # Fallback: let binwalk carve/extract whatever it recognizes.
-    _run(["binwalk", "-e", "-q", "-C", out, artifact])
+    # Wrapped/real firmware: recursive carve+extract of every nested container.
+    # -M = matryoshka (recurse into extracted files), -e = extract, -q = quiet.
+    rc, _o = _run(["binwalk", "-e", "-M", "-q", "-C", out, artifact])
+    if rc != 0:  # older binwalk without -M, or partial — retry non-recursive
+        _run(["binwalk", "-e", "-q", "-C", out, artifact])
     return "binwalk", out
 
 

@@ -58,6 +58,39 @@ RUN if [ "$WITH_GHIDRA" = "1" ]; then \
         echo "Ghidra not included (build with --build-arg WITH_GHIDRA=1 to enable headless Ghidra)"; \
     fi
 
+# --- Foreign-architecture execution (qemu-user) ---------------------------------
+# qemu-<arch> lets the sandbox RUN MIPS/ARM/PPC/… targets (PoC verify + fuzzing) on
+# an x86 host. Still --network none, capped, timed; the target is only executed via
+# the policy-gated PoC/fuzzing path. The -static variants need no host libs.
+# (Placed after Ghidra so a rebuild here keeps the cached Ghidra layer.)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        qemu-user qemu-user-static \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- Firmware extraction toolchain ----------------------------------------------
+# Real vendor firmware wraps a filesystem (squashfs/jffs2/ubifs/cramfs) in a
+# TRX/uImage/vendor header, often with non-standard LZMA. binwalk drives these
+# extractors; sasquatch is the patched unsquashfs that handles vendor LZMA squashfs
+# that stock unsquashfs chokes on. p7zip/cramfs round out the common formats.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        p7zip-full \
+        cramfsswap \
+        python3-dev zlib1g-dev liblzma-dev liblzo2-dev liblz4-dev libzstd-dev \
+        git build-essential autoconf \
+    && pip3 install --no-cache-dir --break-system-packages jefferson ubi_reader \
+    # python-lzo (LZO-compressed UBIFS/JFFS2) is a C extension — best-effort.
+    && (pip3 install --no-cache-dir --break-system-packages python-lzo \
+        || echo "WARN: python-lzo unavailable; LZO-compressed images degraded") \
+    # sasquatch (onekey-sec fork): the patched unsquashfs (built from squashfs-tools/
+    # with all compressors). Best-effort — the image still works with binwalk +
+    # standard unsquashfs if this fails on a given base.
+    && (git clone --depth 1 https://github.com/onekey-sec/sasquatch.git /tmp/sasquatch \
+        && make -C /tmp/sasquatch/squashfs-tools -j"$(nproc)" \
+        && install -m 0755 /tmp/sasquatch/squashfs-tools/sasquatch /usr/local/bin/sasquatch \
+        && rm -rf /tmp/sasquatch \
+        || echo "WARN: sasquatch build failed; vendor-LZMA squashfs extraction degraded") \
+    && rm -rf /var/lib/apt/lists/*
+
 # Bake the probe scripts into the image (no code is mounted at run time, except
 # in HEXGRAPH_SANDBOX_DEV mode).
 COPY src/hexgraph/sandbox/probes/ /opt/hexgraph/

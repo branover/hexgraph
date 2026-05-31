@@ -42,6 +42,12 @@ def _host_root(project: Project, firmware: Target) -> Path:
     return persistent_base(project, firmware.id) / (fs.get("root_rel") or "")
 
 
+def host_root(project: Project, firmware: Target) -> Path:
+    """Public: the on-disk root of a firmware's extracted filesystem (its rootfs).
+    Used e.g. as the qemu-user sysroot when running a foreign-arch child binary."""
+    return _host_root(project, firmware)
+
+
 def list_filesystem(project: Project, firmware: Target) -> dict:
     """The firmware's file tree for the detail panel (paths/sizes/types + which are
     already targets)."""

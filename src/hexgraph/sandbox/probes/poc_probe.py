@@ -24,8 +24,53 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
+
+# ELF e_machine -> qemu-user binary base name. Endianness/word-size are resolved
+# from the ELF header at runtime (e.g. MIPS LE -> qemu-mipsel, BE -> qemu-mips).
+_EM = {
+    3: ("i386", "i386"), 62: ("x86_64", "x86_64"),
+    8: ("mipsel", "mips"),            # (little, big)
+    40: ("arm", "armeb"),
+    183: ("aarch64", "aarch64_be"),
+    20: ("ppc", "ppc"), 21: ("ppc64le", "ppc64"),
+    42: ("sh4", "sh4eb"),
+    243: ("riscv64", "riscv64"),
+}
+_HOST_MACHINES = {62}  # x86-64 host runs these natively
+
+
+def _qemu_prefix(target_path: str, sysroot: str | None, argv0: str | None = None) -> list:
+    """[] if the target is host-native; else [qemu-<arch>, (-L sysroot), (-0 argv0)]
+    so a foreign-arch (MIPS/ARM/…) binary runs under qemu-user. sysroot supplies the
+    target's shared libraries for dynamically-linked binaries; argv0 overrides
+    argv[0] (e.g. a busybox multiplexer needs argv[0]=='busybox')."""
+    try:
+        with open(target_path, "rb") as fh:
+            head = fh.read(20)
+        if head[:4] != b"\x7fELF":
+            return []
+        is_le = head[5] == 1
+        e_machine = struct.unpack("<H" if is_le else ">H", head[18:20])[0]
+    except OSError:
+        return []
+    if e_machine in _HOST_MACHINES:
+        return []
+    entry = _EM.get(e_machine)
+    if not entry:
+        return []  # unknown arch — try to run native (will likely fail clearly)
+    base = entry[0] if is_le else entry[1]
+    qemu = shutil.which(f"qemu-{base}") or shutil.which(f"qemu-{base}-static")
+    if not qemu:
+        return []
+    pre = [qemu]
+    if sysroot and os.path.isdir(sysroot):
+        pre += ["-L", sysroot]
+    if argv0:
+        pre += ["-0", argv0]
+    return pre
 
 
 def _flag(args, name, default=None):
@@ -69,7 +114,9 @@ def main() -> int:
 
     env = dict(os.environ)
     env.update({str(k): str(v) for k, v in (spec.get("env") or {}).items()})
-    cmd = [target, *[str(a) for a in (spec.get("argv") or [])]]
+    # Foreign-arch targets (MIPS/ARM/…) run under qemu-user; host-native run directly.
+    prefix = _qemu_prefix(target, spec.get("sysroot"), spec.get("argv0"))
+    cmd = [*prefix, target, *[str(a) for a in (spec.get("argv") or [])]]
     timeout = int(spec.get("timeout", 20))
 
     try:
