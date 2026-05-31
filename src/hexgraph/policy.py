@@ -23,8 +23,16 @@ class AnalysisPolicy:
 
 
 def current_policy() -> AnalysisPolicy:
-    # Defaults are static-only. Future dynamic/fuzz profiles return a policy with
-    # allow_execution=True and pair it with a DynamicExecutor.
+    # Static-only by default. Enabling fuzzing in Settings flips this to a dynamic
+    # profile that permits execution (still --network none, capped, timed). This is
+    # the single, explicit place the static-only invariant is relaxed.
+    try:
+        from hexgraph import settings
+
+        if settings.get("features.fuzzing.enabled"):
+            return AnalysisPolicy(static_only=False, allow_execution=True, allow_network=False)
+    except Exception:  # noqa: BLE001 — a settings problem must never widen the policy
+        pass
     return AnalysisPolicy()
 
 

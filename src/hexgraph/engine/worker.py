@@ -26,6 +26,11 @@ def _dispatch(session: Session, project: Project, target: Target, task: Task) ->
     if task.type == "recon":
         execute_recon(session, project, target, task, get_executor())
         return
+    if task.type == "fuzzing":
+        from hexgraph.engine.fuzzing import execute_fuzzing
+
+        execute_fuzzing(session, project, target, task, get_executor())
+        return
     if task.type in LLM_TASK_TYPES:
         execute_llm_task(session, project, target, task)
         return

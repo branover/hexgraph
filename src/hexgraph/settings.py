@@ -35,6 +35,16 @@ DEFAULTS: dict[str, Any] = {
             "timeout": 600,              # headless analyzeHeadless wall-clock budget (s)
             "bridge": {"host": "127.0.0.1", "port": 4768},
         },
+        "fuzzing": {
+            # OFF by default: enabling this flips the analysis policy to allow
+            # execution (still --network none, capped, timed, disposable). The
+            # static-only invariant holds unless a user opts in. (engine: libFuzzer)
+            "enabled": False,
+            "max_total_time": 60,        # seconds of actual fuzzing per run
+            "max_len": 4096,             # max generated input size (bytes)
+            "max_crashes": 10,           # cap on unique-crash findings per run
+            "timeout": 300,              # sandbox wall-clock (>= compile + max_total_time)
+        },
     },
 }
 
@@ -51,6 +61,11 @@ ALLOWED: dict[str, tuple[Any, set | None]] = {
     "features.ghidra.timeout": (int, None),
     "features.ghidra.bridge.host": (str, None),
     "features.ghidra.bridge.port": (int, None),
+    "features.fuzzing.enabled": (bool, None),
+    "features.fuzzing.max_total_time": (int, None),
+    "features.fuzzing.max_len": (int, None),
+    "features.fuzzing.max_crashes": (int, None),
+    "features.fuzzing.timeout": (int, None),
 }
 
 

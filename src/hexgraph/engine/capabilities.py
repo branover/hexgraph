@@ -36,16 +36,38 @@ _EDGE = {
 }
 
 
+# Task types whose target kind / node type can be fuzzed once a harness exists.
+_FUZZABLE_TARGETS = {"executable", "shared_library"}
+
+
+def _fuzzing_enabled() -> bool:
+    try:
+        from hexgraph import settings
+
+        return bool(settings.get("features.fuzzing.enabled"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def capabilities_for(anchor_kind: str, subtype: str | None = None) -> list[str]:
     if anchor_kind == "target":
-        return _TARGET.get(subtype or "unknown", ["recon"])
+        caps = list(_TARGET.get(subtype or "unknown", ["recon"]))
+        if _fuzzing_enabled() and subtype in _FUZZABLE_TARGETS:
+            caps.append("fuzzing")
+        return caps
     if anchor_kind == "node":
-        return _NODE.get(subtype or "", [])
+        caps = list(_NODE.get(subtype or "", []))
+        if _fuzzing_enabled() and subtype == "function":
+            caps.append("fuzzing")
+        return caps
     if anchor_kind == "edge":
         return _EDGE.get(subtype or "_default", _EDGE["_default"])
     return []
 
 
 def capability_table() -> dict:
-    """Full table for the UI."""
-    return {"target": _TARGET, "node": _NODE, "edge": _EDGE}
+    """Full table for the UI (fuzzing folded in per-kind when enabled in Settings)."""
+    fuzz = _fuzzing_enabled()
+    targets = {k: (v + ["fuzzing"] if fuzz and k in _FUZZABLE_TARGETS else v) for k, v in _TARGET.items()}
+    nodes = {k: (v + ["fuzzing"] if fuzz and k == "function" else v) for k, v in _NODE.items()}
+    return {"target": targets, "node": nodes, "edge": _EDGE}

@@ -62,6 +62,7 @@ class SandboxRunner:
         outdir: str | Path | None = None,
         extra_args: list[str] | None = None,
         requires_execution: bool = False,
+        extra_ro_mounts: list[tuple[str, str]] | None = None,
     ) -> RunResult:
         """Run a probe script over `artifact` inside the sandbox.
 
@@ -103,6 +104,9 @@ class SandboxRunner:
             outdir.mkdir(parents=True, exist_ok=True)
             cmd += ["-v", f"{outdir}:/out:rw"]
             probe_args.append("/out")
+        # Extra read-only inputs (e.g. the target library a fuzz harness links against).
+        for host, cont in (extra_ro_mounts or []):
+            cmd += ["-v", f"{Path(host).resolve()}:{cont}:ro"]
         if extra_args:
             probe_args += extra_args
 
@@ -134,10 +138,12 @@ class SandboxRunner:
         outdir: str | Path | None = None,
         extra_args: list[str] | None = None,
         requires_execution: bool = False,
+        extra_ro_mounts: list[tuple[str, str]] | None = None,
     ) -> dict:
         """Run a probe whose stdout is a single JSON object, and parse it."""
         result = self.run_probe(
-            probe, artifact, outdir=outdir, extra_args=extra_args, requires_execution=requires_execution
+            probe, artifact, outdir=outdir, extra_args=extra_args,
+            requires_execution=requires_execution, extra_ro_mounts=extra_ro_mounts,
         )
         try:
             return json.loads(result.stdout)

@@ -29,7 +29,10 @@ export interface SettingsView {
   settings: {
     llm: { backend: string; model: string | null };
     server: { host: string; port: number };
-    features: { ghidra: { enabled: boolean; mode: string; enrich_recon: boolean; timeout: number; bridge: { host: string; port: number } } };
+    features: {
+      ghidra: { enabled: boolean; mode: string; enrich_recon: boolean; timeout: number; bridge: { host: string; port: number } };
+      fuzzing: { enabled: boolean; max_total_time: number; max_len: number; max_crashes: number; timeout: number };
+    };
   };
   secrets: Record<string, SecretStatus>;
   availability: { docker: boolean; ghidra: { enabled: boolean; mode: string; bridge_client_installed: boolean } };

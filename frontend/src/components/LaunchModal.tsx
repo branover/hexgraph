@@ -21,6 +21,9 @@ export default function LaunchModal({ target, taskType, isMock, initialObjective
   const [effort, setEffort] = useState((initialParams?.effort as string) || "medium");
   const [budget, setBudget] = useState("10.00");
   const [fn, setFn] = useState((initialParams?.function as string) || "");
+  const isFuzz = taskType === "fuzzing";
+  const [fuzzTime, setFuzzTime] = useState(String(initialParams?.max_total_time ?? 60));
+  const [triage, setTriage] = useState(Boolean(initialParams?.triage));
   const [preview, setPreview] = useState<any>(null);
   const [busy, setBusy] = useState(false);
 
@@ -28,6 +31,7 @@ export default function LaunchModal({ target, taskType, isMock, initialObjective
     const params: any = { ...(initialParams || {}), effort, budget_usd: parseFloat(budget) || 0 };
     if (fn.trim()) params.function = fn.trim(); else delete params.function;
     if (isMock && scenario !== "(default)") params.mock_scenario = scenario; else delete params.mock_scenario;
+    if (isFuzz) { params.max_total_time = parseInt(fuzzTime) || 60; params.triage = triage; }
     return {
       target_id: target.id, type: taskType, objective: objective.trim() || undefined,
       model: model === "(project default)" ? undefined : model, params,
@@ -82,6 +86,20 @@ export default function LaunchModal({ target, taskType, isMock, initialObjective
               <div className="field"><label>mock scenario</label>
                 <select value={scenario} onChange={(e) => setScenario(e.target.value)}>{SCENARIOS.map((s) => <option key={s}>{s}</option>)}</select>
               </div>
+            )}
+            {isFuzz && (
+              <>
+                <div className="field"><label>fuzz time (s)</label>
+                  <input value={fuzzTime} onChange={(e) => setFuzzTime(e.target.value)} />
+                </div>
+                <label className="switch" style={{ fontSize: 12, display: "flex", gap: 8, alignItems: "center", marginTop: 4 }}>
+                  <input type="checkbox" checked={triage} onChange={(e) => setTriage(e.target.checked)} />
+                  <span>LLM-triage crashes (real backend only)</span>
+                </label>
+                <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+                  Uses the latest harness for this target. Crashes become findings automatically.
+                </div>
+              </>
             )}
           </div>
 
