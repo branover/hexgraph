@@ -69,9 +69,11 @@ export function TasksPanel({ tasks, selectedId, onSelect, onClear }: {
 
 export function TaskDetail({ taskId, onViewFinding, onRerun }: { taskId: string; onViewFinding: (id: string) => void; onRerun: (newId: string) => void }) {
   const [d, setD] = useState<any>(null);
-  useEffect(() => { setD(null); api.taskDetail(taskId).then(setD).catch(() => {}); }, [taskId]);
+  const [trace, setTrace] = useState<{ name: string; content: string } | null>(null);
+  useEffect(() => { setD(null); setTrace(null); api.taskDetail(taskId).then(setD).catch(() => {}); }, [taskId]);
   if (!d) return <div className="empty">Loading task…</div>;
   const t = d.task;
+  const openTrace = (name: string) => api.taskTrace(taskId, name).then((content) => setTrace({ name, content })).catch(() => {});
   return (
     <div className="insp scroll fade-in">
       <div className="head"><Icon name="task" size={17} /><h3>{t.type.replace(/_/g, " ")}</h3></div>
@@ -81,6 +83,12 @@ export function TaskDetail({ taskId, onViewFinding, onRerun }: { taskId: string;
         {t.model && <span className="tag">{t.model}</span>}
         <span className="tag">${(t.cost_estimate || 0).toFixed(4)}</span>
       </div>
+      {d.error && (
+        <>
+          <div className="sec" style={{ color: "#ff8a93" }}>Failure</div>
+          <pre className="codewrap" style={{ whiteSpace: "pre-wrap", borderColor: "rgba(255,93,108,.4)" }}>{d.error}</pre>
+        </>
+      )}
       <div className="actions">
         <button className="btn sm primary" onClick={async () => onRerun((await api.rerun(taskId)).task_id)}><Icon name="refresh" size={12} /> Re-run</button>
       </div>
@@ -88,8 +96,17 @@ export function TaskDetail({ taskId, onViewFinding, onRerun }: { taskId: string;
       <div className="kvs">
         {t.context_bundle_id && <><span className="k">bundle</span><code>{t.context_bundle_id.slice(0, 12)}</code></>}
         {Object.keys(t.params || {}).length > 0 && <><span className="k">params</span><code>{JSON.stringify(t.params)}</code></>}
-        <span className="k">trace</span><span>{d.trace_files.join(", ") || "—"}</span>
       </div>
+      <div className="sec">Trace files</div>
+      <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+        {d.trace_files.length === 0 ? <span className="muted" style={{ fontSize: 11 }}>—</span>
+          : d.trace_files.map((f: string) => (
+            <button key={f} className={"tag addable" + (trace?.name === f ? " sel" : "")} onClick={() => openTrace(f)}>{f}</button>
+          ))}
+      </div>
+      {trace && (
+        <pre className="codewrap" style={{ whiteSpace: "pre-wrap", marginTop: 8 }}>{trace.content || "(empty)"}</pre>
+      )}
       <div className="sec">Findings produced ({d.findings.length})</div>
       {d.findings.map((f: any) => (
         <div key={f.id} className="finding" onClick={() => onViewFinding(f.id)} style={{ ["--sev" as any]: "var(--info)" }}>

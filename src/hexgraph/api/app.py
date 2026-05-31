@@ -751,13 +751,34 @@ def create_app() -> FastAPI:
                 raise HTTPException(404, "task not found")
             findings = s.query(Finding).filter(Finding.task_id == task_id).all()
             trace = []
+            error = None
             if t.log_path and _P(t.log_path).is_dir():
                 trace = sorted(p.name for p in _P(t.log_path).iterdir() if p.is_file())
+                err_path = _P(t.log_path) / "error.txt"
+                if err_path.is_file():
+                    error = err_path.read_text()[:8000]  # surface the failure reason inline
             return {
                 "task": _task_dict(t),
                 "findings": [_finding_dict(f) for f in findings],
                 "trace_files": trace,
+                "error": error,
             }
+
+    @app.get("/api/tasks/{task_id}/trace/{name}")
+    def api_task_trace(task_id: str, name: str):
+        """Read one trace artifact's content (error.txt, prompt.txt, fuzz.json, …)."""
+        from pathlib import Path as _P
+
+        from fastapi.responses import PlainTextResponse
+
+        with session_scope() as s:
+            t = s.get(Task, task_id)
+            if t is None or not t.log_path:
+                raise HTTPException(404, "task not found")
+            p = _P(t.log_path) / name
+            if p.name != name or not p.is_file():  # no path traversal
+                raise HTTPException(404, "trace file not found")
+            return PlainTextResponse(p.read_text()[:200000])
 
     @app.post("/api/tasks/{task_id}/rerun")
     async def api_task_rerun(task_id: str):

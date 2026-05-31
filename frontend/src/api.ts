@@ -72,7 +72,12 @@ export const api = {
   spawnFollowup: (fid: string, i: number) => postJSON<{ task_id: string }>(`/api/findings/${fid}/followups/${i}`, {}),
   task: (tid: string) => getJSON<{ id: string; status: string; type: string }>(`/api/tasks/${tid}`),
   projectTasks: (pid: string) => getJSON<any[]>(`/api/projects/${pid}/tasks`),
-  taskDetail: (tid: string) => getJSON<{ task: any; findings: Finding[]; trace_files: string[] }>(`/api/tasks/${tid}/detail`),
+  taskDetail: (tid: string) => getJSON<{ task: any; findings: Finding[]; trace_files: string[]; error?: string | null }>(`/api/tasks/${tid}/detail`),
+  async taskTrace(tid: string, name: string): Promise<string> {
+    const r = await fetch(`/api/tasks/${tid}/trace/${encodeURIComponent(name)}`);
+    if (!r.ok) throw new Error(`${r.status}`);
+    return r.text();
+  },
   rerun: (tid: string) => postJSON<{ task_id: string }>(`/api/tasks/${tid}/rerun`, {}),
   previewTask: (body: any) => postJSON<any>("/api/tasks/preview", body),
   clearTasks: (pid: string) => postJSON<{ removed: number }>(`/api/projects/${pid}/tasks/clear`, {}),
