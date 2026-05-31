@@ -9,7 +9,7 @@ PY ?= .venv/bin/python
 PIP ?= .venv/bin/pip
 export HEXGRAPH_LLM_BACKEND ?= mock
 
-.PHONY: help setup install venv ui sandbox-build test demo test-live fixtures serve clean
+.PHONY: help setup install venv ui sandbox-build test demo test-live fixtures serve vulnrouter clean
 
 help: ## Show this help
 	@echo "HexGraph — get started with:  make setup  &&  make serve"
@@ -42,6 +42,9 @@ sandbox-build: ## Build the analysis sandbox Docker image (add WITH_GHIDRA=1 to 
 
 serve: ## Start the loopback-only API/UI (http://127.0.0.1:8765)
 	$(PY) -m hexgraph.cli serve
+
+vulnrouter: ## Stand up the live vulnrouter web target + a project pointed at it (Claude engagement)
+	$(PY) scripts/vulnrouter_engagement.py
 
 test: ## Run the test suite against the mock backend (offline)
 	$(PY) -m pytest -q

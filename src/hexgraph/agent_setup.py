@@ -64,6 +64,31 @@ that haven't been analyzed yet.
 - Go deeper with `run_task` (`static_analysis`, `harness_generation`, `fuzzing`),
   and **`verify_poc`** to PROVE exploitability (a confirmed PoC is the gold bar).
 
+## 2b. Live web / service surfaces (routers, admin consoles, APIs)
+Many firmware bugs live in a web app, not just the binary. If you're given a base
+URL (or a `web_app` target already exists), assess it dynamically:
+- **`register_surface(project_id, base_url, endpoints?)`** registers the surface as a
+  `web_app` target (a Channel, no bytes). `run_task(id, "surface_recon")` maps the
+  routes you supply into `endpoint`/`param` nodes and `routes_to` edges to the handler
+  function in the firmware (the static↔dynamic bridge). `run_task(id, "web_recon")`
+  does a bounded liveness probe.
+- **`http_request(target_id, method, path, params?, headers?, body?, json_body?)`** is
+  your hands on the live target: send a login, probe an auth check, fire an injection
+  payload, and READ the response body. (Bounded, sandboxed, local-only egress, audited.
+  No cookie persistence between calls.)
+- Two oracles to PROVE web bugs with **`verify_poc(target_id, {steps, oracle})`** (cookies
+  carry across `steps`, so login→protected-route works in one shot):
+  - **Auth bypass**: log in with the bypass credential, then GET a protected route;
+    `oracle:{type:"body_contains","value":"<a secret only an authed user sees>"}` — seeing
+    the secret is unforgeable proof. (Or `status_differs` from the unauth baseline.)
+  - **Command/SQL injection (RCE)**: inject `; echo {{NONCE}}` (or equivalent) in a param;
+    `oracle:{type:"body_contains","value":"{{NONCE}}"}`. HexGraph substitutes a fresh token,
+    so the echoed nonce proves your command really ran.
+  Requires **features.network** enabled in Settings (bounded to the target's loopback/
+  private host). Record the route as an `endpoint` node, the injectable field as a `param`
+  (or `input`) node, and `taints` the param → the handler/sink; the verified PoC is a
+  `poc` finding `confirms`→ the vulnerability, same rhythm as below.
+
 ## 3. Record AS YOU GO — write to the graph BEFORE you've confirmed things
 Capture the moment you have a lead, not after you've proven it. The graph is a
 live worklog: a suspicion recorded early is visible to the analyst and other
@@ -73,13 +98,23 @@ is **record → explore → verify → update**:
 
 1. **Suspect → record immediately.** When you spot a likely bug, `record_finding`
    right away at your current confidence (e.g. "low"/"medium", status `new`), with
-   the function, sink, and reasoning so far. `create_node` the relevant functions
-   (pass the function's `address`; put parameters + explanations in `attrs`, e.g.
-   `attrs={"params":[{"name":"host","note":"attacker-controlled query field"}]}`),
-   inputs (`node_type:"input"`), and sinks (`node_type:"sink"`). `create_hypothesis`
-   for the open question, then **`link_evidence(hypothesis_id, finding_id,
-   "supports")`** to connect the finding to it (this also drives the hypothesis's
-   status — it's how you later confirm it).
+   the function, sink, and reasoning so far. `create_node` the relevant entities and
+   **populate the attributes the type expects** — read `node_attribute_schemas` in
+   `get_schemas` for each type's `recommended` fields, so two runs of the same analysis
+   produce the same graph instead of varying:
+   - **functions**: pass `address`; `attrs={"summary":"…","params":[{"name","type",
+     "note":"attacker-controlled?"}]}`.
+   - **inputs** (`node_type:"input"`): the untrusted SOURCE; `attrs={"source":"HTTP
+     param host"}`.
+   - **dangerous calls**: a known risky libc call (system/exec/strcpy/sprintf) is a
+     `symbol` (or `function`) node with **`attrs={"is_sink":true}`** — do NOT also make a
+     separate `sink` node for it. Reserve `node_type:"sink"` for an abstract dangerous
+     point that isn't already a node (e.g. "the shell string built at 0x401200"), with
+     `attrs={"operation","why"}`.
+   Always pass `target_id` for target-bound nodes (else they float as orphans).
+   `create_hypothesis` for the open question, then **`link_evidence(hypothesis_id,
+   finding_id, "supports")`** to connect the finding to it (this also drives the
+   hypothesis's status — it's how you later confirm it).
 2. **Explore → keep adding.** As you decompile/trace, wire the path with
    `create_edge`: `calls`, `references`, `reads`/`writes`, and **`taints`** for the
    untrusted-input → sink dataflow (input node → parser → sink node). **Edges carry

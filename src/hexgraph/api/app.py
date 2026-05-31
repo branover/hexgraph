@@ -170,6 +170,18 @@ class FindingPatch(BaseModel):
     human_notes: str | None = None
     dismissed_reason: str | None = None
     status: str | None = None
+    # Full-field edit (analyst correcting/completing a finding in the UI). Tags are NOT
+    # here — they're annotations (kind=tag), edited via the annotations API.
+    category: str | None = None
+    summary: str | None = None
+    reasoning: str | None = None
+    evidence: dict | None = None
+
+
+class NodePatch(BaseModel):
+    name: str | None = None
+    address: str | None = None
+    attrs: dict | None = None
 
 
 def create_app() -> FastAPI:
@@ -312,6 +324,21 @@ def create_app() -> FastAPI:
             if t is None:
                 raise HTTPException(404, "target not found")
             return list_filesystem(s.get(Project, t.project_id), t)
+
+    @app.get("/api/targets/{target_id}/file")
+    def api_target_file(target_id: str, rel: str):
+        """Read one file from a firmware's unpacked filesystem for the in-UI viewer
+        (text or hex, bounded, path-traversal safe)."""
+        from hexgraph.engine.filesystem import FilesystemError, read_file
+
+        with session_scope() as s:
+            t = s.get(Target, target_id)
+            if t is None:
+                raise HTTPException(404, "target not found")
+            try:
+                return read_file(s.get(Project, t.project_id), t, rel)
+            except FilesystemError as exc:
+                raise HTTPException(400, str(exc))
 
     @app.post("/api/projects/{project_id}/targets/{target_id}/add-from-fs")
     def api_add_from_fs(project_id: str, target_id: str, body: dict):
@@ -525,7 +552,79 @@ def create_app() -> FastAPI:
                     f.status = FindingStatus(body.status).value
                 except ValueError:
                     raise HTTPException(400, f"invalid status {body.status!r}")
+            if body.category is not None:
+                f.category = body.category
+            if body.summary is not None:
+                f.summary = body.summary
+            if body.reasoning is not None:
+                f.reasoning = body.reasoning
+            if body.evidence is not None:
+                # Full evidence replace from the UI editor; the model validates the shape.
+                from pydantic import ValidationError
+
+                from hexgraph.models.finding import Evidence
+                try:
+                    f.evidence_json = Evidence(**body.evidence).model_dump(exclude_none=True)
+                except ValidationError as exc:
+                    raise HTTPException(400, f"invalid evidence: {exc.errors()[:3]}")
             return _finding_dict(f)
+
+    @app.patch("/api/projects/{project_id}/nodes/{node_id}")
+    def api_patch_node(project_id: str, node_id: str, body: NodePatch):
+        """Edit a node's fields from the UI (name/address/attrs). Renaming a function/
+        symbol/struct also updates its normalized identity so it stays dedupable."""
+        from hexgraph.db.models import Node
+        from hexgraph.engine.nodes import normalize_symbol_name
+
+        with session_scope() as s:
+            n = s.get(Node, node_id)
+            if n is None or n.project_id != project_id:
+                raise HTTPException(404, "node not found")
+            if body.name is not None and body.name.strip():
+                name = body.name.strip()
+                if n.node_type in ("function", "symbol", "struct"):
+                    name = normalize_symbol_name(name) or name
+                n.name = name
+                n.fq_name = name
+            if body.address is not None:
+                n.address = body.address or None
+            if body.attrs is not None:
+                n.attrs_json = body.attrs
+            return {"id": n.id, "node_type": n.node_type, "name": n.name,
+                    "address": n.address, "attrs": n.attrs_json or {}}
+
+    @app.post("/api/findings/{finding_id}/verify")
+    def api_verify_finding(finding_id: str):
+        """Re-run a PoC finding's stored spec (evidence.extra.poc) against its target and
+        update the finding's verification in place. Lets an analyst confirm a PoC with one
+        click — binary PoCs need features.poc, web PoCs need features.network."""
+        from hexgraph.engine.poc import verify_poc as _verify
+        from hexgraph.policy import PolicyViolation
+
+        with session_scope() as s:
+            f = s.get(Finding, finding_id)
+            if f is None:
+                raise HTTPException(404, "finding not found")
+            spec = ((f.evidence_json or {}).get("extra") or {}).get("poc")
+            if not spec:
+                raise HTTPException(400, "this finding has no stored PoC spec to verify")
+            t = s.get(Target, f.target_id)
+            try:
+                r = _verify(s, s.get(Project, f.project_id), t, spec)
+            except PolicyViolation:
+                from hexgraph.engine.poc import _is_web
+                raise HTTPException(403, "enable features.network (web PoC) or features.poc (binary PoC) to verify")
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(400, f"verification failed: {exc}")
+            ev = dict(f.evidence_json or {})
+            extra = dict(ev.get("extra") or {})
+            extra["poc"] = r.get("spec")
+            extra["verification"] = {"verified": bool(r.get("verified")), "detail": r.get("detail"),
+                                     "exit_code": r.get("exit_code"), "nonce": r.get("nonce"),
+                                     "output": (r.get("output") or "")[:2000]}
+            ev["extra"] = extra
+            f.evidence_json = ev
+            return {**_finding_dict(f), "verified": bool(r.get("verified")), "detail": r.get("detail")}
 
     @app.post("/api/projects/{project_id}/dedup")
     def api_dedup(project_id: str):
