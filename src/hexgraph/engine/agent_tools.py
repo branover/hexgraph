@@ -39,8 +39,9 @@ _STATIC_SPECS = [
     ToolSpec("disassemble", "Disassemble one function (when pseudo-C is unclear).",
              {"type": "object", "properties": {"function": {"type": "string"}}, "required": ["function"]}),
     ToolSpec("xrefs", "Find which functions CALL a given symbol/sink (e.g. system, popen, "
-             "strcpy) and where. With no symbol, map every dangerous sink in the binary. Use "
-             "this to trace from a dangerous sink back to the code that reaches it.",
+             "strcpy) and where. With no symbol, map the binary's dangerous sinks, format-string "
+             "sinks, AND network/socket surface (bind/listen/connect/recv) + who reaches each. Use "
+             "to trace a sink back to its caller, or to find listen/connect sites for socket nodes.",
              {"type": "object", "properties": {"symbol": {"type": "string"}}}),
     ToolSpec("read_imports", "Return the target's imported symbols, linked libraries, and mitigation flags.",
              {"type": "object", "properties": {}}),
@@ -219,6 +220,7 @@ def _xrefs(ctx: ToolContext, symbol: str | None) -> str:
 
         sinks = out.get("sinks") or {}
         fmt_sinks = out.get("format_sinks") or {}
+        net = out.get("network") or {}
         parts = []
         if sinks:
             parts.append("dangerous sinks (memory/exec) and who reaches them:\n"
@@ -226,8 +228,11 @@ def _xrefs(ctx: ToolContext, symbol: str | None) -> str:
         if fmt_sinks:
             parts.append("format-string sinks (printf family) — only a bug if the FORMAT arg is "
                          "attacker-controlled; check each call:\n" + "\n".join(fmt_group(fmt_sinks)))
+        if net:
+            parts.append("network/IPC surface (sockets) — model endpoints as `socket` nodes with "
+                         "listens_on/connects_to edges:\n" + "\n".join(fmt_group(net)))
         text = "\n\n".join(parts) if parts else \
-            "no dangerous or format-string sinks (system/popen/strcpy/printf/…) referenced in this target"
+            "no dangerous, format-string, or network sinks referenced in this target"
     ctx.cache[key] = _clip(text)
     return ctx.cache[key]
 

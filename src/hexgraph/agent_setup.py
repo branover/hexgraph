@@ -82,8 +82,16 @@ is **record → explore → verify → update**:
    status — it's how you later confirm it).
 2. **Explore → keep adding.** As you decompile/trace, wire the path with
    `create_edge`: `calls`, `references`, `reads`/`writes`, and **`taints`** for the
-   untrusted-input → sink dataflow (input node → parser → sink node). `annotate`
-   nodes with what you learn (clearer name, "reachable pre-auth", a CWE tag).
+   untrusted-input → sink dataflow (input node → parser → sink node). **Edges carry
+   attributes** — put `call_sites`/`arg_constraints` on a `calls` edge, an `address`
+   on a `taints`/`bypasses` edge (see get_schemas → edge_attribute_schemas;
+   `create_edge(merge=True)` accumulates list attrs). For network services, model
+   endpoints as **`socket` nodes** (`create_socket(kind, port|name)`) and wire
+   `listens_on` (server) / `connects_to` (client) edges with the listen/connect
+   `address` — both sides of a firmware that share a port resolve to one socket, so
+   `list_sockets` shows who talks to whom. `xrefs` (no symbol) surfaces the
+   bind/listen/connect sites. `annotate` nodes with what you learn (clearer name,
+   "reachable pre-auth", a CWE tag).
    **Record the PoC as its own finding BEFORE you run it** (it will be typed
    `poc`), containing the attacker input/spec you intend to try, marked unverified,
    and `create_edge` it `confirms`→ the vulnerability finding.

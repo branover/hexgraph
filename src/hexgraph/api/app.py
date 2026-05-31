@@ -86,6 +86,20 @@ class EdgeCreate(BaseModel):
     dst_id: str
     type: str
     attrs: dict | None = None
+    merge: bool = False
+
+
+class EdgeAttrsUpdate(BaseModel):
+    attrs: dict
+    merge: bool = True
+
+
+class SocketCreate(BaseModel):
+    kind: str = "tcp"
+    port: int | str | None = None
+    name: str | None = None
+    bind_addr: str | None = None
+    attrs: dict | None = None
 
 
 class TaskCreate(BaseModel):
@@ -317,7 +331,8 @@ def create_app() -> FastAPI:
                                 target_id=body.target_id, address=body.address, attrs=body.attrs)
             except InvariantError as exc:
                 raise HTTPException(400, str(exc))
-            return {"id": n.id, "node_type": n.node_type, "name": n.name, "target_id": n.target_id}
+            return {"id": n.id, "node_type": n.node_type, "name": n.name, "target_id": n.target_id,
+                    "address": n.address, "attrs": n.attrs_json or {}}
 
     @app.post("/api/projects/{project_id}/edges")
     def api_create_edge(project_id: str, body: EdgeCreate):
@@ -329,10 +344,48 @@ def create_app() -> FastAPI:
                 raise HTTPException(404, "project not found")
             try:
                 e = create_edge(s, project, src_kind=body.src_kind, src_id=body.src_id,
-                                dst_kind=body.dst_kind, dst_id=body.dst_id, type=body.type, attrs=body.attrs)
+                                dst_kind=body.dst_kind, dst_id=body.dst_id, type=body.type,
+                                attrs=body.attrs, merge=body.merge)
             except InvariantError as exc:
                 raise HTTPException(400, str(exc))
-            return {"id": e.id, "type": e.type, "src_id": e.src_id, "dst_id": e.dst_id}
+            return {"id": e.id, "type": e.type, "src_id": e.src_id, "dst_id": e.dst_id,
+                    "attrs": e.attrs_json or {}}
+
+    @app.patch("/api/edges/{edge_id}")
+    def api_update_edge(edge_id: str, body: EdgeAttrsUpdate):
+        from hexgraph.db.models import Edge
+        from hexgraph.engine.edge_schemas import merge_edge_attrs
+
+        with session_scope() as s:
+            e = s.get(Edge, edge_id)
+            if e is None:
+                raise HTTPException(404, "edge not found")
+            e.attrs_json = (merge_edge_attrs(e.type, e.attrs_json, body.attrs)
+                            if body.merge else dict(body.attrs or {}))
+            return {"id": e.id, "type": e.type, "attrs": e.attrs_json}
+
+    @app.post("/api/projects/{project_id}/sockets")
+    def api_create_socket(project_id: str, body: SocketCreate):
+        from hexgraph.engine.authoring import InvariantError, create_socket
+
+        with session_scope() as s:
+            project = s.get(Project, project_id)
+            if project is None:
+                raise HTTPException(404, "project not found")
+            try:
+                n = create_socket(s, project, kind=body.kind, port=body.port, name=body.name,
+                                  bind_addr=body.bind_addr, attrs=body.attrs)
+            except InvariantError as exc:
+                raise HTTPException(400, str(exc))
+            return {"id": n.id, "node_type": n.node_type, "name": n.name, "attrs": n.attrs_json or {}}
+
+    @app.get("/api/edge-schemas")
+    def api_edge_schemas():
+        """What attributes are meaningful per edge type + the socket kinds — for the
+        UI's edge inspector and for any client populating typed edges."""
+        from hexgraph.engine.edge_schemas import SOCKET_KINDS, describe_edges
+
+        return {"edges": describe_edges(), "socket_kinds": list(SOCKET_KINDS)}
 
     @app.get("/api/projects/{project_id}")
     def api_project(project_id: str):

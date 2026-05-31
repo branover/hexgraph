@@ -2,10 +2,12 @@ import { ReactNode, useState } from "react";
 import { api, Graph, TargetNode } from "../api";
 import { Icon } from "./Icon";
 
-const MANUAL_NODE_TYPES = ["function", "symbol", "string", "struct", "hypothesis", "pattern"];
+const MANUAL_NODE_TYPES = ["function", "symbol", "string", "struct", "hypothesis", "pattern", "input", "sink", "socket"];
 const TARGET_BOUND = new Set(["function", "symbol", "string", "struct"]);
-const EDGE_TYPES = ["calls", "references", "reads", "writes", "links_against", "similar_to",
-  "duplicate_of", "related_to", "instance_of_pattern", "contains"];
+const SOCKET_KINDS = ["tcp", "udp", "unix", "io", "netlink", "raw", "other"];
+const EDGE_TYPES = ["calls", "references", "reads", "writes", "taints", "bypasses",
+  "listens_on", "connects_to", "links_against", "similar_to", "derived_from",
+  "duplicate_of", "related_to", "instance_of_pattern", "about", "contains"];
 
 function Modal({ title, icon, onClose, children }: { title: string; icon: string; onClose: () => void; children: ReactNode }) {
   return (
@@ -24,13 +26,20 @@ export function AddNodeModal({ projectId, targets, onClose, onDone }: {
   const [nodeType, setNodeType] = useState("function");
   const [name, setName] = useState("");
   const [targetId, setTargetId] = useState(targets[0]?.id ?? "");
+  const [sockKind, setSockKind] = useState("tcp");
+  const [sockPort, setSockPort] = useState("");
   const [err, setErr] = useState<string>();
   const needsTarget = TARGET_BOUND.has(nodeType);
+  const isSocket = nodeType === "socket";
 
   const submit = async () => {
     setErr(undefined);
     try {
-      await api.createNode(projectId, { node_type: nodeType, name, target_id: needsTarget ? targetId : undefined });
+      if (isSocket) {
+        await api.createSocket(projectId, { kind: sockKind, port: sockPort || undefined, name: sockPort ? undefined : name });
+      } else {
+        await api.createNode(projectId, { node_type: nodeType, name, target_id: needsTarget ? targetId : undefined });
+      }
       onDone(); onClose();
     } catch (e: any) { setErr(String(e.message || e)); }
   };
@@ -43,10 +52,26 @@ export function AddNodeModal({ projectId, targets, onClose, onDone }: {
           {MANUAL_NODE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
       </div>
+      {isSocket ? (
+        <>
+          <div className="field"><label>kind</label>
+            <select value={sockKind} onChange={(e) => setSockKind(e.target.value)}>
+              {SOCKET_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
+            </select>
+          </div>
+          <div className="field"><label>port (tcp/udp)</label>
+            <input value={sockPort} onChange={(e) => setSockPort(e.target.value)} placeholder="e.g. 8080" />
+          </div>
+          <div className="field"><label>name (unix path / id, if no port)</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. /var/run/ctl.sock" />
+          </div>
+        </>
+      ) : (
       <div className="field">
         <label>{nodeType === "hypothesis" ? "statement" : "name"}</label>
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder={nodeType === "hypothesis" ? "e.g. auth can be bypassed via token reuse" : "e.g. parse_request"} />
       </div>
+      )}
       {needsTarget && (
         <div className="field">
           <label>binary (required)</label>
@@ -58,7 +83,7 @@ export function AddNodeModal({ projectId, targets, onClose, onDone }: {
       {err && <div className="err">{err}</div>}
       <div className="foot">
         <button className="btn ghost" onClick={onClose}>Cancel</button>
-        <button className="btn primary" onClick={submit} disabled={!name.trim() || (needsTarget && !targetId)}>Create</button>
+        <button className="btn primary" onClick={submit} disabled={isSocket ? !(sockPort.trim() || name.trim()) : (!name.trim() || (needsTarget && !targetId))}>Create</button>
       </div>
     </Modal>
   );
@@ -71,6 +96,7 @@ export function AddEdgeModal({ projectId, graph, onClose, onDone }: {
   const [src, setSrc] = useState(opts[0]?.id ?? "");
   const [dst, setDst] = useState(opts[1]?.id ?? "");
   const [type, setType] = useState("references");
+  const [attrsText, setAttrsText] = useState("");
   const [err, setErr] = useState<string>();
   const find = (id: string) => opts.find((o) => o.id === id);
 
@@ -78,8 +104,12 @@ export function AddEdgeModal({ projectId, graph, onClose, onDone }: {
     setErr(undefined);
     const s = find(src), d = find(dst);
     if (!s || !d) { setErr("pick both endpoints"); return; }
+    let attrs: any = undefined;
+    if (attrsText.trim()) {
+      try { attrs = JSON.parse(attrsText); } catch { setErr("attributes must be valid JSON"); return; }
+    }
     try {
-      await api.createEdge(projectId, { src_kind: s.kind, src_id: s.id, dst_kind: d.kind, dst_id: d.id, type });
+      await api.createEdge(projectId, { src_kind: s.kind, src_id: s.id, dst_kind: d.kind, dst_id: d.id, type, attrs, merge: true });
       onDone(); onClose();
     } catch (e: any) { setErr(String(e.message || e)); }
   };
@@ -94,6 +124,9 @@ export function AddEdgeModal({ projectId, graph, onClose, onDone }: {
       </div>
       <div className="field"><label>to</label>
         <select value={dst} onChange={(e) => setDst(e.target.value)}>{opts.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}</select>
+      </div>
+      <div className="field"><label>attributes (optional JSON)</label>
+        <input value={attrsText} onChange={(e) => setAttrsText(e.target.value)} placeholder='e.g. {"address":"0x401200","port":8080}' />
       </div>
       {err && <div className="err">{err}</div>}
       <div className="foot">

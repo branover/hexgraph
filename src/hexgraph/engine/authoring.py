@@ -28,7 +28,8 @@ from hexgraph.engine.nodes import get_or_create_node
 
 # Node types a human may hand-author. `task` is not authorable (tasks come from
 # launching analysis); `target` is not a node (it requires uploaded bytes).
-MANUAL_NODE_TYPES = {"function", "symbol", "string", "struct", "hypothesis", "pattern", "input", "sink"}
+MANUAL_NODE_TYPES = {"function", "symbol", "string", "struct", "hypothesis", "pattern",
+                     "input", "sink", "socket"}
 # These describe code inside a binary, so they require an existing target.
 TARGET_BOUND = {"function", "symbol", "string", "struct"}
 
@@ -54,6 +55,15 @@ def create_node(
             f"node_type {node_type!r} cannot be hand-created (allowed: {sorted(MANUAL_NODE_TYPES)}; "
             "binaries/firmware are added by uploading a file)"
         )
+    # Sockets have their own identity (kind+port|name, shared across binaries) — route
+    # to the dedicated builder, taking kind/port/name/bind_addr from attrs.
+    if node_type == "socket":
+        a = dict(attrs or {})
+        return create_socket(session, project, kind=a.get("kind", "tcp"), port=a.get("port"),
+                             name=a.get("name") or (name if not a.get("port") else None),
+                             bind_addr=a.get("bind_addr"),
+                             attrs={k: v for k, v in a.items()
+                                    if k not in ("kind", "port", "name", "bind_addr")})
     if not (name or "").strip():
         raise InvariantError("node name is required")
     if node_type in TARGET_BOUND:
@@ -69,9 +79,29 @@ def create_node(
     )
 
 
+def create_socket(
+    session: Session, project: Project, *, kind: str = "tcp", port: int | str | None = None,
+    name: str | None = None, bind_addr: str | None = None, attrs: dict[str, Any] | None = None,
+    created_by: str = "human",
+) -> Node:
+    """Create (or reuse) a socket node — a network/IPC endpoint shared across the
+    firmware's binaries. Identity is (kind, port|name); a server `listens_on` it and
+    a client `connects_to` it, both resolving to this one node."""
+    from hexgraph.engine.edge_schemas import SOCKET_KINDS
+    from hexgraph.engine.nodes import materialize_socket
+
+    if kind not in SOCKET_KINDS:
+        raise InvariantError(f"socket kind must be one of {list(SOCKET_KINDS)}")
+    if port in (None, "") and not name:
+        raise InvariantError("a socket needs a port or a name")
+    return materialize_socket(session, project_id=project.id, kind=kind, port=port, name=name,
+                              bind_addr=bind_addr, attrs=attrs, created_by=created_by)
+
+
 def create_edge(
     session: Session, project: Project, *, src_kind: str, src_id: str, dst_kind: str, dst_id: str,
     type: str, attrs: dict[str, Any] | None = None, confidence: float | None = 1.0,
+    merge: bool = False,
 ) -> Edge:
     if src_kind not in EDGE_KINDS or dst_kind not in EDGE_KINDS:
         raise InvariantError(f"edge endpoint kinds must be one of {EDGE_KINDS}")
@@ -86,5 +116,5 @@ def create_edge(
             raise InvariantError(f"{kind} {id_} does not exist in this project")
     return add_edge(
         session, project_id=project.id, src=(src_kind, src_id), dst=(dst_kind, dst_id),
-        type=edge_type, origin="human", confidence=confidence, attrs=attrs,
+        type=edge_type, origin="human", confidence=confidence, attrs=attrs, merge=merge,
     )

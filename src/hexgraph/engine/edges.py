@@ -53,11 +53,18 @@ def add_edge(
             .first()
         )
         if existing is not None:
-            merged = dict(existing.attrs_json or {})
-            ids = list(merged.get("finding_ids") or ([merged["finding_id"]] if merged.get("finding_id") else []))
+            # Accumulate contributing finding ids from the EXISTING attrs first (the
+            # incoming scalar finding_id would otherwise overwrite the prior one).
+            from hexgraph.engine.edge_schemas import merge_edge_attrs
+
+            prev = existing.attrs_json or {}
+            ids = list(prev.get("finding_ids") or ([prev["finding_id"]] if prev.get("finding_id") else []))
             new_fid = (attrs or {}).get("finding_id")
             if new_fid and new_fid not in ids:
                 ids.append(new_fid)
+            # Schema-aware merge of the rest: list attributes (e.g. a calls edge's
+            # call_sites) accumulate; scalars overwrite; unknown keys pass through.
+            merged = merge_edge_attrs(type_str, prev, attrs)
             if ids:
                 merged["finding_ids"] = ids
             if confidence is not None and (existing.confidence is None or confidence > existing.confidence):

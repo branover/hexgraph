@@ -276,8 +276,13 @@ def create_node(project_id: str, node_type: str, name: str, target_id: str | Non
 
 
 def create_edge(project_id: str, src_kind: str, src_id: str, dst_kind: str, dst_id: str,
-                type: str, attrs: dict | None = None) -> dict:
-    """Connect two graph entities (target|node|finding|task). Both must exist."""
+                type: str, attrs: dict | None = None, merge: bool = False) -> dict:
+    """Connect two graph entities (target|node|finding|task). Both must exist.
+    `attrs` carries edge-type-specific facts — call get_schemas to see what's
+    meaningful per type (e.g. a `calls` edge's `call_sites`/`arg_constraints`, a
+    `listens_on` edge's `address`). With `merge=True`, a repeat of the same
+    (src,dst,type) folds into the existing edge: list attributes like `call_sites`
+    accumulate instead of drawing a parallel edge."""
     from hexgraph.engine.authoring import InvariantError, create_edge as _create
 
     with session_scope() as s:
@@ -286,10 +291,71 @@ def create_edge(project_id: str, src_kind: str, src_id: str, dst_kind: str, dst_
             return {"error": "project not found"}
         try:
             e = _create(s, project, src_kind=src_kind, src_id=src_id, dst_kind=dst_kind,
-                        dst_id=dst_id, type=type, attrs=attrs)
+                        dst_id=dst_id, type=type, attrs=attrs, merge=merge)
         except InvariantError as exc:
             return {"error": str(exc)}
-        return {"id": e.id, "type": e.type, "src_id": e.src_id, "dst_id": e.dst_id}
+        return {"id": e.id, "type": e.type, "src_id": e.src_id, "dst_id": e.dst_id,
+                "attrs": e.attrs_json or {}}
+
+
+def update_edge(edge_id: str, attrs: dict, merge: bool = True) -> dict:
+    """Add/update attributes on an EXISTING edge (by id). Default `merge=True`
+    accumulates list attributes (e.g. append a newly-found `call_sites` address)
+    and overwrites scalars; `merge=False` replaces attrs wholesale. See get_schemas
+    for the attributes meaningful to each edge type."""
+    from hexgraph.db.models import Edge
+    from hexgraph.engine.edge_schemas import merge_edge_attrs
+
+    with session_scope() as s:
+        e = s.get(Edge, edge_id)
+        if e is None:
+            return {"error": "edge not found"}
+        e.attrs_json = merge_edge_attrs(e.type, e.attrs_json, attrs) if merge else dict(attrs or {})
+        return {"id": e.id, "type": e.type, "attrs": e.attrs_json}
+
+
+def create_socket(project_id: str, kind: str = "tcp", port: int | str | None = None,
+                  name: str | None = None, bind_addr: str | None = None,
+                  attrs: dict | None = None) -> dict:
+    """Create (or reuse) a SOCKET node — a network/IPC endpoint shared across the
+    firmware's binaries. `kind` ∈ tcp|udp|unix|io|netlink|raw|other; give a `port`
+    (tcp/udp) or a `name` (unix path / identifier). A server `listens_on` it and a
+    client `connects_to` it — both resolve to this ONE node, so you can see which
+    binaries talk over the same endpoint. Put the listen/connect code address on
+    those edges (create_edge attrs={'address': '0x...'})."""
+    from hexgraph.engine.authoring import InvariantError, create_socket as _create
+
+    with session_scope() as s:
+        project = s.get(Project, project_id)
+        if project is None:
+            return {"error": "project not found"}
+        try:
+            n = _create(s, project, kind=kind, port=port, name=name, bind_addr=bind_addr,
+                        attrs=attrs, created_by="agent")
+        except InvariantError as exc:
+            return {"error": str(exc)}
+        return {"id": n.id, "node_type": n.node_type, "name": n.name, "attrs": n.attrs_json or {}}
+
+
+def list_sockets(project_id: str) -> list[dict]:
+    """List socket endpoints in the project with who listens/connects on each — the
+    network map of the firmware (server↔client over shared sockets)."""
+    from hexgraph.db.models import Edge, NodeType
+
+    with session_scope() as s:
+        socks = (s.query(Node)
+                 .filter(Node.project_id == project_id, Node.node_type == NodeType.socket.value)
+                 .all())
+        out = []
+        for n in socks:
+            edges = (s.query(Edge)
+                     .filter(Edge.project_id == project_id, Edge.dst_kind == "node", Edge.dst_id == n.id,
+                             Edge.type.in_(("listens_on", "connects_to")))
+                     .all())
+            peers = [{"relation": e.type, "src_kind": e.src_kind, "src_id": e.src_id,
+                      "address": (e.attrs_json or {}).get("address")} for e in edges]
+            out.append({"id": n.id, "name": n.name, "attrs": n.attrs_json or {}, "peers": peers})
+        return out
 
 
 def update_finding(finding_id: str, status: str | None = None, severity: str | None = None,
@@ -357,6 +423,7 @@ def get_schemas() -> dict:
 
     from hexgraph.db.models import EdgeType, FindingStatus, NodeType
     from hexgraph.engine.annotations import KINDS as ANN_KINDS, NODE_KINDS as ANN_NODE_KINDS
+    from hexgraph.engine.edge_schemas import SOCKET_KINDS, describe_edges
     from hexgraph.engine.findings import FINDING_TYPES
     from hexgraph.models.finding import Finding as FModelCls
 
@@ -390,6 +457,17 @@ def get_schemas() -> dict:
         "edge_note": "A hypothesis IS a node (node_type='hypothesis'); link a finding to it with "
                      "dst_kind='node' + its id, or better use link_evidence(hypothesis_id, finding_id, "
                      "relation) which also updates the hypothesis status.",
+        "edge_attribute_schemas": describe_edges(),
+        "edge_attributes_note": "Edges carry attributes (edge.attrs) — the schema above lists what's "
+                                "meaningful per type (e.g. a calls edge's call_sites + arg_constraints, a "
+                                "listens_on edge's address). Pass them via create_edge(attrs=…); use "
+                                "create_edge(merge=True) or update_edge to ACCUMULATE list attrs.",
+        "socket": {
+            "kinds": list(SOCKET_KINDS),
+            "note": "A `socket` node is a network/IPC endpoint SHARED across binaries. Make it with "
+                    "create_socket(kind, port|name); a server `listens_on` it and a client "
+                    "`connects_to` it (both resolve to the one node). list_sockets shows the map.",
+        },
         "link_evidence_relations": ["supports", "refutes", "confirms", "contradicts"],
         "link_evidence_note": "relation is supports|refutes (confirms→supports, contradicts→refutes are "
                               "accepted aliases). The hypothesis status is then recomputed from its "
@@ -600,7 +678,7 @@ _CATALOG = [
      {"type": "object", "properties": {"target_id": {"type": "string"}}, "required": ["target_id"]}),
     ("read", "list_strings", list_strings, "Notable strings in a target (optional substring filter).",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "pattern": {"type": "string"}}, "required": ["target_id"]}),
-    ("read", "xrefs", xrefs, "Cross-references: which functions CALL a symbol/sink and where (omit `symbol` to map all dangerous sinks). Trace a sink back to the code that reaches it.",
+    ("read", "xrefs", xrefs, "Cross-references: which functions CALL a symbol/sink and where (omit `symbol` to map dangerous sinks, format-string sinks, AND network/socket surface bind/listen/connect/recv). Trace a sink back to its caller, or find listen/connect sites to model as socket nodes.",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "symbol": {"type": "string"}}, "required": ["target_id"]}),
     ("read", "search", search, "Search the project graph (findings + functions).",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "q": {"type": "string"}}, "required": ["project_id", "q"]}),
@@ -614,6 +692,8 @@ _CATALOG = [
      {"type": "object", "properties": {"project_id": {"type": "string"}, "target_id": {"type": "string"}, "node_type": {"type": "string"}}, "required": ["project_id"]}),
     ("read", "list_edges", list_edges, "List edges (optionally those touching a node) to confirm the dataflow/relationships you wired.",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "node_id": {"type": "string"}}, "required": ["project_id"]}),
+    ("read", "list_sockets", list_sockets, "List socket endpoints (tcp/udp/unix/…) with who listens/connects on each — the firmware's network map (server↔client over shared sockets).",
+     {"type": "object", "properties": {"project_id": {"type": "string"}}, "required": ["project_id"]}),
     ("read", "get_schemas", get_schemas, "The write-API contract: allowed enums + the Finding shape. Read before record_finding/create_node/create_edge/annotate to avoid guessing field names.",
      {"type": "object", "properties": {}}),
     ("write", "record_finding", record_finding, "Record a new finding (the `finding` dict must match the Finding schema — call get_schemas). `finding_type` is a SEPARATE arg (vulnerability|poc|…), not a finding field. Pass task_id in delegate mode.",
@@ -622,8 +702,12 @@ _CATALOG = [
      {"type": "object", "properties": {"finding_id": {"type": "string"}, "status": {"type": "string"}, "severity": {"type": "string"}, "confidence": {"type": "string"}, "human_notes": {"type": "string"}}, "required": ["finding_id"]}),
     ("write", "create_node", create_node, "Add a node (function/symbol/string/struct/hypothesis/pattern/input/sink). Pass `address` for a function's binary location; put parameters/explanations in `attrs`.",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "node_type": {"type": "string"}, "name": {"type": "string"}, "target_id": {"type": "string"}, "address": {"type": "string"}, "attrs": {"type": "object"}}, "required": ["project_id", "node_type", "name"]}),
-    ("write", "create_edge", create_edge, "Connect two graph entities (target|node|finding|task). A hypothesis is a 'node'; or use link_evidence to attach a finding to one.",
-     {"type": "object", "properties": {"project_id": {"type": "string"}, "src_kind": {"type": "string"}, "src_id": {"type": "string"}, "dst_kind": {"type": "string"}, "dst_id": {"type": "string"}, "type": {"type": "string"}, "attrs": {"type": "object"}}, "required": ["project_id", "src_kind", "src_id", "dst_kind", "dst_id", "type"]}),
+    ("write", "create_edge", create_edge, "Connect two graph entities (target|node|finding|task) with a typed, attributed edge. `attrs` carries edge-type facts (see get_schemas: e.g. calls→call_sites/arg_constraints, listens_on→address). merge=True accumulates list attrs. A hypothesis is a 'node'; or use link_evidence to attach a finding to one.",
+     {"type": "object", "properties": {"project_id": {"type": "string"}, "src_kind": {"type": "string"}, "src_id": {"type": "string"}, "dst_kind": {"type": "string"}, "dst_id": {"type": "string"}, "type": {"type": "string"}, "attrs": {"type": "object"}, "merge": {"type": "boolean"}}, "required": ["project_id", "src_kind", "src_id", "dst_kind", "dst_id", "type"]}),
+    ("write", "update_edge", update_edge, "Add/update attributes on an EXISTING edge by id (merge=True accumulates list attrs like call_sites; merge=False replaces). See get_schemas for per-type attributes.",
+     {"type": "object", "properties": {"edge_id": {"type": "string"}, "attrs": {"type": "object"}, "merge": {"type": "boolean"}}, "required": ["edge_id", "attrs"]}),
+    ("write", "create_socket", create_socket, "Create/reuse a SOCKET node (network/IPC endpoint shared across binaries). kind=tcp|udp|unix|io|…, give port or name. A server listens_on it, a client connects_to it — both resolve to one node.",
+     {"type": "object", "properties": {"project_id": {"type": "string"}, "kind": {"type": "string"}, "port": {"type": ["integer", "string"]}, "name": {"type": "string"}, "bind_addr": {"type": "string"}, "attrs": {"type": "object"}}, "required": ["project_id"]}),
     ("write", "create_hypothesis", create_hypothesis, "Record a research hypothesis anchored to a target.",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "statement": {"type": "string"}, "rationale": {"type": "string"}, "target_id": {"type": "string"}}, "required": ["project_id", "statement"]}),
     ("write", "link_evidence", link_evidence, "Attach a finding to a hypothesis as supporting/refuting evidence (recomputes the hypothesis status). relation = supports|refutes. This is how you confirm a hypothesis.",

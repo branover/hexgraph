@@ -71,6 +71,7 @@ def build_graph(session: Session, project_id: str) -> dict:
                 "id": e.id, "source": e.src_id, "target": e.dst_id, "type": e.type,
                 "src_kind": e.src_kind, "dst_kind": e.dst_kind,
                 "origin": e.origin, "confidence": e.confidence, "count": 1,
+                "attrs": e.attrs_json or {},
             }
         else:
             existing["count"] += 1

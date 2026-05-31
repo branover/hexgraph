@@ -34,6 +34,15 @@ _FORMAT_SINKS = [
     "vsprintf", "vsnprintf", "syslog", "vsyslog", "asprintf",
 ]
 
+# Network / IPC surface: who opens sockets, listens, connects, or reads off the
+# wire. Not "dangerous" per se — it's the attack surface + the socket map (model
+# these as `socket` nodes with listens_on/connects_to edges).
+_NETWORK_SINKS = [
+    "socket", "bind", "listen", "accept", "accept4", "connect", "recv", "recvfrom",
+    "recvmsg", "read", "send", "sendto", "sendmsg", "setsockopt", "getaddrinfo",
+    "gethostbyname", "socketpair",
+]
+
 _MAX_CALLERS = 30  # bound per-sink caller lists so a noisy printf doesn't flood
 
 
@@ -107,7 +116,8 @@ def main() -> int:
                 return out
             print(json.dumps({"tool": "xrefs_probe",
                               "sinks": sweep(_DEFAULT_SINKS),
-                              "format_sinks": sweep(_FORMAT_SINKS)}))
+                              "format_sinks": sweep(_FORMAT_SINKS),
+                              "network": sweep(_NETWORK_SINKS)}))
         return 0
     finally:
         r2.quit()

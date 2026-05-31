@@ -45,7 +45,7 @@ export interface SettingsView {
 export interface GhidraStatus { enabled: boolean; ok: boolean; detail: string; mode?: string; [k: string]: any; }
 export interface FsEntry { rel: string; size?: number; is_elf?: boolean; child_target_id?: string | null; added?: boolean; }
 export interface GraphNode { id: string; type: "target" | "node" | "finding"; label: string; [k: string]: any; }
-export interface GraphEdge { id: string; source: string; target: string; type: string; src_kind?: string; dst_kind?: string; origin?: string; confidence?: number | null; }
+export interface GraphEdge { id: string; source: string; target: string; type: string; src_kind?: string; dst_kind?: string; origin?: string; confidence?: number | null; attrs?: Record<string, any>; count?: number; }
 export interface Graph { project_id: string; nodes: GraphNode[]; edges: GraphEdge[]; }
 export interface ProjectDetail {
   project: Project; targets: TargetNode[]; findings: Finding[];
@@ -59,6 +59,11 @@ async function getJSON<T>(url: string): Promise<T> {
 }
 async function postJSON<T>(url: string, body: unknown): Promise<T> {
   const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(`${r.status} ${url}`);
+  return r.json() as Promise<T>;
+}
+async function patchJSON<T>(url: string, body: unknown): Promise<T> {
+  const r = await fetch(url, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!r.ok) throw new Error(`${r.status} ${url}`);
   return r.json() as Promise<T>;
 }
@@ -109,6 +114,9 @@ export const api = {
   filesystem: (tid: string) => getJSON<{ unpacked: boolean; method?: string; files: FsEntry[] }>(`/api/targets/${tid}/filesystem`),
   addFromFs: (pid: string, fwId: string, rel: string) => postJSON<any>(`/api/projects/${pid}/targets/${fwId}/add-from-fs`, { rel }),
   createEdge: (pid: string, body: any) => postJSON<any>(`/api/projects/${pid}/edges`, body),
+  updateEdge: (eid: string, body: { attrs: Record<string, any>; merge?: boolean }) => patchJSON<any>(`/api/edges/${eid}`, body),
+  createSocket: (pid: string, body: { kind?: string; port?: number | string | null; name?: string | null; bind_addr?: string | null; attrs?: any }) => postJSON<any>(`/api/projects/${pid}/sockets`, body),
+  edgeSchemas: () => getJSON<{ edges: Record<string, any>; socket_kinds: string[] }>(`/api/edge-schemas`),
   createAnnotation: (pid: string, body: any) => postJSON<any>(`/api/projects/${pid}/annotations`, body),
   annotations: (nodeKind: string, nodeId: string) => getJSON<any[]>(`/api/annotations/${nodeKind}/${nodeId}`),
   setAnnotationStatus: (id: string, status: string) => postJSON<any>(`/api/annotations/${id}/status`, { status }),

@@ -55,6 +55,7 @@ class NodeType(str, enum.Enum):
     pattern = "pattern"
     input = "input"      # an untrusted-input source (env/arg/recv) for taint paths
     sink = "sink"        # a dangerous operation reached by tainted data
+    socket = "socket"    # a network/IPC endpoint (tcp/udp/unix/io) shared across binaries
     task = "task"
 
 
@@ -84,6 +85,8 @@ class EdgeType(str, enum.Enum):
     dataflow_hint = "dataflow_hint"
     taints = "taints"          # untrusted data flows from src into dst (source→sink)
     bypasses = "bypasses"      # attacker input defeats/weakens a control (auth/logic bugs)
+    listens_on = "listens_on"  # a binary/function opens a listening socket (server side)
+    connects_to = "connects_to"  # a binary/function connects to a socket (client side)
     related_to = "related_to"  # generic fallback (kept for back-compat)
 
 

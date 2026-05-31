@@ -124,6 +124,34 @@ def materialize_function(
     )
 
 
+def socket_label(kind: str, port: int | str | None, name: str | None) -> str:
+    """Human label / identity key for a socket node: 'tcp:8080', a unix path, etc."""
+    if name:
+        return f"{kind}:{name}"
+    if port not in (None, ""):
+        return f"{kind}:{port}"
+    return f"{kind}:?"
+
+
+def materialize_socket(
+    session: Session, *, project_id: str, kind: str, port: int | str | None = None,
+    name: str | None = None, bind_addr: str | None = None, created_by: str = "agent",
+    attrs: dict[str, Any] | None = None,
+) -> Node:
+    """A network/IPC endpoint shared across binaries (so a server's `listens_on`
+    and a client's `connects_to` resolve to the SAME node). Identity is
+    (project, kind, port|name) via content_hash, with target_id=None so it isn't
+    bound to one binary."""
+    label = socket_label(kind, port, name)
+    base = {"kind": kind, "port": port, "name": name, "bind_addr": bind_addr}
+    merged = {**{k: v for k, v in base.items() if v not in (None, "")}, **(attrs or {})}
+    return get_or_create_node(
+        session, project_id=project_id, node_type=NodeType.socket, name=label,
+        target_id=None, fq_name=label, content_hash=_sha("socket", kind, str(port), name or ""),
+        attrs=merged, created_by=created_by,
+    )
+
+
 def materialize_symbol(
     session: Session, *, project_id: str, target_id: str | None, name: str,
     kind: str = "import", library: str | None = None, is_sink: bool = False,
