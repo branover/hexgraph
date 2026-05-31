@@ -335,10 +335,12 @@ def create_app() -> FastAPI:
             for a in s.query(Annotation).filter(Annotation.project_id == project_id, Annotation.kind == "tag",
                                                 Annotation.node_kind == "finding").all():
                 tags.setdefault(a.node_id, []).append(a.value)
+            task_types = {t.id: t.type for t in tasks}  # so the UI can spot harness findings
             return {
                 "project": _project_dict(project),
                 "targets": [_target_dict(t) for t in targets],
-                "findings": [{**_finding_dict(f), "tags": tags.get(f.id, [])} for f in findings],
+                "findings": [{**_finding_dict(f), "tags": tags.get(f.id, []),
+                              "task_type": task_types.get(f.task_id)} for f in findings],
                 "cost": {
                     "total_usd": total_cost,
                     "cost_source": cost_source,
@@ -352,7 +354,8 @@ def create_app() -> FastAPI:
             f = s.get(Finding, finding_id)
             if f is None:
                 raise HTTPException(404, "finding not found")
-            return _finding_dict(f)
+            task = s.get(Task, f.task_id)
+            return {**_finding_dict(f), "task_type": task.type if task else None}
 
     @app.post("/api/findings/{finding_id}/status")
     def api_set_finding_status(finding_id: str, body: StatusUpdate):

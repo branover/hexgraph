@@ -31,6 +31,7 @@ export default function Workspace() {
   const [results, setResults] = useState<any | null>(null);
   const [modal, setModal] = useState<"node" | "edge" | "report" | "compare" | "ghidra" | null>(null);
   const [ghidraBridge, setGhidraBridge] = useState(false);
+  const [fuzzingEnabled, setFuzzingEnabled] = useState(false);
   const [launchFor, setLaunchFor] = useState<{ target: TargetNode; type: string; objective?: string; params?: any; parentFindingId?: string; anchorKind?: string; anchorId?: string } | null>(null);
   const [maxed, setMaxed] = useState(false);
   const [detailBig, setDetailBig] = useState(false);
@@ -49,6 +50,7 @@ export default function Workspace() {
     api.getSettings().then((s) => {
       const g = s.settings.features.ghidra;
       setGhidraBridge(g.enabled && g.mode === "bridge");
+      setFuzzingEnabled(Boolean(s.settings.features.fuzzing?.enabled));
     }).catch(() => {});
   }, [load]);
 
@@ -201,6 +203,7 @@ export default function Workspace() {
     }
     return <Inspector finding={selFinding} projectId={projectId} hypotheses={hypotheses} onChanged={load}
                       onLaunch={pollThenReload} onOpenLaunch={openLaunchForFinding} onViewTask={viewTask}
+                      fuzzingEnabled={fuzzingEnabled}
                       onHighlight={(ids) => ids[0] && setSelGraphId(ids[0])} />;
   };
 
@@ -306,6 +309,9 @@ export default function Workspace() {
                      initialObjective={launchFor.objective} initialParams={launchFor.params}
                      parentFindingId={launchFor.parentFindingId}
                      anchorKind={launchFor.anchorKind} anchorId={launchFor.anchorId}
+                     harnesses={detail.findings
+                       .filter((f) => f.task_type === "harness_generation" && f.target_id === launchFor.target.id)
+                       .map((f) => ({ id: f.id, label: f.title }))}
                      onClose={() => setLaunchFor(null)} onLaunched={pollThenReload} />
       )}
     </>

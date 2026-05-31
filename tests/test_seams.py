@@ -19,7 +19,10 @@ def test_metering_records_without_error(caplog):
     record_usage("task.static_analysis", Usage(input_tokens=10, output_tokens=2), task_id="t1")
 
 
-def test_policy_is_static_only_by_default():
+def test_policy_is_static_only_by_default(hg_home):
+    # hg_home isolates HEXGRAPH_HOME so this is hermetic regardless of the
+    # developer's real ~/.hexgraph/settings.json (current_policy() reads the
+    # fuzzing toggle from settings).
     from hexgraph.policy import PolicyViolation, assert_allows_execution, current_policy
 
     p = current_policy()

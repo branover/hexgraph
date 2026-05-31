@@ -22,11 +22,11 @@ function Lifecycle({ status }: { status: string }) {
 }
 
 // Detail + triage + follow-on launch + provenance for a selected finding.
-export default function Inspector({ finding, projectId, hypotheses = [], onChanged, onLaunch, onOpenLaunch, onViewTask, onHighlight }: {
+export default function Inspector({ finding, projectId, hypotheses = [], onChanged, onLaunch, onOpenLaunch, onViewTask, onHighlight, fuzzingEnabled }: {
   finding: Finding | null; projectId?: string; hypotheses?: { id: string; statement: string }[];
   onChanged: () => void; onLaunch: (taskId: string) => void;
   onOpenLaunch?: (type: string, opts?: { objective?: string; params?: any }) => void;
-  onViewTask?: (taskId: string) => void; onHighlight?: (ids: string[]) => void;
+  onViewTask?: (taskId: string) => void; onHighlight?: (ids: string[]) => void; fuzzingEnabled?: boolean;
 }) {
   const [sugg, setSugg] = useState<any[]>([]);
   const [copied, setCopied] = useState(false);
@@ -84,6 +84,10 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
             const comps = await api.components(finding.id);
             onHighlight(comps.map((c: any) => c.id).filter(Boolean));
           }}><Icon name="target" size={12} /> Components</button>
+        )}
+        {finding.task_type === "harness_generation" && fuzzingEnabled && onOpenLaunch && (
+          <button className="btn sm primary" title="Fuzz using this harness"
+                  onClick={() => onOpenLaunch("fuzzing")}><Icon name="run" size={12} /> Fuzz this harness</button>
         )}
       </div>
 

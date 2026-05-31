@@ -8,6 +8,7 @@ export interface Finding {
   summary: string; reasoning: string; evidence: any;
   suggested_followups?: any[]; related_target_refs?: string[]; created_at?: string;
   origin?: string; dismissed_reason?: string | null; human_notes?: string | null; tags?: string[];
+  task_type?: string;
 }
 export interface EvidenceRef { finding_id: string; title: string; severity: string; status: string; origin: string; }
 export interface Hypothesis {

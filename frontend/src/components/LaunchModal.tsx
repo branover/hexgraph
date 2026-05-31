@@ -10,10 +10,10 @@ const EFFORT = ["low", "medium", "high"];
 // and a live pre-flight preview of the exact context bundle that will be sent.
 // Reused for finding follow-ups (prefilled objective/params + parent_finding_id).
 export default function LaunchModal({ target, taskType, isMock, initialObjective, initialParams,
-  parentFindingId, anchorKind, anchorId, onClose, onLaunched }: {
+  parentFindingId, anchorKind, anchorId, harnesses = [], onClose, onLaunched }: {
   target: TargetNode; taskType: string; isMock: boolean;
   initialObjective?: string; initialParams?: Record<string, any>; parentFindingId?: string;
-  anchorKind?: string; anchorId?: string;
+  anchorKind?: string; anchorId?: string; harnesses?: { id: string; label: string }[];
   onClose: () => void; onLaunched: (taskId: string) => void;
 }) {
   const [objective, setObjective] = useState(initialObjective || "");
@@ -25,6 +25,9 @@ export default function LaunchModal({ target, taskType, isMock, initialObjective
   const isFuzz = taskType === "fuzzing";
   const [fuzzTime, setFuzzTime] = useState(String(initialParams?.max_total_time ?? 60));
   const [triage, setTriage] = useState(Boolean(initialParams?.triage));
+  // Which harness to fuzz: defaults to the parent finding (if launched from one),
+  // else "(latest)" → the backend picks the most recent harness_generation finding.
+  const [harnessId, setHarnessId] = useState(parentFindingId && harnesses.some((h) => h.id === parentFindingId) ? parentFindingId : "");
   const [preview, setPreview] = useState<any>(null);
   const [busy, setBusy] = useState(false);
 
@@ -33,10 +36,13 @@ export default function LaunchModal({ target, taskType, isMock, initialObjective
     if (fn.trim()) params.function = fn.trim(); else delete params.function;
     if (isMock && scenario !== "(default)") params.mock_scenario = scenario; else delete params.mock_scenario;
     if (isFuzz) { params.max_total_time = parseInt(fuzzTime) || 60; params.triage = triage; }
+    // For fuzzing, the chosen harness wins as the parent finding (the fuzz run is
+    // derived from that harness); otherwise keep the caller's parent finding.
+    const parent = isFuzz ? (harnessId || parentFindingId) : parentFindingId;
     return {
       target_id: target.id, type: taskType, objective: objective.trim() || undefined,
       model: model === "(project default)" ? undefined : model, params,
-      parent_finding_id: parentFindingId, anchor_kind: anchorKind, anchor_id: anchorId,
+      parent_finding_id: parent, anchor_kind: anchorKind, anchor_id: anchorId,
     };
   };
 
@@ -90,6 +96,12 @@ export default function LaunchModal({ target, taskType, isMock, initialObjective
             )}
             {isFuzz && (
               <>
+                <div className="field"><label>harness</label>
+                  <select value={harnessId} onChange={(e) => setHarnessId(e.target.value)}>
+                    <option value="">(latest harness for this target)</option>
+                    {harnesses.map((h) => <option key={h.id} value={h.id}>{h.label}</option>)}
+                  </select>
+                </div>
                 <div className="field"><label>fuzz time (s)</label>
                   <input value={fuzzTime} onChange={(e) => setFuzzTime(e.target.value)} />
                 </div>
