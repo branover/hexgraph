@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { GhidraStatus, SettingsView, api } from "../api";
 import Header from "../components/Header";
 import { Icon } from "../components/Icon";
@@ -6,13 +7,20 @@ import { Icon } from "../components/Icon";
 // Self-service configuration: optional features + non-secret prefs. API keys are
 // status-only here (env/config.toml BYOK) — the server never writes secrets.
 export default function Settings() {
+  const nav = useNavigate();
   const [v, setV] = useState<SettingsView | null>(null);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
   const [ghidra, setGhidra] = useState<GhidraStatus | null>(null);
   const [testing, setTesting] = useState(false);
 
-  useEffect(() => { api.getSettings().then(setV).catch((e) => setErr(String(e.message || e))); }, []);
+  const close = () => { if (window.history.length > 1) nav(-1); else nav("/"); };
+  useEffect(() => {
+    api.getSettings().then(setV).catch((e) => setErr(String(e.message || e)));
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const patch = async (p: Record<string, any>) => {
     setSaving(true); setErr("");
@@ -30,7 +38,11 @@ export default function Settings() {
       <Header />
       <div className="settings">
         <div className="settings-inner">
-          <h2><Icon name="chip" size={20} /> Settings</h2>
+          <h2>
+            <Icon name="gear" size={20} /> Settings
+            <span style={{ flex: 1 }} />
+            <button className="btn sm ghost" onClick={close} title="Close (Esc)"><Icon name="x" size={13} /> Close</button>
+          </h2>
           {err && <div className="banner err">{err}</div>}
           {saving && <div className="muted" style={{ fontSize: 12 }}>saving…</div>}
 
