@@ -18,7 +18,11 @@ then run the resume verifier, then continue at the next unchecked task.
   harness, finding-per-crash, optional LLM triage). **Target soft-removal** (archive subtree, restore on
   re-add) and **firmware filesystem browser** (persisted unpacked tree, add any file as a child target;
   library exports → nodes; function nodes launch tasks).
-- **Last verified:** `.venv/bin/python -m pytest -q` → 171 passed, 1 skipped (live, no key); SPA builds clean.
+- **LLM tool-use:** LLM tasks run an agent loop (`llm/runner.run_findings_agentic` + `engine/agent_tools.py`):
+  the model calls sandboxed tools (decompile/strings/imports/…, fuzz when enabled), HexGraph executes them
+  and feeds results back until findings. Superset of single-pass; mock drives it offline (`tool_calls`
+  fixtures, `agentic_overflow` scenario). Works with a plain BYOK key — no external coding agent needed.
+- **Last verified:** `.venv/bin/python -m pytest -q` → 179 passed, 1 skipped (live, no key); SPA builds clean.
 - **UI quickstart (updated):** `make ui` once → `make sandbox-build` once →
   `hexgraph ingest tests/fixtures/synthetic_fw.bin --name demo` → `hexgraph serve` → http://127.0.0.1:8765.
 - **How to re-verify:** `make test`; or run the UI (see UI quickstart below).
@@ -144,6 +148,13 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-05-30: **LLM tool-use (agent loop).** Tasks advertise sandboxed tools and run a bounded loop —
+  model requests a tool → HexGraph runs it in the sandbox → result fed back → repeat until findings.
+  `llm/base.py` (ToolSpec/ToolCall + messages/tool_calls), `llm/runner.run_findings_agentic` (superset of
+  single-pass, retains retry/JSON-repair, step budget), `engine/agent_tools.py` (decompile/disassemble/
+  list_functions/read_imports/list_strings + policy-gated fuzz_function). Mock drives it at $0 via
+  `tool_calls` fixtures (`static_analysis/agentic_overflow`); Anthropic backend does real tool_use/
+  tool_result. The model directs, HexGraph executes — a plain BYOK key suffices. 179 pass.
 - 2026-05-30: **Fuzzing + target removal + firmware filesystem.** (1) `fuzzing` task (opt-in via the
   policy seam — the single relaxation of static-only): `fuzz_probe.py` compiles a harness with
   libFuzzer+ASan, fork-runs under a budget, reproduces each crash for its ASan report; `engine/fuzzing.py`
