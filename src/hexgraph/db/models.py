@@ -345,3 +345,22 @@ class AnalysisRun(Base):
     bundle_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
     finding_count: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class EgressEvent(Base):
+    """Audit record for every outbound network action against a live target. Mandatory
+    once the bounded-egress (local-network) tier is enabled — a durable, queryable log
+    of what HexGraph connected to, when, and whether the policy allowed it
+    (docs/design-dynamic-surfaces.md)."""
+
+    __tablename__ = "egress_event"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("project.id"), index=True)
+    target_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    task_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    dest: Mapped[str] = mapped_column(String(255))          # host:port the action targeted
+    allowed: Mapped[bool] = mapped_column(default=False)    # did the policy/allowlist permit it
+    tool: Mapped[str] = mapped_column(String(64), default="")
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
