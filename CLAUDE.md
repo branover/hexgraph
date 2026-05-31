@@ -63,6 +63,11 @@ Key disciplines: **probes are baked into the sandbox image — re-run `make sand
 
 Targets can be **soft-removed** from the Targets pane (`target.archived`, migration 0007): archives the parent_id subtree, hiding its nodes/findings from graph/detail/search/report without deleting; re-adding the same bytes (sha256) restores them. Firmware targets persist their **unpacked filesystem** (`metadata_json["filesystem"]`, files under `<data_dir>/unpacked/<id>/`) — browsable in the detail panel, any file addable as a child target (`engine/filesystem.py`).
 
+**Coding-agent integration (MCP), two directions, both keep target bytes in the sandbox:**
+- **Driver mode** — `hexgraph mcp` (stdio, optional `[mcp]` extra; `mcp_server.py` + `engine/mcp_tools.py`) exposes HexGraph's sandboxed primitives so an external agent (Claude Code/Codex/gemini-cli) inspects targets, populates the graph (findings/nodes/edges/hypotheses/annotations), and runs sandboxed tasks. Tools are grouped read/write/run and gated by `features.mcp.{read,write,run}` (+ `--tools` / Settings) so the agent's context stays small. `hexgraph mcp install` prints registration steps (`agent_setup.py`).
+- **Delegate mode** — opt-in `features.agent` + an `agent_delegate` task (`engine/agent_delegate.py`): HexGraph launches the configured agent CLI headless, wired to the MCP server + VR skill, **restricted to HexGraph's sandboxed tools** (no shell on the target).
+LLM tasks themselves use a tool-use **agent loop** (above) over a plain BYOK key — the model directs, HexGraph runs the tools; Claude Code/Codex are an *alternative backend/driver*, never required.
+
 ## Commands
 
 - **`make setup`** — one-shot: venv + deps + SPA + sandbox image + db init. Then **`make serve`** → http://127.0.0.1:8765.

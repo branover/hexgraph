@@ -22,7 +22,10 @@ then run the resume verifier, then continue at the next unchecked task.
   the model calls sandboxed tools (decompile/strings/imports/…, fuzz when enabled), HexGraph executes them
   and feeds results back until findings. Superset of single-pass; mock drives it offline (`tool_calls`
   fixtures, `agentic_overflow` scenario). Works with a plain BYOK key — no external coding agent needed.
-- **Last verified:** `.venv/bin/python -m pytest -q` → 179 passed, 1 skipped (live, no key); SPA builds clean.
+- **Coding-agent integration (MCP):** driver mode (`hexgraph mcp` exposes sandboxed read/write/run tools,
+  group-gated) + delegate mode (`agent_delegate` task launches the agent CLI restricted to HexGraph tools).
+  LLM tasks use a tool-use agent loop over a BYOK key. `hexgraph mcp install` for setup.
+- **Last verified:** `.venv/bin/python -m pytest -q` → 200 passed, 1 skipped (live, no key); SPA builds clean.
 - **UI quickstart (updated):** `make ui` once → `make sandbox-build` once →
   `hexgraph ingest tests/fixtures/synthetic_fw.bin --name demo` → `hexgraph serve` → http://127.0.0.1:8765.
 - **How to re-verify:** `make test`; or run the UI (see UI quickstart below).
@@ -148,6 +151,16 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-05-30: **Coding-agent integration (both directions) + VR-eval UX pass.** (1) **MCP driver mode**:
+  `hexgraph mcp` server (`mcp_server.py` + `engine/mcp_tools.py`) exposes sandboxed tools — read (inspect),
+  write (record_finding/create_node/create_edge/create_hypothesis/annotate), run (run_task) — grouped and
+  gated via `features.mcp.{read,write,run}` (+ `--tools`/Settings) so the agent's context stays lean.
+  `agent_setup.py` + `hexgraph mcp install` print per-agent registration; `[mcp]` optional extra. (2) **Delegate
+  mode**: `features.agent` + `agent_delegate` task (`engine/agent_delegate.py`) launches the agent CLI
+  headless wired to MCP + the VR skill, restricted to HexGraph tools (no shell on the target). (3) Acted on
+  `docs/ux-eval-vr.md`: fixed stale-detail-after-triage bug, merged duplicate suggestion blocks,
+  Accept→Confirm, labeled confidence, faint Run affordance, toolbar tooltips + graph Export, README/doc
+  fixes, and an **in-app decompilation viewer** on function nodes. 200 tests pass.
 - 2026-05-30: **LLM tool-use (agent loop).** Tasks advertise sandboxed tools and run a bounded loop —
   model requests a tool → HexGraph runs it in the sandbox → result fed back → repeat until findings.
   `llm/base.py` (ToolSpec/ToolCall + messages/tool_calls), `llm/runner.run_findings_agentic` (superset of
