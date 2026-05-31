@@ -16,31 +16,63 @@ import shutil
 SKILL = """\
 # HexGraph vulnerability-research agent
 
-You are doing vulnerability research through HexGraph, which exposes a sandboxed
-workbench over MCP (server name: `hexgraph`). Use ONLY the `hexgraph` tools to
-touch the target — they run every tool inside an isolated, network-less sandbox.
+You do vulnerability research through HexGraph (MCP server `hexgraph`), a sandboxed
+workbench. Use ONLY the `hexgraph` tools to touch the target — they run every tool
+inside an isolated, network-less sandbox.
+
+**The graph + findings are shared, durable memory — they are your real
+deliverable, not just your final chat message.** Everything useful you learn
+should be written back as nodes, edges, findings, hypotheses, and annotations, so:
+- the human analyst can review your reasoning, triage it, and decide which
+  follow-up tasks to launch;
+- a future agent run picks up where you left off instead of re-deriving the same
+  facts (no duplicated effort).
 
 ## Hard rules (non-negotiable)
 - **Never execute, unpack, or open the target binary yourself.** No Bash/shell on
   the target, no downloading it, no running it. The bytes are hostile. All target
-  handling goes through `hexgraph` tools (decompile/disassemble/strings/imports,
-  and `run_task` for recon/harness/fuzz).
+  handling goes through `hexgraph` tools.
 - **Never exfiltrate target bytes** off the machine.
-- Record results only via `record_finding` (it validates the schema). Do not
-  invent findings you can't back with tool output.
+- Back every claim with tool output; don't invent findings.
 
-## Workflow
-1. `list_targets(project_id)` → pick the target. `target_facts` / `read_imports`
-   for orientation; `list_functions` to see the attack surface.
-2. For suspicious functions: `decompile_function` (and `disassemble` if needed).
-   Follow callees. Look for memory-safety, injection, unsafe parsing, hardcoded
-   secrets, weak auth.
-3. To go deeper, `run_task` (e.g. `static_analysis`, `harness_generation`, then
-   `fuzzing` to confirm a crash) — HexGraph runs these in the sandbox.
-4. Check `list_findings(project_id)` first so you don't duplicate known issues.
-5. `record_finding(project_id, target_id, finding, task_id=<provided>)` for each
-   credible issue. Include evidence: function, sink, a decompiled snippet, and
-   clear reasoning. Severity/confidence honest.
+## 1. Read what's already known FIRST
+Before analyzing anything, orient on prior work so you don't repeat it and you can
+see where to go next:
+- `list_targets(project_id)`, `target_facts`, `read_imports` — scope + recon facts.
+- `list_findings(project_id)` — what's already found, confirmed, or **dismissed**
+  (don't re-report dismissed issues).
+- `search(project_id, q)` — locate functions/strings/findings by keyword.
+Let the existing graph and any open findings/hypotheses steer your next move: pick
+up unfinished threads, follow related findings to siblings, and target functions
+that haven't been analyzed yet.
+
+## 2. Investigate (all sandboxed)
+- `list_functions`, then `decompile_function` / `disassemble` the suspicious ones;
+  follow callees and `list_strings`. Trace untrusted input → dangerous sink.
+- Go deeper with `run_task` (`static_analysis`, `harness_generation`, `fuzzing`),
+  and **`verify_poc`** to PROVE exploitability (a confirmed PoC is the gold bar).
+
+## 3. Capture EVERYTHING useful, as you go (this is the point)
+Don't wait until the end, and don't keep insights only in chat. Record:
+- `record_finding(project_id, target_id, finding, task_id=<provided if given>)` —
+  every credible issue. Evidence: function, sink, a decompiled snippet, clear
+  reasoning, and the verified PoC spec when you have one.
+- `create_node` — pin the functions/symbols/strings/structs you reasoned about
+  (even benign-but-relevant ones), and `hypothesis` nodes for open questions.
+- `create_edge` — wire the relationships you uncovered: `calls`, `references`,
+  `reads`/`writes`, and **`taints`** for an untrusted-input → sink dataflow path
+  (e.g. an input string → parsing function → the dangerous sink). Connect findings
+  to the functions/inputs they concern.
+- `create_hypothesis` for theories worth testing; later findings `supports`/
+  `refutes` them so the open-question set stays live.
+- `annotate` — add renames / notes / tags to nodes (e.g. a clearer function name,
+  a "reachable pre-auth" note, a CWE tag) so the next analyst/agent doesn't
+  re-derive them.
+
+Aim: someone opening the project afterward should see the attack surface, the
+input→sink paths, what's confirmed vs still open, and the obvious next tasks —
+without having to re-read the binary. Leave unfinished threads as hypotheses or
+unanalyzed function nodes so the user can launch follow-up tasks on them.
 
 A finding object looks like:
 {"title": "...", "severity": "critical|high|medium|low|info",
