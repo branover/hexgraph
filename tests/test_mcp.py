@@ -241,3 +241,34 @@ def test_verify_poc_attaches_to_finding(hg_home, monkeypatch):
     with session_scope() as s:
         f = s.get(Finding, fid)
         assert f.evidence_json["extra"]["verification"]["verified"] is True
+
+
+def test_record_finding_accepts_finding_type(hg_home):
+    from hexgraph.engine import mcp_tools
+    with session_scope() as s:
+        p = create_project(s, name="ft")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="x")
+        pid, tid = p.id, t.id
+    r = mcp_tools.record_finding(pid, tid, {
+        "title": "RCE PoC", "severity": "critical", "confidence": "high",
+        "category": "command-injection", "summary": "s", "reasoning": "r",
+        "evidence": {"function": "f"}}, finding_type="poc")
+    assert r.get("finding_type") == "poc"
+    assert "error" in mcp_tools.record_finding(pid, tid, {
+        "title": "x", "severity": "low", "confidence": "low", "category": "other",
+        "summary": "s", "reasoning": "r", "evidence": {}}, finding_type="bogus")
+
+
+def test_graph_read_tools(hg_home):
+    from hexgraph.engine import mcp_tools
+    with session_scope() as s:
+        p = create_project(s, name="rd")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="x")
+        pid, tid = p.id, t.id
+    n = mcp_tools.create_node(pid, "function", "cgi_handler", target_id=tid, address="0x401200",
+                              attrs={"params": [{"name": "req"}]})
+    got = mcp_tools.get_node(n["id"])
+    assert got["address"] == "0x401200" and got["attrs"]["params"][0]["name"] == "req"
+    assert any(x["id"] == n["id"] for x in mcp_tools.list_nodes(pid, node_type="function"))
+    mcp_tools.create_edge(pid, "node", n["id"], "target", tid, "contains")
+    assert any(e["src_id"] == n["id"] for e in mcp_tools.list_edges(pid, node_id=n["id"]))

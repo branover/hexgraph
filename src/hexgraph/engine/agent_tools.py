@@ -133,7 +133,27 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
             if out.get("error"):
                 return out["error"]
             return _clip("functions:\n" + "\n".join(out.get("functions", [])[:300]))
-        if name in ("decompile_function", "disassemble"):
+        if name == "disassemble":
+            fn = args.get("function")
+            if not fn:
+                return "error: 'function' argument is required"
+            # Always disassemble with radare2 — it gives real instruction listings;
+            # the Ghidra decompiler path returns empty disasm (it's a decompiler).
+            from hexgraph.sandbox.decompiler import R2Decompiler
+            from hexgraph.sandbox.runner import docker_available
+            if not docker_available():
+                return "disassembly unavailable (Docker/sandbox not running)"
+            try:
+                out = R2Decompiler().decompile(ctx.target.path, fn)  # defaults to get_executor()
+            except Exception as exc:  # noqa: BLE001
+                return f"disassembly failed: {exc}"
+            focus = (out or {}).get("focus")
+            disasm = (focus or {}).get("disasm") if focus else None
+            if not disasm:
+                return f"function {fn!r} not found / no disassembly (functions: " \
+                       f"{', '.join((out or {}).get('functions', [])[:40])})"
+            return _clip(f"// {fn} disassembly\n{disasm}")
+        if name == "decompile_function":
             fn = args.get("function")
             if not fn:
                 return "error: 'function' argument is required"
@@ -143,9 +163,8 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
             focus = out.get("focus")
             if not focus:
                 return f"function {fn!r} not found among: {', '.join(out.get('functions', [])[:40])}"
-            if name == "disassemble":
-                return _clip(f"// {fn} disassembly\n{focus.get('disasm', '')}")
-            return _clip(f"// {fn} (callees: {', '.join(focus.get('callees', []) or [])})\n"
+            addr = f" @ {focus['address']}" if focus.get("address") else ""
+            return _clip(f"// {fn}{addr} (callees: {', '.join(focus.get('callees', []) or [])})\n"
                          f"{focus.get('pseudocode', '')}")
         if name == "fuzz_function":
             return _fuzz(ctx, args)

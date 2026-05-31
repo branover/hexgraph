@@ -85,6 +85,47 @@ def list_strings(target_id: str, pattern: str | None = None) -> str:
     return _tool(target_id, "list_strings", {"pattern": pattern} if pattern else {})
 
 
+def _node_dict(n: Node) -> dict:
+    return {"id": n.id, "node_type": n.node_type, "name": n.name, "fq_name": n.fq_name,
+            "address": n.address, "target_id": n.target_id, "attrs": n.attrs_json or {}}
+
+
+def get_node(node_id: str) -> dict:
+    """Read a node back in full — including its address and attrs (params/notes you
+    set). Use this to confirm what you wrote landed."""
+    with session_scope() as s:
+        n = s.get(Node, node_id)
+        return _node_dict(n) if n is not None else {"error": "node not found"}
+
+
+def list_nodes(project_id: str, target_id: str | None = None, node_type: str | None = None) -> list[dict]:
+    """List graph nodes (optionally filtered by target and/or node_type), with
+    their address + attrs. The read path for the graph you've been building."""
+    with session_scope() as s:
+        q = s.query(Node).filter(Node.project_id == project_id)
+        if target_id:
+            q = q.filter(Node.target_id == target_id)
+        if node_type:
+            q = q.filter(Node.node_type == node_type)
+        return [_node_dict(n) for n in q.limit(500).all()]
+
+
+def list_edges(project_id: str, node_id: str | None = None) -> list[dict]:
+    """List edges in the project (or just those touching `node_id`) so you can
+    confirm the dataflow/relationships you wired (calls/taints/about/…)."""
+    from hexgraph.db.models import Edge
+    from sqlalchemy import or_
+
+    with session_scope() as s:
+        q = s.query(Edge).filter(Edge.project_id == project_id)
+        if node_id:
+            q = q.filter(or_((Edge.src_kind == "node") & (Edge.src_id == node_id),
+                             (Edge.dst_kind == "node") & (Edge.dst_id == node_id)))
+        return [{"id": e.id, "type": e.type, "src_kind": e.src_kind, "src_id": e.src_id,
+                 "dst_kind": e.dst_kind, "dst_id": e.dst_id, "attrs": e.attrs_json or {}}
+                for e in q.limit(500).all()]
+
+
 def search(project_id: str, q: str) -> dict:
     from hexgraph.engine.search import search_project
 
@@ -108,18 +149,23 @@ def list_findings(project_id: str) -> list[dict]:
         return out
 
 
-def record_finding(project_id: str, target_id: str, finding: dict, task_id: str | None = None) -> dict:
-    """Persist an agent-produced finding (validated against the frozen schema).
-    Pass the HexGraph `task_id` you were given (delegate mode) to attribute it to
-    that task; otherwise a fresh agent_delegate task is created for provenance."""
+def record_finding(project_id: str, target_id: str, finding: dict, task_id: str | None = None,
+                   finding_type: str | None = None) -> dict:
+    """Persist an agent-produced finding (the `finding` dict must match the frozen
+    Finding schema — call get_schemas). `finding_type` is a SEPARATE classifier
+    (vulnerability|poc|recon|harness|fuzz_crash|annotation|other) — pass it here,
+    NOT inside the finding dict. Pass the given `task_id` in delegate mode."""
     from hexgraph.db.models import Task
-    from hexgraph.engine.findings import persist_finding
+    from hexgraph.engine.findings import FINDING_TYPES, persist_finding
     from hexgraph.engine.tasks import create_task
 
+    if finding_type is not None and finding_type not in FINDING_TYPES:
+        return {"error": f"invalid finding_type {finding_type!r} (allowed: {list(FINDING_TYPES)})"}
     try:
         model = FModel.model_validate(finding)
     except Exception as exc:  # noqa: BLE001
-        return {"error": f"finding does not match the schema: {exc}"}
+        return {"error": f"finding does not match the schema: {exc} — call get_schemas; note "
+                         "finding_type is a separate record_finding arg, not a finding field."}
     with session_scope() as s:
         project = s.get(Project, project_id)
         target = s.get(Target, target_id)
@@ -128,9 +174,10 @@ def record_finding(project_id: str, target_id: str, finding: dict, task_id: str 
         task = s.get(Task, task_id) if task_id else None
         if task is None or task.project_id != project.id:
             task = create_task(s, project=project, target_id=target.id, type="agent_delegate", backend="agent")
-        row = persist_finding(s, project_id=project.id, target_id=target.id, task_id=task.id, finding=model)
+        row = persist_finding(s, project_id=project.id, target_id=target.id, task_id=task.id,
+                              finding=model, finding_type=finding_type)
         row.origin = "agent"
-        return {"id": row.id, "title": row.title, "severity": row.severity}
+        return {"id": row.id, "title": row.title, "severity": row.severity, "finding_type": row.finding_type}
 
 
 def create_node(project_id: str, node_type: str, name: str, target_id: str | None = None,
@@ -249,8 +296,13 @@ def get_schemas() -> dict:
             "evidence_note": "evidence.extra is a FREE-FORM object — put the PoC spec, verification "
                              "result, CWE, dataflow, etc. there. `reproducer` is a free-text PoC string. "
                              "Top-level evidence keys other than those listed are rejected.",
-            "finding_types": list(FINDING_TYPES),
             "status": [s.value for s in FindingStatus],
+        },
+        "finding_type": {
+            "values": list(FINDING_TYPES),
+            "note": "NOT a field of the finding object — pass it as the separate `finding_type` "
+                    "argument to record_finding (and read it back via list_findings). Defaults to "
+                    "'vulnerability' / is auto-classified from the producing task.",
         },
         "node_types": [t.value for t in NodeType if t != NodeType.task],
         "edge_types": [t.value for t in EdgeType],
@@ -423,10 +475,16 @@ _CATALOG = [
      {"type": "object", "properties": {"project_id": {"type": "string"}, "q": {"type": "string"}}, "required": ["project_id", "q"]}),
     ("read", "list_findings", list_findings, "Existing findings in a project (with finding_type + verified flag).",
      {"type": "object", "properties": {"project_id": {"type": "string"}}, "required": ["project_id"]}),
+    ("read", "get_node", get_node, "Read a node back in full (address + attrs/params you set) — confirm what you wrote.",
+     {"type": "object", "properties": {"node_id": {"type": "string"}}, "required": ["node_id"]}),
+    ("read", "list_nodes", list_nodes, "List graph nodes (filter by target/node_type) with address + attrs.",
+     {"type": "object", "properties": {"project_id": {"type": "string"}, "target_id": {"type": "string"}, "node_type": {"type": "string"}}, "required": ["project_id"]}),
+    ("read", "list_edges", list_edges, "List edges (optionally those touching a node) to confirm the dataflow/relationships you wired.",
+     {"type": "object", "properties": {"project_id": {"type": "string"}, "node_id": {"type": "string"}}, "required": ["project_id"]}),
     ("read", "get_schemas", get_schemas, "The write-API contract: allowed enums + the Finding shape. Read before record_finding/create_node/create_edge/annotate to avoid guessing field names.",
      {"type": "object", "properties": {}}),
-    ("write", "record_finding", record_finding, "Record a new finding (must match the Finding schema — call get_schemas first). Pass the given task_id in delegate mode.",
-     {"type": "object", "properties": {"project_id": {"type": "string"}, "target_id": {"type": "string"}, "finding": {"type": "object"}, "task_id": {"type": "string"}}, "required": ["project_id", "target_id", "finding"]}),
+    ("write", "record_finding", record_finding, "Record a new finding (the `finding` dict must match the Finding schema — call get_schemas). `finding_type` is a SEPARATE arg (vulnerability|poc|…), not a finding field. Pass task_id in delegate mode.",
+     {"type": "object", "properties": {"project_id": {"type": "string"}, "target_id": {"type": "string"}, "finding": {"type": "object"}, "finding_type": {"type": "string"}, "task_id": {"type": "string"}}, "required": ["project_id", "target_id", "finding"]}),
     ("write", "update_finding", update_finding, "Update an EXISTING finding in place (status/severity/confidence/human_notes) — e.g. confirm it after a PoC verifies. Don't create a duplicate.",
      {"type": "object", "properties": {"finding_id": {"type": "string"}, "status": {"type": "string"}, "severity": {"type": "string"}, "confidence": {"type": "string"}, "human_notes": {"type": "string"}}, "required": ["finding_id"]}),
     ("write", "create_node", create_node, "Add a node (function/symbol/string/struct/hypothesis/pattern/input/sink). Pass `address` for a function's binary location; put parameters/explanations in `attrs`.",
