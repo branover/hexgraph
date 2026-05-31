@@ -115,6 +115,56 @@ def test_delete_project_removes_rows_and_data_dir(hg_home):
     assert not Path(data_dir).exists()
 
 
+def test_archive_socket_node_hides_its_edges(hg_home):
+    """A socket has target_id=None (shared across binaries); archiving it must still
+    hide the listens_on/connects_to edges resolving to it, and restore-on-re-add."""
+    from hexgraph.engine.nodes import materialize_socket
+
+    with session_scope() as s:
+        p, t, caller, callee, edge = _seed(s)
+        sock = materialize_socket(s, project_id=p.id, kind="tcp", port=8080)
+        le = add_edge(s, project_id=p.id, src=("node", caller.id), dst=("node", sock.id),
+                      type=EdgeType.listens_on, origin="agent")
+        archive_node(s, p.id, sock.id)
+        g = build_graph(s, p.id)
+        assert not any(n["id"] == sock.id for n in g["nodes"])
+        assert not any(e["id"] == le.id for e in g["edges"])
+        # re-materializing the same socket un-archives it and the edge returns
+        again = materialize_socket(s, project_id=p.id, kind="tcp", port=8080)
+        assert again.id == sock.id and again.archived is False
+        assert any(e["id"] == le.id for e in build_graph(s, p.id)["edges"])
+
+
+def test_archive_finding_anchored_node(hg_home):
+    """Archiving a node that a finding points at (about edge) hides the node + the
+    about edge, but the finding row and the finding graph-node survive."""
+    with session_scope() as s:
+        p, t, caller, callee, edge = _seed(s)
+        task = create_task(s, project=p, target_id=t.id, type="static_analysis")
+        persist_finding(s, project_id=p.id, target_id=t.id, task_id=task.id, finding=FModel(
+            title="rce", severity="critical", confidence="high", category="command-injection",
+            summary="s", reasoning="r", evidence=Evidence(function="system")))
+        archive_node(s, p.id, callee.id)
+        g = build_graph(s, p.id)
+        assert not any(n["id"] == callee.id for n in g["nodes"])
+        # the finding itself is still rendered (it hangs off the target, not the node)
+        assert any(n["type"] == "finding" for n in g["nodes"])
+        assert s.query(Finding).filter(Finding.project_id == p.id).count() == 1
+
+
+def test_delete_edge_with_target_endpoint(hg_home):
+    """delete_edge works for a structural edge whose endpoint is a target (the
+    target ─contains→ function edge), and the target/function both survive."""
+    with session_scope() as s:
+        p, t, caller, callee, edge = _seed(s)
+        contains = (s.query(Edge).filter(Edge.project_id == p.id, Edge.type == "contains",
+                                         Edge.dst_id == caller.id).first())
+        assert contains is not None
+        assert delete_edge(s, contains.id) is True
+        assert s.get(Target, t.id) is not None and s.get(Node, caller.id) is not None
+        assert not any(e["id"] == contains.id for e in build_graph(s, p.id)["edges"])
+
+
 def test_node_removal_via_api(hg_home):
     with session_scope() as s:
         p, t, caller, callee, edge = _seed(s)
