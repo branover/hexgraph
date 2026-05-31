@@ -252,11 +252,15 @@ def propagate_finding(finding_id: str, target_id: str, function: str | None = No
 
 def create_node(project_id: str, node_type: str, name: str, target_id: str | None = None,
                 address: str | None = None, attrs: dict | None = None) -> dict:
-    """Add a node to the graph (function/symbol/string/struct/hypothesis/pattern/
-    input/sink). Enforces the UI invariants (code nodes require an existing target).
-    Pass `address` for a function's location in the binary; put parameters and
-    explanations in `attrs` (e.g. {"params":[{"name":"host","type":"char*","note":
-    "attacker-controlled query field"}], "summary":"..."})."""
+    """Add a node to the graph (function/symbol/string/struct/input/sink/endpoint/param/
+    hypothesis/pattern). Target-bound types REQUIRE target_id (else the node is an orphan)
+    and are auto-linked to their target with a `contains` edge. Pass `address` for a code
+    node's location, and populate `attrs` with the type's recommended fields — call
+    get_schemas first and read node_attribute_schemas[<type>] for what's expected (e.g. a
+    function wants {"summary","params":[{"name","type","note"}]}; an input wants {"source"};
+    a sink wants {"operation","why"}). DON'T create a `sink` node for a known dangerous call
+    (system/strcpy/…) — that's a symbol/function node with is_sink=true. Populating the
+    recommended attrs is what makes repeated runs of the same analysis converge."""
     from hexgraph.engine.authoring import InvariantError, create_node as _create
 
     with session_scope() as s:
@@ -469,6 +473,7 @@ def get_schemas() -> dict:
     from hexgraph.db.models import EdgeType, FindingStatus, NodeType
     from hexgraph.engine.annotations import KINDS as ANN_KINDS, NODE_KINDS as ANN_NODE_KINDS
     from hexgraph.engine.edge_schemas import SOCKET_KINDS, describe_edges
+    from hexgraph.engine.node_schemas import describe_nodes
     from hexgraph.engine.findings import FINDING_TYPES
     from hexgraph.models.finding import Finding as FModelCls
 
@@ -497,6 +502,14 @@ def get_schemas() -> dict:
                                     "keyword args. For 'the same bug in another binary' use "
                                     "propagate_finding(finding_id, target_id) instead of re-typing it.",
         "node_types": [t.value for t in NodeType if t != NodeType.task],
+        "node_attribute_schemas": describe_nodes(),
+        "node_attributes_note": "Per node type: what it IS, `use_when` (when to create it vs an "
+                                "alternative), and the `recommended` attrs to populate on create_node "
+                                "for a complete, consistent graph. KEY RULE: a dangerous library call "
+                                "(system/exec/strcpy/sprintf) is a `symbol`/`function` node with "
+                                "is_sink=true — do NOT also create a separate `sink` node for it; reserve "
+                                "`sink` for an abstract dangerous point that is not already a node. Always "
+                                "pass target_id for target-bound types so the node isn't an orphan.",
         "edge_types": [t.value for t in EdgeType],
         "edge_endpoint_kinds": ["target", "node", "finding", "task"],
         "edge_note": "A hypothesis IS a node (node_type='hypothesis'); link a finding to it with "
@@ -605,16 +618,59 @@ def register_surface(project_id: str, base_url: str, name: str | None = None,
                 "endpoints": len((t.metadata_json or {}).get("endpoints", []))}
 
 
-def verify_poc(target_id: str, poc: dict, finding_id: str | None = None) -> dict:
-    """Execute a proof-of-concept against a target IN THE SANDBOX and report whether
-    it worked. The spec is {argv?, env?, stdin?, timeout?, oracle:{type,value}};
-    put {{NONCE}} in the injected command + the oracle value and HexGraph
-    substitutes a fresh random token, so a verified output_contains oracle proves
-    real command execution. Requires PoC/fuzzing enabled in Settings.
+def http_request(target_id: str, method: str, path: str, params: dict | None = None,
+                 headers: dict | None = None, body=None, json_body: bool = False) -> dict:
+    """Send ONE crafted HTTP request to a registered web surface and return the response
+    (status, headers, and the body, capped at 64 KiB) — your hands for live web testing:
+    log in, probe an auth check, fire an injection payload, read what comes back. `body`
+    is form-encoded by default; set json_body=true to send it as JSON. Cookies are NOT
+    persisted between separate http_request calls — for an auth flow that needs a session
+    (login then access a protected route), use verify_poc with a multi-step `steps` spec.
 
-    Pass `finding_id` to attach the result to that finding (its evidence.extra.poc
-    + .verification) so it shows as verified in list_findings — the typed home for
-    a confirmed exploit."""
+    Egress is bounded and audited exactly like web_recon: it runs in the sandbox, follows
+    no redirects, and the destination must be the surface's own loopback/private host.
+    Requires features.network enabled in Settings."""
+    from hexgraph.engine.surfaces import run_http_request
+    from hexgraph.policy import PolicyViolation
+
+    with session_scope() as s:
+        t = s.get(Target, target_id)
+        if t is None:
+            return {"error": "target not found"}
+        req = {"method": method, "path": path, "params": params or None,
+               "headers": headers or None, "body": body, "json": bool(json_body)}
+        req = {k: v for k, v in req.items() if v is not None}
+        try:
+            return run_http_request(s, s.get(Project, t.project_id), t, request=req)
+        except PolicyViolation:
+            return {"error": "egress not permitted — enable features.network in Settings (bounded, local-only)"}
+        except ValueError as exc:
+            return {"error": str(exc)}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"request failed: {exc}"}
+
+
+def verify_poc(target_id: str, poc: dict, finding_id: str | None = None) -> dict:
+    """Prove an exploit really works and report verified true/false. Two flavours, chosen
+    by the target:
+    - **binary target** → executes it IN THE SANDBOX. Spec: {argv?, env?, stdin?, timeout?,
+      oracle:{type:"output_contains|exit_code|exit_nonzero|crash", value}}. Requires
+      features.poc enabled.
+    - **web surface** (a web_app registered with register_surface) → sends HTTP step(s).
+      Spec: {steps:[{method,path,params?,headers?,body?,json?}, ...],
+      oracle:{type:"body_contains|status_is|status_differs", value}}. Cookies carry across
+      steps, so an auth flow works (e.g. step 1 POST /api/login with the bypass cred → step
+      2 GET the protected route; oracle = body_contains the secret only an authed user
+      sees). Requires features.network enabled (bounded local-only egress, audited).
+
+    For an UNFORGEABLE check put {{NONCE}} in BOTH the injected command/payload and an
+    `output_contains`/`body_contains` oracle value — HexGraph substitutes a fresh random
+    token, so a match proves the injected behaviour actually happened (not something the
+    model could fabricate).
+
+    Pass `finding_id` to attach the result to that finding (its evidence.extra.poc +
+    .verification) so it shows as `verified` in list_findings — the typed home for a
+    confirmed exploit. ALWAYS attach: a confirmed vuln finding must carry its verified PoC."""
     from hexgraph.db.models import Finding
     from hexgraph.engine.poc import verify_poc as _verify
     from hexgraph.policy import PolicyViolation
@@ -626,7 +682,10 @@ def verify_poc(target_id: str, poc: dict, finding_id: str | None = None) -> dict
         try:
             r = _verify(s, s.get(Project, t.project_id), t, poc)
         except PolicyViolation:
-            return {"error": "execution not permitted — enable features.poc in Settings to verify PoCs"}
+            from hexgraph.engine.poc import _is_web
+            return {"error": ("egress not permitted — enable features.network in Settings to verify a web PoC"
+                              if _is_web(t) else
+                              "execution not permitted — enable features.poc in Settings to verify PoCs")}
         except Exception as exc:  # noqa: BLE001
             return {"error": f"verification failed: {exc}"}
         if finding_id:
@@ -710,14 +769,22 @@ def run_task(target_id: str, type: str, objective: str | None = None, params: di
         if t is None:
             return {"error": "target not found"}
         project = s.get(Project, t.project_id)
+        project_id = project.id
         task = create_task(s, project=project, target_id=t.id, type=type, objective=objective,
                            backend=project.llm_backend.value, params=params or {})
         task_id = task.id
     status = run_task_sync(task_id)
     with session_scope() as s:
+        # Fold any duplicate function/symbol nodes (e.g. an agent's `foo` colliding with a
+        # decompiler-seeded `sym.foo`) so the graph converges instead of accumulating dupes.
+        from hexgraph.engine.nodemerge import merge_duplicate_nodes
+        merged = merge_duplicate_nodes(s, project_id)
         findings = s.query(Finding).filter(Finding.task_id == task_id).all()
-        return {"task_id": task_id, "status": status,
-                "findings": [{"id": f.id, "title": f.title, "severity": f.severity} for f in findings]}
+        out = {"task_id": task_id, "status": status,
+               "findings": [{"id": f.id, "title": f.title, "severity": f.severity} for f in findings]}
+        if merged:
+            out["nodes_merged"] = merged
+        return out
 
 
 # Tool groups let a user expose only what they need so an agent's context isn't
@@ -728,17 +795,17 @@ def run_task(target_id: str, type: str, objective: str | None = None, params: di
 GROUPS = ("read", "write", "run")
 
 _CATALOG = [
-    ("read", "list_projects", list_projects, "List HexGraph projects.",
+    ("read", "list_projects", list_projects, "List HexGraph projects (id, name, backend) — start here to find the project_id other tools need.",
      {"type": "object", "properties": {}}),
-    ("read", "list_targets", list_targets, "List targets (binaries) in a project.",
+    ("read", "list_targets", list_targets, "List targets in a project (binaries, libraries, firmware children, and web_app surfaces) with id/kind/arch — the entry point for picking what to analyze.",
      {"type": "object", "properties": {"project_id": {"type": "string"}}, "required": ["project_id"]}),
     ("read", "target_facts", target_facts, "Recon facts for a target (imports/exports/mitigations).",
      {"type": "object", "properties": {"target_id": {"type": "string"}}, "required": ["target_id"]}),
-    ("read", "list_functions", list_functions, "List functions in a target (sandboxed).",
+    ("read", "list_functions", list_functions, "List the functions in a target (name + address), discovered in the sandbox — use to find what to decompile next.",
      {"type": "object", "properties": {"target_id": {"type": "string"}}, "required": ["target_id"]}),
-    ("read", "decompile_function", decompile_function, "Decompile a function to pseudo-C (sandboxed).",
+    ("read", "decompile_function", decompile_function, "Decompile one function to pseudo-C in the sandbox (radare2/Ghidra) — the primary way to read a target's logic without touching its bytes.",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "function": {"type": "string"}}, "required": ["target_id", "function"]}),
-    ("read", "disassemble", disassemble, "Disassemble a function (sandboxed).",
+    ("read", "disassemble", disassemble, "Disassemble one function to assembly in the sandbox — when you need instruction-level detail the decompiler smooths over.",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "function": {"type": "string"}}, "required": ["target_id", "function"]}),
     ("read", "read_imports", read_imports, "Imports, libraries, and mitigation flags of a target.",
      {"type": "object", "properties": {"target_id": {"type": "string"}}, "required": ["target_id"]}),
@@ -768,7 +835,7 @@ _CATALOG = [
      {"type": "object", "properties": {"project_id": {"type": "string"}, "target_id": {"type": "string"}, "finding": {"type": "object"}, "finding_type": {"type": "string"}, "task_id": {"type": "string"}}, "required": ["project_id", "target_id", "finding"]}),
     ("write", "update_finding", update_finding, "Update an EXISTING finding in place (status/severity/confidence/human_notes) — e.g. confirm it after a PoC verifies. Don't create a duplicate.",
      {"type": "object", "properties": {"finding_id": {"type": "string"}, "status": {"type": "string"}, "severity": {"type": "string"}, "confidence": {"type": "string"}, "human_notes": {"type": "string"}}, "required": ["finding_id"]}),
-    ("write", "create_node", create_node, "Add a node (function/symbol/string/struct/hypothesis/pattern/input/sink). Pass `address` for a function's binary location; put parameters/explanations in `attrs`.",
+    ("write", "create_node", create_node, "Add a node (function/symbol/string/struct/input/sink/endpoint/param/hypothesis/pattern). ALWAYS pass target_id for target-bound types (else it's an orphan); it auto-links to its target. Populate `attrs` with the type's recommended fields from get_schemas.node_attribute_schemas (function->summary+params, input->source, sink->operation+why). A dangerous call (system/strcpy) is a symbol/function node with is_sink=true — NOT a separate `sink` node. Pass `address` for code nodes.",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "node_type": {"type": "string"}, "name": {"type": "string"}, "target_id": {"type": "string"}, "address": {"type": "string"}, "attrs": {"type": "object"}}, "required": ["project_id", "node_type", "name"]}),
     ("write", "create_edge", create_edge, "Connect two graph entities (target|node|finding|task) with a typed, attributed edge. `attrs` carries edge-type facts (see get_schemas: e.g. calls→call_sites/arg_constraints, listens_on→address). merge=True accumulates list attrs. A hypothesis is a 'node'; or use link_evidence to attach a finding to one.",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "src_kind": {"type": "string"}, "src_id": {"type": "string"}, "dst_kind": {"type": "string"}, "dst_id": {"type": "string"}, "type": {"type": "string"}, "attrs": {"type": "object"}, "merge": {"type": "boolean"}}, "required": ["project_id", "src_kind", "src_id", "dst_kind", "dst_id", "type"]}),
@@ -796,11 +863,13 @@ _CATALOG = [
      {"type": "object", "properties": {"project_id": {"type": "string"}}, "required": ["project_id"]}),
     ("write", "propagate_finding", propagate_finding, "N-day: clone an existing finding onto another binary that shares the same code (per link_same_code) as a fresh finding to triage, wired derived_from→ the source. Avoids re-typing the whole finding for 'same bug, other binary'.",
      {"type": "object", "properties": {"finding_id": {"type": "string"}, "target_id": {"type": "string"}, "function": {"type": "string"}, "notes": {"type": "string"}}, "required": ["finding_id", "target_id"]}),
-    ("run", "verify_poc", verify_poc, "Execute a proof-of-concept against a target in the sandbox and report verified true/false (use {{NONCE}} in the injected command + oracle for an unforgeable check). Pass finding_id to attach the result. Requires PoC enabled.",
+    ("run", "verify_poc", verify_poc, "Prove an exploit and report verified true/false. Binary target -> runs it in the sandbox (spec {argv?,env?,stdin?,oracle:{output_contains|exit_code|crash}}, needs features.poc). Web surface -> sends HTTP steps (spec {steps:[{method,path,body?,...}],oracle:{body_contains|status_is|status_differs}}, cookies carry across steps for auth flows, needs features.network). Put {{NONCE}} in BOTH the payload and the oracle value for an unforgeable check. Pass finding_id to attach the result (always do this for a confirmed vuln).",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "poc": {"type": "object"}, "finding_id": {"type": "string"}}, "required": ["target_id", "poc"]}),
+    ("run", "http_request", http_request, "Send ONE crafted HTTP request to a registered web surface and return {status,headers,body} (body capped at 64 KiB) — your hands for live web testing (log in, probe an auth check, fire an injection payload, read the response). body is form-encoded unless json_body=true. No cookie persistence between calls (use verify_poc steps for auth flows). Bounded, sandboxed, local-only egress, audited. Requires features.network.",
+     {"type": "object", "properties": {"target_id": {"type": "string"}, "method": {"type": "string"}, "path": {"type": "string"}, "params": {"type": "object"}, "headers": {"type": "object"}, "body": {}, "json_body": {"type": "boolean"}}, "required": ["target_id", "method", "path"]}),
     ("run", "ingest", ingest, "Ingest a binary/firmware from a local path as a target (firmware unpacks into children); creates a project if none given.",
      {"type": "object", "properties": {"path": {"type": "string"}, "name": {"type": "string"}, "project_id": {"type": "string"}}, "required": ["path"]}),
-    ("run", "run_task", run_task, "Run a HexGraph task (recon/static_analysis/harness_generation/fuzzing/surface_recon) and return its findings.",
+    ("run", "run_task", run_task, "Run a HexGraph task and return its findings. Types: recon, static_analysis, harness_generation, fuzzing, poc, surface_recon (offline route->handler map), web_recon (live liveness probe of a web surface, needs features.network).",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "type": {"type": "string"}, "objective": {"type": "string"}, "params": {"type": "object"}}, "required": ["target_id", "type"]}),
     ("run", "register_surface", register_surface, "Register a WEB attack surface (web_app target via an HTTP Channel, no bytes); pass an optional offline route spec, then run_task(surface_recon) to map endpoints/params + routes_to→handler edges. Offline (no egress).",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "base_url": {"type": "string"}, "name": {"type": "string"}, "endpoints": {"type": "array"}}, "required": ["project_id", "base_url"]}),

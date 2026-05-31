@@ -59,7 +59,9 @@ class Handler(BaseHTTPRequestHandler):
     def _form(self) -> dict:
         n = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(n).decode("utf-8", "replace") if n else ""
-        return {k: v[0] for k, v in parse_qs(body).items()}
+        # keep_blank_values so an explicitly-empty `token=` reaches the auth check
+        # (that's the planted bug: an empty token authenticates).
+        return {k: v[0] for k, v in parse_qs(body, keep_blank_values=True).items()}
 
     def do_GET(self):
         path = urlparse(self.path).path

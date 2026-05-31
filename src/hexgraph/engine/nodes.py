@@ -99,9 +99,14 @@ def get_or_create_node(
     )
     session.add(node)
     session.flush()
-    # Tie code nodes back to the binary/library they live in (target ─contains→ node)
-    # so functions/symbols are connected to their target in the graph, not floating.
-    if target_id and nt in ("function", "symbol", "string", "struct"):
+    # Tie every target-bound node back to the target it lives in (target ─contains→ node)
+    # so it's connected in the graph, not floating. This covers functions/symbols/strings/
+    # structs AND the dataflow/surface types (input/sink/endpoint/param) — anything with a
+    # target_id. Cross-binary nodes (socket) and patterns carry target_id=None by design and
+    # are anchored by their semantic edges (listens_on/connects_to, instance_of_pattern);
+    # hypotheses are anchored by `about` edges. So the only nodes without a parent edge are
+    # the ones that genuinely have no single owning target.
+    if target_id and nt not in ("hypothesis", "pattern"):
         from hexgraph.db.models import EdgeType
         from hexgraph.engine.edges import add_edge
 

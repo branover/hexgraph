@@ -58,21 +58,54 @@ def _substitute(obj, nonce: str):
     return obj
 
 
+def _is_web(target: Target) -> bool:
+    """A web/service surface is reached via an HTTP Channel, not executed bytes."""
+    from hexgraph.db.models import TargetKind
+
+    return target.kind == TargetKind.web_app or bool(
+        (target.metadata_json or {}).get("channel", {}).get("base_url"))
+
+
+def _verify_web_poc(session, project, target, spec, runner, nonce) -> dict:
+    """Web PoC: run the spec's HTTP steps and evaluate its oracle on the final response
+    (cookies carry across steps). {{NONCE}} is already substituted. Gated by the SAME
+    bounded-egress policy as web_recon (network on + local-only scope) and audited."""
+    from hexgraph.engine.surfaces import run_web_poc
+
+    steps = spec.get("steps") or ([spec["request"]] if spec.get("request") else [])
+    if not steps:
+        raise ValueError("a web PoC spec needs `steps` (or a single `request`) and an `oracle`")
+    result = run_web_poc(session, project, target, steps=steps,
+                         oracle=spec.get("oracle") or {}, runner=runner)
+    last = (result.get("steps") or [{}])[-1]
+    return {"verified": bool(result.get("verified")), "detail": result.get("detail"),
+            "exit_code": last.get("status"), "output": (last.get("body") or "")[:2000],
+            "nonce": nonce, "spec": spec, "steps": result.get("steps")}
+
+
 def verify_poc(session: Session, project: Project, target: Target, spec: dict,
                *, runner: Executor | None = None) -> dict:
-    """Run a PoC spec against `target` in the sandbox and report whether it worked.
+    """Run a PoC spec against `target` and report whether it worked.
 
     A `{{NONCE}}` placeholder anywhere in the spec is replaced with a fresh random
-    token before running, making an `output_contains` oracle unforgeable. Returns
-    {verified, exit_code, output, detail, nonce, spec}."""
+    token before running, making the oracle unforgeable. Two flavours, by target:
+    - **binary** → run it in the sandbox (argv/env/stdin + an output/exit/crash oracle);
+      policy-gated by `assert_allows_execution` (PoC/fuzzing enabled).
+    - **web surface** (a `web_app` Channel) → send the spec's HTTP `steps` and check a
+      `body_contains`/`status_is`/`status_differs` oracle on the final response; gated by
+      the bounded-egress network tier instead. Returns {verified, exit_code, output,
+      detail, nonce, spec}."""
+    nonce = "HEXGRAPH_PWNED_" + secrets.token_hex(6)
+    live = _substitute(copy.deepcopy(spec or {}), nonce)
+
+    if _is_web(target):
+        return _verify_web_poc(session, project, target, live, runner, nonce)
+
     from hexgraph.policy import assert_allows_execution
 
     assert_allows_execution()  # opt-in gate: raises unless PoC/fuzzing is enabled
     runner = runner or get_executor()
     import tempfile
-
-    nonce = "HEXGRAPH_PWNED_" + secrets.token_hex(6)
-    live = _substitute(copy.deepcopy(spec or {}), nonce)
 
     # Foreign-arch firmware binaries run under qemu-user (poc_probe picks qemu-<arch>
     # from the ELF header). A dynamically-linked one needs its sibling libs, so mount
