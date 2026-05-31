@@ -57,7 +57,11 @@ Key disciplines: **probes are baked into the sandbox image — re-run `make sand
 
 ## Optional features & settings
 
-`settings.json` (managed, written via `PATCH /api/settings` or `hexgraph config set`) holds non-secret prefs and optional-feature toggles, layered as **env > settings.json > config.toml > defaults**. Secrets are never written there and reported as presence-only. Ghidra is opt-in (`features.ghidra`): `headless` (analyzeHeadless in the sandbox, needs `make sandbox-build WITH_GHIDRA=1`), `bridge` (connect to a running Ghidra via `ghidra_bridge`), and `enrich_recon` (materialize functions/call-graph/structs). Everything degrades to radare2/normal recon when off or unavailable.
+`settings.json` (managed, written via `PATCH /api/settings` or `hexgraph config set`) holds non-secret prefs and optional-feature toggles, layered as **env > settings.json > config.toml > defaults**. Secrets are never written there and reported as presence-only. Optional features:
+- **Ghidra** (`features.ghidra`): `headless` (analyzeHeadless in the sandbox, needs `make sandbox-build WITH_GHIDRA=1`), `bridge` (connect to a running Ghidra via `ghidra_bridge`), `enrich_recon` (materialize functions/call-graph/structs). Degrades to radare2 when off.
+- **Fuzzing** (`features.fuzzing`, default off): the `fuzzing` task type. **This is the only thing that relaxes the static-only invariant** — enabling it makes `policy.current_policy()` return a dynamic profile (`allow_execution=True`), gated through the policy seam; the sandbox stays `--network none`, capped, timed. It compiles a `harness_generation` harness with libFuzzer+ASan and auto-creates a finding per crash (optional LLM `triage` step). `engine/fuzzing.py`, `sandbox/probes/fuzz_probe.py`.
+
+Targets can be **soft-removed** from the Targets pane (`target.archived`, migration 0007): archives the parent_id subtree, hiding its nodes/findings from graph/detail/search/report without deleting; re-adding the same bytes (sha256) restores them. Firmware targets persist their **unpacked filesystem** (`metadata_json["filesystem"]`, files under `<data_dir>/unpacked/<id>/`) — browsable in the detail panel, any file addable as a child target (`engine/filesystem.py`).
 
 ## Commands
 

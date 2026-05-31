@@ -12,11 +12,13 @@ then run the resume verifier, then continue at the next unchecked task.
   run-compare diff UI. Remaining documented sub-items (not whole phases): richer approval gates (review-on-
   output / plan / spend), P7-5 (offline CVE / bounded dataflow / reviewable dedup), FTS5 search,
   SSE live activity, real-key cassette recording (`make test-live`), Ghidra decompiler.
-- **Optional features:** **Settings system** (`settings.py` managed `settings.json` layer + `/api/settings` +
-  `hexgraph config`; secrets status-only) and **Ghidra** (optional, settings-driven): headless decompiler
-  in the sandbox (`WITH_GHIDRA=1`), connect-to-running **bridge** mode, and **enrich_recon** (functions/
-  call-graph/structs into the graph). All degrade to radare2/normal recon when off.
-- **Last verified:** `.venv/bin/python -m pytest -q` → 154 passed, 1 skipped (live, no key); SPA builds clean.
+- **Optional features (settings-driven, `settings.py` + `/api/settings` + `hexgraph config`; secrets status-only):**
+  **Ghidra** (headless `WITH_GHIDRA=1` / bridge / enrich_recon), and **Fuzzing** (`fuzzing` task, off by
+  default — the one thing that relaxes static-only, via the policy seam: libFuzzer+ASan on a generated
+  harness, finding-per-crash, optional LLM triage). **Target soft-removal** (archive subtree, restore on
+  re-add) and **firmware filesystem browser** (persisted unpacked tree, add any file as a child target;
+  library exports → nodes; function nodes launch tasks).
+- **Last verified:** `.venv/bin/python -m pytest -q` → 171 passed, 1 skipped (live, no key); SPA builds clean.
 - **UI quickstart (updated):** `make ui` once → `make sandbox-build` once →
   `hexgraph ingest tests/fixtures/synthetic_fw.bin --name demo` → `hexgraph serve` → http://127.0.0.1:8765.
 - **How to re-verify:** `make test`; or run the UI (see UI quickstart below).
@@ -142,6 +144,14 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-05-30: **Fuzzing + target removal + firmware filesystem.** (1) `fuzzing` task (opt-in via the
+  policy seam — the single relaxation of static-only): `fuzz_probe.py` compiles a harness with
+  libFuzzer+ASan, fork-runs under a budget, reproduces each crash for its ASan report; `engine/fuzzing.py`
+  makes a deterministic finding per unique crash (+ optional LLM triage). clang/libclang-rt added to the
+  image; runner gains `extra_ro_mounts` to link the target .so. (2) **Soft target removal** (migration
+  0007 `target.archived`): archive subtree, hide nodes/findings everywhere, restore on re-add by sha256.
+  (3) **Firmware filesystem** (`engine/filesystem.py`): unpack persists the tree + manifest; detail-panel
+  browser adds any file as a child target; library exports → nodes; function nodes launch tasks. 171 pass.
 - 2026-05-30: **Settings system + Ghidra (optional) + UI fixes.** Managed `settings.json` layer
   (`settings.py`, `/api/settings`, `hexgraph config`, Settings page) — env > settings.json > config.toml >
   defaults; secrets status-only (never written/returned). Ghidra behind the Decompiler seam, settings-driven:
