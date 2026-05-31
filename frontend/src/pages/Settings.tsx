@@ -189,6 +189,30 @@ export default function Settings() {
             </p>
           </section>
 
+          {/* Network egress — bounded local-network tier */}
+          <section className="card2">
+            <div className="h3row">
+              <h3><Icon name="globe" size={15} /> Network egress <span className="muted">· optional · contacts a live target</span></h3>
+              <label className="switch">
+                <input type="checkbox" checked={v.settings.features.network.enabled}
+                       onChange={(e) => patch({ "features.network.enabled": e.target.checked })} />
+                <span>{v.settings.features.network.enabled ? "enabled" : "disabled"}</span>
+              </label>
+            </div>
+            <p className="hint">
+              ⚠ Enabling this relaxes <code>--network none</code> for the bounded <b>local-network</b> tier:
+              a sandboxed probe (e.g. <code>web_recon</code> against a <code>web_app</code> surface) may reach
+              a target, but <b>only a loopback/private destination</b> on a per-target deny-all-but-this
+              allowlist — external/public hosts are refused. Every outbound action is audited
+              (<code>EgressEvent</code>). The target is never executed locally.
+            </p>
+            {v.settings.features.network.enabled && (
+              <div className="row"><label>probe timeout (s)</label>
+                <input className="inp" type="number" defaultValue={v.settings.features.network.timeout}
+                       onBlur={(e) => patch({ "features.network.timeout": parseInt(e.target.value) || 30 })} /></div>
+            )}
+          </section>
+
           {/* MCP — coding-agent integration */}
           <section className="card2">
             <h3><Icon name="link" size={15} /> Coding-agent tools (MCP) <span className="muted">· optional</span></h3>

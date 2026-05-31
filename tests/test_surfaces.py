@@ -94,6 +94,26 @@ def test_surface_recon_via_worker_task(hg_home):
         assert recon and "Web surface mapped: 2 endpoint(s)" in recon[0].title
 
 
+def test_endpoint_and_param_are_hand_authorable(hg_home):
+    """A4/A3 UX: endpoint and param are first-class, target-bound, hand-authorable
+    node types (an analyst can add a route/field the same way as a function node)."""
+    from hexgraph.engine.authoring import MANUAL_NODE_TYPES, TARGET_BOUND
+    assert {"endpoint", "param"} <= MANUAL_NODE_TYPES
+    assert {"endpoint", "param"} <= TARGET_BOUND
+    with session_scope() as s:
+        p = create_project(s, name="auth")
+        surface = register_web_surface(s, p, "http://127.0.0.1", endpoints=[])
+        pid, sid = p.id, surface.id
+    ep = M.create_node(pid, "endpoint", "POST /api/login", target_id=sid)
+    pm = M.create_node(pid, "param", "token", target_id=sid)
+    assert ep.get("id") and pm.get("id")
+    # they require a target (target-bound) — refused without one
+    assert M.create_node(pid, "endpoint", "GET /x").get("error")
+    with session_scope() as s:
+        kinds = {n.node_type for n in s.query(Node).filter(Node.project_id == pid).all()}
+        assert {"endpoint", "param"} <= kinds
+
+
 def test_mcp_register_and_recon_drive_path(hg_home):
     with session_scope() as s:
         p = create_project(s, name="surf4")

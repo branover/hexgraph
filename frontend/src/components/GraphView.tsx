@@ -6,15 +6,27 @@ import { Icon } from "./Icon";
 
 cytoscape.use(dagre);
 
-const SEV: Record<string, string> = { info: "#7d8799", low: "#3fb950", medium: "#e3b341", high: "#f0883e", critical: "#ff5d6c" };
-const KIND: Record<string, string> = { firmware_image: "#a371f7", executable: "#6aa3ff", shared_library: "#39c5cf", web_app: "#2dd4bf", unknown: "#7d8799" };
-const NODE_T: Record<string, string> = { function: "#7ee787", symbol: "#d2a8ff", string: "#79c0ff", struct: "#ffa657", hypothesis: "#e3b341", input: "#56d4dd", sink: "#ff7b72", socket: "#f778ba", endpoint: "#2dd4bf", param: "#56d4dd" };
-const EDGE_C: Record<string, string> = {
+export const SEV: Record<string, string> = { info: "#7d8799", low: "#3fb950", medium: "#e3b341", high: "#f0883e", critical: "#ff5d6c" };
+// Target-kind colors. (red is reserved for severity/findings — never a node fill.)
+export const KIND: Record<string, string> = { firmware_image: "#a371f7", executable: "#6aa3ff", shared_library: "#39c5cf", web_app: "#2dd4bf", unknown: "#7d8799" };
+// Sub-file/conceptual node colors — each visually distinct (no two near-identical hues).
+export const NODE_T: Record<string, string> = {
+  function: "#7ee787", symbol: "#d2a8ff", string: "#79c0ff", struct: "#ffa657",
+  hypothesis: "#e3b341", pattern: "#bc8cff",
+  input: "#58a6ff", sink: "#db6d28", socket: "#f778ba", endpoint: "#2dd4bf", param: "#a5d6ff",
+};
+// Per-node-type shape, so types are distinguishable independent of color.
+export const NODE_SHAPE: Record<string, string> = {
+  socket: "hexagon", endpoint: "tag", param: "ellipse", input: "triangle", sink: "vee",
+};
+export const EDGE_C: Record<string, string> = {
   contains: "#46506a", calls: "#6aa3ff", about: "#3b4458", related_to: "#f0883e",
   instance_of_pattern: "#f0883e", links_against: "#39c5cf", similar_to: "#8b5cf6",
   taints: "#ff7b72", bypasses: "#ff5d6c", listens_on: "#f778ba", connects_to: "#f0a0d0",
-  routes_to: "#2dd4bf",
+  routes_to: "#2dd4bf", references: "#46506a", derived_from: "#8b5cf6",
 };
+// Semantic edges whose type/attrs are the point — always labelled, not just on hover.
+const ALWAYS_LABEL = new Set(["taints", "bypasses", "listens_on", "connects_to", "routes_to"]);
 const RESOLVED = new Set(["confirmed", "dismissed", "reported"]);
 
 export default function GraphView({ graph, onSelect, selectedId }: { graph: Graph; onSelect: (id: string, type: string) => void; selectedId?: string }) {
@@ -75,7 +87,8 @@ export default function GraphView({ graph, onSelect, selectedId }: { graph: Grap
         if (e.type === "calls" && (a.call_sites?.length || (e.count && e.count > 1))) hint = ` ×${a.call_sites?.length || e.count}`;
         else if ((e.type === "listens_on" || e.type === "connects_to") && a.address) hint = ` @${a.address}`;
         else if (a.port) hint = ` :${a.port}`;
-        return { data: { id: e.id, source: e.source, target: e.target, etype: e.type, elabel: e.type + hint, color: EDGE_C[e.type] || "#3b4458" } };
+        return { data: { id: e.id, source: e.source, target: e.target, etype: e.type, elabel: e.type + hint,
+                         color: EDGE_C[e.type] || "#3b4458", persist: ALWAYS_LABEL.has(e.type) ? 1 : 0 } };
       }),
     ];
 
@@ -89,7 +102,7 @@ export default function GraphView({ graph, onSelect, selectedId }: { graph: Grap
             "text-valign": "bottom", "text-margin-y": 5, "text-wrap": "ellipsis", "text-max-width": "104px",
             width: 26, height: 26,
             "background-color": (n: any) => n.data("gtype") === "finding" ? (SEV[n.data("severity")] || "#7d8799") : n.data("gtype") === "node" ? (NODE_T[n.data("node_type")] || "#7d8799") : (KIND[n.data("kind")] || "#7d8799"),
-            shape: (n: any) => n.data("gtype") === "finding" ? "diamond" : n.data("node_type") === "socket" ? "hexagon" : n.data("gtype") === "node" ? "round-rectangle" : "ellipse",
+            shape: ((n: any) => n.data("gtype") === "finding" ? "diamond" : NODE_SHAPE[n.data("node_type")] || (n.data("gtype") === "node" ? "round-rectangle" : "ellipse")) as any,
             "border-width": (n: any) => n.data("collapsed") ? 3 : 2, "border-color": (n: any) => n.data("collapsed") ? "#e3b341" : "#0a0c12",
             "underlay-color": (n: any) => n.data("gtype") === "finding" ? (SEV[n.data("severity")] || "#7d8799") : (KIND[n.data("kind")] || "#39c5cf"),
             "underlay-opacity": (n: any) => (n.data("gtype") === "finding" && (n.data("severity") === "critical" || n.data("severity") === "high") ? 0.28 : 0.12),
@@ -105,6 +118,9 @@ export default function GraphView({ graph, onSelect, selectedId }: { graph: Grap
             "text-rotation": "autorotate", "text-background-color": "#0a0c12", "text-background-opacity": 0.8, "text-background-padding": "2px",
           },
         },
+        // Semantic edges (taints/bypasses/listens_on/connects_to/routes_to) carry the
+        // graph's meaning — label them at rest, a touch brighter than structural edges.
+        { selector: "edge[persist = 1]", style: { label: "data(elabel)", opacity: 0.8 } },
         { selector: "edge.lit", style: { label: "data(elabel)", opacity: 1, width: 2.2 } },
       ],
       layout: { name: "dagre", rankDir: "LR", nodeSep: 26, rankSep: 72, padding: 24 } as any,

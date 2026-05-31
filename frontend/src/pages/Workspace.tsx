@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api, Finding, Graph, GraphNode, ProjectDetail, TargetNode } from "../api";
 import Header from "../components/Header";
-import GraphView from "../components/GraphView";
+import GraphView, { NODE_T, EDGE_C, KIND } from "../components/GraphView";
 import FindingsPanel from "../components/FindingsPanel";
 import Inspector from "../components/Inspector";
 import NodeInspector from "../components/NodeInspector";
@@ -266,14 +266,16 @@ export default function Workspace() {
           </div>
           {results && q.trim() && (
             <div className="search-pop">
-              {results.findings.map((f: any) => (
-                <div className="res" key={f.id} onClick={() => { setResults(null); setQ(""); viewFinding(f.id); }}>
-                  <span className={"chip sev-" + f.severity}>{f.severity}</span> {f.title}
-                </div>
-              ))}
+              {results.nodes.length > 0 && <div className="res-head">Graph nodes</div>}
               {results.nodes.map((n: any) => (
                 <div className="res" key={n.id} onClick={() => { setResults(null); setQ(""); onGraphSelect(n.id, "node"); }}>
                   <Icon name={NODE_ICON[n.node_type] || "fn"} size={13} /> {n.name} <span className="muted">{n.node_type}</span>
+                </div>
+              ))}
+              {results.findings.length > 0 && <div className="res-head">Findings</div>}
+              {results.findings.map((f: any) => (
+                <div className="res" key={f.id} onClick={() => { setResults(null); setQ(""); viewFinding(f.id); }}>
+                  <span className={"chip sev-" + f.severity}>{f.severity}</span> {f.title}
                 </div>
               ))}
               {results.findings.length === 0 && results.nodes.length === 0 && <div className="res muted">No matches</div>}
@@ -281,11 +283,35 @@ export default function Workspace() {
             </div>
           )}
           <GraphView graph={graph} selectedId={selGraphId} onSelect={onGraphSelect} />
-          <div className="legend">
-            {[["firmware", "#a371f7"], ["executable", "#6aa3ff"], ["library", "#39c5cf"], ["function", "#7ee787"], ["finding", "#ff5d6c"]].map(([l, c]) => (
-              <span className="it" key={l}><span className="sw" style={{ background: c as string }} />{l}</span>
-            ))}
-          </div>
+          {(() => {
+            // Legend driven from the SAME color maps GraphView uses, showing only the
+            // node/edge types actually present in this graph (single source of truth).
+            const nodeKeys: { label: string; color: string }[] = [];
+            const seen = new Set<string>();
+            let hasFinding = false;
+            for (const n of graph.nodes) {
+              if (n.type === "finding") { hasFinding = true; continue; }
+              const key = n.type === "target" ? (n.kind as string) : (n.node_type as string);
+              const color = (n.type === "target" ? KIND[key] : NODE_T[key]);
+              if (!key || seen.has(key) || !color) continue;
+              seen.add(key);
+              nodeKeys.push({ label: key === "firmware_image" ? "firmware" : key === "shared_library" ? "library" : key, color });
+            }
+            const edgeKeys = [...new Set(graph.edges.map((e) => e.type))]
+              .filter((t) => EDGE_C[t]).map((t) => ({ label: t, color: EDGE_C[t] }));
+            return (
+              <div className="legend">
+                {nodeKeys.map((k) => (
+                  <span className="it" key={"n-" + k.label}><span className="sw" style={{ background: k.color }} />{k.label}</span>
+                ))}
+                {hasFinding && <span className="it"><span className="sw" style={{ background: "#ff5d6c", transform: "rotate(45deg)" }} />finding</span>}
+                {edgeKeys.length > 0 && <span className="it sep" />}
+                {edgeKeys.map((k) => (
+                  <span className="it" key={"e-" + k.label}><span className="ln" style={{ background: k.color }} />{k.label}</span>
+                ))}
+              </div>
+            );
+          })()}
         </section>
 
         {!maxed && (

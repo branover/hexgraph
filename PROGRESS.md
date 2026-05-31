@@ -24,6 +24,13 @@ then run the resume verifier, then continue at the next unchecked task.
   (`surface_probe.py`, no redirects) — **denies + audits by default** (network off). Live probe is
   Docker+`features.network`-gated; the policy/scope/audit/denial machinery is fully offline-tested.
   Next: dynamic web PoC (the `{{NONCE}}` oracle over HTTP), then rehosting + live-device collection.
+  **UX refresh DONE** (from a full UI review): graph legend driven from the shared color maps
+  (present-only, nodes+edges, red reserved for severity) + distinct shapes per node type; semantic edges
+  labelled at rest; a **Network-egress Settings card** (the `features.network` tier was previously
+  unreachable from the UI); type-aware NodeInspector hints for socket/endpoint/input/sink; node icons for
+  the new types; modernised selects + pill toggle switches; endpoint/param hand-authoring; search ranks
+  nodes first. Deferred items (egress-audit view, schema-driven edge-attr form, a11y) tracked in
+  `docs/ui-backlog.md`. A committed vulnerable web target (`tests/fixtures/vulnrouter/`) backs live testing.
 - **Current state:** **P0–P8 all delivered** (core) + **researcher depth (P6/P7) complete**: annotations
   (rename/note/tag, agent-proposed→confirm, confirmed facts feed context), hypothesis lifecycle
   (evidence-derived status, sticky human verdict, open hypotheses feed context), in-app report viewer +
