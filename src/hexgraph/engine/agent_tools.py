@@ -103,8 +103,8 @@ def _materialize(ctx: ToolContext, focus: dict) -> None:
     if not focus.get("name"):
         return
     fnode = materialize_function(ctx.session, project_id=ctx.project.id, target_id=ctx.target.id,
-                                 name=focus["name"], pseudocode=focus.get("pseudocode") or None,
-                                 created_by="agent")
+                                 name=focus["name"], address=focus.get("address"),
+                                 pseudocode=focus.get("pseudocode") or None, created_by="agent")
     for callee in focus.get("callees", []) or []:
         cnode = materialize_function(ctx.session, project_id=ctx.project.id, target_id=ctx.target.id,
                                      name=callee, created_by="agent")

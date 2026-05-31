@@ -13,9 +13,10 @@ in-process agent loop. `record_finding` validates against the frozen schema.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
-from hexgraph.db.models import Finding, Project, Target
+from hexgraph.db.models import Finding, Node, Project, Target
 from hexgraph.db.session import session_scope
 from hexgraph.models.finding import Finding as FModel
 
@@ -33,15 +34,23 @@ def list_targets(project_id: str) -> list[dict]:
                  "parent_id": t.parent_id} for t in rows]
 
 
+# libc/shell sinks worth pointing a researcher straight at.
+_DANGEROUS = {"system", "popen", "execve", "execl", "execlp", "execvp", "exec", "strcpy", "strcat",
+              "sprintf", "vsprintf", "gets", "scanf", "sscanf", "memcpy", "alloca", "realpath"}
+
+
 def target_facts(target_id: str) -> dict:
     with session_scope() as s:
         t = s.get(Target, target_id)
         if t is None:
             return {"error": "target not found"}
         meta = t.metadata_json or {}
+        imports = meta.get("imports", [])
         return {"id": t.id, "name": t.name, "kind": t.kind.value, "format": t.format, "arch": t.arch,
-                "imports": meta.get("imports", []), "exports": meta.get("exports", []),
-                "libraries": meta.get("libraries", []), "mitigations": meta.get("mitigations", {})}
+                "imports": imports, "exports": meta.get("exports", []),
+                "libraries": meta.get("libraries", []), "mitigations": meta.get("mitigations", {}),
+                # derived: which imports are classic vuln sinks — start here.
+                "dangerous_imports": sorted(set(imports) & _DANGEROUS)}
 
 
 def _tool(target_id: str, name: str, args: dict) -> str:
@@ -89,9 +98,14 @@ def list_findings(project_id: str) -> list[dict]:
     """Existing findings, so the agent doesn't re-report what's already known."""
     with session_scope() as s:
         rows = s.query(Finding).filter(Finding.project_id == project_id).all()
-        return [{"id": f.id, "title": f.title, "severity": f.severity, "category": f.category,
-                 "status": f.status, "target_id": f.target_id,
-                 "function": (f.evidence_json or {}).get("function")} for f in rows]
+        out = []
+        for f in rows:
+            ev = f.evidence_json or {}
+            verified = bool(((ev.get("extra") or {}).get("verification") or {}).get("verified"))
+            out.append({"id": f.id, "title": f.title, "severity": f.severity, "category": f.category,
+                        "status": f.status, "finding_type": f.finding_type, "verified": verified,
+                        "target_id": f.target_id, "function": ev.get("function")})
+        return out
 
 
 def record_finding(project_id: str, target_id: str, finding: dict, task_id: str | None = None) -> dict:
@@ -120,9 +134,12 @@ def record_finding(project_id: str, target_id: str, finding: dict, task_id: str 
 
 
 def create_node(project_id: str, node_type: str, name: str, target_id: str | None = None,
-                attrs: dict | None = None) -> dict:
-    """Add a node to the graph (function/symbol/string/struct/hypothesis/pattern).
-    Enforces the same invariants as the UI (code nodes require an existing target)."""
+                address: str | None = None, attrs: dict | None = None) -> dict:
+    """Add a node to the graph (function/symbol/string/struct/hypothesis/pattern/
+    input/sink). Enforces the UI invariants (code nodes require an existing target).
+    Pass `address` for a function's location in the binary; put parameters and
+    explanations in `attrs` (e.g. {"params":[{"name":"host","type":"char*","note":
+    "attacker-controlled query field"}], "summary":"..."})."""
     from hexgraph.engine.authoring import InvariantError, create_node as _create
 
     with session_scope() as s:
@@ -130,10 +147,12 @@ def create_node(project_id: str, node_type: str, name: str, target_id: str | Non
         if project is None:
             return {"error": "project not found"}
         try:
-            n = _create(s, project, node_type=node_type, name=name, target_id=target_id, attrs=attrs)
+            n = _create(s, project, node_type=node_type, name=name, target_id=target_id,
+                        address=address, attrs=attrs)
         except InvariantError as exc:
             return {"error": str(exc)}
-        return {"id": n.id, "node_type": n.node_type, "name": n.name, "target_id": n.target_id}
+        return {"id": n.id, "node_type": n.node_type, "name": n.name, "address": n.address,
+                "target_id": n.target_id}
 
 
 def create_edge(project_id: str, src_kind: str, src_id: str, dst_kind: str, dst_id: str,
@@ -151,6 +170,98 @@ def create_edge(project_id: str, src_kind: str, src_id: str, dst_kind: str, dst_
         except InvariantError as exc:
             return {"error": str(exc)}
         return {"id": e.id, "type": e.type, "src_id": e.src_id, "dst_id": e.dst_id}
+
+
+def update_finding(finding_id: str, status: str | None = None, severity: str | None = None,
+                   confidence: str | None = None, human_notes: str | None = None) -> dict:
+    """Update an EXISTING finding in place (don't create a duplicate) — e.g. raise
+    confidence/severity and set status='confirmed' after a PoC verifies, or
+    'dismissed' if it's a false positive."""
+    from hexgraph.db.models import Finding, FindingStatus
+
+    with session_scope() as s:
+        f = s.get(Finding, finding_id)
+        if f is None:
+            return {"error": "finding not found"}
+        if status is not None:
+            try:
+                f.status = FindingStatus(status).value
+            except ValueError:
+                return {"error": f"invalid status {status!r} (use new|triaging|confirmed|dismissed|reported)"}
+        if severity:
+            f.severity = severity
+        if confidence:
+            f.confidence = confidence
+        if human_notes is not None:
+            f.human_notes = human_notes
+        return {"id": f.id, "status": f.status, "severity": f.severity, "confidence": f.confidence}
+
+
+def link_evidence(hypothesis_id: str, finding_id: str, relation: str) -> dict:
+    """Attach a finding to a hypothesis as supporting/refuting evidence. This is how
+    you CONFIRM a hypothesis — the hypothesis status is recomputed from its evidence
+    (open → supported / refuted / contested). relation = 'supports' | 'refutes'."""
+    from hexgraph.engine.hypotheses import HypothesisError, link_evidence as _le, summary
+
+    with session_scope() as s:
+        node = s.get(Node, hypothesis_id)
+        project = s.get(Project, node.project_id) if node is not None else None
+        if project is None:
+            return {"error": "hypothesis not found"}
+        try:
+            _le(s, project, hypothesis_id=hypothesis_id, finding_id=finding_id, relation=relation)
+        except HypothesisError as exc:
+            return {"error": str(exc)}
+        return summary(s, hypothesis_id)
+
+
+def set_hypothesis_status(hypothesis_id: str, status: str) -> dict:
+    """Pin a hypothesis verdict: confirmed | rejected | open | supported | refuted."""
+    from hexgraph.engine.hypotheses import HypothesisError, set_status, summary
+
+    with session_scope() as s:
+        try:
+            set_status(s, hypothesis_id, status)
+            return summary(s, hypothesis_id)
+        except HypothesisError as exc:
+            return {"error": str(exc)}
+
+
+def get_schemas() -> dict:
+    """The write-API contract: allowed enums + the Finding shape. Read this before
+    record_finding / create_node / create_edge / annotate to avoid guessing."""
+    import typing
+
+    from hexgraph.db.models import EdgeType, FindingStatus, NodeType
+    from hexgraph.engine.annotations import KINDS as ANN_KINDS, NODE_KINDS as ANN_NODE_KINDS
+    from hexgraph.engine.findings import FINDING_TYPES
+    from hexgraph.models.finding import Finding as FModelCls
+
+    cats = list(typing.get_args(FModelCls.model_fields["category"].annotation))
+    sevs = list(typing.get_args(FModelCls.model_fields["severity"].annotation))
+    confs = list(typing.get_args(FModelCls.model_fields["confidence"].annotation))
+    return {
+        "finding": {
+            "required": ["title", "severity", "confidence", "category", "summary", "reasoning", "evidence"],
+            "severity": sevs, "confidence": confs, "category": cats,
+            "evidence_fields": ["function", "file", "address", "line", "decompiled_snippet",
+                                "reproducer", "backtrace", "sink", "strings", "extra"],
+            "evidence_note": "evidence.extra is a FREE-FORM object — put the PoC spec, verification "
+                             "result, CWE, dataflow, etc. there. `reproducer` is a free-text PoC string. "
+                             "Top-level evidence keys other than those listed are rejected.",
+            "finding_types": list(FINDING_TYPES),
+            "status": [s.value for s in FindingStatus],
+        },
+        "node_types": [t.value for t in NodeType if t != NodeType.task],
+        "edge_types": [t.value for t in EdgeType],
+        "edge_endpoint_kinds": ["target", "node", "finding", "task"],
+        "edge_note": "A hypothesis IS a node (node_type='hypothesis'); link a finding to it with "
+                     "dst_kind='node' + its id, or better use link_evidence(hypothesis_id, finding_id, "
+                     "relation) which also updates the hypothesis status.",
+        "annotation_kinds": sorted(ANN_KINDS),
+        "annotation_node_kinds": sorted(ANN_NODE_KINDS),
+        "annotation_note": "Annotations from an agent land status='proposed' (pending analyst approval).",
+    }
 
 
 def create_hypothesis(project_id: str, statement: str, rationale: str | None = None,
@@ -210,12 +321,17 @@ def ingest(path: str, name: str | None = None, project_id: str | None = None) ->
                 "children": summary.get("children", [])}
 
 
-def verify_poc(target_id: str, poc: dict) -> dict:
+def verify_poc(target_id: str, poc: dict, finding_id: str | None = None) -> dict:
     """Execute a proof-of-concept against a target IN THE SANDBOX and report whether
     it worked. The spec is {argv?, env?, stdin?, timeout?, oracle:{type,value}};
     put {{NONCE}} in the injected command + the oracle value and HexGraph
     substitutes a fresh random token, so a verified output_contains oracle proves
-    real command execution. Requires PoC/fuzzing enabled in Settings."""
+    real command execution. Requires PoC/fuzzing enabled in Settings.
+
+    Pass `finding_id` to attach the result to that finding (its evidence.extra.poc
+    + .verification) so it shows as verified in list_findings — the typed home for
+    a confirmed exploit."""
+    from hexgraph.db.models import Finding
     from hexgraph.engine.poc import verify_poc as _verify
     from hexgraph.policy import PolicyViolation
 
@@ -229,8 +345,22 @@ def verify_poc(target_id: str, poc: dict) -> dict:
             return {"error": "execution not permitted — enable features.poc in Settings to verify PoCs"}
         except Exception as exc:  # noqa: BLE001
             return {"error": f"verification failed: {exc}"}
+        if finding_id:
+            f = s.get(Finding, finding_id)
+            if f is not None:
+                ev = dict(f.evidence_json or {})
+                extra = dict(ev.get("extra") or {})
+                extra["poc"] = r.get("spec")
+                extra["verification"] = {"verified": bool(r.get("verified")), "detail": r.get("detail"),
+                                         "exit_code": r.get("exit_code"), "nonce": r.get("nonce"),
+                                         "output": (r.get("output") or "")[:2000]}
+                ev["extra"] = extra
+                if not ev.get("reproducer"):
+                    ev["reproducer"] = json.dumps(r.get("spec"))
+                f.evidence_json = ev
         return {"verified": bool(r.get("verified")), "detail": r.get("detail"),
-                "exit_code": r.get("exit_code"), "output": (r.get("output") or "")[:4000]}
+                "exit_code": r.get("exit_code"), "output": (r.get("output") or "")[:4000],
+                "attached_to": finding_id if finding_id else None}
 
 
 def merge_duplicates(project_id: str) -> dict:
@@ -291,22 +421,30 @@ _CATALOG = [
      {"type": "object", "properties": {"target_id": {"type": "string"}, "pattern": {"type": "string"}}, "required": ["target_id"]}),
     ("read", "search", search, "Search the project graph (findings + functions).",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "q": {"type": "string"}}, "required": ["project_id", "q"]}),
-    ("read", "list_findings", list_findings, "Existing findings in a project.",
+    ("read", "list_findings", list_findings, "Existing findings in a project (with finding_type + verified flag).",
      {"type": "object", "properties": {"project_id": {"type": "string"}}, "required": ["project_id"]}),
-    ("write", "record_finding", record_finding, "Record a new finding (must match the Finding schema). Pass the given task_id in delegate mode.",
+    ("read", "get_schemas", get_schemas, "The write-API contract: allowed enums + the Finding shape. Read before record_finding/create_node/create_edge/annotate to avoid guessing field names.",
+     {"type": "object", "properties": {}}),
+    ("write", "record_finding", record_finding, "Record a new finding (must match the Finding schema — call get_schemas first). Pass the given task_id in delegate mode.",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "target_id": {"type": "string"}, "finding": {"type": "object"}, "task_id": {"type": "string"}}, "required": ["project_id", "target_id", "finding"]}),
-    ("write", "create_node", create_node, "Add a node (function/symbol/string/struct/hypothesis/pattern) to the graph.",
-     {"type": "object", "properties": {"project_id": {"type": "string"}, "node_type": {"type": "string"}, "name": {"type": "string"}, "target_id": {"type": "string"}, "attrs": {"type": "object"}}, "required": ["project_id", "node_type", "name"]}),
-    ("write", "create_edge", create_edge, "Connect two graph entities (target|node|finding|task).",
+    ("write", "update_finding", update_finding, "Update an EXISTING finding in place (status/severity/confidence/human_notes) — e.g. confirm it after a PoC verifies. Don't create a duplicate.",
+     {"type": "object", "properties": {"finding_id": {"type": "string"}, "status": {"type": "string"}, "severity": {"type": "string"}, "confidence": {"type": "string"}, "human_notes": {"type": "string"}}, "required": ["finding_id"]}),
+    ("write", "create_node", create_node, "Add a node (function/symbol/string/struct/hypothesis/pattern/input/sink). Pass `address` for a function's binary location; put parameters/explanations in `attrs`.",
+     {"type": "object", "properties": {"project_id": {"type": "string"}, "node_type": {"type": "string"}, "name": {"type": "string"}, "target_id": {"type": "string"}, "address": {"type": "string"}, "attrs": {"type": "object"}}, "required": ["project_id", "node_type", "name"]}),
+    ("write", "create_edge", create_edge, "Connect two graph entities (target|node|finding|task). A hypothesis is a 'node'; or use link_evidence to attach a finding to one.",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "src_kind": {"type": "string"}, "src_id": {"type": "string"}, "dst_kind": {"type": "string"}, "dst_id": {"type": "string"}, "type": {"type": "string"}, "attrs": {"type": "object"}}, "required": ["project_id", "src_kind", "src_id", "dst_kind", "dst_id", "type"]}),
     ("write", "create_hypothesis", create_hypothesis, "Record a research hypothesis anchored to a target.",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "statement": {"type": "string"}, "rationale": {"type": "string"}, "target_id": {"type": "string"}}, "required": ["project_id", "statement"]}),
-    ("write", "annotate", annotate, "Attach a note/tag/rename to a graph entity (agent proposal).",
+    ("write", "link_evidence", link_evidence, "Attach a finding to a hypothesis as supporting/refuting evidence (recomputes the hypothesis status). relation = supports|refutes. This is how you confirm a hypothesis.",
+     {"type": "object", "properties": {"hypothesis_id": {"type": "string"}, "finding_id": {"type": "string"}, "relation": {"type": "string"}}, "required": ["hypothesis_id", "finding_id", "relation"]}),
+    ("write", "set_hypothesis_status", set_hypothesis_status, "Pin a hypothesis verdict: confirmed|rejected|open|supported|refuted.",
+     {"type": "object", "properties": {"hypothesis_id": {"type": "string"}, "status": {"type": "string"}}, "required": ["hypothesis_id", "status"]}),
+    ("write", "annotate", annotate, "Attach a note/tag/rename/type_decl to a graph entity (agent proposal, pending analyst approval). For parameters/explanations on a function, prefer create_node attrs.",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "node_kind": {"type": "string"}, "node_id": {"type": "string"}, "kind": {"type": "string"}, "value": {"type": "string"}}, "required": ["project_id", "node_kind", "node_id", "kind", "value"]}),
     ("write", "merge_duplicates", merge_duplicates, "Collapse duplicate binaries/nodes (e.g. sym.foo == foo) in a project, preserving all edges/findings.",
      {"type": "object", "properties": {"project_id": {"type": "string"}}, "required": ["project_id"]}),
-    ("run", "verify_poc", verify_poc, "Execute a proof-of-concept against a target in the sandbox and report verified true/false (use {{NONCE}} in the injected command + oracle for an unforgeable check). Requires PoC enabled.",
-     {"type": "object", "properties": {"target_id": {"type": "string"}, "poc": {"type": "object"}}, "required": ["target_id", "poc"]}),
+    ("run", "verify_poc", verify_poc, "Execute a proof-of-concept against a target in the sandbox and report verified true/false (use {{NONCE}} in the injected command + oracle for an unforgeable check). Pass finding_id to attach the result. Requires PoC enabled.",
+     {"type": "object", "properties": {"target_id": {"type": "string"}, "poc": {"type": "object"}, "finding_id": {"type": "string"}}, "required": ["target_id", "poc"]}),
     ("run", "ingest", ingest, "Ingest a binary/firmware from a local path as a target (firmware unpacks into children); creates a project if none given.",
      {"type": "object", "properties": {"path": {"type": "string"}, "name": {"type": "string"}, "project_id": {"type": "string"}}, "required": ["path"]}),
     ("run", "run_task", run_task, "Run a HexGraph task (recon/static_analysis/harness_generation/fuzzing) and return its findings.",

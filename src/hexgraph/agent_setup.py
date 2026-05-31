@@ -35,12 +35,21 @@ should be written back as nodes, edges, findings, hypotheses, and annotations, s
 - **Never exfiltrate target bytes** off the machine.
 - Back every claim with tool output; don't invent findings.
 
+## 0. Read the write-API contract
+Call **`get_schemas`** once up front. It lists the allowed enums (node types,
+edge types + endpoint kinds, finding categories/severities/statuses, annotation
+kinds) and the Finding shape — so you don't guess field names. Key facts it
+encodes: `evidence.extra` is a free-form object (put the PoC spec, verification,
+CWE, dataflow there); a hypothesis is a `node`; structured data goes in `extra`,
+not new top-level evidence keys.
+
 ## 1. Read what's already known FIRST
 Before analyzing anything, orient on prior work so you don't repeat it and you can
 see where to go next:
-- `list_targets(project_id)`, `target_facts`, `read_imports` — scope + recon facts.
-- `list_findings(project_id)` — what's already found, confirmed, or **dismissed**
-  (don't re-report dismissed issues).
+- `list_targets(project_id)`, `target_facts` (note its `dangerous_imports` — start
+  there), `read_imports` — scope + recon facts.
+- `list_findings(project_id)` — what's already found, **verified**, confirmed, or
+  **dismissed** (don't re-report dismissed issues).
 - `search(project_id, q)` — locate functions/strings/findings by keyword.
 Let the existing graph and any open findings/hypotheses steer your next move: pick
 up unfinished threads, follow related findings to siblings, and target functions
@@ -60,25 +69,28 @@ to add the finding** — that hides work in progress and risks losing it. The rh
 is **record → explore → verify → update**:
 
 1. **Suspect → record immediately.** When you spot a likely bug, `record_finding`
-   right away at your current confidence (e.g. confidence "low"/"medium", status
-   stays `new`), with the function, sink, and reasoning so far. `create_node` the
-   relevant functions/strings, and `create_hypothesis` for the open question.
-   **Link the hypothesis to the finding** with `create_edge` (the finding
-   `supports` the hypothesis) so they're connected, not floating.
+   right away at your current confidence (e.g. "low"/"medium", status `new`), with
+   the function, sink, and reasoning so far. `create_node` the relevant functions
+   (pass the function's `address`; put parameters + explanations in `attrs`, e.g.
+   `attrs={"params":[{"name":"host","note":"attacker-controlled query field"}]}`),
+   inputs (`node_type:"input"`), and sinks (`node_type:"sink"`). `create_hypothesis`
+   for the open question, then **`link_evidence(hypothesis_id, finding_id,
+   "supports")`** to connect the finding to it (this also drives the hypothesis's
+   status — it's how you later confirm it).
 2. **Explore → keep adding.** As you decompile/trace, wire the path with
    `create_edge`: `calls`, `references`, `reads`/`writes`, and **`taints`** for the
-   untrusted-input → sink dataflow (input string → parser → sink). `annotate`
+   untrusted-input → sink dataflow (input node → parser → sink node). `annotate`
    nodes with what you learn (clearer name, "reachable pre-auth", a CWE tag).
-   **Write the PoC into a finding BEFORE you run it**: record a separate PoC
-   finding (category matching the bug; it will be typed `poc`) containing the
-   attacker input/spec you intend to try, marked unverified — then link it to the
-   vulnerability finding and hypothesis with `create_edge`.
-3. **Verify → update in place.** Run `verify_poc` / `run_task`, then update the
-   SAME findings (don't make new duplicates): on success raise the vulnerability
-   finding's confidence/severity, mark the PoC finding verified, and add a
-   `confirms` edge from the PoC finding to the vulnerability finding; the finding
-   `supports` the hypothesis. On failure, lower confidence, note why, and
-   `refutes` the hypothesis.
+   **Record the PoC as its own finding BEFORE you run it** (it will be typed
+   `poc`), containing the attacker input/spec you intend to try, marked unverified,
+   and `create_edge` it `confirms`→ the vulnerability finding.
+3. **Verify → update in place.** Run `verify_poc(target_id, poc,
+   finding_id=<the PoC finding>)` (it attaches the result to that finding) / or
+   `run_task`. Then update the SAME findings — don't make duplicates: on success
+   `update_finding` the vulnerability to higher confidence/severity and
+   status `confirmed`, and `link_evidence(..., "supports")` so the hypothesis
+   flips to supported/confirmed. On failure, `update_finding` to lower confidence
+   and `link_evidence(..., "refutes")`.
 
 **Rule: a confirmed vulnerability finding MUST have a verified PoC finding linked
 to it** (PoC `confirms`→ vulnerability). A vulnerability without a linked, verified

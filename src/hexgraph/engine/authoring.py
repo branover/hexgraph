@@ -28,7 +28,7 @@ from hexgraph.engine.nodes import get_or_create_node
 
 # Node types a human may hand-author. `task` is not authorable (tasks come from
 # launching analysis); `target` is not a node (it requires uploaded bytes).
-MANUAL_NODE_TYPES = {"function", "symbol", "string", "struct", "hypothesis", "pattern"}
+MANUAL_NODE_TYPES = {"function", "symbol", "string", "struct", "hypothesis", "pattern", "input", "sink"}
 # These describe code inside a binary, so they require an existing target.
 TARGET_BOUND = {"function", "symbol", "string", "struct"}
 

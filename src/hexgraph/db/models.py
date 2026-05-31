@@ -53,6 +53,8 @@ class NodeType(str, enum.Enum):
     struct = "struct"
     hypothesis = "hypothesis"
     pattern = "pattern"
+    input = "input"      # an untrusted-input source (env/arg/recv) for taint paths
+    sink = "sink"        # a dangerous operation reached by tainted data
     task = "task"
 
 

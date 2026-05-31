@@ -52,10 +52,14 @@ def main() -> int:
     r2 = r2pipe.open(path, flags=["-2"])  # -2 silences stderr
     try:
         r2.cmd("aaa")  # analyze all
+        offsets = {}
         try:
-            functions = [f.get("name") for f in (json.loads(r2.cmd("aflj") or "[]"))]
+            for f in (json.loads(r2.cmd("aflj") or "[]")):
+                if f.get("name"):
+                    offsets[f["name"]] = f.get("offset")
         except json.JSONDecodeError:
-            functions = []
+            pass
+        functions = list(offsets.keys())
 
         focus = None
         if focus_name:
@@ -67,9 +71,11 @@ def main() -> int:
             seek = resolved or f"sym.{focus_name.lstrip('.')}"
             pseudo = r2.cmd(f"pdc @ {seek}").strip()
             disasm = r2.cmd(f"pdf @ {seek}").strip()
+            off = offsets.get(resolved) if resolved else None
             focus = {
                 "name": focus_name,
                 "resolved": resolved,
+                "address": hex(off) if isinstance(off, int) else None,
                 "pseudocode": pseudo,
                 "disasm": disasm,
                 "callees": _callees(disasm),

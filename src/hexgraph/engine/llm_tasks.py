@@ -172,7 +172,8 @@ def _materialize_decomp_graph(session: Session, project_id: str, target_id: str,
         return
     fnode = materialize_function(
         session, project_id=project_id, target_id=target_id, name=focus["name"],
-        pseudocode=focus.get("pseudocode") or None, created_by="decompile",
+        address=focus.get("address"), pseudocode=focus.get("pseudocode") or None,
+        created_by="decompile",
     )
     for callee in focus.get("callees", []):
         cnode = materialize_function(
