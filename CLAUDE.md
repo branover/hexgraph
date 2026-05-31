@@ -17,7 +17,7 @@ A self-hosted, **local-only** agentic vulnerability-research workbench. Point it
 Post-MVP, **every new feature or major atomic change happens on its own branch in a dedicated git worktree**, so multiple agents work in parallel without stepping on each other. Trivial one-line touch-ups can go on a normal branch; anything substantial gets a worktree.
 
 **Git/GitHub rules (non-negotiable):**
-- **Never commit or push to `main`.** `main` only changes by **merging a reviewed PR**. (The push guard blocks direct pushes anyway.)
+- **Never commit or push to `main`.** `main` only changes by **merging a reviewed PR**. (There is no automated push guard or branch protection — this is a discipline you must keep, not something the repo enforces for you.)
 - Branch off `main` with a typed name: **`build/<topic>`** (code), **`fix/<topic>`** (bugfix), **`docs/<topic>`** (docs).
 - Commits: imperative, lowercase-prefixed subject (`feat:`/`fix:`/`docs:`/`db:`/…); end every commit with the trailer `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
 - **Ship the whole change together:** code + its tests + `PROGRESS.md` update + (for any model change) an `alembic revision --autogenerate` migration. A PR that changes a model without a migration is incomplete.
