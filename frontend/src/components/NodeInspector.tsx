@@ -115,7 +115,15 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
             ))}
           </div>
           <div className="muted" style={{ fontSize: 11, marginTop: 12 }}>
-            Tip: launch a task from the binary in the Targets pane to analyze this {node.node_type}.
+            {["function", "symbol", "string", "struct"].includes(node.node_type)
+              ? `Tip: launch a task from the binary in the Targets pane to analyze this ${node.node_type}.`
+              : node.node_type === "socket"
+              ? "A network/IPC endpoint shared across binaries — its listens_on / connects_to peers are shown as edges in the graph."
+              : node.node_type === "endpoint"
+              ? "A web route on a dynamic surface — its params and its routes_to handler are linked as edges in the graph."
+              : ["input", "sink"].includes(node.node_type)
+              ? "Part of a dataflow path — follow its taints / bypasses edges in the graph to the source or sink."
+              : "Explore this node's edges in the graph for its relationships."}
           </div>
         </>
       )}

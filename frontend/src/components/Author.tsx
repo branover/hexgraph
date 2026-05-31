@@ -2,10 +2,10 @@ import { ReactNode, useState } from "react";
 import { api, Graph, TargetNode } from "../api";
 import { Icon } from "./Icon";
 
-const MANUAL_NODE_TYPES = ["function", "symbol", "string", "struct", "hypothesis", "pattern", "input", "sink", "socket"];
-const TARGET_BOUND = new Set(["function", "symbol", "string", "struct"]);
+const MANUAL_NODE_TYPES = ["function", "symbol", "string", "struct", "hypothesis", "pattern", "input", "sink", "socket", "endpoint", "param"];
+const TARGET_BOUND = new Set(["function", "symbol", "string", "struct", "endpoint", "param"]);
 const SOCKET_KINDS = ["tcp", "udp", "unix", "io", "netlink", "raw", "other"];
-const EDGE_TYPES = ["calls", "references", "reads", "writes", "taints", "bypasses",
+const EDGE_TYPES = ["calls", "references", "reads", "writes", "taints", "bypasses", "routes_to",
   "listens_on", "connects_to", "links_against", "similar_to", "derived_from",
   "duplicate_of", "related_to", "instance_of_pattern", "about", "contains"];
 
@@ -68,8 +68,12 @@ export function AddNodeModal({ projectId, targets, onClose, onDone }: {
         </>
       ) : (
       <div className="field">
-        <label>{nodeType === "hypothesis" ? "statement" : "name"}</label>
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder={nodeType === "hypothesis" ? "e.g. auth can be bypassed via token reuse" : "e.g. parse_request"} />
+        <label>{nodeType === "hypothesis" ? "statement" : nodeType === "endpoint" ? "route" : "name"}</label>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder={
+          nodeType === "hypothesis" ? "e.g. auth can be bypassed via token reuse"
+          : nodeType === "endpoint" ? "e.g. POST /api/login"
+          : nodeType === "param" ? "e.g. token"
+          : "e.g. parse_request"} />
       </div>
       )}
       {needsTarget && (

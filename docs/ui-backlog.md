@@ -1,5 +1,25 @@
 # UI improvement backlog
 
+## From the dynamic-surfaces UX review (2026-05-31)
+
+**Done in the `ux-refresh` PR:** network-egress Settings card (A1); type-aware NodeInspector tip for
+socket/endpoint/input/sink (A4); node icons for the new types (A5); search ranks nodes first + section
+headers (A6); always-label semantic edges (A7); legend driven from the shared color maps, present-only,
+nodes+edges, red reserved for severity (B1/B2); distinct node shapes per type (B2); modernised selects
+(B3); pill toggle switches (B4); endpoint/param hand-authoring (A3).
+
+**Deferred (next UI pass):**
+- [ ] **A2** — surface the EgressEvent audit log in the UI (needs a `GET /api/projects/{id}/egress`
+  endpoint + `api.egress` + a small list, e.g. in the web_app NodeInspector or a Tasks-tab sibling).
+- [ ] **B5** — schema-driven edge-attribute form in the Add-edge modal (use `edgeSchemas()` to render
+  known fields per type instead of a raw JSON input).
+- [ ] **A4+** — richer typed-node inspector sections (socket → its listens_on/connects_to peers;
+  endpoint → its params + routes_to handler) — needs the node's edges passed in or fetched.
+- [ ] **B6** — accessibility: keyboard-operable menu/search items (role/tabindex on the `.mi`/`.res`
+  divs), larger icon-button hit targets, focus rings tuned for dark theme, nudge `--muted` contrast.
+- [ ] **B7** — collapse low-frequency workspace toolbar actions into an overflow menu; give the right
+  "Detail" box more height.
+
 ## From the VR UX evaluation (2026-05-30)
 
 **Done (this session):**
