@@ -31,6 +31,7 @@ export default function Workspace() {
   const [modal, setModal] = useState<"node" | "edge" | "report" | "compare" | null>(null);
   const [launchFor, setLaunchFor] = useState<{ target: TargetNode; type: string } | null>(null);
   const [maxed, setMaxed] = useState(false);
+  const [detailBig, setDetailBig] = useState(false);
   const searchTimer = useRef<any>();
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -222,10 +223,25 @@ export default function Workspace() {
 
         {!maxed && (
           <aside className="pane">
-            {renderTabs()}
-            {renderList()}
-            <div style={{ borderTop: "1px solid var(--border)", maxHeight: "46%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-              {renderDetail()}
+            {!detailBig && renderTabs()}
+            {!detailBig && renderList()}
+            <div className="detailbox" style={{
+              borderTop: "1px solid var(--border)",
+              flex: detailBig ? 1 : "none",
+              maxHeight: detailBig ? "none" : "46%",
+              display: "flex", flexDirection: "column", overflow: "hidden",
+            }}>
+              <div className="pane-h sub">
+                <span className="ttl">Detail</span>
+                <span className="grow" />
+                <button className="btn sm icon ghost" title={detailBig ? "Collapse detail" : "Expand detail"}
+                        onClick={() => setDetailBig((b) => !b)}>
+                  <Icon name={detailBig ? "minus" : "fit"} size={13} />
+                </button>
+              </div>
+              <div style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column" }}>
+                {renderDetail()}
+              </div>
             </div>
           </aside>
         )}
