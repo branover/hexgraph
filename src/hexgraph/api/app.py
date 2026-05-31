@@ -620,13 +620,14 @@ def create_app() -> FastAPI:
             try:
                 r = _verify(s, s.get(Project, f.project_id), t, spec)
             except PolicyViolation:
-                from hexgraph.engine.poc import _is_web
                 raise HTTPException(403, "enable features.network (web PoC) or features.poc (binary PoC) to verify")
             except Exception as exc:  # noqa: BLE001
                 raise HTTPException(400, f"verification failed: {exc}")
             ev = dict(f.evidence_json or {})
             extra = dict(ev.get("extra") or {})
-            extra["poc"] = r.get("spec")
+            # Preserve the original spec (with {{NONCE}} intact) so re-verify stays
+            # repeatable; r.get("spec") is the nonce-substituted copy.
+            extra["poc"] = spec
             extra["verification"] = {"verified": bool(r.get("verified")), "detail": r.get("detail"),
                                      "exit_code": r.get("exit_code"), "nonce": r.get("nonce"),
                                      "output": (r.get("output") or "")[:2000]}

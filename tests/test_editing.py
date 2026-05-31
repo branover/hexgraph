@@ -79,6 +79,37 @@ def test_verify_finding_without_spec_400(hg_home):
     assert r.status_code == 400 and "no stored PoC" in r.json()["detail"]
 
 
+def test_verify_finding_preserves_original_spec(hg_home, monkeypatch):
+    """Re-verify must keep the {{NONCE}} template in evidence.extra.poc, not the
+    nonce-substituted copy verify_poc ran — else a later re-verify is unrepeatable."""
+    spec = {"oracle": {"type": "output_contains", "value": "{{NONCE}}"},
+            "argv": ["./x", "; echo {{NONCE}}"]}
+    with session_scope() as s:
+        p = create_project(s, name="rv")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        task = create_task(s, project=p, target_id=t.id, type="poc")
+        f = persist_finding(s, project_id=p.id, target_id=t.id, task_id=task.id, finding=FModel(
+            title="poc", severity="high", confidence="low", category="command-injection",
+            summary="s", reasoning="r", evidence=Evidence(extra={"poc": spec})))
+        fid = f.id
+
+    def fake_verify(session, project, target, in_spec, runner=None):
+        # The real verify_poc returns the substituted spec; the endpoint must NOT store it.
+        return {"verified": True, "detail": "ok", "exit_code": 0, "nonce": "HEXGRAPH_PWNED_x",
+                "output": "...", "spec": {"oracle": {"type": "output_contains", "value": "HEXGRAPH_PWNED_x"}}}
+    monkeypatch.setattr("hexgraph.engine.poc.verify_poc", fake_verify)
+
+    c = TestClient(create_app())
+    r = c.post(f"/api/findings/{fid}/verify")
+    assert r.status_code == 200, r.text
+    assert r.json()["verified"] is True
+    with session_scope() as s:
+        from hexgraph.db.models import Finding
+        ev = s.get(Finding, fid).evidence_json
+        assert ev["extra"]["poc"]["oracle"]["value"] == "{{NONCE}}"
+        assert ev["extra"]["verification"]["verified"] is True
+
+
 def test_read_firmware_file_and_traversal_guard(hg_home, tmp_path):
     # Build a tiny fake "unpacked firmware" manifest pointing at a real on-disk tree.
     from pathlib import Path

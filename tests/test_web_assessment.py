@@ -55,6 +55,23 @@ def test_oracle_only_inspects_final_step():
     assert not http_probe._check_oracle({"type": "body_contains", "value": "NONCE"}, steps)[0]
 
 
+def test_dest_refuses_off_allowlist_via_crafted_path():
+    """A crafted `path` must not let a request escape the host allowlist, and a malformed
+    netloc must be refused cleanly (not crash the probe). The in-sandbox allowlist is the
+    second line of defense behind the host-side egress scope."""
+    class _NoOpen:
+        def open(self, *a, **k):  # must never be reached for an off-allowlist dest
+            raise AssertionError("opener.open reached for a refused destination")
+
+    allow = {"localhost:8080"}
+    # userinfo trick: path '@evil.com/' makes urlparse see host=evil.com → not allowlisted
+    r = http_probe._do(_NoOpen(), "http://localhost:8080", {"path": "@evil.com/"}, allow, 5)
+    assert r["ok"] is False and r["error"] == "destination not in allowlist"
+    # a malformed netloc (path that breaks port parsing) is refused, not an uncaught error
+    r = http_probe._do(_NoOpen(), "http://localhost:8080", {"path": "http://evil.com/"}, allow, 5)
+    assert r["ok"] is False and r["error"] == "destination not in allowlist"
+
+
 # ---------------- offline: egress gate on http_request ----------------
 
 def test_http_request_denied_and_audited_when_network_off(hg_home):

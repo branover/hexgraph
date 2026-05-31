@@ -719,13 +719,16 @@ def verify_poc(target_id: str, poc: dict, finding_id: str | None = None) -> dict
             if f is not None:
                 ev = dict(f.evidence_json or {})
                 extra = dict(ev.get("extra") or {})
-                extra["poc"] = r.get("spec")
+                # Store the ORIGINAL spec (with its {{NONCE}} placeholder intact), not the
+                # nonce-substituted copy verify_poc ran — otherwise the placeholder is gone
+                # and a later re-verify carries a stale literal nonce that can never match.
+                extra["poc"] = poc
                 extra["verification"] = {"verified": bool(r.get("verified")), "detail": r.get("detail"),
                                          "exit_code": r.get("exit_code"), "nonce": r.get("nonce"),
                                          "output": (r.get("output") or "")[:2000]}
                 ev["extra"] = extra
                 if not ev.get("reproducer"):
-                    ev["reproducer"] = json.dumps(r.get("spec"))
+                    ev["reproducer"] = json.dumps(poc)
                 f.evidence_json = ev
         return {"verified": bool(r.get("verified")), "detail": r.get("detail"),
                 "exit_code": r.get("exit_code"), "output": (r.get("output") or "")[:4000],

@@ -49,9 +49,18 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def _dest(url: str) -> str:
-    u = urllib.parse.urlparse(url)
-    port = u.port or (443 if u.scheme == "https" else 80)
-    return f"{u.hostname}:{port}"
+    """The `host:port` an allowlist check is run against. A crafted path can produce a
+    malformed netloc (e.g. base+'http://evil/' → port not an int); return an unmatchable
+    sentinel rather than raise, so such a URL is *refused* by the allowlist, not crashed."""
+    try:
+        u = urllib.parse.urlparse(url)
+        port = u.port or (443 if u.scheme == "https" else 80)
+        host = u.hostname
+    except ValueError:
+        return "<malformed>"
+    if not host:
+        return "<malformed>"
+    return f"{host}:{port}"
 
 
 def _build(base: str, spec: dict):

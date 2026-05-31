@@ -231,8 +231,12 @@ def test_verify_poc_attaches_to_finding(hg_home, monkeypatch):
     from hexgraph.models.finding import Evidence, Finding as FModel
 
     def fake_verify(session, project, target, spec, runner=None):
+        # Mirror the real verify_poc: it returns the NONCE-SUBSTITUTED spec. The caller
+        # must NOT persist that (it would bake in a stale literal nonce) — it stores the
+        # original template instead. Return a substituted copy so the test can tell them apart.
+        substituted = {"oracle": {"type": "output_contains", "value": "HEXGRAPH_PWNED_x"}}
         return {"verified": True, "detail": "nonce in output", "exit_code": 0,
-                "nonce": "HEXGRAPH_PWNED_x", "output": "...HEXGRAPH_PWNED_x...", "spec": spec}
+                "nonce": "HEXGRAPH_PWNED_x", "output": "...HEXGRAPH_PWNED_x...", "spec": substituted}
     monkeypatch.setattr("hexgraph.engine.poc.verify_poc", fake_verify)
 
     with session_scope() as s:
@@ -248,6 +252,9 @@ def test_verify_poc_attaches_to_finding(hg_home, monkeypatch):
     with session_scope() as s:
         f = s.get(Finding, fid)
         assert f.evidence_json["extra"]["verification"]["verified"] is True
+        # The stored PoC spec must be the ORIGINAL template (with {{NONCE}} intact), not the
+        # nonce-substituted copy — otherwise a later re-verify carries a stale literal token.
+        assert f.evidence_json["extra"]["poc"]["oracle"]["value"] == "{{NONCE}}"
 
 
 def test_record_finding_accepts_finding_type(hg_home):
