@@ -149,6 +149,14 @@ keeping target bytes inside the sandbox:
   `agent_delegate` task from the Run menu — HexGraph runs your agent headless, wired to the MCP server
   and restricted to HexGraph's sandboxed tools (no shell on the target).
 
+Setup: install the SDK into your environment (`.venv/bin/pip install "mcp"`), then
+`hexgraph mcp install` prints the registration steps. The MCP server speaks JSON-RPC over **stdio** —
+your agent spawns it on demand; `hexgraph mcp` run by hand prints a "ready" line to stderr and then
+blocks (that's correct). Confirm the wiring with `hexgraph mcp --check` (lists the tools and exits).
+The **web UI (`hexgraph serve`) and the MCP server run at the same time** — they're separate processes
+sharing the SQLite DB (WAL-mode), so findings an agent records show up in the UI on reload, and vice
+versa.
+
 ---
 
 ## Model backends

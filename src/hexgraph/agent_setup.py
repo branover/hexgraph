@@ -76,10 +76,18 @@ def write_skill(base_dir: str) -> str:
 
 
 def mcp_command() -> tuple[str, list[str]]:
-    """How to launch the MCP server. Prefer the installed entrypoint."""
-    if shutil.which("hexgraph"):
-        return "hexgraph", ["mcp"]
-    return "python", ["-m", "hexgraph.cli", "mcp"]
+    """How to launch the MCP server, as an ABSOLUTE command the agent can spawn.
+
+    The agent (Claude Code/Codex) runs this with its own PATH/cwd, so bare names
+    like `hexgraph`/`python` won't resolve to this install. Prefer the absolute
+    path to the `hexgraph` console script; otherwise use this interpreter
+    (`sys.executable` — e.g. the venv's python, which has HexGraph installed)."""
+    import sys
+
+    exe = shutil.which("hexgraph")
+    if exe:
+        return exe, ["mcp"]
+    return sys.executable, ["-m", "hexgraph.cli", "mcp"]
 
 
 def mcp_server_entry() -> dict:
@@ -120,8 +128,18 @@ def install_help(agent: str | None = None) -> str:
 
     if not blocks:
         return f"unknown agent {agent!r}; choose one of {AGENTS}"
-    header = ("Register HexGraph as an MCP server with your coding agent. Then point\n"
-              "the agent at a project and let it use the `hexgraph` tools.\n\n")
+    import sys
+
+    header = (
+        "Register HexGraph as an MCP server with your coding agent. Then point\n"
+        "the agent at a project and let it use the `hexgraph` tools.\n\n"
+        f"First install the MCP SDK INTO THIS ENVIRONMENT (note the venv's pip):\n"
+        f"  {sys.executable} -m pip install \"mcp\"\n"
+        f"Confirm it's wired up (lists the tools and exits — no client needed):\n"
+        f"  {cmd_str} --check\n"
+        f"(`{cmd_str}` with no flag prints a 'ready, waiting for a client' line to stderr then\n"
+        f" blocks — that's correct; your agent launches it. `hexgraph serve` (the web UI) can run\n"
+        f" at the same time; they're separate processes sharing the DB.)\n\n")
     footer = ("\n\nInstall the VR skill so the agent knows the workflow + the hostile-target rules:\n"
               "  hexgraph mcp install --write-skill .claude/skills   # Claude Code (project-local)\n"
               "  hexgraph mcp install --write-skill ~/.claude/skills  # Claude Code (global)\n"

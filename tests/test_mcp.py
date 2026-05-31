@@ -114,9 +114,15 @@ def test_install_help_for_each_agent():
 
 
 def test_mcp_server_requires_sdk():
-    # The SDK isn't installed in CI; serving must fail clearly, not import-error elsewhere.
+    # When the optional MCP SDK is absent, serving must fail clearly (SystemExit
+    # with install guidance), not raise an opaque ImportError. Skip when the SDK
+    # is installed (its presence can't exercise the absence path).
+    import importlib.util
+
     import pytest
 
+    if importlib.util.find_spec("mcp") is not None:
+        pytest.skip("mcp SDK installed; absence path not exercisable")
     from hexgraph.mcp_server import serve_stdio
 
     with pytest.raises(SystemExit):
@@ -139,3 +145,16 @@ def test_skill_markdown_is_a_claude_skill():
     d = tempfile.mkdtemp()
     p = write_skill(d)
     assert os.path.isfile(p) and p.endswith("hexgraph-vr/SKILL.md")
+
+
+def test_cli_mcp_check_lists_tools(capsys):
+    from hexgraph.cli import main
+    rc = main(["mcp", "--check", "--tools", "read"])
+    out = capsys.readouterr().out
+    assert rc == 0 and "decompile_function" in out and "record_finding" not in out
+
+
+def test_install_help_includes_sdk_and_check():
+    from hexgraph.agent_setup import install_help
+    h = install_help("claude")
+    assert "pip install" in h and "--check" in h and "serve" in h and "same time" in h

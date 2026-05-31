@@ -249,12 +249,24 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
             return 0
         print(install_help(args.agent))
         return 0
-    # default: serve the MCP server on stdio
-    from hexgraph.mcp_server import serve_stdio
-
     groups = None
     if getattr(args, "tools", None):
         groups = {g.strip() for g in args.tools.split(",") if g.strip()}
+
+    if getattr(args, "check", False):
+        # Human confirmation that the server is wired up, without needing a client.
+        from hexgraph.engine.mcp_tools import catalog
+        from hexgraph.mcp_server import enabled_groups
+
+        active = enabled_groups(groups)
+        tools = catalog(active)
+        print(f"HexGraph MCP server OK — {len(tools)} tools exposed [{', '.join(sorted(active))}]:")
+        for t in tools:
+            print(f"  [{t['group']}] {t['name']}")
+        return 0
+
+    from hexgraph.mcp_server import serve_stdio
+
     serve_stdio(groups)
     return 0
 
@@ -333,6 +345,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     pm = sub.add_parser("mcp", help="MCP server for coding agents (stdio); `mcp install` prints setup")
     pm.add_argument("--tools", help="comma-separated tool groups to expose: read,write,run (default: Settings)")
+    pm.add_argument("--check", action="store_true", help="list the exposed tools and exit (don't serve)")
     msub = pm.add_subparsers(dest="_mcpcmd")  # no subcommand → serve
     mi = msub.add_parser("install", help="print how to register HexGraph with claude/codex/gemini")
     mi.add_argument("--agent", choices=["claude", "codex", "gemini"], default=None)

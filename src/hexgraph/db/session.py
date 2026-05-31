@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -37,12 +37,29 @@ def db_url() -> str:
     return f"sqlite:///{_resolve_db_path()}"
 
 
+def _apply_sqlite_pragmas(dbapi_conn, _record) -> None:
+    """WAL + a busy timeout so the web app and a coding agent's MCP server (separate
+    processes) can read/write the same SQLite file concurrently without
+    'database is locked'. WAL allows many readers alongside one writer; the busy
+    timeout makes a writer wait briefly instead of failing immediately."""
+    cur = dbapi_conn.cursor()
+    cur.execute("PRAGMA journal_mode=WAL")
+    cur.execute("PRAGMA busy_timeout=5000")
+    cur.execute("PRAGMA synchronous=NORMAL")
+    cur.execute("PRAGMA foreign_keys=ON")
+    cur.close()
+
+
 def get_engine() -> Engine:
     global _engine, _Session
     if _engine is None:
         path = _resolve_db_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        _engine = create_engine(f"sqlite:///{path}", future=True)
+        _engine = create_engine(
+            f"sqlite:///{path}", future=True,
+            connect_args={"check_same_thread": False, "timeout": 5},
+        )
+        event.listen(_engine, "connect", _apply_sqlite_pragmas)
         _Session = sessionmaker(bind=_engine, future=True, expire_on_commit=False)
     return _engine
 

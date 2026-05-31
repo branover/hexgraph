@@ -45,7 +45,17 @@ def serve_stdio(groups: set[str] | None = None) -> None:
 
     prepare_database(backup=True)
 
-    tools = {t["name"]: t for t in catalog(enabled_groups(groups))}
+    import sys
+
+    active = enabled_groups(groups)
+    tools = {t["name"]: t for t in catalog(active)}
+    # Confirmation goes to STDERR — stdout is the MCP JSON-RPC channel and must not
+    # carry human text. Running this by hand just blocks waiting for a client (it's
+    # normally spawned by your coding agent); Ctrl-C to stop.
+    print(f"HexGraph MCP server ready on stdio · {len(tools)} tools "
+          f"[{','.join(sorted(active))}] · waiting for a client… "
+          f"(normally launched by your agent; running it by hand will just block)",
+          file=sys.stderr, flush=True)
     server = Server("hexgraph")
 
     @server.list_tools()
