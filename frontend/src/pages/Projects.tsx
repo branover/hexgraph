@@ -20,6 +20,13 @@ export default function Projects() {
     catch (e: any) { setErr(String(e.message || e)); }
   };
 
+  const remove = async (e: React.MouseEvent, p: Row) => {
+    e.preventDefault(); e.stopPropagation();
+    if (!confirm(`Permanently delete project “${p.name}” and everything in it (targets, findings, graph, on-disk data)? This cannot be undone.`)) return;
+    try { await api.deleteProject(p.id); setProjects((ps) => (ps || []).filter((x) => x.id !== p.id)); }
+    catch (err: any) { setErr(String(err.message || err)); }
+  };
+
   useEffect(() => {
     api.projects().then(async (ps) => {
       setProjects(ps);
@@ -70,6 +77,8 @@ export default function Projects() {
         <div className="proj-grid">
           {projects?.map((p) => (
             <Link className="card proj-card link fade-in" to={`/projects/${p.id}`} key={p.id}>
+              <button className="btn sm icon ghost trash" title="Delete project (permanent)"
+                      onClick={(e) => remove(e, p)}><Icon name="x" size={12} /></button>
               <span className="name"><Icon name="chip" size={15} /> {p.name}</span>
               <span className="muted" style={{ fontSize: 12 }}>{p.backend} · {p.id.slice(0, 8)}</span>
               <div className="stats">

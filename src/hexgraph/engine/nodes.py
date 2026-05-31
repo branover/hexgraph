@@ -88,6 +88,9 @@ def get_or_create_node(
         # Upgrade to a body hash when one is provided (force_hash); never downgrade.
         if content_hash and (force_hash or not existing.content_hash):
             existing.content_hash = content_hash
+        # Re-adding a soft-removed node restores it (and its hidden edges reappear).
+        if existing.archived:
+            existing.archived = False
         return existing
     node = Node(
         project_id=project_id, node_type=nt, target_id=target_id, name=name,

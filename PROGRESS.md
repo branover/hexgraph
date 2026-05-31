@@ -44,6 +44,15 @@ then run the resume verifier, then continue at the next unchecked task.
   harness, finding-per-crash, optional LLM triage). **Target soft-removal** (archive subtree, restore on
   re-add) and **firmware filesystem browser** (persisted unpacked tree, add any file as a child target;
   library exports → nodes; function nodes launch tasks).
+- **Entity removal (`engine/removal.py`, migration 0011 `node.archived`):** nodes **soft-archive** —
+  `archive_node` hides the node *and* the edges touching it (the graph already skips edges to hidden
+  endpoints); re-adding the same node (`get_or_create_node`) or `restore_node` brings it and its edges
+  back (nothing deleted). A single edge is a **hard delete** (`delete_edge`); a whole project is a hard
+  delete of all its rows + on-disk data dir (`delete_project`). Full surface: API (`DELETE
+  /api/projects/{id}`, `DELETE|POST .../nodes/{id}[/restore]`, `DELETE /api/edges/{id}`), MCP write tools
+  (`archive_node`/`restore_node`/`delete_edge`; `list_nodes` skips archived), and UI (NodeInspector
+  "Remove node", tap-an-edge → "Delete edge", Projects-card delete — all with confirm). Targets keep
+  their existing archive flow. Tests: `tests/test_removal.py`.
 - **LLM tool-use:** LLM tasks run an agent loop (`llm/runner.run_findings_agentic` + `engine/agent_tools.py`):
   the model calls sandboxed tools (decompile/strings/imports/…, fuzz when enabled), HexGraph executes them
   and feeds results back until findings. Superset of single-pass; mock drives it offline (`tool_calls`

@@ -90,6 +90,10 @@ code { font-family: var(--mono); }
 
 /* projects */
 .proj-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; margin-top: 18px; }
+.proj-card { position: relative; }
+.proj-card .trash { position: absolute; right: 10px; top: 10px; opacity: 0; transition: opacity .12s, color .12s; color: var(--muted); }
+.proj-card:hover .trash { opacity: .6; }
+.proj-card .trash:hover { opacity: 1; color: #ff6b6b; }
 .proj-card .name { font-weight: 700; font-size: 15.5px; display: block; }
 .proj-card .stats { display: flex; gap: 8px; margin-top: 12px; }
 .stat { background: var(--surface-3); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 12px; }

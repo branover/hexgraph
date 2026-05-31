@@ -68,6 +68,11 @@ async function patchJSON<T>(url: string, body: unknown): Promise<T> {
   if (!r.ok) throw new Error(`${r.status} ${url}`);
   return r.json() as Promise<T>;
 }
+async function delJSON<T>(url: string): Promise<T> {
+  const r = await fetch(url, { method: "DELETE" });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `${r.status} ${url}`);
+  return r.json() as Promise<T>;
+}
 
 export const api = {
   projects: () => getJSON<Project[]>("/api/projects"),
@@ -110,7 +115,11 @@ export const api = {
     if (!r.ok) throw new Error(`${r.status}`);
     return r.json();
   },
+  deleteProject: (pid: string) => delJSON<{ deleted_project: string; rows: Record<string, number> }>(`/api/projects/${pid}`),
   createNode: (pid: string, body: any) => postJSON<any>(`/api/projects/${pid}/nodes`, body),
+  removeNode: (pid: string, nid: string) => delJSON<{ archived: boolean; id: string }>(`/api/projects/${pid}/nodes/${nid}`),
+  restoreNode: (pid: string, nid: string) => postJSON<{ archived: boolean; id: string }>(`/api/projects/${pid}/nodes/${nid}/restore`, {}),
+  deleteEdge: (eid: string) => delJSON<{ deleted: boolean; id: string }>(`/api/edges/${eid}`),
   decompile: (tid: string, fn: string) => postJSON<{ available: boolean; detail?: string; focus?: any; functions?: string[] }>(`/api/targets/${tid}/decompile`, { function: fn }),
   filesystem: (tid: string) => getJSON<{ unpacked: boolean; method?: string; files: FsEntry[] }>(`/api/targets/${tid}/filesystem`),
   addFromFs: (pid: string, fwId: string, rel: string) => postJSON<any>(`/api/projects/${pid}/targets/${fwId}/add-from-fs`, { rel }),

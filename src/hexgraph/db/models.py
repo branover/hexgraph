@@ -177,6 +177,10 @@ class Node(Base):
     content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     attrs_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_by: Mapped[str] = mapped_column(String(32), default="recon")
+    # Soft removal: an archived node (and the edges touching it) is hidden from the
+    # graph/search; re-adding the same node (get_or_create_node) un-archives it and
+    # its edges reappear (they are never deleted). Mirrors target.archived.
+    archived: Mapped[bool] = mapped_column(default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

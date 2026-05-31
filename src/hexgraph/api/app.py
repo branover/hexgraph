@@ -196,6 +196,18 @@ def create_app() -> FastAPI:
             p = create_project(s, name=body.name.strip(), llm_backend=body.backend or "mock")
             return _project_dict(p)
 
+    @app.delete("/api/projects/{project_id}")
+    def api_delete_project(project_id: str):
+        """Permanently delete a project: all its rows + its on-disk data dir.
+        Destructive and irreversible (unlike target/node archive)."""
+        from hexgraph.engine.removal import delete_project
+
+        with session_scope() as s:
+            try:
+                return delete_project(s, project_id)
+            except ValueError as exc:
+                raise HTTPException(404, str(exc))
+
     @app.post("/api/projects/{project_id}/targets")
     def api_add_target(
         project_id: str,
@@ -333,6 +345,34 @@ def create_app() -> FastAPI:
             return {"id": n.id, "node_type": n.node_type, "name": n.name, "target_id": n.target_id,
                     "address": n.address, "attrs": n.attrs_json or {}}
 
+    @app.delete("/api/projects/{project_id}/nodes/{node_id}")
+    def api_remove_node(project_id: str, node_id: str):
+        """Soft-remove a node (REVERSIBLE): hides the node and the edges touching it.
+        Re-adding the same node, or POST .../restore, brings it and its edges back."""
+        from hexgraph.engine.removal import archive_node
+
+        with session_scope() as s:
+            if s.get(Project, project_id) is None:
+                raise HTTPException(404, "project not found")
+            try:
+                n = archive_node(s, project_id, node_id)
+            except ValueError as exc:
+                raise HTTPException(404, str(exc))
+            return {"archived": n.archived, "id": n.id}
+
+    @app.post("/api/projects/{project_id}/nodes/{node_id}/restore")
+    def api_restore_node(project_id: str, node_id: str):
+        from hexgraph.engine.removal import restore_node
+
+        with session_scope() as s:
+            if s.get(Project, project_id) is None:
+                raise HTTPException(404, "project not found")
+            try:
+                n = restore_node(s, project_id, node_id)
+            except ValueError as exc:
+                raise HTTPException(404, str(exc))
+            return {"archived": n.archived, "id": n.id}
+
     @app.post("/api/projects/{project_id}/edges")
     def api_create_edge(project_id: str, body: EdgeCreate):
         from hexgraph.engine.authoring import InvariantError, create_edge
@@ -362,6 +402,17 @@ def create_app() -> FastAPI:
             e.attrs_json = (merge_edge_attrs(e.type, e.attrs_json, body.attrs)
                             if body.merge else dict(body.attrs or {}))
             return {"id": e.id, "type": e.type, "attrs": e.attrs_json}
+
+    @app.delete("/api/edges/{edge_id}")
+    def api_delete_edge(edge_id: str):
+        """Permanently delete one edge (hard delete — recreate with POST .../edges to
+        restore). To remove a node's edges reversibly, archive the node instead."""
+        from hexgraph.engine.removal import delete_edge
+
+        with session_scope() as s:
+            if not delete_edge(s, edge_id):
+                raise HTTPException(404, "edge not found")
+            return {"deleted": True, "id": edge_id}
 
     @app.post("/api/projects/{project_id}/sockets")
     def api_create_socket(project_id: str, body: SocketCreate):

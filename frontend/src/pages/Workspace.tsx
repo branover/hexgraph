@@ -22,6 +22,7 @@ export default function Workspace() {
   const [caps, setCaps] = useState<Record<string, Record<string, string[]>>>({});
   const [selFinding, setSelFinding] = useState<Finding | null>(null);
   const [selNode, setSelNode] = useState<GraphNode | null>(null);
+  const [selEdge, setSelEdge] = useState<any | null>(null);
   const [selGraphId, setSelGraphId] = useState<string>();
   const [busy, setBusy] = useState<string>();
   const [tab, setTab] = useState<"findings" | "tasks">("findings");
@@ -203,7 +204,34 @@ export default function Workspace() {
     if (t) setLaunchFor({ target: t, type, objective: opts.objective, params: opts.params, parentFindingId: selFinding.id });
   };
 
+  const deleteEdge = async () => {
+    if (!selEdge) return;
+    if (!confirm(`Delete the ${selEdge.type} edge? This is permanent (re-create it with the Edge button to restore). To remove a node's edges reversibly, remove the node instead.`)) return;
+    await api.deleteEdge(selEdge.id);
+    setSelEdge(null);
+    await load();
+  };
+
   const renderDetail = () => {
+    if (selEdge) {
+      return (
+        <div className="insp scroll fade-in">
+          <div className="head"><Icon name="link" size={17} /><h3>{selEdge.type}</h3></div>
+          <div className="chips"><span className="tag">{selEdge.src_kind} → {selEdge.dst_kind}</span>
+            {selEdge.origin && <span className="tag">{selEdge.origin}</span>}
+            {typeof selEdge.confidence === "number" && <span className="tag">conf {selEdge.confidence}</span>}</div>
+          {Object.keys(selEdge.attrs || {}).length > 0 && (
+            <><div className="sec">Attributes</div>
+              <div className="kvs">{Object.entries(selEdge.attrs).map(([k, v]) => (
+                <span key={k} style={{ display: "contents" }}><span className="k">{k}</span><code>{String(typeof v === "object" ? JSON.stringify(v) : v)}</code></span>
+              ))}</div></>
+          )}
+          <div className="actions" style={{ marginTop: 12 }}>
+            <button className="btn sm ghost danger" onClick={deleteEdge}><Icon name="x" size={12} /> Delete edge</button>
+          </div>
+        </div>
+      );
+    }
     if (selTask) return <TaskDetail taskId={selTask} onViewFinding={viewFinding} onRerun={pollThenReload} />;
     if (selNode) {
       const tgt = selNode.type === "target" ? detail.targets.find((t) => t.id === selNode.id) : undefined;
@@ -282,7 +310,8 @@ export default function Workspace() {
               <div className="cov">{results.coverage?.note}</div>
             </div>
           )}
-          <GraphView graph={graph} selectedId={selGraphId} onSelect={onGraphSelect} />
+          <GraphView graph={graph} selectedId={selGraphId} onSelect={onGraphSelect}
+                     onEdgeSelect={(e) => { setSelEdge(e); if (e) { setSelNode(null); setSelFinding(null); setSelTask(undefined); } }} />
           {(() => {
             // Legend driven from the SAME color maps GraphView uses, showing only the
             // node/edge types actually present in this graph (single source of truth).

@@ -109,7 +109,7 @@ def list_nodes(project_id: str, target_id: str | None = None, node_type: str | N
     """List graph nodes (optionally filtered by target and/or node_type), with
     their address + attrs. The read path for the graph you've been building."""
     with session_scope() as s:
-        q = s.query(Node).filter(Node.project_id == project_id)
+        q = s.query(Node).filter(Node.project_id == project_id, Node.archived.is_(False))
         if target_id:
             q = q.filter(Node.target_id == target_id)
         if node_type:
@@ -312,6 +312,41 @@ def update_edge(edge_id: str, attrs: dict, merge: bool = True) -> dict:
             return {"error": "edge not found"}
         e.attrs_json = merge_edge_attrs(e.type, e.attrs_json, attrs) if merge else dict(attrs or {})
         return {"id": e.id, "type": e.type, "attrs": e.attrs_json}
+
+
+def archive_node(project_id: str, node_id: str) -> dict:
+    """Soft-remove a node from the graph (reversible). The node and the edges touching
+    it are hidden; re-adding the same node (create_node / a task) or restore_node brings
+    it and its edges back — nothing is deleted."""
+    from hexgraph.engine.removal import archive_node as _archive
+
+    with session_scope() as s:
+        try:
+            n = _archive(s, project_id, node_id)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        return {"id": n.id, "archived": n.archived}
+
+
+def restore_node(project_id: str, node_id: str) -> dict:
+    """Un-archive a previously soft-removed node (its hidden edges reappear)."""
+    from hexgraph.engine.removal import restore_node as _restore
+
+    with session_scope() as s:
+        try:
+            n = _restore(s, project_id, node_id)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        return {"id": n.id, "archived": n.archived}
+
+
+def delete_edge(edge_id: str) -> dict:
+    """Permanently delete one edge (hard delete — re-create it with create_edge to
+    bring it back). To remove a node's edges reversibly, archive the node instead."""
+    from hexgraph.engine.removal import delete_edge as _del
+
+    with session_scope() as s:
+        return {"deleted": _del(s, edge_id), "edge_id": edge_id}
 
 
 def create_socket(project_id: str, kind: str = "tcp", port: int | str | None = None,
@@ -751,6 +786,12 @@ _CATALOG = [
      {"type": "object", "properties": {"project_id": {"type": "string"}, "node_kind": {"type": "string"}, "node_id": {"type": "string"}, "kind": {"type": "string"}, "value": {"type": "string"}}, "required": ["project_id", "node_kind", "node_id", "kind", "value"]}),
     ("write", "merge_duplicates", merge_duplicates, "Collapse duplicate binaries/nodes (e.g. sym.foo == foo) in a project, preserving all edges/findings.",
      {"type": "object", "properties": {"project_id": {"type": "string"}}, "required": ["project_id"]}),
+    ("write", "archive_node", archive_node, "Soft-remove a node from the graph (REVERSIBLE): hides the node and the edges touching it. Re-adding the same node (create_node/a task) or restore_node brings it and its edges back — nothing is deleted.",
+     {"type": "object", "properties": {"project_id": {"type": "string"}, "node_id": {"type": "string"}}, "required": ["project_id", "node_id"]}),
+    ("write", "restore_node", restore_node, "Un-archive a previously soft-removed node; its hidden edges reappear.",
+     {"type": "object", "properties": {"project_id": {"type": "string"}, "node_id": {"type": "string"}}, "required": ["project_id", "node_id"]}),
+    ("write", "delete_edge", delete_edge, "Permanently delete ONE edge by id (hard delete — recreate with create_edge to restore). To remove a node's edges reversibly, archive the node instead.",
+     {"type": "object", "properties": {"edge_id": {"type": "string"}}, "required": ["edge_id"]}),
     ("write", "link_same_code", link_same_code, "Cross-target n-day primitive: link functions with identical code (same content_hash) across DIFFERENT binaries via similar_to edges, and return the matches (each side flags has_findings). Run after confirming a bug to find the same routine reused elsewhere.",
      {"type": "object", "properties": {"project_id": {"type": "string"}}, "required": ["project_id"]}),
     ("write", "propagate_finding", propagate_finding, "N-day: clone an existing finding onto another binary that shares the same code (per link_same_code) as a fresh finding to triage, wired derived_from→ the source. Avoids re-typing the whole finding for 'same bug, other binary'.",
