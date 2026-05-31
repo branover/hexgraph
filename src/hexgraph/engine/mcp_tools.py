@@ -143,16 +143,23 @@ def search(project_id: str, q: str) -> dict:
 
 
 def list_findings(project_id: str) -> list[dict]:
-    """Existing findings, so the agent doesn't re-report what's already known."""
+    """Existing findings, so the agent doesn't re-report what's already known. Each row
+    carries `verified` and, for a PoC that ran, a compact `verification` summary
+    {verified, detail} so you can see at a glance whether it confirmed — call
+    get_finding(id) for the full evidence (incl. the PoC spec in evidence.extra)."""
     with session_scope() as s:
         rows = s.query(Finding).filter(Finding.project_id == project_id).all()
         out = []
         for f in rows:
             ev = f.evidence_json or {}
-            out.append({"id": f.id, "title": f.title, "severity": f.severity, "category": f.category,
-                        "status": f.status, "finding_type": f.finding_type,
-                        "verified": is_verified(ev), "target_id": f.target_id,
-                        "function": ev.get("function")})
+            row = {"id": f.id, "title": f.title, "severity": f.severity, "category": f.category,
+                   "status": f.status, "finding_type": f.finding_type,
+                   "verified": is_verified(ev), "target_id": f.target_id,
+                   "function": ev.get("function")}
+            ver = ((ev.get("extra") or {}).get("verification"))
+            if ver:
+                row["verification"] = {"verified": bool(ver.get("verified")), "detail": ver.get("detail")}
+            out.append(row)
         return out
 
 
@@ -465,6 +472,24 @@ def set_hypothesis_status(hypothesis_id: str, status: str, rationale: str | None
             return {"error": str(exc)}
 
 
+def _decompiler_info() -> dict:
+    """Which decompiler decompile_function/disassemble use right now, and how to change
+    it — so an agent knows it can't flip it itself (the operator does, in Settings)."""
+    from hexgraph.sandbox.decompiler import _resolve_name
+
+    active = _resolve_name(None)
+    return {
+        "active": active,
+        "available_default": "radare2",
+        "note": "decompile_function / disassemble use the OPERATOR-configured decompiler "
+                "automatically — you don't select it. radare2 is the always-available default; "
+                "Ghidra is used when the operator enables features.ghidra in Settings AND the "
+                "sandbox image was built with Ghidra (`make sandbox-build WITH_GHIDRA=1`). There "
+                "is intentionally no MCP tool to toggle this (it's an operator setting). If you "
+                "want Ghidra and `active` here is 'radare2', ask the operator to enable it.",
+    }
+
+
 def get_schemas() -> dict:
     """The write-API contract: allowed enums + the Finding shape. Read this before
     record_finding / create_node / create_edge / annotate to avoid guessing."""
@@ -534,6 +559,7 @@ def get_schemas() -> dict:
                             "pre-materializes function nodes (address=null). create_node on an existing "
                             "one MERGES: it fills a missing address and unions attrs (it won't overwrite "
                             "a known address). The returned address/attrs show what actually landed.",
+        "decompiler": _decompiler_info(),
         "annotation_kinds": sorted(ANN_KINDS),
         "annotation_node_kinds": sorted(ANN_NODE_KINDS),
         "annotation_note": "Annotations from an agent land status='proposed' (pending analyst approval).",

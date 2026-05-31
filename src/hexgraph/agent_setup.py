@@ -60,7 +60,11 @@ that haven't been analyzed yet.
   who reaches them — start there to find the attack surface fast. `xrefs <sink>`
   lists exactly which functions call a given sink and where.
 - `list_functions`, then `decompile_function` / `disassemble` the suspicious ones;
-  follow callees and `list_strings`. Trace untrusted input → dangerous sink.
+  follow callees and `list_strings`. Trace untrusted input → dangerous sink. (These use
+  the operator-configured decompiler automatically — radare2 by default, Ghidra if the
+  operator enabled it; you don't pick it. `get_schemas.decompiler.active` shows which is
+  live. If you want Ghidra and it's not active, ask the operator to enable it — there's no
+  tool to flip it yourself.)
 - Go deeper with `run_task` (`static_analysis`, `harness_generation`, `fuzzing`),
   and **`verify_poc`** to PROVE exploitability (a confirmed PoC is the gold bar).
 

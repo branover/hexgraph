@@ -37,8 +37,9 @@ install: venv ## Install the Python package (server + dev extras) into the venv
 ui: ## Build the React SPA into the package (needs Node/npm)
 	cd frontend && npm install && npm run build
 
-sandbox-build: ## Build the analysis sandbox Docker image (add WITH_GHIDRA=1 to include Ghidra)
-	docker build -f Dockerfile.sandbox -t hexgraph-sandbox:latest .
+WITH_GHIDRA ?= 0
+sandbox-build: ## Build the analysis sandbox Docker image (WITH_GHIDRA=1 to include Ghidra headless)
+	docker build -f Dockerfile.sandbox --build-arg WITH_GHIDRA=$(WITH_GHIDRA) -t hexgraph-sandbox:latest .
 
 serve: ## Start the loopback-only API/UI (http://127.0.0.1:8765)
 	$(PY) -m hexgraph.cli serve
