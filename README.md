@@ -347,6 +347,26 @@ unsandboxed, never on the host.
 
 ---
 
+## Running with Docker Compose
+
+An alternative to the venv path: `docker compose up` builds and starts the loopback-only UI service,
+published to `127.0.0.1:8765`. It launches the disposable analysis sandbox via the host's Docker
+socket, so build the sandbox image on the host first:
+
+```bash
+make sandbox-build          # (add WITH_GHIDRA=1 for Ghidra)
+docker compose up
+```
+
+The container binds `0.0.0.0` internally (the only way a published port reaches the process) and sets
+`HEXGRAPH_I_KNOW_WHAT_IM_DOING=1` deliberately — the real exposure control is the `127.0.0.1:` publish,
+which keeps HexGraph host-loopback-only. The venv quickstart above is still the simplest way to run it.
+
+---
+
 ## License
 
-> 🚧 To be determined. HexGraph is intended to be fully free and open (no license gates, no paid tiers).
+**[AGPL-3.0](LICENSE).** HexGraph is free and open — use, run, study, and modify it freely. The
+copyleft terms mean any modified version you distribute *or offer over a network* must also be released
+under the AGPL-3.0, so the project (and improvements to it) stay open: no one can ship a closed,
+proprietary fork. No license gates, no paid tiers.
