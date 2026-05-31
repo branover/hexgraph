@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, Enum, Float, ForeignKey, String, Text
+from sqlalchemy import JSON, DateTime, Enum, Float, ForeignKey, Index, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -178,6 +178,14 @@ class Edge(Base):
     entities (target | node | finding | task)."""
 
     __tablename__ = "edge"
+    # Composite indexes for the polymorphic endpoint lookups (created in migrations);
+    # declared here so create_all matches a migrated DB. The single-column src_id/
+    # dst_id indexes below (index=True) additionally serve edges_touching(), which
+    # filters on an id alone (no project_id) and so can't use the composite ones.
+    __table_args__ = (
+        Index("ix_edge_src", "project_id", "src_kind", "src_id"),
+        Index("ix_edge_dst", "project_id", "dst_kind", "dst_id"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     project_id: Mapped[str] = mapped_column(ForeignKey("project.id"), index=True)
