@@ -50,14 +50,22 @@ vulnrouter: ## Stand up the live vulnrouter web target + a project pointed at it
 firmae-build: ## Build the FirmAE rehosting image (heavy; needs privileged Docker + /dev/net/tun to run)
 	docker build -f docker/firmae/Dockerfile -t hexgraph-firmae:latest .
 
-IOTGOAT_URL ?= https://github.com/OWASP/IoTGoat/releases/download/v1.0/IoTGoat-rpi-2.img.gz
+# IoTGoat's ARM (Raspberry Pi 2) image — uncompressed, FirmAE-friendly. Override IOTGOAT_URL
+# for the x86 build (IoTGoat-x86.img.gz) or FW=<path> to use a local image.
+IOTGOAT_URL ?= https://github.com/OWASP/IoTGoat/releases/download/v1.0/IoTGoat-raspberry-pi2.img
 iotgoat: ## Fetch IoTGoat (FW=<path> to use your own), rehost it, register its live web surface
-	@if [ -z "$(FW)" ]; then \
-		echo "downloading IoTGoat → /tmp/IoTGoat.img.gz (override with FW=<path>)"; \
-		curl -fSL "$(IOTGOAT_URL)" -o /tmp/IoTGoat.img.gz && gunzip -f /tmp/IoTGoat.img.gz; \
-		$(PY) scripts/rehost_engagement.py /tmp/IoTGoat.img --name "IoTGoat"; \
-	else \
+	@if [ -n "$(FW)" ]; then \
 		$(PY) scripts/rehost_engagement.py "$(FW)" --name "IoTGoat"; \
+	else \
+		set -e; \
+		case "$(IOTGOAT_URL)" in \
+			*.gz) dl=/tmp/IoTGoat.img.gz; img=/tmp/IoTGoat.img;; \
+			*)    dl=/tmp/IoTGoat.img;    img=/tmp/IoTGoat.img;; \
+		esac; \
+		echo "downloading IoTGoat → $$dl (override with FW=<path> or IOTGOAT_URL=<url>)"; \
+		curl -fSL "$(IOTGOAT_URL)" -o "$$dl"; \
+		[ "$$dl" != "$$img" ] && gunzip -f "$$dl" || true; \
+		$(PY) scripts/rehost_engagement.py "$$img" --name "IoTGoat"; \
 	fi
 
 test: ## Run the test suite against the mock backend (offline)

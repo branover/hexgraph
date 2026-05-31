@@ -24,6 +24,13 @@ def main() -> int:
     ap.add_argument("--name", default=None, help="target name")
     args = ap.parse_args()
 
+    import os
+    if not os.path.isfile(args.firmware):
+        print(f"error: firmware image not found: {args.firmware}\n"
+              "(download IoTGoat with `make iotgoat`, or pass an existing image path.)",
+              file=sys.stderr)
+        return 2
+
     from hexgraph import settings
     from hexgraph.db.migrate import prepare_database
     from hexgraph.db.session import session_scope
