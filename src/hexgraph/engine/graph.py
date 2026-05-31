@@ -22,8 +22,8 @@ def build_graph(session: Session, project_id: str) -> dict:
     ).all()
     live_ids = {t.id for t in targets}
     code_nodes = [
-        n for n in session.query(Node).filter(Node.project_id == project_id).all()
-        if n.target_id is None or n.target_id in live_ids  # hide nodes under archived targets
+        n for n in session.query(Node).filter(Node.project_id == project_id, Node.archived.is_(False)).all()
+        if n.target_id is None or n.target_id in live_ids  # hide archived nodes + nodes under archived targets
     ]
     edges = session.query(Edge).filter(Edge.project_id == project_id).all()
     findings = [

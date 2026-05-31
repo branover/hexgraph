@@ -29,7 +29,7 @@ export const EDGE_C: Record<string, string> = {
 const ALWAYS_LABEL = new Set(["taints", "bypasses", "listens_on", "connects_to", "routes_to"]);
 const RESOLVED = new Set(["confirmed", "dismissed", "reported"]);
 
-export default function GraphView({ graph, onSelect, selectedId }: { graph: Graph; onSelect: (id: string, type: string) => void; selectedId?: string }) {
+export default function GraphView({ graph, onSelect, onEdgeSelect, selectedId }: { graph: Graph; onSelect: (id: string, type: string) => void; onEdgeSelect?: (edge: Graph["edges"][number] | null) => void; selectedId?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const cyRef = useRef<cytoscape.Core>();
   const tapRef = useRef<{ id: string | null; t: number }>({ id: null, t: 0 });
@@ -125,9 +125,15 @@ export default function GraphView({ graph, onSelect, selectedId }: { graph: Grap
       ],
       layout: { name: "dagre", rankDir: "LR", nodeSep: 26, rankSep: 72, padding: 24 } as any,
     });
+    const edgeById = new Map(graph.edges.map((e) => [e.id, e] as const));
+    cy.on("tap", "edge", (evt) => {
+      cy.edges().removeClass("lit"); evt.target.addClass("lit");
+      onEdgeSelect?.(edgeById.get(evt.target.id()) || null);
+    });
     cy.on("tap", "node", (evt) => {
       const id = evt.target.id();
       onSelect(id, evt.target.data("gtype"));
+      onEdgeSelect?.(null);
       cy.edges().removeClass("lit"); evt.target.connectedEdges().addClass("lit");
       const now = performance.now();
       if (tapRef.current.id === id && now - tapRef.current.t < 350) {
@@ -136,7 +142,7 @@ export default function GraphView({ graph, onSelect, selectedId }: { graph: Grap
         tapRef.current = { id: null, t: 0 };
       } else tapRef.current = { id, t: now };
     });
-    cy.on("tap", (evt) => { if (evt.target === cy) cy.edges().removeClass("lit"); });
+    cy.on("tap", (evt) => { if (evt.target === cy) { cy.edges().removeClass("lit"); onEdgeSelect?.(null); } });
     cyRef.current = cy;
     return () => cy.destroy();
   }, [graph, findings, showFns, collapsed]);

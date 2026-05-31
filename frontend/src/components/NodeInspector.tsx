@@ -35,6 +35,13 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
     onChanged?.();
   };
 
+  const removeNode = async () => {
+    if (!projectId) return;
+    if (!confirm(`Remove “${node.label}” from the graph? Its edges are hidden too. Re-adding the same node (or a task that finds it) brings it and its edges back — nothing is deleted.`)) return;
+    await api.removeNode(projectId, node.id);
+    onChanged?.();
+  };
+
   return (
     <div className="insp scroll fade-in">
       <div className="head"><Icon name={icon || "binary"} size={17} /><h3>{node.label}</h3></div>
@@ -125,6 +132,13 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
               ? "Part of a dataflow path — follow its taints / bypasses edges in the graph to the source or sink."
               : "Explore this node's edges in the graph for its relationships."}
           </div>
+          {projectId && (
+            <div className="actions" style={{ marginTop: 12 }}>
+              <button className="btn sm ghost danger" onClick={removeNode} title="Soft-remove (reversible)">
+                <Icon name="x" size={12} /> Remove node
+              </button>
+            </div>
+          )}
         </>
       )}
 
