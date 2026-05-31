@@ -150,12 +150,14 @@ def run_web_recon(session: Session, project: Project, target: Target, task=None,
                   dest=dest, allowed=True, tool="web_recon", detail=scope.rationale)
 
     from hexgraph.sandbox.executor import get_executor
+    from hexgraph import settings
     runner = runner or get_executor()
     endpoints = (target.metadata_json or {}).get("endpoints") or []
+    timeout = int(settings.get("features.network.timeout", 30) or 30)
     channel = {"base_url": base_url, "allow": sorted(scope.allow),
                "endpoints": [{"method": e.get("method", "GET"), "path": e.get("path", "/")}
                              for e in endpoints],
-               "timeout": 15}
+               "timeout": timeout}
     result = runner.run_channel_probe("surface_probe.py", channel=channel)
 
     alive = 0

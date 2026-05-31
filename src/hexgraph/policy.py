@@ -89,7 +89,11 @@ def _host_is_local(host: str) -> bool:
         ip = ipaddress.ip_address(host)
     except ValueError:
         return False
-    return ip.is_loopback or ip.is_private or ip.is_link_local
+    # Loopback + RFC1918 private only. Link-local is deliberately EXCLUDED so the
+    # cloud-metadata endpoint (169.254.169.254) is never reachable — an SSRF vector
+    # unrelated to a local web/rehost target. (Python's is_private INCLUDES
+    # link-local, so it must be subtracted explicitly.)
+    return (ip.is_loopback or ip.is_private) and not ip.is_link_local
 
 
 def local_network_scope(base_url: str) -> NetworkScope:

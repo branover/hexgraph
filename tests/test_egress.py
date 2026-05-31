@@ -31,7 +31,8 @@ def test_local_network_scope_refuses_public_hosts():
                "http://localhost", "http://[::1]:80"):
         scope = policy.local_network_scope(ok)
         assert len(scope.allow) == 1
-    for public in ("http://example.com", "http://8.8.8.8", "https://1.1.1.1", "http://93.184.216.34"):
+    for public in ("http://example.com", "http://8.8.8.8", "https://1.1.1.1", "http://93.184.216.34",
+                   "http://169.254.169.254"):  # incl. the cloud-metadata link-local SSRF vector
         with pytest.raises(policy.PolicyViolation):
             policy.local_network_scope(public)
 
