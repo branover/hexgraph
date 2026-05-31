@@ -26,7 +26,6 @@ import subprocess
 import sys
 
 SCRATCH = os.environ.get("TMPDIR", "/scratch")
-FUZZER = os.path.join(SCRATCH, "fuzzer")
 
 _ASAN_TYPE = re.compile(r"(?:ERROR|SUMMARY): AddressSanitizer: ([a-zA-Z0-9_\-]+)")
 _LIBFUZZER_DEADLY = re.compile(r"==\d+== ERROR|libFuzzer: (deadly signal|timeout|out-of-memory)")
@@ -85,6 +84,10 @@ def main() -> int:
         return _emit({"compiled": False, "ran": False,
                       "error": "clang+libFuzzer not in sandbox image (rebuild with fuzzing toolchain)"})
 
+    # Build + run the fuzzer in the /out bind-mount: the tmpfs /scratch can be
+    # noexec / not writable for an output executable, whereas /out is a host bind
+    # mount (writable + executable, same place crash artifacts are collected).
+    FUZZER = os.path.join(outdir, "fuzzer")
     cmd = [clang, "-g", "-O1", "-w", "-fsanitize=fuzzer,address", src, "-o", FUZZER]
     if target_lib and os.path.isfile(target_lib):
         cmd.append(target_lib)
@@ -98,7 +101,7 @@ def main() -> int:
         [FUZZER, "-fork=1", "-ignore_crashes=1", "-ignore_timeouts=1", "-ignore_ooms=1",
          f"-max_total_time={max_total_time}", f"-max_len={max_len}",
          "-rss_limit_mb=2048", f"-artifact_prefix={outdir.rstrip('/')}/"],
-        capture_output=True, text=True, cwd=SCRATCH,
+        capture_output=True, text=True, cwd=outdir,
     )
     out = (run.stdout or "") + "\n" + (run.stderr or "")
     execs = None
@@ -116,7 +119,7 @@ def main() -> int:
     for path in artifacts[: max_crashes * 2]:
         data = open(path, "rb").read()
         sha = hashlib.sha256(data).hexdigest()
-        repro = subprocess.run([FUZZER, path], capture_output=True, text=True, cwd=SCRATCH)
+        repro = subprocess.run([FUZZER, path], capture_output=True, text=True, cwd=outdir)
         info = parse_asan((repro.stdout or "") + (repro.stderr or ""))
         sig = (info["kind"], info["function"])
         if sig in seen:
