@@ -87,7 +87,12 @@ class SandboxRunner:
             "--memory", "2g",
             "--cpus", "2",
             "--pids-limit", "256",
-            "--tmpfs", "/scratch:rw,size=512m",
+            # mode=1777 (world-writable + sticky, like /tmp) so the non-root probe
+            # user can create files/dirs; exec so compiled PoCs/JVM scratch can run.
+            "--tmpfs", "/scratch:rw,exec,mode=1777,size=512m",
+            # Writable /tmp too: tools (Ghidra's java.io.tmpdir, mktemp callers)
+            # assume it, and the rootfs is read-only.
+            "--tmpfs", "/tmp:rw,exec,mode=1777,size=512m",
             "--workdir", "/scratch",
             # Point HOME/TMP at the tmpfs so tools needing a writable home work
             # under the read-only rootfs.

@@ -6,8 +6,10 @@ FROM debian:bookworm-slim
 
 ARG WITH_GHIDRA=0
 # Ghidra release to install when WITH_GHIDRA=1 (large: pulls a JDK + ~400MB Ghidra).
-ARG GHIDRA_VERSION=11.3.2
-ARG GHIDRA_DATE=20250415
+# Ghidra 11.1.2 is the last line that runs on JDK 17 (this image's openjdk-17);
+# 11.2+ needs JDK 21. Bump both together with the JDK if you move up.
+ARG GHIDRA_VERSION=11.1.2
+ARG GHIDRA_DATE=20240709
 ARG GHIDRA_URL=https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${GHIDRA_VERSION}_build/ghidra_${GHIDRA_VERSION}_PUBLIC_${GHIDRA_DATE}.zip
 # radare2 isn't in bookworm-slim's apt sources, so install the upstream .deb.
 ARG R2_VERSION=6.1.4
