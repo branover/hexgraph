@@ -32,6 +32,7 @@ def add_edge(
     created_by_task_id: str | None = None,
     created_by_tool: str | None = None,
     attrs: dict[str, Any] | None = None,
+    merge: bool = False,
 ) -> Edge:
     src_kind, src_id = src
     dst_kind, dst_id = dst
@@ -39,10 +40,36 @@ def add_edge(
         raise ValueError(f"edge endpoints must be one of {EDGE_KINDS}; got {src_kind!r}/{dst_kind!r}")
     if isinstance(confidence, str):
         confidence = CONFIDENCE.get(confidence)
+    type_str = type.value if isinstance(type, EdgeType) else str(type)
+
+    if merge:
+        # One edge per (src, dst, type): fold a repeat into the existing edge,
+        # accumulating contributing finding ids instead of drawing a parallel edge.
+        existing = (
+            session.query(Edge)
+            .filter(Edge.project_id == project_id, Edge.type == type_str,
+                    Edge.src_kind == src_kind, Edge.src_id == src_id,
+                    Edge.dst_kind == dst_kind, Edge.dst_id == dst_id)
+            .first()
+        )
+        if existing is not None:
+            merged = dict(existing.attrs_json or {})
+            ids = list(merged.get("finding_ids") or ([merged["finding_id"]] if merged.get("finding_id") else []))
+            new_fid = (attrs or {}).get("finding_id")
+            if new_fid and new_fid not in ids:
+                ids.append(new_fid)
+            if ids:
+                merged["finding_ids"] = ids
+            if confidence is not None and (existing.confidence is None or confidence > existing.confidence):
+                existing.confidence = confidence
+            existing.attrs_json = merged
+            session.flush()
+            return existing
+
     edge = Edge(
         project_id=project_id,
         src_kind=src_kind, src_id=src_id, dst_kind=dst_kind, dst_id=dst_id,
-        type=type.value if isinstance(type, EdgeType) else str(type),
+        type=type_str,
         directed=directed, confidence=confidence, weight=weight, origin=origin,
         created_by_task_id=created_by_task_id, created_by_tool=created_by_tool,
         attrs_json=attrs or {},

@@ -46,15 +46,24 @@ def build_graph(session: Session, project_id: str) -> dict:
             }
         )
 
-    out_edges = [
-        {
-            "id": e.id, "source": e.src_id, "target": e.dst_id, "type": e.type,
-            "src_kind": e.src_kind, "dst_kind": e.dst_kind,
-            "origin": e.origin, "confidence": e.confidence,
-        }
-        for e in edges
-    ]
-    return {"project_id": project_id, "nodes": nodes, "edges": out_edges}
+    # Collapse parallel edges of the same type between the same endpoints into a
+    # single edge (e.g. three findings each relating httpd→libupnp draw one
+    # related_to edge, not three). Distinct types between the same pair are kept.
+    collapsed: dict[tuple, dict] = {}
+    for e in edges:
+        key = (e.src_id, e.dst_id, e.type)
+        existing = collapsed.get(key)
+        if existing is None:
+            collapsed[key] = {
+                "id": e.id, "source": e.src_id, "target": e.dst_id, "type": e.type,
+                "src_kind": e.src_kind, "dst_kind": e.dst_kind,
+                "origin": e.origin, "confidence": e.confidence, "count": 1,
+            }
+        else:
+            existing["count"] += 1
+            if e.confidence is not None and (existing["confidence"] is None or e.confidence > existing["confidence"]):
+                existing["confidence"] = e.confidence
+    return {"project_id": project_id, "nodes": nodes, "edges": list(collapsed.values())}
 
 
 def export_graph(session: Session, project_id: str, path: str | Path) -> Path:

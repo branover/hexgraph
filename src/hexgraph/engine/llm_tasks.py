@@ -264,6 +264,9 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
                 src=("target", target.id), dst=("target", dst.id),
                 type=edge_type, origin="llm", confidence=finding.confidence,
                 created_by_task_id=task.id,
+                # One edge per (src,dst,type): repeats fold in, accumulating finding ids
+                # instead of drawing parallel duplicates (graph stays readable).
+                merge=True,
                 attrs={
                     "finding_id": row.id,
                     # B3: link the match back to the seed finding that triggered the sweep.
