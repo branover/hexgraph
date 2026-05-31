@@ -1,6 +1,6 @@
 # UI improvement backlog
 
-## From the VR UX evaluation (`docs/ux-eval-vr.md`, 2026-05-30)
+## From the VR UX evaluation (2026-05-30)
 
 **Done (this session):**
 - [x] Stale finding status in the detail panel after Accept/Dismiss — `load()` now refreshes the

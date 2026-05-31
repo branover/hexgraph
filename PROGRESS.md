@@ -76,7 +76,12 @@ then run the resume verifier, then continue at the next unchecked task.
   **Verified end-to-end:** DVRF `DVRF_v03.bin` (Linksys E1550, MIPS) → 218 ELFs extracted; `verify_poc`
   on its real `/bin/busybox` (MIPS LE, uClibc, dynamically linked) ran under qemu-mipsel and returned
   verified:true. Dockerfile layers ordered after Ghidra so rebuilds keep the cached Ghidra layer.
-- **Last verified:** `.venv/bin/python -m pytest -q` → 239 passed, 2 skipped (live test skips without a
+- **Code-review pass (5 parallel agents: security/bugs/clutter/docs/tests):** sandbox hardening
+  (`--cap-drop ALL`, `--security-opt no-new-privileges`, `--user`); fixed an r2 command-injection via
+  unvalidated function names (decompile_probe); sha256 at ingest (archive/restore without recon);
+  dedupe edge-cascade; misc leaks/idempotency; added `findings.is_verified` helper; new tests
+  (secret-never-logged, loopback startup, unpack manifest, regression guards). Merged to `main` (PR #1).
+- **Last verified:** `.venv/bin/python -m pytest -q` → 246 passed, 2 skipped (live test skips without a
   key; one Docker-gated when the sandbox image is absent); SPA builds clean. Sandbox image
   (`WITH_GHIDRA=1`) includes Ghidra + qemu + firmware extractors and works end-to-end.
 - **UI quickstart (updated):** `make ui` once → `make sandbox-build` once →
