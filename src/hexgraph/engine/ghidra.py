@@ -90,6 +90,49 @@ def _probe_ghidra_present() -> dict:
     return {"present": False, "detail": out.get("detail", "Ghidra is not installed in the sandbox image.")}
 
 
+def enrich_enabled() -> bool:
+    g = ghidra_config()
+    return bool(g["enabled"] and g.get("enrich_recon") and g["mode"] == "headless")
+
+
+def enrich_target(session, project, target) -> dict:
+    """Materialize Ghidra's function inventory, call graph, and recovered structs
+    into the typed graph (best-effort). Bounded so it never floods the graph.
+    Returns a summary; raises only on a hard sandbox failure (caller guards)."""
+    from hexgraph.db.models import EdgeType, NodeType
+    from hexgraph.engine.edges import add_edge
+    from hexgraph.engine.nodes import get_or_create_node, materialize_function
+    from hexgraph.sandbox.executor import get_executor
+
+    data = get_executor().run_json_probe("ghidra_probe.py", target.path)
+    if "error" in data:
+        return {"ok": False, "detail": data["error"]}
+
+    fn_nodes: dict[str, str] = {}
+    for name in (data.get("functions") or [])[:200]:
+        node = materialize_function(session, project_id=project.id, target_id=target.id,
+                                    name=name, created_by="ghidra")
+        fn_nodes[name] = node.id
+
+    edges = 0
+    for caller, callee in (data.get("calls") or [])[:1000]:
+        if caller not in fn_nodes or callee not in fn_nodes:
+            continue
+        add_edge(session, project_id=project.id, src=("node", fn_nodes[caller]),
+                 dst=("node", fn_nodes[callee]), type=EdgeType.calls, origin="ghidra", confidence=0.9)
+        edges += 1
+
+    structs = 0
+    for st_ in (data.get("structs") or [])[:100]:
+        get_or_create_node(session, project_id=project.id, node_type=NodeType.struct,
+                           name=st_.get("name", "struct"), target_id=target.id,
+                           attrs={"size": st_.get("size"), "fields": st_.get("fields", [])},
+                           created_by="ghidra")
+        structs += 1
+
+    return {"ok": True, "functions": len(fn_nodes), "calls": edges, "structs": structs}
+
+
 def _self_artifact() -> str:
     """A throwaway file to satisfy the probe's read-only artifact mount during a
     --check (the probe ignores it when --check is passed)."""

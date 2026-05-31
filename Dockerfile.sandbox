@@ -5,6 +5,10 @@
 FROM debian:bookworm-slim
 
 ARG WITH_GHIDRA=0
+# Ghidra release to install when WITH_GHIDRA=1 (large: pulls a JDK + ~400MB Ghidra).
+ARG GHIDRA_VERSION=11.3.2
+ARG GHIDRA_DATE=20250415
+ARG GHIDRA_URL=https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${GHIDRA_VERSION}_build/ghidra_${GHIDRA_VERSION}_PUBLIC_${GHIDRA_DATE}.zip
 # radare2 isn't in bookworm-slim's apt sources, so install the upstream .deb.
 ARG R2_VERSION=6.1.4
 
@@ -34,10 +38,20 @@ RUN pip3 install --no-cache-dir --break-system-packages \
         python-magic \
         r2pipe
 
-# Ghidra is opt-in (decompiler workhorse, large). The R2Decompiler is the v1
-# default; this hook lets Ghidra drop in later without changing task code.
+# Ghidra is opt-in (large; pulls a headless JDK + the Ghidra distribution). The
+# R2Decompiler stays the always-available default; GhidraDecompiler is selected
+# only when enabled in Settings. analyzeHeadless lands at $GHIDRA_INSTALL_DIR.
+ENV GHIDRA_INSTALL_DIR=/opt/ghidra
 RUN if [ "$WITH_GHIDRA" = "1" ]; then \
-        echo "TODO: install Ghidra headless here when WITH_GHIDRA=1"; \
+        apt-get update && apt-get install -y --no-install-recommends \
+            openjdk-17-jdk-headless unzip wget \
+        && wget -q -O /tmp/ghidra.zip "$GHIDRA_URL" \
+        && unzip -q /tmp/ghidra.zip -d /opt \
+        && mv /opt/ghidra_* /opt/ghidra \
+        && rm -f /tmp/ghidra.zip \
+        && rm -rf /var/lib/apt/lists/* ; \
+    else \
+        echo "Ghidra not included (build with --build-arg WITH_GHIDRA=1 to enable headless Ghidra)"; \
     fi
 
 # Bake the probe scripts into the image (no code is mounted at run time, except

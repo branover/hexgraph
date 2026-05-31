@@ -20,9 +20,10 @@ def test_get_decompiler_default_is_r2():
 
 
 def test_ghidra_decompiler_is_opt_in():
-    import pytest
+    # Ghidra is now wired behind the Decompiler seam, but stays opt-in: radare2 is
+    # the default and Ghidra is only selected when enabled in Settings (or asked
+    # for explicitly). Selecting it returns the wrapper without running anything.
+    from hexgraph.sandbox.decompiler import GhidraDecompiler, R2Decompiler, get_decompiler
 
-    from hexgraph.sandbox.decompiler import get_decompiler
-
-    with pytest.raises(NotImplementedError):
-        get_decompiler("ghidra")
+    assert isinstance(get_decompiler(), R2Decompiler)  # default unchanged
+    assert isinstance(get_decompiler("ghidra"), GhidraDecompiler)

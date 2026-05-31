@@ -20,6 +20,21 @@ from hexgraph.engine.unpack import build_links_against, unpack_firmware
 from hexgraph.sandbox.executor import Executor, get_executor
 
 _FIRMWARE_FORMATS = {"squashfs", "cpio"}
+_ENRICHABLE_KINDS = {"executable", "shared_library"}
+
+
+def _maybe_enrich_ghidra(session: Session, project: Project, target: Target, facts: dict) -> None:
+    """Optionally fold Ghidra's function/call-graph/struct inventory into the graph
+    (Settings → features.ghidra.enrich_recon). Best-effort: never breaks recon."""
+    if facts.get("kind") not in _ENRICHABLE_KINDS:
+        return
+    try:
+        from hexgraph.engine.ghidra import enrich_enabled, enrich_target
+
+        if enrich_enabled():
+            enrich_target(session, project, target)
+    except Exception:  # noqa: BLE001 — enrichment is an optional bonus pass
+        pass
 
 
 def analyze_target(
@@ -35,8 +50,11 @@ def analyze_target(
     is_firmware = facts.get("kind") == "firmware_image" or facts.get("format") in _FIRMWARE_FORMATS
     if is_firmware:
         for child in unpack_firmware(session, project, target, runner):
-            run_recon(session, project, child, runner)
+            _child_finding, child_facts = run_recon(session, project, child, runner)
+            _maybe_enrich_ghidra(session, project, child, child_facts)
             summary["children"].append({"target_id": child.id, "name": child.name})
+    else:
+        _maybe_enrich_ghidra(session, project, target, facts)
     return summary
 
 
