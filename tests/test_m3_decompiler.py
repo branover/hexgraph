@@ -22,6 +22,10 @@ def test_xrefs_finds_sink_callers(sandbox):
 
     sweep = sandbox.run_json_probe("xrefs_probe.py", fixture_path("vuln_httpd"))
     assert "strcpy" in sweep["sinks"]
+    # printf is reported in the separate format-string tier (it's only a bug when
+    # the format arg is attacker-controlled), not the memory/exec sink list.
+    assert "printf" in sweep["format_sinks"]
+    assert "printf" not in sweep["sinks"]
 
 
 def test_get_decompiler_default_is_r2(hg_home):

@@ -18,13 +18,23 @@ from __future__ import annotations
 import json
 import sys
 
-# Sinks worth mapping by default — memory-unsafe copies, format strings, and
-# command/exec sinks. Untrusted data reaching any of these is the usual bug.
+# Memory-unsafe + command/exec sinks: untrusted data reaching any of these is
+# almost always a bug regardless of context.
 _DEFAULT_SINKS = [
     "system", "popen", "execl", "execlp", "execle", "execv", "execvp", "execve",
-    "strcpy", "strcat", "sprintf", "vsprintf", "gets", "scanf", "sscanf",
-    "memcpy", "alloca", "stpcpy",
+    "strcpy", "strcat", "gets", "scanf", "sscanf", "memcpy", "alloca", "stpcpy",
 ]
+
+# The printf family: dangerous ONLY when the FORMAT argument is attacker-controlled
+# (CWE-134) — but then it's a disclosure/write primitive. Reported separately
+# because these are called pervasively, so the callers list is context, not a
+# verdict: check each call's format argument.
+_FORMAT_SINKS = [
+    "printf", "fprintf", "sprintf", "snprintf", "dprintf", "vprintf", "vfprintf",
+    "vsprintf", "vsnprintf", "syslog", "vsyslog", "asprintf",
+]
+
+_MAX_CALLERS = 30  # bound per-sink caller lists so a noisy printf doesn't flood
 
 
 def _candidates(sym: str) -> list[str]:
@@ -85,14 +95,19 @@ def main() -> int:
 
         if symbol:
             refs = _xrefs_to(r2, symbol, flagset)
-            print(json.dumps({"tool": "xrefs_probe", "symbol": symbol, "callers": refs}))
+            print(json.dumps({"tool": "xrefs_probe", "symbol": symbol,
+                              "callers": refs[:_MAX_CALLERS], "total": len(refs)}))
         else:
-            sinks: dict[str, list[dict]] = {}
-            for s in _DEFAULT_SINKS:
-                refs = _xrefs_to(r2, s, flagset)
-                if refs:
-                    sinks[s] = refs
-            print(json.dumps({"tool": "xrefs_probe", "sinks": sinks}))
+            def sweep(names):
+                out = {}
+                for s in names:
+                    refs = _xrefs_to(r2, s, flagset)
+                    if refs:
+                        out[s] = {"callers": refs[:_MAX_CALLERS], "total": len(refs)}
+                return out
+            print(json.dumps({"tool": "xrefs_probe",
+                              "sinks": sweep(_DEFAULT_SINKS),
+                              "format_sinks": sweep(_FORMAT_SINKS)}))
         return 0
     finally:
         r2.quit()

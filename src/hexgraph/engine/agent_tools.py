@@ -201,18 +201,33 @@ def _xrefs(ctx: ToolContext, symbol: str | None) -> str:
         if not callers:
             text = f"no callers of {symbol!r} found (not imported/referenced, or unresolved)"
         else:
+            more = out.get("total", len(callers)) - len(callers)
             text = f"callers of {symbol}:\n" + "\n".join(
                 f"- {c['caller']} (@ {c.get('caller_addr')}) calls at {c.get('at')}" for c in callers)
+            if more > 0:
+                text += f"\n  … and {more} more"
+
     else:
-        sinks = out.get("sinks") or {}
-        if not sinks:
-            text = "no dangerous sinks (system/popen/strcpy/sprintf/…) referenced in this target"
-        else:
+        def fmt_group(group: dict) -> list[str]:
             lines = []
-            for s, refs in sinks.items():
+            for s, info in group.items():
+                refs = info.get("callers", [])
                 callers = ", ".join(sorted({c["caller"] for c in refs}))
-                lines.append(f"- {s}: reached from {callers}")
-            text = "dangerous sinks and who reaches them:\n" + "\n".join(lines)
+                extra = f" (+{info['total'] - len(refs)} more)" if info.get("total", 0) > len(refs) else ""
+                lines.append(f"- {s}: reached from {callers}{extra}")
+            return lines
+
+        sinks = out.get("sinks") or {}
+        fmt_sinks = out.get("format_sinks") or {}
+        parts = []
+        if sinks:
+            parts.append("dangerous sinks (memory/exec) and who reaches them:\n"
+                         + "\n".join(fmt_group(sinks)))
+        if fmt_sinks:
+            parts.append("format-string sinks (printf family) — only a bug if the FORMAT arg is "
+                         "attacker-controlled; check each call:\n" + "\n".join(fmt_group(fmt_sinks)))
+        text = "\n\n".join(parts) if parts else \
+            "no dangerous or format-string sinks (system/popen/strcpy/printf/…) referenced in this target"
     ctx.cache[key] = _clip(text)
     return ctx.cache[key]
 
