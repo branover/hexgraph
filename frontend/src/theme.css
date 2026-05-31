@@ -111,7 +111,8 @@ code { font-family: var(--mono); }
 .tree-row.child { margin-left: 16px; }
 .tree-row .nm { display: flex; align-items: center; gap: 7px; font-weight: 650; }
 .tree-row .mt { font-size: 11px; color: var(--muted); margin: 3px 0 0 22px; }
-.tree-row .run { position: absolute; right: 36px; top: 8px; opacity: 0; transition: opacity .12s; }
+/* Faintly visible by default so it's discoverable that targets are runnable. */
+.tree-row .run { position: absolute; right: 36px; top: 8px; opacity: .45; transition: opacity .12s; }
 .tree-row:hover .run, .tree-row.sel .run { opacity: 1; }
 .tree-row .trash { position: absolute; right: 8px; top: 7px; opacity: 0; transition: opacity .12s, color .12s; color: var(--muted); }
 .tree-row:hover .trash, .tree-row.sel .trash { opacity: .65; }

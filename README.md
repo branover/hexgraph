@@ -84,7 +84,10 @@ Open `http://127.0.0.1:8765` after `hexgraph serve`. The workspace has three pan
 - **Right — findings.** Every finding for the project; click one to see its evidence, reasoning, and
   suggested follow-ups.
 
-**Mock scenarios you can try** (mock backend only) on the `sbin/httpd` target:
+After ingesting `synthetic_fw.bin` you'll see it unpack into two child targets —
+`sbin/httpd` (executable) and `usr/lib/libupnp.so` (shared library). That's what success looks like.
+
+**Mock scenarios you can try** (mock backend only) on the `sbin/httpd` child target:
 
 | Task type / scenario | What you'll see |
 |---|---|
@@ -96,10 +99,11 @@ Open `http://127.0.0.1:8765` after `hexgraph serve`. The workspace has three pan
 | `error_rate_limit` / `error_timeout` | The task fails gracefully (retry/backoff then `failed`) |
 | `(default)` | A deterministic, always-successful scenario |
 
-Click a finding's **suggested follow-up** button to spawn the next task in one click — it runs against
-the resolved target (e.g. a sibling), with the parent finding recorded. `pattern_sweep` adds a finding
-on the matched sibling and a `related_to` edge; `harness_generation` compiles the generated harness in
-the sandbox. Use **Accept / Dismiss** in the detail panel to triage a finding.
+Click a finding's **suggested follow-up** button to open a **pre-filled launch modal** for the next
+task (with the parent finding and context carried forward) — review the model/budget, then **Launch
+agent**. It runs against the resolved target (e.g. a sibling). `pattern_sweep` adds a finding on the
+matched sibling and a `related_to` edge; `harness_generation` compiles the generated harness in the
+sandbox. Use **Confirm / Dismiss** in the detail panel to triage a finding.
 
 ---
 
@@ -108,7 +112,8 @@ the sandbox. Use **Accept / Dismiss** in the detail panel to triage a finding.
 All commands are available as `.venv/bin/hexgraph <command>` (or just `hexgraph` with the venv active).
 
 ```text
-hexgraph init                              Initialize HexGraph (DB + ~/.hexgraph dirs)
+hexgraph init                              Initialize HexGraph (DB + ~/.hexgraph dirs) — optional;
+                                           ingest/serve auto-initialize the DB on first use
 hexgraph ingest <path> [--name N]          Ingest a binary/firmware; runs recon (auto-unpacks firmware)
                  [--project ID]            …add to an existing project instead of creating one
                  [--no-recon]              …register the target without running analysis
@@ -122,11 +127,27 @@ hexgraph run <target> --type T             Run an analysis task against a target
 hexgraph findings <project> [--status S]   List findings (optionally filter by new|accepted|dismissed)
                  [--export FILE]           …or write the findings as JSON to FILE
 hexgraph graph <project> --export FILE     Export the project graph as JSON (nodes + edges)
+hexgraph config list | get K | set K V     Read/write managed settings (optional features, prefs)
+hexgraph mcp [--tools read,write,run]      Run the MCP server for a coding agent (stdio)
+hexgraph mcp install [--agent A]           Print how to register HexGraph with claude|codex|gemini
 hexgraph serve [--host H] [--port P]       Start the loopback-only API/UI (default 127.0.0.1:8765)
 ```
 
 Task types for `--type`: `recon`, `static_analysis`, `reverse_engineering`, `pattern_sweep`,
-`harness_generation`.
+`harness_generation` (plus `fuzzing` and `agent_delegate` when enabled in Settings).
+
+### Coding-agent integration (MCP)
+
+HexGraph can work *with* a coding agent (Claude Code / Codex / gemini-cli) in two directions, both
+keeping target bytes inside the sandbox:
+
+- **You drive the agent.** `hexgraph mcp install` registers HexGraph as an MCP server; your agent then
+  uses the `hexgraph` tools to inspect targets, populate the graph (findings/nodes/edges/hypotheses),
+  and run sandboxed tasks. Trim which tool groups it sees in **Settings → Coding-agent tools** (read /
+  write / run) so its context isn't cluttered.
+- **HexGraph drives the agent.** Enable **Settings → Delegate to a coding agent**, then launch an
+  `agent_delegate` task from the Run menu — HexGraph runs your agent headless, wired to the MCP server
+  and restricted to HexGraph's sandboxed tools (no shell on the target).
 
 ---
 
@@ -226,8 +247,10 @@ local filesystem under `~/.hexgraph/projects/<id>/`.
 Tiny, intentionally-vulnerable targets live under `tests/fixtures/` (regenerate with `make fixtures`):
 
 - `vuln_httpd` — an ELF with an unbounded `strcpy` in a fake CGI handler, built with weak mitigations.
-- `libupnp.so` — a shared library with the same `strcpy` sink in `ssdp_recv` (a sibling for pattern sweeps).
-- `synthetic_fw.bin` — a squashfs firmware image that unpacks into the two ELFs above.
+  (Inside `synthetic_fw.bin` it appears at the rootfs path `sbin/httpd`.)
+- `libupnp.so` — a shared library with the same `strcpy` sink in `ssdp_recv` (a sibling for pattern
+  sweeps). (Inside the firmware: `usr/lib/libupnp.so`.)
+- `synthetic_fw.bin` — a squashfs firmware image that unpacks into the two binaries above.
 
 ---
 
@@ -263,8 +286,13 @@ what's done and what's next. Start there if you're picking up the build.
 | **M4** | One-click follow-up spawn; `pattern_sweep`; `harness_generation` | ✅ Done |
 | **M5** | Accept/dismiss triage, dedup, findings export, polish | ✅ Done (UI polish backlog in `docs/ui-backlog.md`) |
 
-Out of scope (by design): accounts/multi-user, cloud/hosted compute, live fuzzing, dynamic/emulated
-execution, exploit generation, Neo4j, Kubernetes.
+**Opt-in, off by default** (the v1 static-only/local defaults still hold unless you enable these in
+Settings): a **Ghidra** decompiler/enrichment integration, **fuzzing** (libFuzzer over a generated
+harness — relaxes the static-only policy *only when enabled*, still sandboxed/`--network none`/capped),
+and **coding-agent** integration (an MCP server + an in-UI delegate task for Claude Code/Codex/gemini-cli).
+
+Out of scope (by design): accounts/multi-user, cloud/hosted compute, dynamic/emulated execution of the
+target as-is, exploit generation, Neo4j, Kubernetes.
 
 ---
 

@@ -1,5 +1,41 @@
 # UI improvement backlog
 
+## From the VR UX evaluation (`docs/ux-eval-vr.md`, 2026-05-30)
+
+**Done (this session):**
+- [x] Stale finding status in the detail panel after Accept/Dismiss — `load()` now refreshes the
+  selected finding. *(the eval's one outright bug; top priority)*
+- [x] Surface the failure reason inline on failed tasks + make trace files openable (error.txt /
+  prompt.txt / fuzz.json / agent_trace.json viewer).
+- [x] Merge the duplicate "Follow-ups" vs "Suggested next steps" blocks into one deduped "Next steps".
+- [x] Vocabulary: button "Accept" → "Confirm" (matches the `confirmed` status); bulk action too.
+- [x] Label the confidence chip ("conf X") so it isn't mistaken for severity.
+- [x] Persistent (faint) Run affordance on target rows — targets read as runnable.
+- [x] Tooltips on Compare / Same-code / Node / Edge; "Mock scenario" already gated to the mock backend.
+- [x] Graph export button in the UI (downloads graph JSON).
+- [x] Docs: unify `sbin/httpd` vs `vuln_httpd` naming; reword "one-click follow-up" → pre-filled launch;
+  README reflects opt-in fuzzing/Ghidra/agent features; note `ingest`/`serve` auto-init the DB.
+
+**Remaining ideas (not yet done):**
+- [ ] **P1 — In-app decompilation viewer.** Findings show a DECOMPILED snippet and tasks expose trace
+  files now, but a researcher can't open the *full* decompiled function on demand (e.g. a "decompile"
+  action on a function node that shows pseudocode inline). Highest-value "show me, don't tell me".
+- [ ] **P1 — Auto-derive `links_against`** from the dynamic section (DT_NEEDED) so firmware
+  dependency edges (which binary loads which library) appear without manual authoring. Recon reports
+  0 today; investigate whether recon populates `metadata.libraries` for the fixtures.
+- [ ] **P1 — Graph scaling for real firmware.** ~84 nodes already crowds labels. Have double-tap
+  collapse + the filter popover; still want cluster-by-target / focus-subtree / hide-resolved at
+  hundreds of functions.
+- [ ] **P2 — Firmware/version diffing** (v1.0 vs v1.1) — the biggest real-world VR workflow not served;
+  `Compare` is target-vs-target, not version-vs-version.
+- [ ] **P2 — CWE tagging** on findings (e.g. CWE-121). The Finding schema is frozen, so carry it in
+  `evidence.extra` or as an annotation tag, and use it in dedup + report.
+- [ ] **P2 — Upload/ingest progress state** ("ingesting… unpacking…") during the sandbox unpack.
+- [ ] **P3 — Bulk triage discoverability** (checkboxes + bulk Confirm/Dismiss exist; make the
+  multi-select action bar more obvious).
+
+---
+
 Captured from a visual review of the running workspace (firmware project with recon + mock
 `static_analysis`/`pattern_sweep`/`reverse_engineering` findings), driven via headless Chromium.
 

@@ -61,6 +61,16 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
   };
   const linkHyp = async (relation: string) => { if (hypId) { await api.linkEvidence(hypId, finding.id, relation); setHypId(""); onChanged(); } };
 
+  // One "Next steps" list: the finding's own follow-ups first, then rule-based
+  // suggestions that aren't already covered (deduped by task_type+label) — so the
+  // two sources don't show near-identical buttons twice.
+  const fuKey = (s: any) => `${s.task_type}|${(s.label || "").toLowerCase()}`;
+  const fuKeys = new Set((finding.suggested_followups || []).map(fuKey));
+  const nextSteps = [
+    ...(finding.suggested_followups || []).map((s: any, i: number) => ({ label: s.label, from: "finding" as const, run: () => spawn(i, s) })),
+    ...sugg.filter((s) => !fuKeys.has(fuKey(s))).map((s: any) => ({ label: s.label, from: "suggester" as const, run: () => launchSuggested(s) })),
+  ];
+
   return (
     <div className="insp scroll fade-in">
       <div className="head">
@@ -76,7 +86,7 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
       </div>
       <Lifecycle status={finding.status} />
       <div className="actions">
-        <button className="btn sm" onClick={() => setStatus("confirmed")}><Icon name="check" size={12} /> Accept</button>
+        <button className="btn sm" onClick={() => setStatus("confirmed")}><Icon name="check" size={12} /> Confirm</button>
         <button className="btn sm danger" onClick={() => setStatus("dismissed")}><Icon name="x" size={12} /> Dismiss</button>
         {onViewTask && <button className="btn sm ghost" onClick={() => onViewTask(finding.task_id)}><Icon name="task" size={12} /> Task</button>}
         {onHighlight && (
@@ -121,23 +131,15 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
 
       {finding.human_notes && (<><div className="sec">Analyst notes</div><p>{finding.human_notes}</p></>)}
 
-      {finding.suggested_followups?.length ? (
+      {nextSteps.length > 0 && (
         <>
-          <div className="sec">Follow-ups</div>
+          <div className="sec">Next steps</div>
           <div className="actions">
-            {finding.suggested_followups.map((s, i) => (
-              <button className="btn sm" key={i} onClick={() => spawn(i, s)}><Icon name="run" size={11} /> {s.label}</button>
-            ))}
-          </div>
-        </>
-      ) : null}
-
-      {sugg.length > 0 && (
-        <>
-          <div className="sec">Suggested next steps</div>
-          <div className="actions">
-            {sugg.map((s, i) => (
-              <button className="btn sm" key={i} onClick={() => launchSuggested(s)}><Icon name="spark" size={11} /> {s.label}</button>
+            {nextSteps.map((s, i) => (
+              <button className="btn sm" key={i} title={s.from === "finding" ? "Suggested by this finding" : "Rule-based suggestion"}
+                      onClick={() => s.run()}>
+                <Icon name={s.from === "finding" ? "run" : "spark"} size={11} /> {s.label}
+              </button>
             ))}
           </div>
         </>

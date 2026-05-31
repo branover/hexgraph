@@ -42,6 +42,9 @@ export default function Workspace() {
     if (!projectId) return;
     const [d, g, tk] = await Promise.all([api.project(projectId), api.graph(projectId), api.projectTasks(projectId)]);
     setDetail(d); setGraph(g); setTasks(tk);
+    // Refresh the open detail with the reloaded data so triage (Accept/Dismiss,
+    // status pills, annotations) re-renders instead of showing a stale finding.
+    setSelFinding((prev) => (prev ? d.findings.find((f) => f.id === prev.id) ?? prev : prev));
   }, [projectId]);
 
   useEffect(() => {
@@ -112,6 +115,15 @@ export default function Workspace() {
     clearTimeout(searchTimer.current);
     if (!text.trim()) { setResults(null); return; }
     searchTimer.current = setTimeout(() => { if (projectId) api.search(projectId, text).then(setResults).catch(() => {}); }, 200);
+  };
+  const exportGraph = () => {
+    if (!graph || !detail) return;
+    const blob = new Blob([JSON.stringify(graph, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${detail.project.name.replace(/\s+/g, "_")}_graph.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
   };
   const linkSameCode = async () => {
     if (!projectId) return;
@@ -235,11 +247,12 @@ export default function Workspace() {
               <Icon name="search" size={14} />
               <input placeholder="Search functions, strings, findings…" value={q} onChange={(e) => doSearch(e.target.value)} />
             </div>
-            <button className="btn sm" onClick={() => setModal("node")}><Icon name="plus" size={12} /> Node</button>
-            <button className="btn sm" onClick={() => setModal("edge")}><Icon name="link" size={13} /> Edge</button>
-            <button className="btn sm" onClick={() => setModal("report")}><Icon name="doc" size={13} /> Report</button>
-            <button className="btn sm" onClick={() => setModal("compare")}><Icon name="refresh" size={13} /> Compare</button>
-            <button className="btn sm" onClick={linkSameCode}><Icon name="link" size={13} /> Same-code</button>
+            <button className="btn sm" title="Add a node to the graph (function/symbol/hypothesis/…)" onClick={() => setModal("node")}><Icon name="plus" size={12} /> Node</button>
+            <button className="btn sm" title="Connect two graph entities with an edge" onClick={() => setModal("edge")}><Icon name="link" size={13} /> Edge</button>
+            <button className="btn sm" title="Markdown report of confirmed/reported findings" onClick={() => setModal("report")}><Icon name="doc" size={13} /> Report</button>
+            <button className="btn sm" title="Diff two analysis runs over a target (added/dropped/changed findings)" onClick={() => setModal("compare")}><Icon name="refresh" size={13} /> Compare</button>
+            <button className="btn sm" title="Link identical functions across targets (n-day clone detection)" onClick={linkSameCode}><Icon name="link" size={13} /> Same-code</button>
+            <button className="btn sm" title="Download the project graph as JSON" onClick={exportGraph}><Icon name="doc" size={13} /> Export</button>
             {busy && <span className="badge"><Icon name="refresh" size={12} className="spin" /> {busy}</span>}
           </div>
           {results && q.trim() && (

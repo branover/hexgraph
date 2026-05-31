@@ -65,7 +65,7 @@ export default function FindingsPanel({
           <span className="ttl">{f.title}</span>
         </div>
         <div className="mt">
-          <span>{f.category}</span><span>· {f.confidence}</span>
+          <span>{f.category}</span><span>· conf {f.confidence}</span>
           <span className="tag">{f.status}</span>
           {!group && <span>· {targetName(f.target_id)}</span>}
           {(f.tags || []).map((tg) => <span key={tg} className="tag" style={{ color: "var(--accent)" }}>#{tg}</span>)}
@@ -105,7 +105,7 @@ export default function FindingsPanel({
         <div className="fbar" style={{ borderTop: "1px solid var(--border)" }}>
           <span className="muted">{picked.size} selected</span>
           <span className="grow" />
-          <button className="btn sm" onClick={() => bulk("confirmed")}><Icon name="check" size={12} /> Accept</button>
+          <button className="btn sm" onClick={() => bulk("confirmed")}><Icon name="check" size={12} /> Confirm</button>
           <button className="btn sm danger" onClick={() => bulk("dismissed")}><Icon name="x" size={12} /> Dismiss</button>
         </div>
       )}
