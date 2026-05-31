@@ -13,13 +13,15 @@ def test_r2_decompiler_focus_function(sandbox, monkeypatch):
     assert out["focus"]["pseudocode"]  # non-empty pseudo-C/disasm
 
 
-def test_get_decompiler_default_is_r2():
+def test_get_decompiler_default_is_r2(hg_home):
+    # hg_home isolates HEXGRAPH_HOME so this is hermetic regardless of the
+    # developer's real ~/.hexgraph/settings.json (Ghidra may be enabled there).
     from hexgraph.sandbox.decompiler import R2Decompiler, get_decompiler
 
     assert isinstance(get_decompiler(), R2Decompiler)
 
 
-def test_ghidra_decompiler_is_opt_in():
+def test_ghidra_decompiler_is_opt_in(hg_home):
     # Ghidra is now wired behind the Decompiler seam, but stays opt-in: radare2 is
     # the default and Ghidra is only selected when enabled in Settings (or asked
     # for explicitly). Selecting it returns the wrapper without running anything.
