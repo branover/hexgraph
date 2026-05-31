@@ -12,6 +12,43 @@ A self-hosted, **local-only** agentic vulnerability-research workbench. Point it
 2. Re-verify with `make test` (full suite, mock backend, offline) and `make demo` (full loop; needs Docker + sandbox image).
 3. **Update `PROGRESS.md` as work lands** (checklist + `▶ RESUME HERE` + session log) and commit it with the code. Keep this file current only when a *durable rule or fact* changes — never add feature history here.
 
+## How we work: git worktrees, PRs, and concurrency
+
+Post-MVP, **every new feature or major atomic change happens on its own branch in a dedicated git worktree**, so multiple agents work in parallel without stepping on each other. Trivial one-line touch-ups can go on a normal branch; anything substantial gets a worktree.
+
+**Git/GitHub rules (non-negotiable):**
+- **Never commit or push to `main`.** `main` only changes by **merging a reviewed PR**. (There is no automated push guard or branch protection — this is a discipline you must keep, not something the repo enforces for you.)
+- Branch off `main` with a typed name: **`build/<topic>`** (code), **`fix/<topic>`** (bugfix), **`docs/<topic>`** (docs).
+- Commits: imperative, lowercase-prefixed subject (`feat:`/`fix:`/`docs:`/`db:`/…); end every commit with the trailer `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
+- **Ship the whole change together:** code + its tests + `PROGRESS.md` update + (for any model change) an `alembic revision --autogenerate` migration. A PR that changes a model without a migration is incomplete.
+- Open the PR with `gh pr create --base main`; write a real description (what/why, verification).
+
+**The merge gate — a PR-review subagent, every time.** Before a worktree branch merges:
+1. Run `make test` (and `make demo` if the loop is touched) green in the worktree.
+2. **Dispatch a subagent (Agent tool) to review the PR diff** — correctness, the security invariants (loopback / sandbox / secret-never-logged / static-only policy), test quality, and that docs/PROGRESS/migrations were updated. Have it **fix the issues it finds** (or report them for you to fix), then re-verify.
+3. Only after the review passes: `gh pr merge`. There is **no CI yet**, so this review + local `make test` *is* the gate.
+4. Clean up: `git worktree remove <path>` and delete the merged branch.
+
+**Creating a worktree (with its own isolated runtime):**
+```bash
+git worktree add ../hexgraph-wt/<topic> -b build/<topic> main
+cd ../hexgraph-wt/<topic>
+python3 -m venv .venv && .venv/bin/pip install -e ".[server,dev]"   # OWN venv — required
+export HEXGRAPH_HOME="$PWD/.hghome"                                  # OWN data/DB/settings
+```
+
+**Running code from worktrees concurrently — deconflict ALL shared state.** Nothing is worktree-aware by default; isolation comes entirely from per-worktree env + venv:
+- **Own venv (required).** The editable install pins an *absolute* `src` path, so reusing another worktree's `.venv` silently imports the *wrong* worktree's code. Each worktree gets its own `.venv` (`make install`). `make ui` already builds the SPA into the worktree's own `src/hexgraph/web/dist` (gitignored) — no sharing.
+- **Own `HEXGRAPH_HOME`.** All runtime state (the SQLite DB, `projects/`, `settings.json`, `config.toml`) roots at `HEXGRAPH_HOME` (default `~/.hexgraph`), which is otherwise **shared across every worktree**. Without a per-worktree home, two agents mutate the same graph and a newer-migration worktree silently upgrades the shared DB schema. (WAL keeps it lock-*safe*, but that is not isolation.) Copy `~/.hexgraph/config.toml` into the worktree home if you need the BYOK key.
+- **Own `HEXGRAPH_PORT` when serving.** Two `hexgraph serve` on the default `8765` collide. Use `HEXGRAPH_PORT=876N hexgraph serve`; keep `HEXGRAPH_HOST=127.0.0.1` (the loopback assertion is a product invariant — never `0.0.0.0` to "spread out").
+- **Sandbox image (`hexgraph-sandbox:latest`) is host-global.** Probe `.py` edits need no rebuild — they're **mounted from your worktree's package** at run time (set `HEXGRAPH_SANDBOX_NO_MOUNT=1` only to force the baked copy), so probe changes are already per-worktree. But a **Dockerfile/toolchain change (or `WITH_GHIDRA=1`) must NOT run `make sandbox-build`** — that clobbers the shared tag. Build a private tag and point only your processes at it: `docker build -f Dockerfile.sandbox -t hexgraph-sandbox:wt-<topic> .` then `export HEXGRAPH_SANDBOX_IMAGE=hexgraph-sandbox:wt-<topic>`. (Containers are uuid-named + `--rm`; they never collide.)
+- **MCP + Claude Code (the subtle one).** The MCP server is **stdio** (spawns per session, no port) and a registration **bakes an absolute interpreter/script path with no env**, while the server name is hardcoded `"hexgraph"`. So **`cd`-ing between worktrees does NOT change which code or DB the agent's MCP tools use** — it's frozen to the registered command + the spawning agent's ambient env (which falls back to `~/.hexgraph`). To test MCP changes that live only in your worktree, editable-install it, then register a **uniquely-named** server pinned to that worktree's python + home:
+  ```bash
+  claude mcp add hexgraph-<topic> --env HEXGRAPH_HOME=$PWD/.hghome -- $PWD/.venv/bin/python -m hexgraph.cli mcp
+  ```
+  Verify the command resolves to your code with `.venv/bin/python -m hexgraph.cli mcp --check`. Two agents must use **distinct MCP server names and distinct `HEXGRAPH_HOME`** — never share the default `hexgraph` registration across worktrees (it runs stale code and shares the DB).
+- **Already safe, no action:** `make test` (the `hg_home` fixture isolates each test in a tmp home, mock backend, Docker/decompile disabled) and `make demo` (its own tmp home) are self-isolating across worktrees — only Docker throughput competes for the sandbox-gated subset.
+
 ## Non-negotiable constraints (these define the product)
 
 - **Fully self-hosted.** Nothing calls a HexGraph-operated backend; no telemetry, no auto-update pings.
