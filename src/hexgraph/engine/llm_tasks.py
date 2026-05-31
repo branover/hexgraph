@@ -288,6 +288,12 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
     if findings and low_confidence:
         task.status = TaskStatus.needs_triage
 
+    # Fold any duplicate function/symbol nodes this task introduced (e.g. a
+    # decompiler `sym.foo` colliding with an agent's `foo`) into one node.
+    from hexgraph.engine.nodemerge import merge_duplicate_nodes
+
+    merge_duplicate_nodes(session, project.id)
+
     # Group this execution as an analysis_run for run-to-run comparison.
     from hexgraph.engine.runs import record_run
 

@@ -46,7 +46,9 @@ def _apply_sqlite_pragmas(dbapi_conn, _record) -> None:
     cur.execute("PRAGMA journal_mode=WAL")
     cur.execute("PRAGMA busy_timeout=5000")
     cur.execute("PRAGMA synchronous=NORMAL")
-    cur.execute("PRAGMA foreign_keys=ON")
+    # NB: foreign_keys is intentionally left OFF — edges/annotations reference
+    # entities polymorphically by string id (not FKs), and merge/cascade logic
+    # reparents rows explicitly; enabling enforcement would break those paths.
     cur.close()
 
 

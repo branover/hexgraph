@@ -125,6 +125,14 @@ export default function Workspace() {
     a.click();
     URL.revokeObjectURL(a.href);
   };
+  const mergeDupes = async () => {
+    if (!projectId) return;
+    setBusy("merging duplicates…");
+    const r = await api.mergeDuplicates(projectId);
+    setBusy(undefined);
+    await load();
+    alert(`Merged ${r.nodes_merged} duplicate node(s) and ${r.targets_merged} duplicate binary(ies).`);
+  };
   const linkSameCode = async () => {
     if (!projectId) return;
     setBusy("linking…"); const r = await api.linkSameCode(projectId); setBusy(undefined);
@@ -252,6 +260,7 @@ export default function Workspace() {
             <button className="btn sm" title="Markdown report of confirmed/reported findings" onClick={() => setModal("report")}><Icon name="doc" size={13} /> Report</button>
             <button className="btn sm" title="Diff two analysis runs over a target (added/dropped/changed findings)" onClick={() => setModal("compare")}><Icon name="refresh" size={13} /> Compare</button>
             <button className="btn sm" title="Link identical functions across targets (n-day clone detection)" onClick={linkSameCode}><Icon name="link" size={13} /> Same-code</button>
+            <button className="btn sm" title="Merge duplicate binaries/nodes (e.g. sym.foo == foo)" onClick={mergeDupes}><Icon name="refresh" size={13} /> Merge dupes</button>
             <button className="btn sm" title="Download the project graph as JSON" onClick={exportGraph}><Icon name="doc" size={13} /> Export</button>
             {busy && <span className="badge"><Icon name="refresh" size={12} className="spin" /> {busy}</span>}
           </div>

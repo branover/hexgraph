@@ -468,6 +468,18 @@ def create_app() -> FastAPI:
                 raise HTTPException(404, "project not found")
         return PlainTextResponse(md, media_type="text/markdown")
 
+    @app.post("/api/projects/{project_id}/merge-duplicates")
+    def api_merge_duplicates(project_id: str):
+        """Collapse duplicate binaries (same bytes) and nodes (same normalized
+        identity, e.g. sym.foo == foo) — moving all edges/findings/annotations to
+        the keeper so nothing is lost."""
+        from hexgraph.engine.nodemerge import merge_duplicates
+
+        with session_scope() as s:
+            if s.get(Project, project_id) is None:
+                raise HTTPException(404, "project not found")
+            return merge_duplicates(s, project_id)
+
     @app.post("/api/projects/{project_id}/link-same-code")
     def api_link_same_code(project_id: str):
         from hexgraph.engine.crosstarget import link_same_code

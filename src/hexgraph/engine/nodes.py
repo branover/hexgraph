@@ -24,6 +24,24 @@ def _sha(*parts: str | None) -> str:
     return hashlib.sha256("\x00".join(p or "" for p in parts).encode("utf-8")).hexdigest()
 
 
+# Decompiler/disassembler namespace prefixes that don't change a symbol's identity
+# (radare2 emits `sym.get_param`, `sym.imp.system`, …). `fcn.<addr>` is left alone —
+# it names a genuinely-unnamed function, not a prefixed known one.
+_NS_PREFIXES = ("sym.imp.", "loc.imp.", "sym.", "imp.", "loc.", "dbg.", "obj.", "reloc.")
+NAMED_TYPES = {"function", "symbol", "struct"}
+
+
+def normalize_symbol_name(name: str | None) -> str | None:
+    """Canonical name for a function/symbol/struct: strip decompiler namespace
+    prefixes so `sym.get_param` / `imp.get_param` / `get_param` are one identity."""
+    if not name:
+        return name
+    for p in _NS_PREFIXES:
+        if name.startswith(p) and len(name) > len(p):
+            return name[len(p):]
+    return name
+
+
 def get_or_create_node(
     session: Session,
     *,
@@ -39,6 +57,15 @@ def get_or_create_node(
     force_hash: bool = False,
 ) -> Node:
     nt = node_type.value if isinstance(node_type, NodeType) else str(node_type)
+    # Canonicalize named-symbol identity + display so decompiler-prefixed names
+    # (`sym.get_param`) and bare names (`get_param`) resolve to one node. The raw
+    # name is kept in attrs.name_raw so nothing is lost.
+    raw_name = name
+    if nt in NAMED_TYPES:
+        name = normalize_symbol_name(name) or name
+        fq_name = normalize_symbol_name(fq_name) if fq_name else None
+        if raw_name != name:
+            attrs = {**(attrs or {}), "name_raw": raw_name}
     fq = fq_name or name
     q = session.query(Node).filter(Node.project_id == project_id, Node.node_type == nt)
     # Within a target, identity is the locator (target, fq_name) — so the SAME

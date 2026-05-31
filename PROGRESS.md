@@ -155,6 +155,17 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-05-31: **Duplicate-node/target merge + name normalization + MCP usability.** Function/symbol
+  identity now normalizes decompiler prefixes (`sym.get_param`==`get_param`) at creation
+  (`engine.nodes.normalize_symbol_name`); `engine/nodemerge.py` folds existing duplicates by per-type
+  canonical key (target sha256 for binaries) moving all edges/findings/annotations to the keeper —
+  auto-run after LLM tasks + `POST /merge-duplicates` + MCP tool + "Merge dupes" button. Added a
+  `taints` edge type. SQLite now WAL (web UI + agent MCP server share the DB concurrently). MCP fixes:
+  absolute launch command (was bare `python`), stderr "ready" banner, `hexgraph mcp --check`, mcp in the
+  dev extra, probes mounted from the install (no rebuild to add a probe). SKILL rewritten: graph is
+  shared durable memory, read it first, **record before verifying** (suspect→record→explore→verify→
+  update), link hypotheses↔findings, and a confirmed vuln MUST have a linked verified PoC finding.
+  Engagement test acted on the agent's run feedback. 215 tests pass.
 - 2026-05-31: **Executable/verified PoC findings + finding-type tagging + engagement test.** (1) PoC:
   `features.poc` opt-in flips the policy to allow execution; `poc_probe.py` runs the target in the
   sandbox with an attacker spec and an unforgeable `{{NONCE}}` oracle; `engine/poc.py` (verify_poc +

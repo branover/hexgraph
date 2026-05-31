@@ -52,27 +52,44 @@ that haven't been analyzed yet.
 - Go deeper with `run_task` (`static_analysis`, `harness_generation`, `fuzzing`),
   and **`verify_poc`** to PROVE exploitability (a confirmed PoC is the gold bar).
 
-## 3. Capture EVERYTHING useful, as you go (this is the point)
-Don't wait until the end, and don't keep insights only in chat. Record:
-- `record_finding(project_id, target_id, finding, task_id=<provided if given>)` —
-  every credible issue. Evidence: function, sink, a decompiled snippet, clear
-  reasoning, and the verified PoC spec when you have one.
-- `create_node` — pin the functions/symbols/strings/structs you reasoned about
-  (even benign-but-relevant ones), and `hypothesis` nodes for open questions.
-- `create_edge` — wire the relationships you uncovered: `calls`, `references`,
-  `reads`/`writes`, and **`taints`** for an untrusted-input → sink dataflow path
-  (e.g. an input string → parsing function → the dangerous sink). Connect findings
-  to the functions/inputs they concern.
-- `create_hypothesis` for theories worth testing; later findings `supports`/
-  `refutes` them so the open-question set stays live.
-- `annotate` — add renames / notes / tags to nodes (e.g. a clearer function name,
-  a "reachable pre-auth" note, a CWE tag) so the next analyst/agent doesn't
-  re-derive them.
+## 3. Record AS YOU GO — write to the graph BEFORE you've confirmed things
+Capture the moment you have a lead, not after you've proven it. The graph is a
+live worklog: a suspicion recorded early is visible to the analyst and other
+agents and is what you come back to confirm. **Do NOT wait until a PoC verifies
+to add the finding** — that hides work in progress and risks losing it. The rhythm
+is **record → explore → verify → update**:
 
-Aim: someone opening the project afterward should see the attack surface, the
-input→sink paths, what's confirmed vs still open, and the obvious next tasks —
-without having to re-read the binary. Leave unfinished threads as hypotheses or
-unanalyzed function nodes so the user can launch follow-up tasks on them.
+1. **Suspect → record immediately.** When you spot a likely bug, `record_finding`
+   right away at your current confidence (e.g. confidence "low"/"medium", status
+   stays `new`), with the function, sink, and reasoning so far. `create_node` the
+   relevant functions/strings, and `create_hypothesis` for the open question.
+   **Link the hypothesis to the finding** with `create_edge` (the finding
+   `supports` the hypothesis) so they're connected, not floating.
+2. **Explore → keep adding.** As you decompile/trace, wire the path with
+   `create_edge`: `calls`, `references`, `reads`/`writes`, and **`taints`** for the
+   untrusted-input → sink dataflow (input string → parser → sink). `annotate`
+   nodes with what you learn (clearer name, "reachable pre-auth", a CWE tag).
+   **Write the PoC into a finding BEFORE you run it**: record a separate PoC
+   finding (category matching the bug; it will be typed `poc`) containing the
+   attacker input/spec you intend to try, marked unverified — then link it to the
+   vulnerability finding and hypothesis with `create_edge`.
+3. **Verify → update in place.** Run `verify_poc` / `run_task`, then update the
+   SAME findings (don't make new duplicates): on success raise the vulnerability
+   finding's confidence/severity, mark the PoC finding verified, and add a
+   `confirms` edge from the PoC finding to the vulnerability finding; the finding
+   `supports` the hypothesis. On failure, lower confidence, note why, and
+   `refutes` the hypothesis.
+
+**Rule: a confirmed vulnerability finding MUST have a verified PoC finding linked
+to it** (PoC `confirms`→ vulnerability). A vulnerability without a linked, verified
+PoC is "suspected", not "confirmed" — say so in its confidence/reasoning.
+
+Pin every function/symbol/string/struct you reasoned about (even benign-but-
+relevant ones). Aim: at any moment — even mid-investigation — someone opening the
+project sees the attack surface, the input→sink paths, what's suspected vs
+confirmed vs refuted, and the obvious next tasks, without re-reading the binary.
+Leave unfinished threads as hypotheses or unanalyzed nodes so the user (or the
+next agent) can launch follow-up tasks on them.
 
 A finding object looks like:
 {"title": "...", "severity": "critical|high|medium|low|info",

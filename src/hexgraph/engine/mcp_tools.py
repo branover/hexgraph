@@ -233,6 +233,17 @@ def verify_poc(target_id: str, poc: dict) -> dict:
                 "exit_code": r.get("exit_code"), "output": (r.get("output") or "")[:4000]}
 
 
+def merge_duplicates(project_id: str) -> dict:
+    """Collapse duplicate binaries/nodes (e.g. sym.foo == foo) in a project, moving
+    all edges/findings/annotations to the keeper. Safe to call anytime."""
+    from hexgraph.engine.nodemerge import merge_duplicates as _merge
+
+    with session_scope() as s:
+        if s.get(Project, project_id) is None:
+            return {"error": "project not found"}
+        return _merge(s, project_id)
+
+
 def run_task(target_id: str, type: str, objective: str | None = None, params: dict | None = None) -> dict:
     """Run a HexGraph task synchronously (recon/static_analysis/harness_generation/
     fuzzing/…) and return its status + the findings it produced."""
@@ -292,6 +303,8 @@ _CATALOG = [
      {"type": "object", "properties": {"project_id": {"type": "string"}, "statement": {"type": "string"}, "rationale": {"type": "string"}, "target_id": {"type": "string"}}, "required": ["project_id", "statement"]}),
     ("write", "annotate", annotate, "Attach a note/tag/rename to a graph entity (agent proposal).",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "node_kind": {"type": "string"}, "node_id": {"type": "string"}, "kind": {"type": "string"}, "value": {"type": "string"}}, "required": ["project_id", "node_kind", "node_id", "kind", "value"]}),
+    ("write", "merge_duplicates", merge_duplicates, "Collapse duplicate binaries/nodes (e.g. sym.foo == foo) in a project, preserving all edges/findings.",
+     {"type": "object", "properties": {"project_id": {"type": "string"}}, "required": ["project_id"]}),
     ("run", "verify_poc", verify_poc, "Execute a proof-of-concept against a target in the sandbox and report verified true/false (use {{NONCE}} in the injected command + oracle for an unforgeable check). Requires PoC enabled.",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "poc": {"type": "object"}}, "required": ["target_id", "poc"]}),
     ("run", "ingest", ingest, "Ingest a binary/firmware from a local path as a target (firmware unpacks into children); creates a project if none given.",

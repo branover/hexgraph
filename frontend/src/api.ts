@@ -88,6 +88,7 @@ export const api = {
   bulkStatus: (ids: string[], status: string) => postJSON<{ updated: number }>("/api/findings/bulk-status", { ids, status }),
   search: (pid: string, q: string) => getJSON<{ findings: any[]; nodes: any[]; coverage: any }>(`/api/projects/${pid}/search?q=${encodeURIComponent(q)}`),
   linkSameCode: (pid: string) => postJSON<{ created: number }>(`/api/projects/${pid}/link-same-code`, {}),
+  mergeDuplicates: (pid: string) => postJSON<{ targets_merged: number; nodes_merged: number }>(`/api/projects/${pid}/merge-duplicates`, {}),
   reportUrl: (pid: string) => `/api/projects/${pid}/report`,
   async report(pid: string): Promise<string> {
     const r = await fetch(`/api/projects/${pid}/report`);
