@@ -195,6 +195,19 @@ select.sel { background: var(--bg); color: var(--fg); border: 1px solid var(--bo
 .modal .err { color: #ff8a93; font-size: 12px; margin: 6px 0; }
 .modal .foot { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 .modal textarea:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
+.modal textarea { width: 100%; resize: vertical; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 7px; padding: 8px 10px; font: inherit; }
+
+/* deliberate launch modal: pinned header/footer, fixed form column, scrolling
+   preview that can't blow out the grid (minmax(0,1fr) + wrapping <pre>). */
+.modal.launch { width: 880px; max-width: 94vw; max-height: 88vh; display: flex; flex-direction: column; }
+.modal.launch h3 { display: flex; align-items: center; gap: 8px; }
+.launch-grid { display: grid; grid-template-columns: 270px minmax(0, 1fr); gap: 20px; flex: 1; min-height: 0; margin-top: 4px; }
+.launch-form { overflow-y: auto; padding-right: 4px; }
+.launch-form .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.launch-preview { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.launch-preview pre { flex: 1; margin: 6px 0 0; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 11px; font-size: 11px; line-height: 1.5; }
+.modal.launch .foot { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; border-top: 1px solid var(--border); padding-top: 14px; }
 
 /* rendered markdown (report viewer) */
 .markdown { font-size: 13px; line-height: 1.6; color: var(--fg-dim); }

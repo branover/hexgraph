@@ -29,7 +29,7 @@ export default function Workspace() {
   const [q, setQ] = useState("");
   const [results, setResults] = useState<any | null>(null);
   const [modal, setModal] = useState<"node" | "edge" | "report" | "compare" | null>(null);
-  const [launchFor, setLaunchFor] = useState<{ target: TargetNode; type: string } | null>(null);
+  const [launchFor, setLaunchFor] = useState<{ target: TargetNode; type: string; objective?: string; params?: any; parentFindingId?: string } | null>(null);
   const [maxed, setMaxed] = useState(false);
   const [detailBig, setDetailBig] = useState(false);
   const searchTimer = useRef<any>();
@@ -153,6 +153,13 @@ export default function Workspace() {
   ) : (
     <TasksPanel tasks={tasks} selectedId={selTask} onSelect={(id) => setSelTask(id)} onClear={clearTasks} />
   );
+  // Open the deliberate LaunchModal for a finding follow-up (prefilled + parent link).
+  const openLaunchForFinding = (type: string, opts: { objective?: string; params?: any } = {}) => {
+    if (!selFinding) return;
+    const t = detail.targets.find((x) => x.id === selFinding.target_id);
+    if (t) setLaunchFor({ target: t, type, objective: opts.objective, params: opts.params, parentFindingId: selFinding.id });
+  };
+
   const renderDetail = () => {
     if (selTask) return <TaskDetail taskId={selTask} onViewFinding={viewFinding} onRerun={pollThenReload} />;
     if (selNode) {
@@ -163,7 +170,7 @@ export default function Workspace() {
                             onLaunch={(type) => tgt && setLaunchFor({ target: tgt, type })} />;
     }
     return <Inspector finding={selFinding} projectId={projectId} hypotheses={hypotheses} onChanged={load}
-                      onLaunch={pollThenReload} onViewTask={viewTask}
+                      onLaunch={pollThenReload} onOpenLaunch={openLaunchForFinding} onViewTask={viewTask}
                       onHighlight={(ids) => ids[0] && setSelGraphId(ids[0])} />;
   };
 
@@ -260,6 +267,8 @@ export default function Workspace() {
       {modal === "compare" && <RunCompareModal targets={detail.targets} onClose={() => setModal(null)} />}
       {launchFor && (
         <LaunchModal target={launchFor.target} taskType={launchFor.type} isMock={isMock}
+                     initialObjective={launchFor.objective} initialParams={launchFor.params}
+                     parentFindingId={launchFor.parentFindingId}
                      onClose={() => setLaunchFor(null)} onLaunched={pollThenReload} />
       )}
     </>

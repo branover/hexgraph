@@ -22,9 +22,10 @@ function Lifecycle({ status }: { status: string }) {
 }
 
 // Detail + triage + follow-on launch + provenance for a selected finding.
-export default function Inspector({ finding, projectId, hypotheses = [], onChanged, onLaunch, onViewTask, onHighlight }: {
+export default function Inspector({ finding, projectId, hypotheses = [], onChanged, onLaunch, onOpenLaunch, onViewTask, onHighlight }: {
   finding: Finding | null; projectId?: string; hypotheses?: { id: string; statement: string }[];
   onChanged: () => void; onLaunch: (taskId: string) => void;
+  onOpenLaunch?: (type: string, opts?: { objective?: string; params?: any }) => void;
   onViewTask?: (taskId: string) => void; onHighlight?: (ids: string[]) => void;
 }) {
   const [sugg, setSugg] = useState<any[]>([]);
@@ -39,10 +40,15 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
   const ev = finding.evidence || {};
 
   const setStatus = async (s: string) => { await api.setStatus(finding.id, s); onChanged(); };
-  const spawn = async (i: number) => { const { task_id } = await api.spawnFollowup(finding.id, i); onLaunch(task_id); };
+  // Follow-ups open the deliberate LaunchModal (prefilled) rather than firing
+  // blind; fall back to direct spawn only if no modal handler is wired.
+  const spawn = async (i: number, fu: any) => {
+    if (onOpenLaunch) onOpenLaunch(fu.task_type, { objective: fu.label, params: fu.params || {} });
+    else { const { task_id } = await api.spawnFollowup(finding.id, i); onLaunch(task_id); }
+  };
   const launchSuggested = async (s: any) => {
-    const { task_id } = await api.launch({ target_id: finding.target_id, type: s.task_type, params: s.params || {} });
-    onLaunch(task_id);
+    if (onOpenLaunch) onOpenLaunch(s.task_type, { objective: s.label, params: s.params || {} });
+    else { const { task_id } = await api.launch({ target_id: finding.target_id, type: s.task_type, params: s.params || {} }); onLaunch(task_id); }
   };
   const copy = () => { navigator.clipboard?.writeText(ev.decompiled_snippet || ""); setCopied(true); setTimeout(() => setCopied(false), 1200); };
   const newHypothesis = async () => {
@@ -116,7 +122,7 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
           <div className="sec">Follow-ups</div>
           <div className="actions">
             {finding.suggested_followups.map((s, i) => (
-              <button className="btn sm" key={i} onClick={() => spawn(i)}><Icon name="run" size={11} /> {s.label}</button>
+              <button className="btn sm" key={i} onClick={() => spawn(i, s)}><Icon name="run" size={11} /> {s.label}</button>
             ))}
           </div>
         </>
