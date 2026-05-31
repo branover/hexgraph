@@ -65,8 +65,11 @@ def unpack_firmware(
 
 def build_links_against(session: Session, project: Project) -> int:
     """Create `links_against` edges from each target to sibling targets whose
-    filename matches a needed library. Best-effort; returns edges created."""
-    targets = session.query(Target).filter(Target.project_id == project.id).all()
+    filename matches a needed library. Best-effort; returns edges created.
+    Idempotent (merge=True) and skips archived targets, so it's safe to re-run on
+    every ingest/add-from-fs without drawing duplicate parallel edges."""
+    targets = (session.query(Target)
+               .filter(Target.project_id == project.id, Target.archived.is_(False)).all())
     by_basename: dict[str, Target] = {}
     for t in targets:
         by_basename.setdefault(Path(t.name).name, t)
@@ -80,7 +83,7 @@ def build_links_against(session: Session, project: Project) -> int:
                     session, project_id=project.id,
                     src=("target", t.id), dst=("target", dep.id),
                     type=EdgeType.links_against, origin="tool", confidence=1.0,
-                    created_by_tool="recon", attrs={"lib": lib},
+                    created_by_tool="recon", attrs={"lib": lib}, merge=True,
                 )
                 created += 1
     return created

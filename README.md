@@ -158,6 +158,8 @@ hexgraph graph <project> --export FILE     Export the project graph as JSON (nod
 hexgraph config list | get K | set K V     Read/write managed settings (optional-feature toggles, prefs)
 hexgraph mcp [--tools read,write,run]      Run the MCP server for a coding agent (stdio)
 hexgraph mcp install [--agent A]           Print how to register HexGraph with claude|codex|gemini
+             [--write-skill DIR]           …also install the VR skill into a skills dir (e.g. .claude/skills)
+             [--print-skill]               …print the VR skill markdown to stdout
 hexgraph mcp --check                       List the MCP tools and exit
 hexgraph serve [--host H] [--port P]       Start the loopback-only API/UI (default 127.0.0.1:8765)
 ```
@@ -225,6 +227,24 @@ Configuration layers as **env > `settings.json` (managed) > `config.toml` (hand-
 secret) > defaults**. Secrets live only in env or `config.toml` and are never written to
 `settings.json` or returned by the API.
 
+### Enabling execution (PoC / fuzzing) — end to end
+
+By default the target is never run. To turn on verified PoCs:
+
+```bash
+hexgraph config set features.poc.enabled true     # flips the policy to allow sandboxed execution
+# then either: launch a `poc` task on a target from the UI Run menu,
+# or, driving over MCP, call verify_poc(target_id, poc, finding_id=...) with a
+# spec like {"stdin": "...{{NONCE}}...", "oracle": {"type": "output_contains", "value": "{{NONCE}}"}}
+```
+
+A confirmed PoC is surfaced as a `verified` finding. Foreign-arch (MIPS/ARM/…) firmware binaries run
+under qemu-user automatically, with the parent firmware's extracted rootfs as the sysroot — no extra
+setup. `features.fuzzing.enabled true` works the same way for the `fuzzing` task.
+
+To use Ghidra instead of radare2: `make sandbox-build WITH_GHIDRA=1`, then
+`hexgraph config set features.ghidra.enabled true` and re-run a decompile/recon task.
+
 ---
 
 ## Configuration
@@ -255,6 +275,9 @@ port = 8765
 | `HEXGRAPH_MOCK_SCENARIO` | — | Force a mock scenario for all tasks. |
 | `HEXGRAPH_SANDBOX_IMAGE` | `hexgraph-sandbox:latest` | Analysis sandbox image. |
 | `HEXGRAPH_SANDBOX_NO_MOUNT` | — | `1` to use the image's baked-in probes instead of mounting the local copies (probes mount by default, so editing one needs no rebuild). |
+| `HEXGRAPH_DECOMPILER` | `r2` | Override the decompiler seam (`r2` \| `ghidra`). |
+| `HEXGRAPH_DISABLE_DECOMPILE` | — | `1` to skip decompilation in LLM tasks (offline/no-Docker dev + tests). |
+| `HEXGRAPH_DISABLE_SANDBOX_BUILD` | — | `1` to skip the harness-compile sandbox step (dev/tests). |
 | `HEXGRAPH_I_KNOW_WHAT_IM_DOING` | — | `1` to allow a non-loopback bind (warns loudly; not recommended). |
 | `ANTHROPIC_API_KEY` | — | Your key for the `anthropic` backend. Read on demand; never logged or stored. |
 

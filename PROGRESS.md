@@ -11,7 +11,8 @@ then run the resume verifier, then continue at the next unchecked task.
   (evidence-derived status, sticky human verdict, open hypotheses feed context), in-app report viewer +
   run-compare diff UI. Remaining documented sub-items (not whole phases): richer approval gates (review-on-
   output / plan / spend), P7-5 (offline CVE / bounded dataflow / reviewable dedup), FTS5 search,
-  SSE live activity, real-key cassette recording (`make test-live`), Ghidra decompiler.
+  SSE live activity, real-key cassette recording (`make test-live`). (Ghidra decompiler is DONE —
+  see Optional features below.)
 - **Optional features (settings-driven, `settings.py` + `/api/settings` + `hexgraph config`; secrets status-only):**
   **Ghidra** (headless `WITH_GHIDRA=1` / bridge / enrich_recon), and **Fuzzing** (`fuzzing` task, off by
   default — the one thing that relaxes static-only, via the policy seam: libFuzzer+ASan on a generated
@@ -55,7 +56,8 @@ then run the resume verifier, then continue at the next unchecked task.
     wrong bounds check), `netcfgd`/`orbweaver_fw.bin` (command injection behind an INCOMPLETE sanitizer
     — bypass via newline/backtick), `eventlogd`/`halcyon_nvr_fw.bin` (CWE-134 format-string env-secret
     disclosure, unforgeable via env `{{NONCE}}`), `authsvc`+`cfgsvc`/`vantage_gw_fw.bin` (shared
-    `unpack_record` stack overflow across two services — the n-day case). Three sub-agent rounds
+    `unpack_record` stack overflow across two services — the n-day case), `admind`/`sentry_sx3_fw.bin`
+    (CWE-287/697 auth bypass — attacker-controlled compare length). Four sub-agent rounds
     (escalating difficulty) each solved end-to-end with verified PoCs; feedback in
     `/tmp/hexgraph-auto/feedback-*.md` drove every fix above.
 - **Typed attributed edges + socket nodes** (this session): edges carry type-specific attributes

@@ -50,13 +50,11 @@ def _extract(artifact: str, out: str) -> tuple[str, str]:
         return _squashfs(artifact, root), root
     if magic in (b"070701", b"070702", b"070707"):
         os.makedirs(root, exist_ok=True)
-        proc = subprocess.run(
-            ["cpio", "-idmu", "--no-absolute-filenames"],
-            stdin=open(artifact, "rb"),
-            cwd=root,
-            capture_output=True,
-        )
-        _ = proc.returncode
+        with open(artifact, "rb") as fh:
+            subprocess.run(
+                ["cpio", "-idmu", "--no-absolute-filenames"],
+                stdin=fh, cwd=root, capture_output=True,
+            )
         return "cpio", root
     # Wrapped/real firmware: recursive carve+extract of every nested container.
     # -M = matryoshka (recurse into extracted files), -e = extract, -q = quiet.

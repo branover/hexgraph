@@ -33,9 +33,13 @@ def _strings(data: bytes, limit: int = 40) -> list[str]:
     seen: list[str] = []
     notable: list[str] = []
     for m in PRINTABLE.finditer(data):
+        # Both lists are capped so a hostile/large blob saturated with notable
+        # keywords can't grow `notable` unbounded; stop scanning once both are full.
+        if len(notable) >= limit and len(seen) >= limit:
+            break
         s = m.group().decode("ascii", "replace")
         if any(k.lower() in s.lower() for k in _KEYWORDS):
-            if s not in notable:
+            if len(notable) < limit and s not in notable:
                 notable.append(s)
         elif len(seen) < limit:
             seen.append(s)
@@ -131,7 +135,9 @@ _FW_SIGS = (
     (b"HDR0", "trx"),                       # TRX (Broadcom/Linksys)
     (b"\x27\x05\x19\x56", "uimage"),        # U-Boot uImage
     (b"UBI#", "ubi"), (b"UBI!", "ubi"),
-    (b"\x85\x19", "jffs2"), (b"\x19\x85", "jffs2"),
+    # NB: jffs2's magic is only 2 bytes (0x1985) and collides constantly in large
+    # blobs — omitted here to avoid mis-flagging ordinary files as firmware. Real
+    # jffs2 firmware is wrapped (TRX/uImage) and carved by binwalk anyway.
     (b"\x45\x3d\xcd\x28", "cramfs"), (b"\x28\xcd\x3d\x45", "cramfs"),
     (b"\xd0\x0d\xfe\xed", "fit"),            # FIT/DTB
     (b"-lh", "lzh"),

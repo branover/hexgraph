@@ -21,8 +21,9 @@ the `*.bin` (and `keyserv`) are committed build outputs.
 ## Verifying a challenge (sketch)
 
 ```
-export HEXGRAPH_HOME=/tmp/hg-challenge HEXGRAPH_FEATURES_POC=1   # PoC needs execution policy on
+export HEXGRAPH_HOME=/tmp/hg-challenge
 .venv/bin/hexgraph init
+.venv/bin/hexgraph config set features.poc.enabled true   # PoC needs the execution policy on
 # Drive via the MCP tools (engine.mcp_tools) or hand the firmware to a sub-agent.
 ```
 

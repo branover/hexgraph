@@ -84,6 +84,13 @@ class SandboxRunner:
             "docker", "run", "--rm", "--name", name,
             "--network", "none",
             "--read-only",
+            # Defense-in-depth at the hostile-target boundary: no Linux capabilities,
+            # no privilege escalation (blocks setuid-root re-escalation), and pin the
+            # unprivileged uid even if the image's USER is overridden. The probes run
+            # as the non-root analyst (uid 1000) and need none of these.
+            "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges",
+            "--user", "1000:1000",
             "--memory", "2g",
             "--cpus", "2",
             "--pids-limit", "256",

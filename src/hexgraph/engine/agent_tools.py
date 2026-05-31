@@ -132,7 +132,7 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
             pat = (args.get("pattern") or "").lower()
             if pat:
                 strings = [s for s in strings if pat in str(s).lower()]
-            return _clip("strings:\n" + "\n".join(str(s) for s in strings[:200]) or "(none)")
+            return _clip("strings:\n" + ("\n".join(str(s) for s in strings[:200]) or "(none)"))
         if name == "list_functions":
             out = _decomp(ctx, None)
             if out.get("error"):
@@ -266,6 +266,8 @@ def _fuzz(ctx: ToolContext, args: dict) -> str:
         )
     finally:
         os.unlink(src)
+        import shutil
+        shutil.rmtree(crash_dir, ignore_errors=True)
     if not res.get("compiled"):
         return f"harness did not compile: {res.get('stderr', '')[:400]}"
     crashes = res.get("crashes", [])

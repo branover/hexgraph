@@ -1,7 +1,10 @@
 """SQLAlchemy models (SPEC §4). The graph is modeled relationally — no Neo4j.
 
-Entities: project, target (self-referential parent_id tree), edge
-(contains | links_against | related_to), task, finding. All ids are UUID strings.
+Entities: project, target (self-referential parent_id tree), node (typed sub-file
+entities — see NodeType: function/symbol/string/struct/hypothesis/pattern/input/
+sink/socket), polymorphic attributed edge (see EdgeType — contains/calls/taints/
+listens_on/connects_to/similar_to/…), task, finding. `NodeType`/`EdgeType` are
+String columns so new vocab is zero-migration. All ids are UUID strings.
 """
 
 from __future__ import annotations

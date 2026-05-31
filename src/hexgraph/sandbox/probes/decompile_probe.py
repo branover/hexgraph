@@ -35,6 +35,12 @@ def _callees(disasm: str) -> list[str]:
     return out
 
 
+# A function/symbol name is interpolated into an r2 command (`pdc @ <name>`), where
+# `;` chains commands and `!`/backticks reach the shell. Only allow characters that
+# occur in real symbol names, so an unresolved name can never inject a command.
+_SAFE_NAME = re.compile(r"^[A-Za-z0-9_.@$:]+$")
+
+
 def _name_candidates(fn: str) -> list[str]:
     fn = fn.lstrip(".")
     return [f"sym.{fn}", f"sym.imp.{fn}", f"fcn.{fn}", fn]
@@ -68,9 +74,17 @@ def main() -> int:
                 (c for c in _name_candidates(focus_name) if c in functions),
                 focus_name if focus_name in functions else None,
             )
-            seek = resolved or f"sym.{focus_name.lstrip('.')}"
-            pseudo = r2.cmd(f"pdc @ {seek}").strip()
-            disasm = r2.cmd(f"pdf @ {seek}").strip()
+            # Never interpolate an unvalidated name into an r2 command. Use the
+            # resolved flag, or the sym.<name> fallback ONLY if the name is safe;
+            # otherwise refuse to seek (treated as "function not found").
+            if resolved:
+                seek = resolved
+            elif _SAFE_NAME.match(focus_name):
+                seek = f"sym.{focus_name.lstrip('.')}"
+            else:
+                seek = None
+            pseudo = r2.cmd(f"pdc @ {seek}").strip() if seek else ""
+            disasm = r2.cmd(f"pdf @ {seek}").strip() if seek else ""
             off = offsets.get(resolved) if resolved else None
             focus = {
                 "name": focus_name,

@@ -160,7 +160,6 @@ def _generate_spec(session: Session, project: Project, target: Target, task: Tas
     ready spec; a real backend crafts one from the decompilation in context."""
     from hexgraph.engine.llm_tasks import _build_context
     from hexgraph.llm.registry import get_backend
-    from hexgraph.llm.base import LLMRequest
 
     ctx = _build_context(session, project, target, task)
     backend = get_backend(task.backend if task.backend not in (None, "none") else None)

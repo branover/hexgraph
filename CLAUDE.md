@@ -44,10 +44,11 @@ src/hexgraph/
   config.py settings.py        # config.toml (user/secrets, never rewritten) + settings.json (managed, writable)
   models/finding.py            # the frozen Finding/Evidence/FollowupSuggestion Pydantic models
   llm/                         # backend seam: base, mock, anthropic_api, claude_code, registry, cassette
-  sandbox/                     # runner (docker boundary), executor, decompiler; probes/ are baked into the image
-  engine/                      # ingest, pipeline, recon, unpack, worker, nodes, edges, context, runs, findings,
-                               #   tasks, followups, dedup, search, report, crosstarget, authoring, annotations,
-                               #   hypotheses, ghidra, ghidra_bridge, suggester, capabilities, cas
+  sandbox/                     # runner (docker boundary), executor, decompiler; probes/ mounted from the install
+  engine/                      # ingest, pipeline, recon, unpack, worker, nodes, edges, edge_schemas, nodemerge,
+                               #   context, runs, findings, poc, fuzzing, tasks, followups, dedup, search, report,
+                               #   crosstarget, authoring, annotations, hypotheses, filesystem, mcp_tools, targets,
+                               #   ghidra, ghidra_bridge, suggester, capabilities, cas
   api/app.py                   # FastAPI: all REST endpoints + serves the SPA at / (loopback)
   cli.py                       # hexgraph init|db upgrade|ingest|targets|run|findings|graph|prune|config|serve
 frontend/                      # React+Vite+TS SPA → built to src/hexgraph/web/dist by `make ui` (gitignored)

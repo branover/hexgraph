@@ -112,7 +112,9 @@ def main() -> int:
     shutil.copyfile(artifact, target)
     os.chmod(target, 0o755)
 
-    env = dict(os.environ)
+    # Start from a minimal environment (not the sandbox's full os.environ) so the
+    # executed target only sees what the PoC spec deliberately provides.
+    env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/scratch", "TMPDIR": "/scratch"}
     env.update({str(k): str(v) for k, v in (spec.get("env") or {}).items()})
     # Foreign-arch targets (MIPS/ARM/…) run under qemu-user; host-native run directly.
     prefix = _qemu_prefix(target, spec.get("sysroot"), spec.get("argv0"))

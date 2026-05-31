@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from hexgraph.engine.llm_tasks import LLM_TASK_TYPES, execute_llm_task
 from hexgraph.engine.recon import execute_recon
 from hexgraph.engine.tasks import mark_failed, mark_running, mark_succeeded
-from hexgraph.sandbox.executor import Executor, get_executor
+from hexgraph.sandbox.executor import get_executor
 
 
 def _dispatch(session: Session, project: Project, target: Target, task: Task) -> None:

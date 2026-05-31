@@ -57,13 +57,19 @@ def ingest_file(
     dst = artifacts / src.name
     shutil.copy2(src, dst)
 
+    # Content hash at ingest time (not just from recon) so target identity —
+    # archive/restore matching and cross-target dedup — works even when recon
+    # hasn't run (no Docker, or --no-recon). Recon later rewrites the same value.
+    from hexgraph.engine.targets import file_sha256
+
     target = Target(
         project_id=project.id,
         parent_id=parent.id if parent else None,
         name=name or src.name,
         path=str(dst),
         kind=TargetKind.unknown,  # refined by the sandboxed recon task (M2)
-        metadata_json={"size": dst.stat().st_size, "original_path": str(src)},
+        metadata_json={"size": dst.stat().st_size, "original_path": str(src),
+                       "sha256": file_sha256(str(dst))},
     )
     session.add(target)
     session.flush()

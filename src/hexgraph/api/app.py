@@ -19,8 +19,8 @@ from hexgraph import __version__
 from hexgraph.api.loopback import assert_loopback
 from hexgraph.config import load_config
 from hexgraph.db.models import Finding, FindingStatus, Node, Project, Target, Task
-from hexgraph.db.session import init_db, session_scope
-from hexgraph.engine.findings import row_to_payload
+from hexgraph.db.session import session_scope
+from hexgraph.engine.findings import is_verified, row_to_payload
 from hexgraph.engine.graph import build_graph
 from hexgraph.engine.tasks import create_task
 from hexgraph.engine.worker import get_worker
@@ -148,7 +148,6 @@ class BulkStatus(BaseModel):
 
 
 def _finding_dict(f: Finding) -> dict:
-    verification = ((f.evidence_json or {}).get("extra") or {}).get("verification") or {}
     return {
         "id": f.id,
         "target_id": f.target_id,
@@ -156,7 +155,7 @@ def _finding_dict(f: Finding) -> dict:
         "status": f.status,
         "origin": f.origin,
         "finding_type": f.finding_type,
-        "verified": bool(verification.get("verified")),  # a PoC that executed + matched its oracle
+        "verified": is_verified(f.evidence_json),  # a PoC that executed + matched its oracle
         "dismissed_reason": f.dismissed_reason,
         "human_notes": f.human_notes,
         "created_at": f.created_at,

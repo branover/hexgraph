@@ -21,7 +21,14 @@ services:
       - "127.0.0.1:8765:8765"
     volumes:
       - hexgraph_data:/root/.hexgraph
-      # M2: launch the disposable analysis sandbox via docker-out-of-docker.
+      # Launch the disposable analysis sandbox via docker-out-of-docker.
+      # ⚠ SECURITY: mounting the daemon socket grants this container
+      # host-equivalent (root) control of Docker — any RCE in the app would
+      # escalate to the host. Acceptable for a single-user local box; for a
+      # hardened/shared deployment put a restricted socket-proxy (e.g.
+      # tecnativa/docker-socket-proxy, allowing only container create/run/kill)
+      # in front of it, or use a rootless-Docker socket. The venv run path
+      # (make serve) avoids the socket entirely.
       - /var/run/docker.sock:/var/run/docker.sock
     command: ["hexgraph", "serve"]
 

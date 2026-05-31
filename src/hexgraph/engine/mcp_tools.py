@@ -14,10 +14,10 @@ in-process agent loop. `record_finding` validates against the frozen schema.
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from hexgraph.db.models import Finding, Node, Project, Target
 from hexgraph.db.session import session_scope
+from hexgraph.engine.findings import is_verified
 from hexgraph.models.finding import Finding as FModel
 
 
@@ -149,10 +149,10 @@ def list_findings(project_id: str) -> list[dict]:
         out = []
         for f in rows:
             ev = f.evidence_json or {}
-            verified = bool(((ev.get("extra") or {}).get("verification") or {}).get("verified"))
             out.append({"id": f.id, "title": f.title, "severity": f.severity, "category": f.category,
-                        "status": f.status, "finding_type": f.finding_type, "verified": verified,
-                        "target_id": f.target_id, "function": ev.get("function")})
+                        "status": f.status, "finding_type": f.finding_type,
+                        "verified": is_verified(ev), "target_id": f.target_id,
+                        "function": ev.get("function")})
         return out
 
 
@@ -166,7 +166,7 @@ def get_finding(finding_id: str) -> dict:
         if f is None:
             return {"error": "finding not found"}
         ev = f.evidence_json or {}
-        verified = bool(((ev.get("extra") or {}).get("verification") or {}).get("verified"))
+        verified = is_verified(ev)
         return {"id": f.id, "title": f.title, "severity": f.severity, "confidence": f.confidence,
                 "category": f.category, "status": f.status, "finding_type": f.finding_type,
                 "origin": f.origin, "target_id": f.target_id, "task_id": f.task_id,
@@ -519,7 +519,7 @@ def ingest(path: str, name: str | None = None, project_id: str | None = None) ->
     import os
 
     from hexgraph.engine.ingest import create_project, ingest_file
-    from hexgraph.engine.pipeline import analyze_target, ingest_and_analyze
+    from hexgraph.engine.pipeline import ingest_and_analyze
     from hexgraph.sandbox.executor import get_executor
     from hexgraph.sandbox.runner import docker_available
 

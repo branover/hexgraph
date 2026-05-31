@@ -22,6 +22,13 @@ _TYPE_BY_TASK = {
 FINDING_TYPES = ("vulnerability", "recon", "harness", "fuzz_crash", "poc", "annotation", "other")
 
 
+def is_verified(evidence: dict | None) -> bool:
+    """True if a PoC verification was attached to this finding's evidence and it
+    passed (evidence.extra.verification.verified). The single source for the
+    `verified` flag surfaced by the API and MCP read tools."""
+    return bool((((evidence or {}).get("extra") or {}).get("verification") or {}).get("verified"))
+
+
 def classify_finding(task_type: str | None, category: str | None) -> str:
     """Classify a finding for sort/filter from its producing task + category."""
     if category == "recon":
