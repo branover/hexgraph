@@ -43,6 +43,7 @@ class TargetKind(str, enum.Enum):
     firmware_image = "firmware_image"
     executable = "executable"
     shared_library = "shared_library"
+    web_app = "web_app"      # a dynamic HTTP(S) attack surface reached via a Channel (design-dynamic-surfaces.md)
     unknown = "unknown"
 
 
@@ -59,6 +60,8 @@ class NodeType(str, enum.Enum):
     input = "input"      # an untrusted-input source (env/arg/recv) for taint paths
     sink = "sink"        # a dangerous operation reached by tainted data
     socket = "socket"    # a network/IPC endpoint (tcp/udp/unix/io) shared across binaries
+    endpoint = "endpoint"  # a web route / RPC method on a dynamic surface (analogue of function)
+    param = "param"        # a request field (query/body/header/cookie) — analogue of input
     task = "task"
 
 
@@ -90,6 +93,7 @@ class EdgeType(str, enum.Enum):
     bypasses = "bypasses"      # attacker input defeats/weakens a control (auth/logic bugs)
     listens_on = "listens_on"  # a binary/function opens a listening socket (server side)
     connects_to = "connects_to"  # a binary/function connects to a socket (client side)
+    routes_to = "routes_to"    # a web endpoint/route dispatches to its handler function (static↔dynamic link)
     related_to = "related_to"  # generic fallback (kept for back-compat)
 
 

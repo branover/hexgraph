@@ -41,6 +41,11 @@ def _dispatch(session: Session, project: Project, target: Target, task: Task) ->
 
         execute_poc(session, project, target, task, get_executor())
         return
+    if task.type == "surface_recon":
+        from hexgraph.engine.surfaces import run_surface_recon
+
+        run_surface_recon(session, project, target, task)
+        return
     if task.type in LLM_TASK_TYPES:
         execute_llm_task(session, project, target, task)
         return

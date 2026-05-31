@@ -7,12 +7,13 @@ import { Icon } from "./Icon";
 cytoscape.use(dagre);
 
 const SEV: Record<string, string> = { info: "#7d8799", low: "#3fb950", medium: "#e3b341", high: "#f0883e", critical: "#ff5d6c" };
-const KIND: Record<string, string> = { firmware_image: "#a371f7", executable: "#6aa3ff", shared_library: "#39c5cf", unknown: "#7d8799" };
-const NODE_T: Record<string, string> = { function: "#7ee787", symbol: "#d2a8ff", string: "#79c0ff", struct: "#ffa657", hypothesis: "#e3b341", input: "#56d4dd", sink: "#ff7b72", socket: "#f778ba" };
+const KIND: Record<string, string> = { firmware_image: "#a371f7", executable: "#6aa3ff", shared_library: "#39c5cf", web_app: "#2dd4bf", unknown: "#7d8799" };
+const NODE_T: Record<string, string> = { function: "#7ee787", symbol: "#d2a8ff", string: "#79c0ff", struct: "#ffa657", hypothesis: "#e3b341", input: "#56d4dd", sink: "#ff7b72", socket: "#f778ba", endpoint: "#2dd4bf", param: "#56d4dd" };
 const EDGE_C: Record<string, string> = {
   contains: "#46506a", calls: "#6aa3ff", about: "#3b4458", related_to: "#f0883e",
   instance_of_pattern: "#f0883e", links_against: "#39c5cf", similar_to: "#8b5cf6",
   taints: "#ff7b72", bypasses: "#ff5d6c", listens_on: "#f778ba", connects_to: "#f0a0d0",
+  routes_to: "#2dd4bf",
 };
 const RESOLVED = new Set(["confirmed", "dismissed", "reported"]);
 

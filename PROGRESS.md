@@ -6,6 +6,15 @@ then run the resume verifier, then continue at the next unchecked task.
 ## ▶ RESUME HERE
 - **Current milestone:** v2 build — see [`docs/implementation-plan.md`](docs/implementation-plan.md)
   (built from [`docs/design-vision.md`](docs/design-vision.md)). MVP (M0–M5) is the foundation.
+- **Dynamic surfaces (new track, see [`docs/design-dynamic-surfaces.md`](docs/design-dynamic-surfaces.md)):**
+  extending HexGraph beyond static binaries to web/service, live-device, and rehosted-firmware surfaces.
+  **Phase 1 (backbone) DONE:** a Target can now be a `web_app` *surface* (reached via a Channel in
+  `metadata_json`, no bytes); `engine/surfaces.py` `register_web_surface` + the offline `surface_recon`
+  task materialise `endpoint`/`param` nodes and the **`routes_to`** cross-link from a route to its handler
+  `function` in the firmware (the static↔dynamic fuse). Additive `policy.py` tier scaffolding (`tier`,
+  `NetworkScope`, `assert_allows_egress` — always denies; Tiers 0/1 byte-identical to before). Drive via
+  MCP `register_surface` + `run_task(surface_recon)`. **Offline, zero egress, zero new risk.** Next:
+  Phase 2 (network relaxation: `NetworkExecutor` + egress allowlist/audit) then dynamic web PoC.
 - **Current state:** **P0–P8 all delivered** (core) + **researcher depth (P6/P7) complete**: annotations
   (rename/note/tag, agent-proposed→confirm, confirmed facts feed context), hypothesis lifecycle
   (evidence-derived status, sticky human verdict, open hypotheses feed context), in-app report viewer +
