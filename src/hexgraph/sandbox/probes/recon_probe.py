@@ -123,6 +123,30 @@ def _elf_facts(path: str) -> dict:
     return facts
 
 
+# Embedded filesystem / firmware-container signatures. If any appears in a non-ELF
+# blob, it's a firmware image binwalk can carve (real vendor firmware is always
+# wrapped — TRX/uImage/vendor header around a squashfs/jffs2/etc.).
+_FW_SIGS = (
+    (b"hsqs", "squashfs"), (b"sqsh", "squashfs"), (b"shsq", "squashfs"), (b"qshs", "squashfs"),
+    (b"HDR0", "trx"),                       # TRX (Broadcom/Linksys)
+    (b"\x27\x05\x19\x56", "uimage"),        # U-Boot uImage
+    (b"UBI#", "ubi"), (b"UBI!", "ubi"),
+    (b"\x85\x19", "jffs2"), (b"\x19\x85", "jffs2"),
+    (b"\x45\x3d\xcd\x28", "cramfs"), (b"\x28\xcd\x3d\x45", "cramfs"),
+    (b"\xd0\x0d\xfe\xed", "fit"),            # FIT/DTB
+    (b"-lh", "lzh"),
+)
+
+
+def _firmware_signature(data: bytes) -> str | None:
+    """Scan a non-ELF blob for an embedded filesystem/container signature."""
+    window = data[: 8 << 20]  # first 8 MB is plenty to spot the container
+    for sig, fmt in _FW_SIGS:
+        if sig in window:
+            return fmt
+    return None
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print(json.dumps({"error": "usage: recon_probe.py <artifact>"}))
@@ -148,6 +172,14 @@ def main() -> int:
         elif data[:6] in (b"070701", b"070702"):
             facts["format"] = "cpio"
             facts["kind"] = "firmware_image"
+        else:
+            # Wrapped/real firmware: detect an embedded filesystem/container anywhere
+            # in the blob (TRX/uImage/vendor header → squashfs/jffs2/…) so binwalk
+            # carves it. A blob with none of these stays "unknown" (binwalk no-op).
+            fmt = _firmware_signature(data)
+            if fmt:
+                facts["format"] = fmt
+                facts["kind"] = "firmware_image"
 
     print(json.dumps(facts))
     return 0

@@ -92,3 +92,13 @@ def test_worker_runs_recon_task(hg_home, sandbox):
     assert run_task_sync(task_id) == "succeeded"
     with session_scope() as s:
         assert s.query(Finding).count() == 1
+
+
+def test_recon_classifies_wrapped_firmware():
+    """Real firmware is wrapped (TRX/uImage/vendor header); recon must spot an
+    embedded filesystem signature and classify it firmware_image so it gets carved."""
+    from hexgraph.sandbox.probes.recon_probe import _firmware_signature
+    assert _firmware_signature(b"1550\x00\x00HDR0" + b"\x00" * 100) == "trx"
+    assert _firmware_signature(b"\x00" * 64 + b"hsqs" + b"\x00" * 64) == "squashfs"
+    assert _firmware_signature(b"\x27\x05\x19\x56" + b"\x00" * 32) == "uimage"
+    assert _firmware_signature(b"just some random non-firmware bytes" * 10) is None
