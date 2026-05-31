@@ -61,6 +61,11 @@ class EvidenceLink(BaseModel):
     relation: str  # supports | refutes
 
 
+class GhidraImport(BaseModel):
+    path: str
+    name: str | None = None
+
+
 class ProjectCreate(BaseModel):
     name: str
     backend: str | None = "mock"
@@ -492,6 +497,30 @@ def create_app() -> FastAPI:
         from hexgraph.engine.ghidra import check_ghidra
 
         return check_ghidra()
+
+    @app.get("/api/ghidra/programs")
+    def api_ghidra_programs():
+        """List programs open in a connected Ghidra (bridge mode)."""
+        from hexgraph.engine.ghidra_bridge import BridgeUnavailable, list_open_programs
+
+        try:
+            return list_open_programs()
+        except BridgeUnavailable as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.post("/api/projects/{project_id}/ghidra/import")
+    def api_ghidra_import(project_id: str, body: GhidraImport):
+        """Ingest a program Ghidra has open as a target (real on-disk bytes)."""
+        from hexgraph.engine.ghidra_bridge import BridgeUnavailable, import_program
+
+        with session_scope() as s:
+            project = s.get(Project, project_id)
+            if project is None:
+                raise HTTPException(404, "project not found")
+            try:
+                return import_program(s, project, path=body.path, name=body.name)
+            except BridgeUnavailable as exc:
+                raise HTTPException(400, str(exc))
 
     @app.get("/api/capabilities")
     def api_capabilities():
