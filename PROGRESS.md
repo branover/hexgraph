@@ -58,14 +58,25 @@ then run the resume verifier, then continue at the next unchecked task.
     `unpack_record` stack overflow across two services — the n-day case). Three sub-agent rounds
     (escalating difficulty) each solved end-to-end with verified PoCs; feedback in
     `/tmp/hexgraph-auto/feedback-*.md` drove every fix above.
-  - **KNOWN LIMIT — true vendor-firmware analysis needs two more pieces (flagged for greenlight, not
-    yet added):** (1) **sasquatch** for vendor/LZMA squashfs extraction (stock `unsquashfs`/host binwalk
-    can't carve e.g. DVRF's `DVRF_v03.bin`); (2) **qemu-user-static** so `verify_poc` can run foreign-arch
-    (MIPS/ARM) PoCs. Both are heavy `Dockerfile.sandbox` additions. Until then, real images ingest +
-    classify + (where extractable) decompile, but foreign-arch PoC verification is out of reach.
-- **Last verified:** `.venv/bin/python -m pytest -q` → 229 passed, 2 skipped (live test skips without a
-  key; one Docker-gated when the sandbox image is absent); SPA builds clean. Ghidra image
-  (`WITH_GHIDRA=1`) works end-to-end.
+- **Typed attributed edges + socket nodes** (this session): edges carry type-specific attributes
+  (`engine/edge_schemas.py` registry; list attrs like a `calls` edge's `call_sites` merge on repeat
+  via `add_edge(merge=)`/`update_edge`). New `socket` node type — a network/IPC endpoint shared across
+  binaries (a server `listens_on`, a client `connects_to`, both resolve to one node) → the firmware
+  network map. Full surface: MCP (`create_socket`/`update_edge`/`list_sockets`/`get_finding`,
+  `get_schemas` advertises edge schemas + socket kinds), API (`POST /sockets`, `PATCH /edges/{id}`,
+  `GET /api/edge-schemas`), agent loop (`xrefs` adds a network tier), and UI (socket node + edge-attr
+  labels + author forms). `bypasses` edge type for auth/logic bugs.
+- **Real vendor-firmware analysis — DELIVERED (was the known limit):** the sandbox image now bundles
+  **sasquatch** (vendor/LZMA squashfs, built from squashfs-tools/), **jefferson**/**ubi_reader**
+  (JFFS2/UBIFS), p7zip, and **qemu-user** (all arches). `unpack_probe` uses sasquatch + recursive
+  binwalk; `poc_probe` runs foreign-arch targets under `qemu-<arch>` (arch from the ELF header,
+  `-0 argv0`), and `verify_poc` mounts the parent firmware's rootfs as the qemu sysroot (`-L`).
+  **Verified end-to-end:** DVRF `DVRF_v03.bin` (Linksys E1550, MIPS) → 218 ELFs extracted; `verify_poc`
+  on its real `/bin/busybox` (MIPS LE, uClibc, dynamically linked) ran under qemu-mipsel and returned
+  verified:true. Dockerfile layers ordered after Ghidra so rebuilds keep the cached Ghidra layer.
+- **Last verified:** `.venv/bin/python -m pytest -q` → 239 passed, 2 skipped (live test skips without a
+  key; one Docker-gated when the sandbox image is absent); SPA builds clean. Sandbox image
+  (`WITH_GHIDRA=1`) includes Ghidra + qemu + firmware extractors and works end-to-end.
 - **UI quickstart (updated):** `make ui` once → `make sandbox-build` once →
   `hexgraph ingest tests/fixtures/synthetic_fw.bin --name demo` → `hexgraph serve` → http://127.0.0.1:8765.
 - **How to re-verify:** `make test`; or run the UI (see UI quickstart below).
