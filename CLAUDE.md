@@ -25,9 +25,10 @@ Post-MVP, **every new feature or major atomic change happens on its own branch i
 
 **The merge gate — a PR-review subagent, every time.** Before a worktree branch merges:
 1. Run `make test` (and `make demo` if the loop is touched) green in the worktree.
-2. **Dispatch a subagent (Agent tool) to review the PR diff** — correctness, the security invariants (loopback / sandbox / secret-never-logged / static-only policy), test quality, and that docs/PROGRESS/migrations were updated. Have it **fix the issues it finds** (or report them for you to fix), then re-verify.
-3. Only after the review passes: `gh pr merge`. There is **no CI yet**, so this review + local `make test` *is* the gate.
-4. Clean up: `git worktree remove <path>` and delete the merged branch.
+2. **Dispatch a subagent (Agent tool) to review the PR diff** — correctness, the security invariants (loopback / sandbox / secret-never-logged / the opt-in execution policy), test quality, and that docs/PROGRESS/migrations were updated.
+3. **Every requested change or piece of commentary the reviewer raises MUST be posted on the PR itself** — as a review with line-level comments / suggested changes (`gh pr review --comment` or `--request-changes`; `gh api .../pulls/{n}/comments` for inline suggestions), not only returned to the dispatching agent. This is a durable, public log for posterity. A verbose summary back to the dispatching agent is welcome **in addition**, never instead. The reviewer then **fixes the issues** (commit referencing the comment) or hands them back; re-verify after fixes.
+4. Only after the review passes (its PR comments addressed): `gh pr merge`. There is **no CI yet**, so this review + local `make test` *is* the gate.
+5. Clean up: `git worktree remove <path>` and delete the merged branch.
 
 **Creating a worktree (with its own isolated runtime):**
 ```bash
@@ -54,7 +55,7 @@ export HEXGRAPH_HOME="$PWD/.hghome"                                  # OWN data/
 - **Fully self-hosted.** Nothing calls a HexGraph-operated backend; no telemetry, no auto-update pings.
 - **Loopback only.** API/UI bind `127.0.0.1`; a startup assertion refuses a non-loopback bind unless `HEXGRAPH_I_KNOW_WHAT_IM_DOING=1`.
 - **BYOK / Claude Code / mock only.** No bundled keys, no proxying. Read `ANTHROPIC_API_KEY` from env or `~/.hexgraph/config.toml`; **never log, store, or return it.** `HEXGRAPH_API_KEY` is reserved for future paid features — same rule.
-- **Targets are hostile.** All parsing/unpacking/analysis of target bytes runs only inside the disposable Docker sandbox (`--network none`, read-only rootfs, mem/cpu/pids caps, tmpfs, hard timeout). **Static/RE by default; never execute the target** — the one exception is the policy-gated PoC/fuzzing path (opt-in `features.poc`/`features.fuzzing`), which runs the target *inside the same locked-down sandbox* (foreign-arch via qemu-user). **The LLM never sees raw target bytes** — only tool output carried in `TaskContext`.
+- **Targets are hostile.** All parsing/unpacking/analysis of target bytes runs only inside the disposable Docker sandbox (`--network none`, read-only rootfs, mem/cpu/pids caps, tmpfs, hard timeout). **Executing the target is opt-in, gated solely by the policy seam** (`policy.current_policy()` / `assert_allows_execution()`): static-only is the **default**, and it **must be enforced whenever the user hasn't opted into a dynamic/execution analysis** — with neither `features.poc` nor `features.fuzzing` enabled, any attempt to run the target raises. Enabling PoC/fuzzing flips the policy to permit execution, still *inside the same locked-down sandbox* (foreign-arch via qemu-user). So static-only is an **enforced default, not an absolute ban** — but **never relax the gate anywhere except the policy seam**. **The LLM never sees raw target bytes** — only tool output carried in `TaskContext`.
 - **Zero token spend by default.** Mock backend is the dev/CI default; `make demo` runs the full loop offline with no key and exits 0.
 - **The Finding schema is frozen** (`context/schemas/finding.schema.json`). Every task and backend (mock included) emits exactly this shape; a contract test enforces it. New structure goes in the DB envelope, not the schema.
 - **Migrations are mandatory.** The project DB is durable researcher knowledge, never silently reset. Any schema change ships an `alembic revision --autogenerate` committed with the model change.
