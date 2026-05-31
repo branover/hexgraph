@@ -150,7 +150,8 @@ class SandboxRunner:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout)
         except subprocess.TimeoutExpired as exc:
             subprocess.run(["docker", "kill", name], capture_output=True)
-            raise SandboxTimeout(f"probe {probe} exceeded {self.timeout}s on {artifact.name}") from exc
+            target = artifact.name if artifact is not None else "live channel"
+            raise SandboxTimeout(f"probe {probe} exceeded {self.timeout}s on {target}") from exc
         except OSError as exc:
             raise SandboxError(f"failed to launch docker: {exc}") from exc
 
