@@ -55,7 +55,7 @@ context/                       # the build spec: SPEC.md, schemas/finding.schema
 docs/                          # design-vision.md, implementation-plan.md, ui-backlog.md
 ```
 
-Key disciplines: **probes are baked into the sandbox image — re-run `make sandbox-build` after editing anything in `sandbox/probes/`** (or set `HEXGRAPH_SANDBOX_DEV=1` to mount them). Tests use `init_db()` (create_all) on throwaway DBs and never migrate; persistent DBs migrate. Decompilation/harness-compile are best-effort and env-gated (`HEXGRAPH_DISABLE_DECOMPILE`, `HEXGRAPH_DISABLE_SANDBOX_BUILD`) — never gated on backend identity.
+Key disciplines: **probes are mounted from the install at run time** (`sandbox/runner.py` overlays `sandbox/probes/` read-only over the image's baked copy), so **editing or adding a probe needs no rebuild** — only a toolchain change does (`make sandbox-build`; set `HEXGRAPH_SANDBOX_NO_MOUNT=1` to force the baked-in copy). Tests use `init_db()` (create_all) on throwaway DBs and never migrate; persistent DBs migrate. Decompilation/harness-compile are best-effort and env-gated (`HEXGRAPH_DISABLE_DECOMPILE`, `HEXGRAPH_DISABLE_SANDBOX_BUILD`) — never gated on backend identity.
 
 ## Optional features & settings
 

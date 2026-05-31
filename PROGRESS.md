@@ -29,7 +29,32 @@ then run the resume verifier, then continue at the next unchecked task.
   target in the sandbox and confirm exploitation via an unforgeable nonce oracle → finding marked
   `verified`. **Findings are typed** (`finding_type`: vulnerability/recon/harness/fuzz_crash/poc/…,
   migration 0008) for sort/filter. Engagement test (`docs/engagement-brief.md`) success = a verified PoC.
-- **Last verified:** `.venv/bin/python -m pytest -q` → 210 passed, 1 skipped (live, no key); SPA builds clean.
+- **Autonomous-session work (2026-05-31, harder-challenge + sub-agent feedback loop):**
+  - **`xrefs` analysis tool** (`engine/agent_tools._xrefs` + `mcp_tools.xrefs`, `read` group; probe
+    `sandbox/probes/xrefs_probe.py`, r2 `axtj`): "who calls this sink", or (no symbol) a two-tier sink
+    sweep — memory/exec sinks (system/popen/strcpy/…) and a separate **format-string tier** (printf
+    family, labeled "bug only if the format arg is attacker-controlled"). SKILL §2 points agents here
+    first. No image rebuild (probes mount from the install).
+  - **Feedback fixes:** `get_or_create_node` now fills a missing `address` on an existing (recon-seeded)
+    node — the requested function-address feature was silently dropped before; `create_node` echoes
+    back stored address+attrs. `link_evidence` accepts `confirms`/`contradicts` aliases.
+    `set_hypothesis_status` takes a `rationale`. `get_schemas` documents all of it.
+  - **`recon_probe` classifies wrapped real firmware** (TRX/uImage/UBI/JFFS2/cramfs/FIT signatures, not
+    just bare squashfs) so binwalk carving runs on real vendor images.
+  - **Challenge fixtures** (`tests/fixtures/challenges/`, obfuscated, CVE-class, x86 so verify_poc is
+    end-to-end): `keyserv` (stack overflow via wrong bounds check), `netcfgd`/`orbweaver_fw.bin`
+    (command injection behind an INCOMPLETE sanitizer — bypass via newline/backtick), `eventlogd`/
+    `halcyon_nvr_fw.bin` (CWE-134 format-string env-secret disclosure, unforgeable via env `{{NONCE}}`).
+    Three sub-agent rounds solved each end-to-end with verified PoCs; feedback in
+    `/tmp/hexgraph-auto/feedback-*.md`.
+  - **KNOWN LIMIT — true vendor-firmware analysis needs two more pieces (flagged for greenlight, not
+    yet added):** (1) **sasquatch** for vendor/LZMA squashfs extraction (stock `unsquashfs`/host binwalk
+    can't carve e.g. DVRF's `DVRF_v03.bin`); (2) **qemu-user-static** so `verify_poc` can run foreign-arch
+    (MIPS/ARM) PoCs. Both are heavy `Dockerfile.sandbox` additions. Until then, real images ingest +
+    classify + (where extractable) decompile, but foreign-arch PoC verification is out of reach.
+- **Last verified:** `.venv/bin/python -m pytest -q` → 228 passed, 2 skipped (live test skips without a
+  key; one Docker-gated when the sandbox image is absent); SPA builds clean. Ghidra image
+  (`WITH_GHIDRA=1`) works end-to-end.
 - **UI quickstart (updated):** `make ui` once → `make sandbox-build` once →
   `hexgraph ingest tests/fixtures/synthetic_fw.bin --name demo` → `hexgraph serve` → http://127.0.0.1:8765.
 - **How to re-verify:** `make test`; or run the UI (see UI quickstart below).
