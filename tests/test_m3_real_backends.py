@@ -82,7 +82,10 @@ def test_anthropic_5xx_maps_to_transient():
         backend.complete(_req())
 
 
-def test_anthropic_missing_key_errors(monkeypatch):
+def test_anthropic_missing_key_errors(hg_home, monkeypatch):
+    # hg_home isolates HEXGRAPH_HOME so a developer's real ~/.hexgraph/config.toml
+    # key can't make this construct a live client — the no-key branch is hit
+    # deterministically regardless of environment.
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     backend = AnthropicAPIBackend(client=None, api_key=None)
     with pytest.raises(LLMError):
