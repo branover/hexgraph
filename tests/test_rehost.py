@@ -59,6 +59,8 @@ def test_rehost_opt_in_registers_surface_and_audits(hg_home):
         ev = s.query(EgressEvent).filter(EgressEvent.target_id == surface.id,
                                          EgressEvent.tool == "rehost").all()
         assert len(ev) == 1 and ev[0].allowed is True
+        # the audited dest is the same host:port form the egress allowlist uses
+        assert ev[0].dest == "10.0.0.5:80"
 
 
 def test_assess_rehosted_surface_joins_emulator_netns(hg_home):

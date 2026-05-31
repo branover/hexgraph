@@ -24,6 +24,7 @@ import re
 import subprocess
 import uuid
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
@@ -190,9 +191,12 @@ def rehost_firmware(session: Session, project: Project, firmware: Target,
     session.flush()
 
     # Durable, auditable record that the firmware was emulated and is being reached.
+    # Use the same host:port form the egress allowlist uses (urlparse, default port 80)
+    # so the boot event lines up with the later probe events for this surface.
+    u = urlparse(result.base_url)
+    dest = f"{u.hostname or result.ip}:{u.port or (443 if u.scheme == 'https' else 80)}"
     record_egress(session, project_id=project.id, target_id=surface.id, task_id=None,
-                  dest=f"{result.ip}:{(channel.get('base_url') or '').rsplit(':', 1)[-1] or '80'}",
-                  allowed=True, tool="rehost", detail=result.detail)
+                  dest=dest, allowed=True, tool="rehost", detail=result.detail)
     return surface
 
 
