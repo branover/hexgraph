@@ -74,6 +74,5 @@ def assert_allows_egress(dest: str | None = None, policy: AnalysisPolicy | None 
     policy = policy or current_policy()
     scope = policy.network
     if scope is None or (dest is not None and dest not in scope.allow):
-        raise PolicyViolation(
-            "analysis policy does not permit network egress to "
-            f"{dest!r}" if dest else "analysis policy does not permit network egress")
+        where = f" to {dest!r}" if dest else ""
+        raise PolicyViolation(f"analysis policy does not permit network egress{where}")
