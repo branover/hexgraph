@@ -78,8 +78,10 @@ URL (or a `web_app` target already exists), assess it dynamically:
   does a bounded liveness probe.
 - **`http_request(target_id, method, path, params?, headers?, body?, json_body?)`** is
   your hands on the live target: send a login, probe an auth check, fire an injection
-  payload, and READ the response body. (Bounded, sandboxed, local-only egress, audited.
-  No cookie persistence between calls.)
+  payload, and READ the response body. (Bounded, sandboxed, local-only egress, audited.)
+  Pass `session="<label>"` to keep a cookie jar across calls, so you can log in once and
+  then explore protected routes interactively without re-sending the cookie (the response
+  lists the jar in `session_cookies`).
 - Two oracles to PROVE web bugs with **`verify_poc(target_id, {steps, oracle})`** (cookies
   carry across `steps`, so login→protected-route works in one shot):
   - **Auth bypass**: log in with the bypass credential, then GET a protected route;

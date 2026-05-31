@@ -146,23 +146,72 @@ def _egress_gate(session, project: Project, target: Target, *, tool: str, task_i
     return base_url, scope, dest
 
 
+# Per-session cookie jars for free-form authed exploration via http_request. A fresh
+# sandbox container runs each request (no state between calls), so the host keeps the jar
+# and re-injects it. Keyed by (target_id, session_id); in-process (single-user local tool),
+# reset on server restart — that's fine, the agent just logs in again.
+_COOKIE_JARS: dict[tuple[str, str], dict[str, str]] = {}
+
+
+def _parse_set_cookie(values: list[str]) -> dict[str, str]:
+    """Pull name=value from each Set-Cookie header (ignore attributes after the first ';')."""
+    out: dict[str, str] = {}
+    for raw in values or []:
+        first = (raw or "").split(";", 1)[0].strip()
+        if "=" in first:
+            name, _, val = first.partition("=")
+            name = name.strip()
+            if name:
+                out[name] = val.strip()
+    return out
+
+
+def clear_http_session(target_id: str, session: str) -> None:
+    _COOKIE_JARS.pop((target_id, session), None)
+
+
 def run_http_request(session: Session, project: Project, target: Target, *, request: dict,
-                     runner=None, task_id=None) -> dict:
+                     runner=None, task_id=None, http_session: str | None = None) -> dict:
     """Send ONE crafted HTTP request to a live web surface and return the (bounded) response
     — the agent's hands for dynamic web testing (log in, probe an auth check, fire an
     injection payload, read the response body). Egress is policy + per-target-scope gated
     and audited, exactly like web_recon; the request runs in the sandbox (no redirects, host
-    allowlisted, 64 KiB body cap). `request` = {method, path, params?, headers?, body?, json?}."""
+    allowlisted, 64 KiB body cap). `request` = {method, path, params?, headers?, body?, json?}.
+
+    Pass `http_session` (any label) to keep a cookie jar across calls: cookies the server
+    Set-Cookie's are stored and re-sent on the next call with the same label, so an auth
+    flow (log in, then hit protected routes) works across separate http_request calls
+    without manually copying the session cookie."""
     from hexgraph import settings
     from hexgraph.sandbox.executor import get_executor
 
     base_url, scope, dest = _egress_gate(session, project, target, tool="http_request", task_id=task_id)
     runner = runner or get_executor()
     timeout = int(settings.get("features.network.timeout", 30) or 30)
+
+    req = dict(request or {})
+    jar = _COOKIE_JARS.setdefault((target.id, http_session), {}) if http_session else None
+    if jar:
+        # Merge stored cookies into the request's Cookie header (an explicit Cookie the
+        # caller set takes precedence per-name).
+        headers = {str(k): v for k, v in (req.get("headers") or {}).items()}
+        existing = next((v for k, v in headers.items() if k.lower() == "cookie"), "")
+        have = {c.split("=", 1)[0].strip() for c in existing.split(";") if "=" in c}
+        merged = [existing] if existing else []
+        merged += [f"{k}={v}" for k, v in jar.items() if k not in have]
+        if merged:
+            headers = {k: v for k, v in headers.items() if k.lower() != "cookie"}
+            headers["Cookie"] = "; ".join(p for p in merged if p)
+            req["headers"] = headers
+
     channel = {"base_url": base_url, "allow": sorted(scope.allow), "timeout": timeout,
-               "request": request}
+               "request": req}
     result = runner.run_channel_probe("http_probe.py", channel=channel)
-    return result.get("response") or result
+    resp = result.get("response") or result
+    if jar is not None and isinstance(resp, dict):
+        jar.update(_parse_set_cookie(resp.get("set_cookie") or []))
+        resp["session_cookies"] = sorted(jar)  # tell the agent what's in the jar now
+    return resp
 
 
 def run_web_poc(session: Session, project: Project, target: Target, *, steps: list, oracle: dict,

@@ -109,8 +109,11 @@ def _resp(method, url, dest, status, headers, raw: bytes) -> dict:
     truncated = len(raw) > MAX_BODY
     body = raw[:MAX_BODY].decode("utf-8", errors="replace")
     hdrs = {k: v for k, v in (headers.items() if headers else [])}
+    # Surface ALL Set-Cookie values (the dict above collapses duplicates) so the host can
+    # keep a per-session cookie jar across separate single-request calls.
+    set_cookie = headers.get_all("Set-Cookie") if headers and hasattr(headers, "get_all") else []
     return {"method": method, "url": url, "dest": dest, "ok": True, "status": status,
-            "headers": hdrs, "body": body, "body_truncated": truncated}
+            "headers": hdrs, "set_cookie": set_cookie or [], "body": body, "body_truncated": truncated}
 
 
 def _check_oracle(oracle: dict, responses: list) -> tuple[bool, str]:
