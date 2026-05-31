@@ -1,41 +1,60 @@
 # HexGraph — developer commands. Default backend is the mock: no key, no network.
+#
+# Quick start (just two commands):
+#     make setup     # one-shot: venv + deps + web UI + sandbox image
+#     make serve     # start the app at http://127.0.0.1:8765
+#
 .DEFAULT_GOAL := help
 PY ?= .venv/bin/python
 PIP ?= .venv/bin/pip
 export HEXGRAPH_LLM_BACKEND ?= mock
 
-.PHONY: help venv install test demo fixtures sandbox-build serve clean
+.PHONY: help setup install venv ui sandbox-build test demo test-live fixtures serve clean
 
 help: ## Show this help
+	@echo "HexGraph — get started with:  make setup  &&  make serve"
+	@echo ""
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
+
+setup: install ui ## ★ One command: install deps, build the web UI, and the sandbox image
+	@echo ""
+	@echo ">> Building the analysis sandbox image (needs Docker)…"
+	@docker version >/dev/null 2>&1 \
+		&& $(MAKE) --no-print-directory sandbox-build \
+		|| echo "  (!) Docker not running — recon/decompile need it. Start Docker, then: make sandbox-build"
+	@$(PY) -m hexgraph.cli init >/dev/null 2>&1 || true
+	@echo ""
+	@echo "✓ HexGraph is ready.  Start it with:  make serve   →  http://127.0.0.1:8765"
+
+# --- granular targets (composed by `setup`; referenced by CI/docs) ---
 
 venv: ## Create the virtualenv
 	python3 -m venv .venv
 
-install: venv ## Install the package (server + dev extras) into the venv
+install: venv ## Install the Python package (server + dev extras) into the venv
 	$(PIP) install -e ".[server,dev]"
 
-test: ## Run the test suite against the mock backend
+ui: ## Build the React SPA into the package (needs Node/npm)
+	cd frontend && npm install && npm run build
+
+sandbox-build: ## Build the analysis sandbox Docker image (add WITH_GHIDRA=1 to include Ghidra)
+	docker build -f Dockerfile.sandbox -t hexgraph-sandbox:latest .
+
+serve: ## Start the loopback-only API/UI (http://127.0.0.1:8765)
+	$(PY) -m hexgraph.cli serve
+
+test: ## Run the test suite against the mock backend (offline)
 	$(PY) -m pytest -q
 
 demo: ## Full offline loop on bundled fixtures (mock backend, no key/network), exit 0
 	$(PY) -m hexgraph.demo
 
-test-live: ## Scored real-key detection test (needs ANTHROPIC_API_KEY + sandbox image; ~cents, cassette-backed)
+test-live: ## Scored real-key detection test (needs ANTHROPIC_API_KEY + sandbox image; cassette-backed)
 	$(PY) -m pytest -q tests/test_p8_realkey.py -k real_key -rs
 
 fixtures: ## (Re)build the test target binaries/firmware under tests/fixtures
 	tests/fixtures/build.sh
 	tests/fixtures/vuln_fw/build.sh
-
-sandbox-build: ## Build the analysis sandbox Docker image (add WITH_GHIDRA=1 to include Ghidra)
-	docker build -f Dockerfile.sandbox -t hexgraph-sandbox:latest .
-
-ui: ## Build the React SPA into the package (needs Node/npm)
-	cd frontend && npm install && npm run build
-
-serve: ## Start the loopback-only API/UI (lands in M1-T5)
-	$(PY) -m hexgraph.cli serve
 
 clean: ## Remove venv and caches
 	rm -rf .venv .pytest_cache **/__pycache__ *.egg-info src/*.egg-info
