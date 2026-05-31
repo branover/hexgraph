@@ -39,6 +39,12 @@ def serve_stdio(groups: set[str] | None = None) -> None:
             f"({exc})"
         )
 
+    # Ensure the persistent DB exists/upgraded (same as the API server lifespan),
+    # so an agent connecting to a fresh home doesn't hit missing tables.
+    from hexgraph.db.migrate import prepare_database
+
+    prepare_database(backup=True)
+
     tools = {t["name"]: t for t in catalog(enabled_groups(groups))}
     server = Server("hexgraph")
 

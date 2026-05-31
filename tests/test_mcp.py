@@ -121,3 +121,21 @@ def test_mcp_server_requires_sdk():
 
     with pytest.raises(SystemExit):
         serve_stdio()
+
+
+def test_ingest_tool_offline(hg_home, monkeypatch):
+    from hexgraph.engine import mcp_tools
+    monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: False)
+    r = mcp_tools.ingest(fixture_path("vuln_httpd"), name="x")
+    assert r.get("project_id") and r.get("recon") is False
+    assert "ingest" in {t["name"] for t in mcp_tools.catalog({"run"})}
+
+
+def test_skill_markdown_is_a_claude_skill():
+    from hexgraph.agent_setup import skill_markdown, write_skill
+    import tempfile, os
+    md = skill_markdown()
+    assert md.startswith("---\n") and "name: hexgraph-vr" in md and "Never execute" in md
+    d = tempfile.mkdtemp()
+    p = write_skill(d)
+    assert os.path.isfile(p) and p.endswith("hexgraph-vr/SKILL.md")

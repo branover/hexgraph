@@ -184,6 +184,31 @@ def annotate(project_id: str, node_kind: str, node_id: str, kind: str, value: st
         return {"id": a.id, "kind": a.kind, "status": a.status}
 
 
+def ingest(path: str, name: str | None = None, project_id: str | None = None) -> dict:
+    """Ingest a binary/firmware from a local path as a target (firmware unpacks into
+    children), running recon in the sandbox. Creates a project if none is given."""
+    import os
+
+    from hexgraph.engine.ingest import create_project, ingest_file
+    from hexgraph.engine.pipeline import analyze_target, ingest_and_analyze
+    from hexgraph.sandbox.executor import get_executor
+    from hexgraph.sandbox.runner import docker_available
+
+    if not os.path.isfile(path):
+        return {"error": f"file not found: {path}"}
+    with session_scope() as s:
+        project = s.get(Project, project_id) if project_id else None
+        if project is None:
+            project = create_project(s, name=(name or os.path.basename(path)))
+        if not docker_available():
+            t = ingest_file(s, project, path, name=name)
+            return {"project_id": project.id, "root_target_id": t.id, "recon": False,
+                    "note": "Docker not running — registered without recon/unpack"}
+        summary = ingest_and_analyze(s, project, path, name=name, runner=get_executor())
+        return {"project_id": project.id, "root_target_id": summary["root_target_id"],
+                "children": summary.get("children", [])}
+
+
 def run_task(target_id: str, type: str, objective: str | None = None, params: dict | None = None) -> dict:
     """Run a HexGraph task synchronously (recon/static_analysis/harness_generation/
     fuzzing/…) and return its status + the findings it produced."""
@@ -243,6 +268,8 @@ _CATALOG = [
      {"type": "object", "properties": {"project_id": {"type": "string"}, "statement": {"type": "string"}, "rationale": {"type": "string"}, "target_id": {"type": "string"}}, "required": ["project_id", "statement"]}),
     ("write", "annotate", annotate, "Attach a note/tag/rename to a graph entity (agent proposal).",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "node_kind": {"type": "string"}, "node_id": {"type": "string"}, "kind": {"type": "string"}, "value": {"type": "string"}}, "required": ["project_id", "node_kind", "node_id", "kind", "value"]}),
+    ("run", "ingest", ingest, "Ingest a binary/firmware from a local path as a target (firmware unpacks into children); creates a project if none given.",
+     {"type": "object", "properties": {"path": {"type": "string"}, "name": {"type": "string"}, "project_id": {"type": "string"}}, "required": ["path"]}),
     ("run", "run_task", run_task, "Run a HexGraph task (recon/static_analysis/harness_generation/fuzzing) and return its findings.",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "type": {"type": "string"}, "objective": {"type": "string"}, "params": {"type": "object"}}, "required": ["target_id", "type"]}),
 ]

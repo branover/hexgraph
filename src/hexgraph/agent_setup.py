@@ -50,6 +50,31 @@ A finding object looks like:
 """
 
 
+def skill_markdown() -> str:
+    """The VR skill as a Claude Code skill file (YAML frontmatter + body)."""
+    return (
+        "---\n"
+        "name: hexgraph-vr\n"
+        "description: Vulnerability research through HexGraph's sandboxed MCP tools — "
+        "inspect targets, decompile, run analysis/fuzz tasks, and record findings/nodes/edges. "
+        "Use whenever analyzing a binary or firmware that has been ingested into HexGraph.\n"
+        "---\n\n"
+        + SKILL
+    )
+
+
+def write_skill(base_dir: str) -> str:
+    """Write the skill to <base_dir>/hexgraph-vr/SKILL.md and return the path."""
+    import os
+
+    d = os.path.join(base_dir, "hexgraph-vr")
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, "SKILL.md")
+    with open(path, "w") as fh:
+        fh.write(skill_markdown())
+    return path
+
+
 def mcp_command() -> tuple[str, list[str]]:
     """How to launch the MCP server. Prefer the installed entrypoint."""
     if shutil.which("hexgraph"):
@@ -97,4 +122,9 @@ def install_help(agent: str | None = None) -> str:
         return f"unknown agent {agent!r}; choose one of {AGENTS}"
     header = ("Register HexGraph as an MCP server with your coding agent. Then point\n"
               "the agent at a project and let it use the `hexgraph` tools.\n\n")
-    return header + "\n\n".join(blocks)
+    footer = ("\n\nInstall the VR skill so the agent knows the workflow + the hostile-target rules:\n"
+              "  hexgraph mcp install --write-skill .claude/skills   # Claude Code (project-local)\n"
+              "  hexgraph mcp install --write-skill ~/.claude/skills  # Claude Code (global)\n"
+              "(For Codex/gemini, paste the same guidance into AGENTS.md / your system prompt — "
+              "print it with `hexgraph mcp install --print-skill`.)")
+    return header + "\n\n".join(blocks) + footer

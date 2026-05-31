@@ -238,8 +238,15 @@ def _cmd_config(args: argparse.Namespace) -> int:
 
 def _cmd_mcp(args: argparse.Namespace) -> int:
     if args._mcpcmd == "install":
-        from hexgraph.agent_setup import install_help
+        from hexgraph.agent_setup import install_help, skill_markdown, write_skill
 
+        if getattr(args, "print_skill", False):
+            print(skill_markdown())
+            return 0
+        if getattr(args, "write_skill", None):
+            path = write_skill(args.write_skill)
+            print(f"wrote VR skill to {path}")
+            return 0
         print(install_help(args.agent))
         return 0
     # default: serve the MCP server on stdio
@@ -329,6 +336,9 @@ def build_parser() -> argparse.ArgumentParser:
     msub = pm.add_subparsers(dest="_mcpcmd")  # no subcommand → serve
     mi = msub.add_parser("install", help="print how to register HexGraph with claude/codex/gemini")
     mi.add_argument("--agent", choices=["claude", "codex", "gemini"], default=None)
+    mi.add_argument("--write-skill", dest="write_skill", metavar="DIR",
+                    help="write the VR skill to DIR/hexgraph-vr/SKILL.md (e.g. .claude/skills)")
+    mi.add_argument("--print-skill", dest="print_skill", action="store_true", help="print the VR skill markdown")
     mi.set_defaults(func=_cmd_mcp)
     pm.set_defaults(func=_cmd_mcp, _mcpcmd=None)
 

@@ -55,6 +55,7 @@ test-live: ## Scored real-key detection test (needs ANTHROPIC_API_KEY + sandbox 
 fixtures: ## (Re)build the test target binaries/firmware under tests/fixtures
 	tests/fixtures/build.sh
 	tests/fixtures/vuln_fw/build.sh
+	tests/fixtures/eval_fw/build.sh
 
 clean: ## Remove venv and caches
 	rm -rf .venv .pytest_cache **/__pycache__ *.egg-info src/*.egg-info
