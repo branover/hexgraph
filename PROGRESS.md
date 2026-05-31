@@ -13,8 +13,17 @@ then run the resume verifier, then continue at the next unchecked task.
   task materialise `endpoint`/`param` nodes and the **`routes_to`** cross-link from a route to its handler
   `function` in the firmware (the static↔dynamic fuse). Additive `policy.py` tier scaffolding (`tier`,
   `NetworkScope`, `assert_allows_egress` — always denies; Tiers 0/1 byte-identical to before). Drive via
-  MCP `register_surface` + `run_task(surface_recon)`. **Offline, zero egress, zero new risk.** Next:
-  Phase 2 (network relaxation: `NetworkExecutor` + egress allowlist/audit) then dynamic web PoC.
+  MCP `register_surface` + `run_task(surface_recon)`. **Offline, zero egress, zero new risk.**
+  **Phase 2 (bounded egress) DONE:** opt-in `features.network` → the **local-network tier** (`policy.py`
+  `TIER_LOCAL_NETWORK`); a per-target `NetworkScope` from `local_network_scope(base_url)` that **refuses
+  any non-loopback/private destination** (external hosts need the deferred live-remote tier); the runner
+  gains a policy-checked `allow_network`/`run_channel_probe` (the one place `--network none` is relaxed →
+  bridge); `assert_allows_egress(dest, scope)` enforces two independent gates (network-on AND
+  dest-in-allowlist); every outbound decision is audited to `EgressEvent` (migration 0010,
+  `engine/audit.py`, MCP `list_egress`). `web_recon` task does a bounded, read-only HTTP liveness probe
+  (`surface_probe.py`, no redirects) — **denies + audits by default** (network off). Live probe is
+  Docker+`features.network`-gated; the policy/scope/audit/denial machinery is fully offline-tested.
+  Next: dynamic web PoC (the `{{NONCE}}` oracle over HTTP), then rehosting + live-device collection.
 - **Current state:** **P0–P8 all delivered** (core) + **researcher depth (P6/P7) complete**: annotations
   (rename/note/tag, agent-proposed→confirm, confirmed facts feed context), hypothesis lifecycle
   (evidence-derived status, sticky human verdict, open hypotheses feed context), in-app report viewer +

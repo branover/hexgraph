@@ -20,6 +20,10 @@ from hexgraph.engine.edges import add_edge
 from hexgraph.engine.nodes import get_or_create_node, normalize_symbol_name
 
 
+def _channel(target: Target) -> dict:
+    return (target.metadata_json or {}).get("channel") or {}
+
+
 def register_web_surface(
     session: Session, project: Project, base_url: str, *,
     name: str | None = None, parent: Target | None = None,
@@ -115,3 +119,71 @@ def run_surface_recon(session: Session, project: Project, target: Target, task=N
             finding_type="recon",
         )
     return {"endpoints": routes, "handlers_linked": linked}
+
+
+def run_web_recon(session: Session, project: Project, target: Target, task=None, runner=None) -> dict:
+    """Phase 2: LIVE, bounded liveness-probe of a web surface's endpoints. Egress is
+    gated by the policy seam (`features.network` → bounded local-network tier) and a
+    per-target deny-all-but-this `NetworkScope` that **refuses any non-local
+    destination**; every outbound decision (allow or deny) is audited (EgressEvent).
+    The probe runs in the sandbox with bounded egress and returns only metadata."""
+    from hexgraph.engine.audit import record_egress
+    from hexgraph.policy import (PolicyViolation, assert_allows_egress, current_policy,
+                                 local_network_scope)
+
+    base_url = _channel(target).get("base_url")
+    if not base_url:
+        raise ValueError("target has no web channel (base_url)")
+    scope = local_network_scope(base_url)  # raises if the host isn't loopback/private
+    dest = next(iter(scope.allow))
+    task_id = task.id if task is not None else None
+
+    policy = current_policy()
+    try:
+        assert_allows_egress(dest, scope, policy)
+    except PolicyViolation:
+        record_egress(session, project_id=project.id, target_id=target.id, task_id=task_id,
+                      dest=dest, allowed=False, tool="web_recon",
+                      detail="blocked: network egress not permitted by policy")
+        raise
+    record_egress(session, project_id=project.id, target_id=target.id, task_id=task_id,
+                  dest=dest, allowed=True, tool="web_recon", detail=scope.rationale)
+
+    from hexgraph.sandbox.executor import get_executor
+    runner = runner or get_executor()
+    endpoints = (target.metadata_json or {}).get("endpoints") or []
+    channel = {"base_url": base_url, "allow": sorted(scope.allow),
+               "endpoints": [{"method": e.get("method", "GET"), "path": e.get("path", "/")}
+                             for e in endpoints],
+               "timeout": 15}
+    result = runner.run_channel_probe("surface_probe.py", channel=channel)
+
+    alive = 0
+    for pr in result.get("probes", []):
+        label = pr.get("endpoint")
+        if not label:
+            continue
+        enode = get_or_create_node(session, project_id=project.id, node_type=NodeType.endpoint,
+                                   name=label, target_id=target.id, fq_name=label,
+                                   created_by="web_recon",
+                                   attrs={"alive": bool(pr.get("alive")), "status": pr.get("status"),
+                                          "server": pr.get("server")})
+        if pr.get("alive"):
+            alive += 1
+    if task is not None:
+        from hexgraph.engine.findings import persist_finding
+        from hexgraph.models.finding import Evidence, Finding
+
+        persist_finding(
+            session, project_id=project.id, target_id=target.id, task_id=task.id,
+            finding=Finding(
+                title=f"Web surface probed: {alive}/{len(endpoints)} endpoint(s) live at {base_url}",
+                severity="info", confidence="high", category="recon",
+                summary=f"Bounded liveness probe reached {dest}; {alive} endpoint(s) responded.",
+                reasoning="Dynamic surface_recon (bounded egress, audited) confirmed live endpoints.",
+                evidence=Evidence(extra={"base_url": base_url, "dest": dest,
+                                         "alive": alive, "probed": len(endpoints)}),
+            ),
+            finding_type="recon",
+        )
+    return {"dest": dest, "alive": alive, "probed": len(endpoints)}

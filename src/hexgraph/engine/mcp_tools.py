@@ -358,6 +358,16 @@ def list_sockets(project_id: str) -> list[dict]:
         return out
 
 
+def list_egress(project_id: str) -> list[dict]:
+    """The egress audit log — every outbound network action (allowed or denied) the
+    bounded-network tier recorded for this project. Durable proof of what HexGraph
+    connected to and when."""
+    from hexgraph.engine.audit import list_egress as _list
+
+    with session_scope() as s:
+        return _list(s, project_id)
+
+
 def update_finding(finding_id: str, status: str | None = None, severity: str | None = None,
                    confidence: str | None = None, human_notes: str | None = None) -> dict:
     """Update an EXISTING finding in place (don't create a duplicate) — e.g. raise
@@ -713,6 +723,8 @@ _CATALOG = [
      {"type": "object", "properties": {"project_id": {"type": "string"}, "target_id": {"type": "string"}, "node_type": {"type": "string"}}, "required": ["project_id"]}),
     ("read", "list_edges", list_edges, "List edges (optionally those touching a node) to confirm the dataflow/relationships you wired.",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "node_id": {"type": "string"}}, "required": ["project_id"]}),
+    ("read", "list_egress", list_egress, "The egress audit log — every outbound network action (allowed/denied) the bounded-network tier recorded for the project.",
+     {"type": "object", "properties": {"project_id": {"type": "string"}}, "required": ["project_id"]}),
     ("read", "list_sockets", list_sockets, "List socket endpoints (tcp/udp/unix/…) with who listens/connects on each — the firmware's network map (server↔client over shared sockets).",
      {"type": "object", "properties": {"project_id": {"type": "string"}}, "required": ["project_id"]}),
     ("read", "get_schemas", get_schemas, "The write-API contract: allowed enums + the Finding shape. Read before record_finding/create_node/create_edge/annotate to avoid guessing field names.",

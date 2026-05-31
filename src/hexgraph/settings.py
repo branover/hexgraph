@@ -73,6 +73,16 @@ DEFAULTS: dict[str, Any] = {
             "binary": "",               # override the executable name/path (optional)
             "timeout": 900,
         },
+        "network": {
+            # OFF by default. Enabling this relaxes --network none for the
+            # bounded-egress LOCAL-network tier: a sandboxed probe may reach a
+            # web-surface target, but ONLY a loopback/private destination on a
+            # per-target deny-all-but-this allowlist, and every outbound action is
+            # audited (EgressEvent). External/public hosts require the deferred,
+            # separately-gated live-remote tier. (docs/design-dynamic-surfaces.md)
+            "enabled": False,
+            "timeout": 30,
+        },
     },
 }
 
@@ -103,6 +113,8 @@ ALLOWED: dict[str, tuple[Any, set | None]] = {
     "features.agent.cli": (str, {"claude", "codex", "gemini"}),
     "features.agent.binary": (str, None),
     "features.agent.timeout": (int, None),
+    "features.network.enabled": (bool, None),
+    "features.network.timeout": (int, None),
 }
 
 
