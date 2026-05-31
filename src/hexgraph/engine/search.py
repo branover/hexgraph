@@ -40,12 +40,26 @@ def search_project(session: Session, project_id: str, q: str, limit: int = 50) -
         )
         if n.target_id is None or n.target_id not in archived
     ][:limit]
+    # Targets (binaries/libraries/firmware/web surfaces) are searchable too — by name,
+    # format, or arch — so you can jump straight to a component.
+    targets = [
+        t for t in (
+            session.query(Target)
+            .filter(
+                Target.project_id == project_id, Target.archived.is_(False),
+                or_(Target.name.ilike(like), Target.format.ilike(like), Target.arch.ilike(like)),
+            )
+            .limit(limit).all()
+        )
+    ]
     func_count = (
         session.query(Node)
         .filter(Node.project_id == project_id, Node.node_type == NodeType.function.value).count()
     )
     return {
         "query": q,
+        "targets": [{"id": t.id, "name": t.name, "kind": t.kind.value, "format": t.format,
+                     "arch": t.arch} for t in targets],
         "findings": [{"id": f.id, "title": f.title, "severity": f.severity, "category": f.category,
                       "target_id": f.target_id, "status": f.status} for f in findings],
         "nodes": [{"id": n.id, "node_type": n.node_type, "name": n.name, "target_id": n.target_id}

@@ -1,4 +1,4 @@
-import { ReactNode, useState } from "react";
+import { ReactNode, useEffect, useMemo, useState } from "react";
 import { api, Graph, TargetNode } from "../api";
 import { Icon } from "./Icon";
 
@@ -8,6 +8,29 @@ const SOCKET_KINDS = ["tcp", "udp", "unix", "io", "netlink", "raw", "other"];
 const EDGE_TYPES = ["calls", "references", "reads", "writes", "taints", "bypasses", "routes_to",
   "listens_on", "connects_to", "links_against", "similar_to", "derived_from",
   "duplicate_of", "related_to", "instance_of_pattern", "about", "contains"];
+
+// Module-level cache so the schema fetch happens once across modal opens.
+type NodeSchemas = Record<string, { description: string; use_when: string; recommended_attributes: string[]; attributes: Record<string, any> }>;
+type EdgeSchemas = Record<string, { description: string; attributes: Record<string, any> }>;
+let _nodeSchemas: NodeSchemas | null = null;
+let _edgeSchemas: EdgeSchemas | null = null;
+
+function useNodeSchemas(): NodeSchemas | null {
+  const [s, setS] = useState<NodeSchemas | null>(_nodeSchemas);
+  useEffect(() => {
+    if (_nodeSchemas) return;
+    api.nodeSchemas().then((r) => { _nodeSchemas = r.nodes; setS(r.nodes); }).catch(() => {});
+  }, []);
+  return s;
+}
+function useEdgeSchemas(): EdgeSchemas | null {
+  const [s, setS] = useState<EdgeSchemas | null>(_edgeSchemas);
+  useEffect(() => {
+    if (_edgeSchemas) return;
+    api.edgeSchemas().then((r) => { _edgeSchemas = r.edges; setS(r.edges); }).catch(() => {});
+  }, []);
+  return s;
+}
 
 function Modal({ title, icon, onClose, children }: { title: string; icon: string; onClose: () => void; children: ReactNode }) {
   return (
@@ -29,8 +52,10 @@ export function AddNodeModal({ projectId, targets, onClose, onDone }: {
   const [sockKind, setSockKind] = useState("tcp");
   const [sockPort, setSockPort] = useState("");
   const [err, setErr] = useState<string>();
+  const schemas = useNodeSchemas();
   const needsTarget = TARGET_BOUND.has(nodeType);
   const isSocket = nodeType === "socket";
+  const help = schemas?.[nodeType];
 
   const submit = async () => {
     setErr(undefined);
@@ -48,14 +73,19 @@ export function AddNodeModal({ projectId, targets, onClose, onDone }: {
     <Modal title="Add node" icon="fn" onClose={onClose}>
       <div className="field">
         <label>type</label>
-        <select value={nodeType} onChange={(e) => setNodeType(e.target.value)}>
+        <select className="sel" value={nodeType} onChange={(e) => setNodeType(e.target.value)}>
           {MANUAL_NODE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
+        {help && (
+          <div className="modal-help">
+            {help.description}{help.use_when ? ` — ${help.use_when}` : ""}
+          </div>
+        )}
       </div>
       {isSocket ? (
         <>
           <div className="field"><label>kind</label>
-            <select value={sockKind} onChange={(e) => setSockKind(e.target.value)}>
+            <select className="sel" value={sockKind} onChange={(e) => setSockKind(e.target.value)}>
               {SOCKET_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
             </select>
           </div>
@@ -74,12 +104,15 @@ export function AddNodeModal({ projectId, targets, onClose, onDone }: {
           : nodeType === "endpoint" ? "e.g. POST /api/login"
           : nodeType === "param" ? "e.g. token"
           : "e.g. parse_request"} />
+        {help?.recommended_attributes?.length ? (
+          <div className="modal-help muted">After creating, set recommended attributes: {help.recommended_attributes.join(", ")}.</div>
+        ) : null}
       </div>
       )}
       {needsTarget && (
         <div className="field">
           <label>binary (required)</label>
-          <select value={targetId} onChange={(e) => setTargetId(e.target.value)}>
+          <select className="sel" value={targetId} onChange={(e) => setTargetId(e.target.value)}>
             {targets.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
           </select>
         </div>
@@ -93,20 +126,54 @@ export function AddNodeModal({ projectId, targets, onClose, onDone }: {
   );
 }
 
-export function AddEdgeModal({ projectId, graph, onClose, onDone }: {
-  projectId: string; graph: Graph; onClose: () => void; onDone: () => void;
+// Build a clear, grouped option list from the graph: targets first, then
+// functions/symbols, then other nodes, then string nodes (de-emphasized), then findings.
+type EdgeOpt = { kind: string; id: string; label: string };
+function buildEdgeOpts(graph: Graph): { groups: { label: string; opts: EdgeOpt[] }[]; byId: Map<string, EdgeOpt> } {
+  const targetName = new Map(graph.nodes.filter((n) => n.type === "target").map((n) => [n.id, n.label] as const));
+  const groups: { label: string; key: (n: Graph["nodes"][number]) => boolean; opts: EdgeOpt[] }[] = [
+    { label: "targets", key: (n) => n.type === "target", opts: [] },
+    { label: "functions & symbols", key: (n) => n.type === "node" && (n.node_type === "function" || n.node_type === "symbol"), opts: [] },
+    { label: "other nodes", key: (n) => n.type === "node" && n.node_type !== "function" && n.node_type !== "symbol" && n.node_type !== "string", opts: [] },
+    { label: "findings", key: (n) => n.type === "finding", opts: [] },
+    { label: "strings", key: (n) => n.type === "node" && n.node_type === "string", opts: [] },
+  ];
+  const byId = new Map<string, EdgeOpt>();
+  for (const n of graph.nodes) {
+    const ntype = n.type === "target" ? n.kind : n.type === "finding" ? "finding" : n.node_type;
+    const owner = n.type === "node" && n.target_id ? targetName.get(n.target_id) : undefined;
+    const label = `${n.label} · ${ntype}${owner ? ` · ${owner}` : ""}`;
+    const opt: EdgeOpt = { kind: n.type, id: n.id, label };
+    byId.set(n.id, opt);
+    const g = groups.find((gr) => gr.key(n));
+    if (g) g.opts.push(opt);
+  }
+  for (const g of groups) g.opts.sort((a, b) => a.label.localeCompare(b.label));
+  return { groups: groups.filter((g) => g.opts.length).map((g) => ({ label: g.label, opts: g.opts })), byId };
+}
+
+export function AddEdgeModal({ projectId, graph, prefillSrc, prefillDst, onClose, onDone }: {
+  projectId: string; graph: Graph; prefillSrc?: string; prefillDst?: string; onClose: () => void; onDone: () => void;
 }) {
-  const opts = graph.nodes.map((n) => ({ kind: n.type, id: n.id, label: `${n.label} · ${n.type}` }));
-  const [src, setSrc] = useState(opts[0]?.id ?? "");
-  const [dst, setDst] = useState(opts[1]?.id ?? "");
+  const { groups, byId } = useMemo(() => buildEdgeOpts(graph), [graph]);
+  const flat = useMemo(() => groups.flatMap((g) => g.opts), [groups]);
+  const [src, setSrc] = useState(prefillSrc ?? flat[0]?.id ?? "");
+  const [dst, setDst] = useState(prefillDst ?? flat[1]?.id ?? "");
   const [type, setType] = useState("references");
   const [attrsText, setAttrsText] = useState("");
   const [err, setErr] = useState<string>();
-  const find = (id: string) => opts.find((o) => o.id === id);
+  const schemas = useEdgeSchemas();
+  const help = schemas?.[type];
+
+  const renderGroups = () => groups.map((g) => (
+    <optgroup key={g.label} label={g.label}>
+      {g.opts.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+    </optgroup>
+  ));
 
   const submit = async () => {
     setErr(undefined);
-    const s = find(src), d = find(dst);
+    const s = byId.get(src), d = byId.get(dst);
     if (!s || !d) { setErr("pick both endpoints"); return; }
     let attrs: any = undefined;
     if (attrsText.trim()) {
@@ -118,16 +185,24 @@ export function AddEdgeModal({ projectId, graph, onClose, onDone }: {
     } catch (e: any) { setErr(String(e.message || e)); }
   };
 
+  const attrHint = help ? Object.keys(help.attributes || {}) : [];
+
   return (
     <Modal title="Add edge" icon="link" onClose={onClose}>
       <div className="field"><label>from</label>
-        <select value={src} onChange={(e) => setSrc(e.target.value)}>{opts.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}</select>
+        <select className="sel" value={src} onChange={(e) => setSrc(e.target.value)}>{renderGroups()}</select>
       </div>
       <div className="field"><label>type</label>
-        <select value={type} onChange={(e) => setType(e.target.value)}>{EDGE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</select>
+        <select className="sel" value={type} onChange={(e) => setType(e.target.value)}>{EDGE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</select>
+        {help && (
+          <div className="modal-help">
+            {help.description}
+            {attrHint.length ? <span className="muted"> · attributes: {attrHint.join(", ")}</span> : null}
+          </div>
+        )}
       </div>
       <div className="field"><label>to</label>
-        <select value={dst} onChange={(e) => setDst(e.target.value)}>{opts.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}</select>
+        <select className="sel" value={dst} onChange={(e) => setDst(e.target.value)}>{renderGroups()}</select>
       </div>
       <div className="field"><label>attributes (optional JSON)</label>
         <input value={attrsText} onChange={(e) => setAttrsText(e.target.value)} placeholder='e.g. {"address":"0x401200","port":8080}' />

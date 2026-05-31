@@ -31,15 +31,55 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
   const [sugg, setSugg] = useState<any[]>([]);
   const [copied, setCopied] = useState(false);
   const [hypId, setHypId] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState<Partial<Finding>>({});
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editErr, setEditErr] = useState<string>();
+  const [verifying, setVerifying] = useState(false);
+  const [verifyMsg, setVerifyMsg] = useState<string>();
+  const [pocOpen, setPocOpen] = useState(false);
   useEffect(() => {
     setSugg([]); setCopied(false); setHypId("");
+    setEditing(false); setEditErr(undefined); setVerifyMsg(undefined); setPocOpen(false);
     if (finding) api.suggestions(finding.id).then(setSugg).catch(() => setSugg([]));
   }, [finding?.id]);
 
   if (!finding) return <div className="empty">Select a finding in the list or a node in the graph.</div>;
   const ev = finding.evidence || {};
+  const poc = ev.extra?.poc;
+  const verification = ev.extra?.verification;
 
   const setStatus = async (s: string) => { await api.setStatus(finding.id, s); onChanged(); };
+
+  const startEdit = () => {
+    setForm({
+      title: finding.title, severity: finding.severity, confidence: finding.confidence,
+      category: finding.category, summary: finding.summary, reasoning: finding.reasoning, status: finding.status,
+    });
+    setEditErr(undefined); setEditing(true);
+  };
+  const discardEdit = () => { setEditing(false); setEditErr(undefined); };
+  const saveEdit = async () => {
+    setSavingEdit(true); setEditErr(undefined);
+    try {
+      await api.patchFinding(finding.id, {
+        title: form.title, severity: form.severity, confidence: form.confidence,
+        category: form.category, summary: form.summary, reasoning: form.reasoning, status: form.status,
+      });
+      setEditing(false); onChanged();
+    } catch (e: any) { setEditErr(String(e.message || e)); }
+    finally { setSavingEdit(false); }
+  };
+
+  const verify = async () => {
+    setVerifying(true); setVerifyMsg(undefined);
+    try {
+      const r = await api.verifyFinding(finding.id);
+      setVerifyMsg(r.detail || (r.verified ? "verified" : "not verified"));
+      onChanged();
+    } catch (e: any) { setVerifyMsg(String(e.message || e)); }
+    finally { setVerifying(false); }
+  };
   // Follow-ups open the deliberate LaunchModal (prefilled) rather than firing
   // blind; fall back to direct spawn only if no modal handler is wired.
   const spawn = async (i: number, fu: any) => {
@@ -90,6 +130,7 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
       </div>
       <Lifecycle status={finding.status} />
       <div className="actions">
+        {!editing && <button className="btn sm ghost" onClick={startEdit}><Icon name="sliders" size={12} /> Edit</button>}
         <button className="btn sm" onClick={() => setStatus("confirmed")}><Icon name="check" size={12} /> Confirm</button>
         <button className="btn sm danger" onClick={() => setStatus("dismissed")}><Icon name="x" size={12} /> Dismiss</button>
         {onViewTask && <button className="btn sm ghost" onClick={() => onViewTask(finding.task_id)}><Icon name="task" size={12} /> Task</button>}
@@ -105,7 +146,78 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
         )}
       </div>
 
-      <p>{finding.summary}</p>
+      {editing ? (
+        <div className="edit-finding" style={{ display: "flex", flexDirection: "column", gap: 8, margin: "8px 0" }}>
+          <label className="fld"><span className="k">title</span>
+            <input className="sel" value={form.title ?? ""} onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))} /></label>
+          <div style={{ display: "flex", gap: 8 }}>
+            <label className="fld" style={{ flex: 1 }}><span className="k">severity</span>
+              <select className="sel" value={form.severity ?? "info"} onChange={(e) => setForm((f) => ({ ...f, severity: e.target.value }))}>
+                {["critical", "high", "medium", "low", "info"].map((s) => <option key={s} value={s}>{s}</option>)}
+              </select></label>
+            <label className="fld" style={{ flex: 1 }}><span className="k">confidence</span>
+              <select className="sel" value={form.confidence ?? "medium"} onChange={(e) => setForm((f) => ({ ...f, confidence: e.target.value }))}>
+                {["high", "medium", "low"].map((s) => <option key={s} value={s}>{s}</option>)}
+              </select></label>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <label className="fld" style={{ flex: 1 }}><span className="k">category</span>
+              <input className="sel" value={form.category ?? ""} onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))} /></label>
+            <label className="fld" style={{ flex: 1 }}><span className="k">status</span>
+              <select className="sel" value={form.status ?? "new"} onChange={(e) => setForm((f) => ({ ...f, status: e.target.value }))}>
+                {["new", "triaging", "confirmed", "reported", "dismissed"].map((s) => <option key={s} value={s}>{s}</option>)}
+              </select></label>
+          </div>
+          <label className="fld"><span className="k">summary</span>
+            <textarea className="sel" rows={3} value={form.summary ?? ""} onChange={(e) => setForm((f) => ({ ...f, summary: e.target.value }))} /></label>
+          <label className="fld"><span className="k">reasoning</span>
+            <textarea className="sel" rows={4} value={form.reasoning ?? ""} onChange={(e) => setForm((f) => ({ ...f, reasoning: e.target.value }))} /></label>
+          {editErr && <div className="err">{editErr}</div>}
+          <div className="actions">
+            <button className="btn sm primary" onClick={saveEdit} disabled={savingEdit}><Icon name="check" size={12} /> {savingEdit ? "saving…" : "Save"}</button>
+            <button className="btn sm ghost" onClick={discardEdit} disabled={savingEdit}><Icon name="x" size={12} /> Discard</button>
+          </div>
+        </div>
+      ) : (
+        <p>{finding.summary}</p>
+      )}
+
+      {(poc || verification) && (
+        <>
+          <div className="sec">Proof of Concept</div>
+          {verification && (
+            <div className="kvs">
+              <span className="k">status</span>
+              <span>
+                {verification.verified
+                  ? <span className="tag" style={{ color: "#2ea043", borderColor: "#2ea043" }}>✓ verified</span>
+                  : <span className="tag" style={{ color: "#ff5d6c", borderColor: "#ff5d6c" }}>✗ not verified</span>}
+              </span>
+              {verification.detail && <><span className="k">detail</span><span>{verification.detail}</span></>}
+              {verification.exit_code !== undefined && verification.exit_code !== null && <><span className="k">exit code</span><code>{String(verification.exit_code)}</code></>}
+              {verification.nonce && <><span className="k">nonce</span><code>{verification.nonce}</code></>}
+            </div>
+          )}
+          {verification?.output && (
+            <pre className="codewrap" style={{ whiteSpace: "pre-wrap", maxHeight: 240, overflow: "auto", fontSize: 11 }}>{String(verification.output).slice(0, 1000)}</pre>
+          )}
+          {poc && (
+            <details open={pocOpen} onToggle={(e) => setPocOpen((e.target as HTMLDetailsElement).open)} style={{ marginTop: 6 }}>
+              <summary style={{ cursor: "pointer", fontSize: 12 }} className="muted">PoC spec</summary>
+              <pre className="codewrap" style={{ whiteSpace: "pre-wrap", maxHeight: 280, overflow: "auto", fontSize: 11 }}>{JSON.stringify(poc, null, 2)}</pre>
+            </details>
+          )}
+          {poc && (
+            <div className="actions" style={{ marginTop: 8 }}>
+              <button className="btn sm primary" onClick={verify} disabled={verifying}>
+                <Icon name={verifying ? "refresh" : "run"} size={12} className={verifying ? "spin" : ""} />
+                {verifying ? " verifying…" : verification ? " Re-verify" : " Verify PoC"}
+              </button>
+              {verifyMsg && <span className="muted" style={{ fontSize: 11 }}>{verifyMsg}</span>}
+            </div>
+          )}
+        </>
+      )}
 
       {(ev.function || ev.sink || ev.address || ev.file) && (
         <>
@@ -130,8 +242,12 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
         </>
       )}
 
-      <div className="sec">Reasoning</div>
-      <p style={{ color: "var(--fg-dim)" }}>{finding.reasoning}</p>
+      {!editing && (
+        <>
+          <div className="sec">Reasoning</div>
+          <p style={{ color: "var(--fg-dim)" }}>{finding.reasoning}</p>
+        </>
+      )}
 
       {finding.human_notes && (<><div className="sec">Analyst notes</div><p>{finding.human_notes}</p></>)}
 

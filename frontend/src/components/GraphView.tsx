@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import cytoscape from "cytoscape";
 import dagre from "cytoscape-dagre";
+import edgehandles from "cytoscape-edgehandles";
 import { Graph } from "../api";
 import { Icon } from "./Icon";
 
 cytoscape.use(dagre);
+cytoscape.use(edgehandles);
 
 export const SEV: Record<string, string> = { info: "#7d8799", low: "#3fb950", medium: "#e3b341", high: "#f0883e", critical: "#ff5d6c" };
 // Target-kind colors. (red is reserved for severity/findings — never a node fill.)
@@ -29,14 +31,20 @@ export const EDGE_C: Record<string, string> = {
 const ALWAYS_LABEL = new Set(["taints", "bypasses", "listens_on", "connects_to", "routes_to"]);
 const RESOLVED = new Set(["confirmed", "dismissed", "reported"]);
 
-export default function GraphView({ graph, onSelect, onEdgeSelect, selectedId }: { graph: Graph; onSelect: (id: string, type: string) => void; onEdgeSelect?: (edge: Graph["edges"][number] | null) => void; selectedId?: string }) {
+export default function GraphView({ graph, onSelect, onEdgeSelect, onDrawEdge, selectedId }: { graph: Graph; onSelect: (id: string, type: string) => void; onEdgeSelect?: (edge: Graph["edges"][number] | null) => void; onDrawEdge?: (srcId: string, dstId: string) => void; selectedId?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const cyRef = useRef<cytoscape.Core>();
+  const ehRef = useRef<any>(null);
+  const drawRef = useRef<(src: string, dst: string) => void>();
   const tapRef = useRef<{ id: string | null; t: number }>({ id: null, t: 0 });
   const [findings, setFindings] = useState<"all" | "unresolved" | "none">("all");
   const [showFns, setShowFns] = useState(true);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [filterOpen, setFilterOpen] = useState(false);
+  const [drawMode, setDrawMode] = useState(false);
+
+  // keep the latest callback in a ref so the cytoscape effect needn't re-run on it
+  drawRef.current = onDrawEdge;
 
   // children map for collapse: contains (parent→child) + about (node/target → its finding)
   const childrenOf = useMemo(() => {
@@ -144,8 +152,32 @@ export default function GraphView({ graph, onSelect, onEdgeSelect, selectedId }:
     });
     cy.on("tap", (evt) => { if (evt.target === cy) { cy.edges().removeClass("lit"); onEdgeSelect?.(null); } });
     cyRef.current = cy;
-    return () => cy.destroy();
+
+    // Draw-to-connect: edgehandles draws a temporary edge src→dst; we cancel its
+    // creation and instead open the Add-edge modal prefilled with the endpoints.
+    // It is left disabled (drawMode toggles it) so normal tap/select/pan is unaffected.
+    const eh = (cy as any).edgehandles({
+      snap: true,
+      noEdgeEventsInDraw: true,
+      canConnect: (s: any, t: any) => s.id() !== t.id(),
+      edgeParams: () => ({ data: { color: "#6aa3ff", etype: "draft" } }),
+    });
+    ehRef.current = eh;
+    eh.disable();
+    cy.on("ehcomplete", (_evt: any, src: any, tgt: any, addedEdge: any) => {
+      try { addedEdge?.remove(); } catch { /* ignore */ }
+      setDrawMode(false); // single-shot: drop back to normal select/pan after one edge
+      drawRef.current?.(src.id(), tgt.id());
+    });
+
+    return () => { try { eh.destroy(); } catch { /* ignore */ } ehRef.current = null; cy.destroy(); };
   }, [graph, findings, showFns, collapsed]);
+
+  // Toggle edgehandles draw mode on the live instance (no graph rebuild needed).
+  useEffect(() => {
+    const eh = ehRef.current; if (!eh) return;
+    if (drawMode) { eh.enable(); eh.enableDrawMode(); } else { eh.disableDrawMode(); eh.disable(); }
+  }, [drawMode]);
 
   useEffect(() => {
     const cy = cyRef.current; if (!cy) return;
@@ -178,6 +210,11 @@ export default function GraphView({ graph, onSelect, onEdgeSelect, selectedId }:
             </div>
           )}
         </div>
+        {onDrawEdge && (
+          <button className={"btn icon" + (drawMode ? " primary" : "")}
+                  title={drawMode ? "Draw edge: drag from a source node to a target node (click to cancel)" : "Draw an edge: drag from one node to another"}
+                  onClick={() => setDrawMode((d) => !d)}><Icon name="link" /></button>
+        )}
         <button className="btn icon" title="Fit" onClick={fit}><Icon name="fit" /></button>
         <button className="btn icon" title="Zoom in" onClick={() => zoom(1.25)}><Icon name="plus" /></button>
         <button className="btn icon" title="Zoom out" onClick={() => zoom(0.8)}><Icon name="minus" /></button>

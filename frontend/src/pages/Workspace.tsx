@@ -31,6 +31,7 @@ export default function Workspace() {
   const [q, setQ] = useState("");
   const [results, setResults] = useState<any | null>(null);
   const [modal, setModal] = useState<"node" | "edge" | "report" | "compare" | "ghidra" | null>(null);
+  const [edgePrefill, setEdgePrefill] = useState<{ src: string; dst: string } | null>(null);
   const [ghidraBridge, setGhidraBridge] = useState(false);
   const [fuzzingEnabled, setFuzzingEnabled] = useState(false);
   const [launchFor, setLaunchFor] = useState<{ target: TargetNode; type: string; objective?: string; params?: any; parentFindingId?: string; anchorKind?: string; anchorId?: string } | null>(null);
@@ -294,6 +295,12 @@ export default function Workspace() {
           </div>
           {results && q.trim() && (
             <div className="search-pop">
+              {results.targets?.length > 0 && <div className="res-head">Targets</div>}
+              {(results.targets || []).map((t: any) => (
+                <div className="res" key={t.id} onClick={() => { setResults(null); setQ(""); onGraphSelect(t.id, "target"); }}>
+                  <Icon name={NODE_ICON[t.kind] || "binary"} size={13} /> {t.name} <span className="muted">{t.kind}{t.arch ? " · " + t.arch : ""}</span>
+                </div>
+              ))}
               {results.nodes.length > 0 && <div className="res-head">Graph nodes</div>}
               {results.nodes.map((n: any) => (
                 <div className="res" key={n.id} onClick={() => { setResults(null); setQ(""); onGraphSelect(n.id, "node"); }}>
@@ -306,12 +313,13 @@ export default function Workspace() {
                   <span className={"chip sev-" + f.severity}>{f.severity}</span> {f.title}
                 </div>
               ))}
-              {results.findings.length === 0 && results.nodes.length === 0 && <div className="res muted">No matches</div>}
+              {results.findings.length === 0 && results.nodes.length === 0 && !(results.targets?.length) && <div className="res muted">No matches</div>}
               <div className="cov">{results.coverage?.note}</div>
             </div>
           )}
           <GraphView graph={graph} selectedId={selGraphId} onSelect={onGraphSelect}
-                     onEdgeSelect={(e) => { setSelEdge(e); if (e) { setSelNode(null); setSelFinding(null); setSelTask(undefined); } }} />
+                     onEdgeSelect={(e) => { setSelEdge(e); if (e) { setSelNode(null); setSelFinding(null); setSelTask(undefined); } }}
+                     onDrawEdge={(src, dst) => { setEdgePrefill({ src, dst }); setModal("edge"); }} />
           {(() => {
             // Legend driven from the SAME color maps GraphView uses, showing only the
             // node/edge types actually present in this graph (single source of truth).
@@ -377,7 +385,10 @@ export default function Workspace() {
       )}
 
       {modal === "node" && <AddNodeModal projectId={projectId!} targets={detail.targets} onClose={() => setModal(null)} onDone={load} />}
-      {modal === "edge" && <AddEdgeModal projectId={projectId!} graph={graph} onClose={() => setModal(null)} onDone={load} />}
+      {modal === "edge" && <AddEdgeModal projectId={projectId!} graph={graph}
+                                         prefillSrc={edgePrefill?.src} prefillDst={edgePrefill?.dst}
+                                         onClose={() => { setModal(null); setEdgePrefill(null); }}
+                                         onDone={load} />}
       {modal === "report" && <ReportModal projectId={projectId!} projectName={detail.project.name} onClose={() => setModal(null)} />}
       {modal === "compare" && <RunCompareModal targets={detail.targets} onClose={() => setModal(null)} />}
       {modal === "ghidra" && <GhidraImportModal projectId={projectId!} onClose={() => setModal(null)} onDone={load} />}

@@ -464,6 +464,14 @@ def create_app() -> FastAPI:
 
         return {"edges": describe_edges(), "socket_kinds": list(SOCKET_KINDS)}
 
+    @app.get("/api/node-schemas")
+    def api_node_schemas():
+        """Per node-type description, when-to-use, and recommended attributes — for the
+        Add-node UI help and any client populating nodes consistently."""
+        from hexgraph.engine.node_schemas import describe_nodes
+
+        return {"nodes": describe_nodes()}
+
     @app.get("/api/projects/{project_id}")
     def api_project(project_id: str):
         with session_scope() as s:

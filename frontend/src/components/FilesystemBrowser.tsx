@@ -29,6 +29,7 @@ export default function FilesystemBrowser({ projectId, targetId, onChanged }: {
 }) {
   const [fs, setFs] = useState<{ unpacked: boolean; method?: string; files: FsEntry[] } | null>(null);
   const [busy, setBusy] = useState("");
+  const [view, setView] = useState<{ rel: string; loading: boolean; size?: number; encoding?: "text" | "binary"; content?: string; truncated?: boolean; err?: string } | null>(null);
 
   const load = () => api.filesystem(targetId).then(setFs).catch(() => setFs(null));
   useEffect(() => { load(); }, [targetId]);
@@ -38,6 +39,14 @@ export default function FilesystemBrowser({ projectId, targetId, onChanged }: {
     try { await api.addFromFs(projectId, targetId, rel); await load(); onChanged?.(); }
     catch (e: any) { alert(String(e.message || e)); }
     finally { setBusy(""); }
+  };
+
+  const open = async (rel: string) => {
+    setView({ rel, loading: true });
+    try {
+      const r = await api.readFile(targetId, rel);
+      setView({ rel, loading: false, size: r.size, encoding: r.encoding, content: r.content, truncated: r.truncated });
+    } catch (e: any) { setView({ rel, loading: false, err: String(e.message || e) }); }
   };
 
   if (!fs) return null;
@@ -63,8 +72,11 @@ export default function FilesystemBrowser({ projectId, targetId, onChanged }: {
     return (
       <div className="fsfile" style={{ paddingLeft: depth * 12 + 16 }}>
         <Icon name={e.is_elf ? "binary" : "doc"} size={12} />
-        <span className="fname">{node.name}</span>
+        <span className="fname" style={{ cursor: "pointer" }} title="View file contents" onClick={() => open(e.rel)}>{node.name}</span>
         <span className="muted sz">{fmtSize(e.size)}</span>
+        <button className="btn sm icon ghost" title="View file contents" onClick={() => open(e.rel)}>
+          <Icon name="search" size={11} />
+        </button>
         {e.added ? <span className="tag" style={{ color: "var(--accent)" }}>added</span>
           : looksAddable(e) ? (
             <button className="btn sm" disabled={busy === e.rel} onClick={() => add(e.rel)}>
@@ -74,6 +86,29 @@ export default function FilesystemBrowser({ projectId, targetId, onChanged }: {
       </div>
     );
   };
+
+  if (view) {
+    return (
+      <>
+        <div className="sec" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button className="btn sm ghost" onClick={() => setView(null)}><Icon name="x" size={11} /> Back</button>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{view.rel}</span>
+        </div>
+        {view.loading && <div className="muted" style={{ fontSize: 11 }}>loading…</div>}
+        {view.err && <div className="err">{view.err}</div>}
+        {!view.loading && !view.err && (
+          <>
+            <div className="muted" style={{ fontSize: 11, marginBottom: 6 }}>
+              {fmtSize(view.size)}
+              {view.encoding === "binary" && " · binary file (hex)"}
+              {view.truncated && " · truncated"}
+            </div>
+            <pre className="codewrap" style={{ whiteSpace: "pre-wrap", maxHeight: 360, overflow: "auto", fontFamily: "var(--mono, monospace)", fontSize: 11 }}>{view.content}</pre>
+          </>
+        )}
+      </>
+    );
+  }
 
   return (
     <>
