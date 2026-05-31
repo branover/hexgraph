@@ -539,6 +539,27 @@ def ingest(path: str, name: str | None = None, project_id: str | None = None) ->
                 "children": summary.get("children", [])}
 
 
+def register_surface(project_id: str, base_url: str, name: str | None = None,
+                     endpoints: list | None = None) -> dict:
+    """Register a WEB attack surface (a `web_app` target reached via an HTTP Channel —
+    no bytes). Optionally pass an offline route spec `endpoints`:
+    [{"method","path","params"?,"handler"?,"auth"?}]. Then run_task(target_id,
+    "surface_recon") materialises endpoint/param nodes and `routes_to` edges linking
+    each route to its handler function in the firmware. Phase 1 is offline (no egress)."""
+    from hexgraph.engine.surfaces import register_web_surface
+
+    with session_scope() as s:
+        project = s.get(Project, project_id)
+        if project is None:
+            return {"error": "project not found"}
+        try:
+            t = register_web_surface(s, project, base_url, name=name, endpoints=endpoints)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        return {"id": t.id, "name": t.name, "kind": t.kind.value,
+                "endpoints": len((t.metadata_json or {}).get("endpoints", []))}
+
+
 def verify_poc(target_id: str, poc: dict, finding_id: str | None = None) -> dict:
     """Execute a proof-of-concept against a target IN THE SANDBOX and report whether
     it worked. The spec is {argv?, env?, stdin?, timeout?, oracle:{type,value}};
@@ -726,8 +747,10 @@ _CATALOG = [
      {"type": "object", "properties": {"target_id": {"type": "string"}, "poc": {"type": "object"}, "finding_id": {"type": "string"}}, "required": ["target_id", "poc"]}),
     ("run", "ingest", ingest, "Ingest a binary/firmware from a local path as a target (firmware unpacks into children); creates a project if none given.",
      {"type": "object", "properties": {"path": {"type": "string"}, "name": {"type": "string"}, "project_id": {"type": "string"}}, "required": ["path"]}),
-    ("run", "run_task", run_task, "Run a HexGraph task (recon/static_analysis/harness_generation/fuzzing) and return its findings.",
+    ("run", "run_task", run_task, "Run a HexGraph task (recon/static_analysis/harness_generation/fuzzing/surface_recon) and return its findings.",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "type": {"type": "string"}, "objective": {"type": "string"}, "params": {"type": "object"}}, "required": ["target_id", "type"]}),
+    ("run", "register_surface", register_surface, "Register a WEB attack surface (web_app target via an HTTP Channel, no bytes); pass an optional offline route spec, then run_task(surface_recon) to map endpoints/params + routes_to→handler edges. Offline (no egress).",
+     {"type": "object", "properties": {"project_id": {"type": "string"}, "base_url": {"type": "string"}, "name": {"type": "string"}, "endpoints": {"type": "array"}}, "required": ["project_id", "base_url"]}),
 ]
 
 

@@ -95,6 +95,12 @@ EDGE_ATTRIBUTE_SCHEMAS: dict[str, dict[str, Any]] = {
         "attributes": {"by": _attr("what matched, e.g. 'content_hash'"),
                        "score": _attr("similarity 0..1", type="float")},
     },
+    "routes_to": {
+        "description": "a web endpoint/route dispatches to its handler function (the "
+                       "static↔dynamic bridge: dynamic surface → static binary).",
+        "attributes": {"handler": _attr("the handler symbol the route maps to"),
+                       "address": _attr("hex address of the dispatch, if known", type="hex")},
+    },
 }
 
 
