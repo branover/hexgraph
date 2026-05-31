@@ -6,10 +6,29 @@ from sqlalchemy.orm import Session
 
 from hexgraph.db.models import EdgeType
 from hexgraph.db.models import Finding as FindingRow
-from hexgraph.db.models import FindingStatus
+from hexgraph.db.models import FindingStatus, Task
 from hexgraph.engine.edges import add_edge
 from hexgraph.engine.nodes import materialize_function
 from hexgraph.models.finding import Finding
+
+
+# Map a producing task type → the default finding_type (overridable per call).
+_TYPE_BY_TASK = {
+    "recon": "recon",
+    "harness_generation": "harness",
+    "fuzzing": "fuzz_crash",
+    "poc": "poc",
+}
+FINDING_TYPES = ("vulnerability", "recon", "harness", "fuzz_crash", "poc", "annotation", "other")
+
+
+def classify_finding(task_type: str | None, category: str | None) -> str:
+    """Classify a finding for sort/filter from its producing task + category."""
+    if category == "recon":
+        return "recon"
+    if category == "annotation":
+        return "annotation"
+    return _TYPE_BY_TASK.get(task_type or "", "vulnerability")
 
 
 def persist_finding(
@@ -20,8 +39,15 @@ def persist_finding(
     task_id: str,
     finding: Finding,
     status: FindingStatus = FindingStatus.new,
+    finding_type: str | None = None,
 ) -> FindingRow:
-    """Store a schema-shaped Finding payload as a DB row with the envelope."""
+    """Store a schema-shaped Finding payload as a DB row with the envelope.
+
+    `finding_type` classifies it for sort/filter; if omitted it's derived from the
+    producing task type + category (vulnerability is the default)."""
+    if finding_type is None:
+        task = session.get(Task, task_id)
+        finding_type = classify_finding(task.type if task else None, finding.category)
     row = FindingRow(
         project_id=project_id,
         target_id=target_id,
@@ -38,6 +64,7 @@ def persist_finding(
         ],
         related_target_refs_json=list(finding.related_target_refs or []),
         status=status,
+        finding_type=finding_type,
     )
     session.add(row)
     session.flush()

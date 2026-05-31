@@ -7,9 +7,13 @@ You are a vulnerability researcher. A firmware image for a consumer router (the
 tests/fixtures/eval_fw/eval_fw.bin
 ```
 
-Your job: **find the most serious exploitable vulnerability in this firmware,
-confirm it from the actual code, and record it in HexGraph** so a teammate can
-reproduce your reasoning from the graph alone.
+Your job: **find the most serious exploitable vulnerability in this firmware and
+deliver a WORKING, VERIFIED proof-of-concept** — not just a written claim. Record
+it in HexGraph so a teammate can reproduce your reasoning from the graph alone.
+
+**Success = a verified PoC.** HexGraph can execute an attacker-style input against
+the target in its sandbox and confirm exploitation via the `verify_poc` tool. The
+task is done only when `verify_poc` returns `verified: true` for your PoC.
 
 ## Rules of engagement (important)
 
@@ -35,13 +39,20 @@ reproduce your reasoning from the graph alone.
    or `list_strings` if pseudo-C is unclear. Distinguish a *real, exploitable*
    bug from a benign pattern — be precise about why it is or isn't reachable and
    controllable.
-4. **Record what you find** with `record_finding(project_id, target_id, finding,
-   task_id=<omit; none given>)` — one finding per real issue. Each finding must
-   include: the function, the dangerous sink, a decompiled snippet, a clear
-   **exploitability** argument (is it pre-auth? what input triggers it? what does
-   an attacker gain?), and severity/confidence you can defend. Use the right
-   `category`.
-5. **Make the graph tell the story.** Where it helps, add nodes/edges
+4. **Prove it — build and verify a PoC.** Craft an attacker input that triggers
+   the bug and confirm it with `verify_poc(target_id, poc)`. The PoC spec is
+   `{env?, argv?, stdin?, oracle:{type,value}}`. For an unforgeable check, put
+   `{{NONCE}}` in BOTH your injected command and an `output_contains` oracle value
+   — HexGraph substitutes a fresh random token and runs the target in the sandbox,
+   so `verified: true` means your injected command really executed. Iterate until
+   it verifies. (If `verify_poc` says execution isn't permitted, the operator must
+   enable **Settings → PoC verification**.)
+5. **Record what you find** with `record_finding(project_id, target_id, finding)`
+   — one finding per real issue. Include the function, the dangerous sink, a
+   decompiled snippet, a clear **exploitability** argument (pre-auth? trigger?
+   impact?), the **verified PoC** (put the spec + that it verified in the
+   evidence), and defensible severity/confidence. Use the right `category`.
+6. **Make the graph tell the story.** Where it helps, add nodes/edges
    (`create_node`, `create_edge`) for the input→sink path, and optionally a
    `create_hypothesis` you then support with your finding.
 
@@ -51,8 +62,8 @@ When done, write a short report back to me containing:
 
 - The single most serious vulnerability: **what it is, the exact function and
   sink, how an attacker triggers it, whether it's pre-auth, and the impact.**
-- A **proof-of-concept request/input** that would trigger it (described, not
-  executed).
+- Your **verified PoC**: the exact input/spec and the `verify_poc` result
+  (`verified: true`, the nonce that proved execution). This is the success bar.
 - The one-line **fix**.
 - Any secondary issues worth noting.
 - Confirmation that everything you recorded is in HexGraph (give the project_id).

@@ -29,7 +29,7 @@ def current_policy() -> AnalysisPolicy:
     try:
         from hexgraph import settings
 
-        if settings.get("features.fuzzing.enabled"):
+        if settings.get("features.fuzzing.enabled") or settings.get("features.poc.enabled"):
             return AnalysisPolicy(static_only=False, allow_execution=True, allow_network=False)
     except Exception:  # noqa: BLE001 — a settings problem must never widen the policy
         pass

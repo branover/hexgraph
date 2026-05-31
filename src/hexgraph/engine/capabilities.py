@@ -57,6 +57,10 @@ def _agent_enabled() -> bool:
     return _flag("features.agent.enabled")
 
 
+def _poc_enabled() -> bool:
+    return _flag("features.poc.enabled")
+
+
 def capabilities_for(anchor_kind: str, subtype: str | None = None) -> list[str]:
     if anchor_kind == "target":
         caps = list(_TARGET.get(subtype or "unknown", ["recon"]))
@@ -64,6 +68,8 @@ def capabilities_for(anchor_kind: str, subtype: str | None = None) -> list[str]:
             caps.append("fuzzing")
         if _agent_enabled() and subtype in _FUZZABLE_TARGETS:
             caps.append("agent_delegate")
+        if _poc_enabled() and subtype in _FUZZABLE_TARGETS:
+            caps.append("poc")
         return caps
     if anchor_kind == "node":
         caps = list(_NODE.get(subtype or "", []))
@@ -71,6 +77,8 @@ def capabilities_for(anchor_kind: str, subtype: str | None = None) -> list[str]:
             caps.append("fuzzing")
         if _agent_enabled() and subtype == "function":
             caps.append("agent_delegate")
+        if _poc_enabled() and subtype == "function":
+            caps.append("poc")
         return caps
     if anchor_kind == "edge":
         return _EDGE.get(subtype or "_default", _EDGE["_default"])
@@ -79,14 +87,17 @@ def capabilities_for(anchor_kind: str, subtype: str | None = None) -> list[str]:
 
 def capability_table() -> dict:
     """Full table for the UI (fuzzing/agent_delegate folded in when enabled in Settings)."""
-    fuzz, agent = _fuzzing_enabled(), _agent_enabled()
+    fuzz, agent, poc = _fuzzing_enabled(), _agent_enabled(), _poc_enabled()
 
     def extra(kind: str, base: list[str]) -> list[str]:
         out = list(base)
-        if fuzz and (kind in _FUZZABLE_TARGETS or kind == "function"):
+        dyn = kind in _FUZZABLE_TARGETS or kind == "function"
+        if fuzz and dyn:
             out.append("fuzzing")
-        if agent and (kind in _FUZZABLE_TARGETS or kind == "function"):
+        if agent and dyn:
             out.append("agent_delegate")
+        if poc and dyn:
+            out.append("poc")
         return out
 
     targets = {k: extra(k, v) for k, v in _TARGET.items()}

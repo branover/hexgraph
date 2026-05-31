@@ -240,6 +240,9 @@ class Finding(Base):
     suggested_followups_json: Mapped[list[Any]] = mapped_column(JSON, default=list)
     related_target_refs_json: Mapped[list[Any]] = mapped_column(JSON, default=list)
 
+    # Classifies the finding for sort/filter (vulnerability | recon | harness |
+    # fuzz_crash | poc | annotation | other). DB envelope, not the frozen schema.
+    finding_type: Mapped[str] = mapped_column(String(24), default="vulnerability", index=True)
     # String column (no CHECK) so the triage vocabulary can widen without migration pain.
     status: Mapped[str] = mapped_column(String(20), default=FindingStatus.new.value)
     # HITL envelope (design §8): provenance + supersession + human edits.

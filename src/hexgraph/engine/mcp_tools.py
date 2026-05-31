@@ -209,6 +209,29 @@ def ingest(path: str, name: str | None = None, project_id: str | None = None) ->
                 "children": summary.get("children", [])}
 
 
+def verify_poc(target_id: str, poc: dict) -> dict:
+    """Execute a proof-of-concept against a target IN THE SANDBOX and report whether
+    it worked. The spec is {argv?, env?, stdin?, timeout?, oracle:{type,value}};
+    put {{NONCE}} in the injected command + the oracle value and HexGraph
+    substitutes a fresh random token, so a verified output_contains oracle proves
+    real command execution. Requires PoC/fuzzing enabled in Settings."""
+    from hexgraph.engine.poc import verify_poc as _verify
+    from hexgraph.policy import PolicyViolation
+
+    with session_scope() as s:
+        t = s.get(Target, target_id)
+        if t is None:
+            return {"error": "target not found"}
+        try:
+            r = _verify(s, s.get(Project, t.project_id), t, poc)
+        except PolicyViolation:
+            return {"error": "execution not permitted — enable features.poc in Settings to verify PoCs"}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"verification failed: {exc}"}
+        return {"verified": bool(r.get("verified")), "detail": r.get("detail"),
+                "exit_code": r.get("exit_code"), "output": (r.get("output") or "")[:4000]}
+
+
 def run_task(target_id: str, type: str, objective: str | None = None, params: dict | None = None) -> dict:
     """Run a HexGraph task synchronously (recon/static_analysis/harness_generation/
     fuzzing/…) and return its status + the findings it produced."""
@@ -268,6 +291,8 @@ _CATALOG = [
      {"type": "object", "properties": {"project_id": {"type": "string"}, "statement": {"type": "string"}, "rationale": {"type": "string"}, "target_id": {"type": "string"}}, "required": ["project_id", "statement"]}),
     ("write", "annotate", annotate, "Attach a note/tag/rename to a graph entity (agent proposal).",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "node_kind": {"type": "string"}, "node_id": {"type": "string"}, "kind": {"type": "string"}, "value": {"type": "string"}}, "required": ["project_id", "node_kind", "node_id", "kind", "value"]}),
+    ("run", "verify_poc", verify_poc, "Execute a proof-of-concept against a target in the sandbox and report verified true/false (use {{NONCE}} in the injected command + oracle for an unforgeable check). Requires PoC enabled.",
+     {"type": "object", "properties": {"target_id": {"type": "string"}, "poc": {"type": "object"}}, "required": ["target_id", "poc"]}),
     ("run", "ingest", ingest, "Ingest a binary/firmware from a local path as a target (firmware unpacks into children); creates a project if none given.",
      {"type": "object", "properties": {"path": {"type": "string"}, "name": {"type": "string"}, "project_id": {"type": "string"}}, "required": ["path"]}),
     ("run", "run_task", run_task, "Run a HexGraph task (recon/static_analysis/harness_generation/fuzzing) and return its findings.",

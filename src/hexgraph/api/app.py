@@ -134,12 +134,15 @@ class BulkStatus(BaseModel):
 
 
 def _finding_dict(f: Finding) -> dict:
+    verification = ((f.evidence_json or {}).get("extra") or {}).get("verification") or {}
     return {
         "id": f.id,
         "target_id": f.target_id,
         "task_id": f.task_id,
         "status": f.status,
         "origin": f.origin,
+        "finding_type": f.finding_type,
+        "verified": bool(verification.get("verified")),  # a PoC that executed + matched its oracle
         "dismissed_reason": f.dismissed_reason,
         "human_notes": f.human_notes,
         "created_at": f.created_at,

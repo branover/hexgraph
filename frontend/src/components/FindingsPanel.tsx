@@ -18,8 +18,10 @@ export default function FindingsPanel({
   const [status, setStatus] = useState("all");
   const [sev, setSev] = useState("all");
   const [tagF, setTagF] = useState("all");
+  const [typeF, setTypeF] = useState("all");
   const [group, setGroup] = useState(true);
   const allTags = useMemo(() => Array.from(new Set(findings.flatMap((f) => f.tags || []))).sort(), [findings]);
+  const allTypes = useMemo(() => Array.from(new Set(findings.map((f) => f.finding_type).filter(Boolean) as string[])).sort(), [findings]);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const toggle = (id: string) => setPicked((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const bulk = (st: string) => { onBulk?.([...picked], st); setPicked(new Set()); };
@@ -32,10 +34,11 @@ export default function FindingsPanel({
     if (status !== "all") fs = fs.filter((f) => f.status === status);
     if (sev !== "all") fs = fs.filter((f) => f.severity === sev);
     if (tagF !== "all") fs = fs.filter((f) => (f.tags || []).includes(tagF));
+    if (typeF !== "all") fs = fs.filter((f) => (f.finding_type || "vulnerability") === typeF);
     if (q) fs = fs.filter((f) => (f.title + f.category + (f.tags || []).join(" ")).toLowerCase().includes(q.toLowerCase()));
     fs.sort((a, b) => SEV_ORDER.indexOf(a.severity) - SEV_ORDER.indexOf(b.severity));
     return fs;
-  }, [findings, status, sev, tagF, q]);
+  }, [findings, status, sev, tagF, typeF, q]);
 
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
@@ -65,6 +68,10 @@ export default function FindingsPanel({
           <span className="ttl">{f.title}</span>
         </div>
         <div className="mt">
+          {f.finding_type && f.finding_type !== "vulnerability" && (
+            <span className="tag" style={{ textTransform: "none" }}>{f.finding_type.replace(/_/g, " ")}</span>
+          )}
+          {f.verified && <span className="tag" style={{ color: "#2ea043" }}>✓ verified</span>}
           <span>{f.category}</span><span>· conf {f.confidence}</span>
           <span className="tag">{f.status}</span>
           {!group && <span>· {targetName(f.target_id)}</span>}
@@ -88,6 +95,12 @@ export default function FindingsPanel({
         <select className="sel" value={status} onChange={(e) => setStatus(e.target.value)}>
           {["all", "new", "triaging", "confirmed", "dismissed", "reported"].map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
+        {allTypes.length > 1 && (
+          <select className="sel" value={typeF} onChange={(e) => setTypeF(e.target.value)} title="filter by finding type">
+            <option value="all">type</option>
+            {allTypes.map((tp) => <option key={tp} value={tp}>{tp.replace(/_/g, " ")}</option>)}
+          </select>
+        )}
         {allTags.length > 0 && (
           <select className="sel" value={tagF} onChange={(e) => setTagF(e.target.value)} title="filter by tag">
             <option value="all">tag</option>

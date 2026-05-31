@@ -45,6 +45,14 @@ DEFAULTS: dict[str, Any] = {
             "max_crashes": 10,           # cap on unique-crash findings per run
             "timeout": 300,              # sandbox wall-clock (>= compile + max_total_time)
         },
+        "poc": {
+            # OFF by default. Like fuzzing, enabling this relaxes the static-only
+            # policy to allow execution — but only to run an attacker-style PoC
+            # against the target IN THE SANDBOX (--network none, capped, timed,
+            # disposable) and verify it via an unforgeable nonce oracle.
+            "enabled": False,
+            "timeout": 20,
+        },
         "mcp": {
             # Which `hexgraph mcp` tool groups are exposed to a connected coding
             # agent. Trim these so the agent's tool list (its context) stays small
@@ -86,6 +94,8 @@ ALLOWED: dict[str, tuple[Any, set | None]] = {
     "features.fuzzing.max_len": (int, None),
     "features.fuzzing.max_crashes": (int, None),
     "features.fuzzing.timeout": (int, None),
+    "features.poc.enabled": (bool, None),
+    "features.poc.timeout": (int, None),
     "features.mcp.read": (bool, None),
     "features.mcp.write": (bool, None),
     "features.mcp.run": (bool, None),

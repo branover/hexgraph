@@ -79,6 +79,12 @@ class MockLLMBackend:
             return LLMResponse(text=str(fixture.get("thinking", "")), usage=_DEFAULT_USAGE,
                                tool_calls=calls, stop_reason="tool_use")
 
+        # PoC-spec fixtures (the `poc` task): return the spec JSON as-is rather than
+        # the {"findings": …} envelope, so engine.poc._generate_spec can read it.
+        if "poc" in fixture:
+            return LLMResponse(text=json.dumps(self._fill_templates(fixture, req.template_vars)),
+                               usage=_DEFAULT_USAGE)
+
         # malformed_then_valid: invalid text on attempt 1, valid object after.
         if "raw_text_first" in fixture and "on_retry" in fixture:
             attempt = self._attempts.get(req.task_id, 0)

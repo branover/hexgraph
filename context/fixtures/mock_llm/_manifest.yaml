@@ -36,3 +36,7 @@ harness_generation:
 pattern_sweep:
   default: match_found
   scenarios: [match_found]
+
+poc:
+  default: command_injection
+  scenarios: [command_injection]   # returns a runnable PoC spec (not a findings envelope)

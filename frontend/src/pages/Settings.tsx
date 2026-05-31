@@ -171,6 +171,24 @@ export default function Settings() {
             )}
           </section>
 
+          {/* PoC verification */}
+          <section className="card2">
+            <div className="h3row">
+              <h3><Icon name="check" size={15} /> PoC verification <span className="muted">· optional · executes the target</span></h3>
+              <label className="switch">
+                <input type="checkbox" checked={v.settings.features.poc.enabled}
+                       onChange={(e) => patch({ "features.poc.enabled": e.target.checked })} />
+                <span>{v.settings.features.poc.enabled ? "enabled" : "disabled"}</span>
+              </label>
+            </div>
+            <p className="hint">
+              ⚠ Like fuzzing, this relaxes the static-only policy: a <b>poc</b> task / the <code>verify_poc</code>
+              tool <b>executes the target</b> with an attacker-style input inside the sandbox
+              (<code>--network none</code>, capped, timed, disposable) and confirms it via an unforgeable
+              nonce oracle. A verified PoC is marked <b>✓ verified</b> on the finding.
+            </p>
+          </section>
+
           {/* MCP — coding-agent integration */}
           <section className="card2">
             <h3><Icon name="link" size={15} /> Coding-agent tools (MCP) <span className="muted">· optional</span></h3>

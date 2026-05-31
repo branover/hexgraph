@@ -1,0 +1,12 @@
+{
+  "_scenario": "command_injection",
+  "_note": "A PoC spec for the `poc` task. {{NONCE}} is replaced by HexGraph with a fresh random token before running, so a verified output_contains oracle proves real command execution. Targets a CGI binary that passes a query-string field to system().",
+  "function": "{{function|run_diagnostic}}",
+  "category": "command-injection",
+  "poc": {
+    "env": { "QUERY_STRING": "host=127.0.0.1;echo {{NONCE}}" },
+    "oracle": { "type": "output_contains", "value": "{{NONCE}}" },
+    "timeout": 20
+  },
+  "usage": { "input_tokens": 800, "output_tokens": 80, "cost_source": "mock", "cost_usd": 0.0 }
+}

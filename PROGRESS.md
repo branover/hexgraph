@@ -25,7 +25,11 @@ then run the resume verifier, then continue at the next unchecked task.
 - **Coding-agent integration (MCP):** driver mode (`hexgraph mcp` exposes sandboxed read/write/run tools,
   group-gated) + delegate mode (`agent_delegate` task launches the agent CLI restricted to HexGraph tools).
   LLM tasks use a tool-use agent loop over a BYOK key. `hexgraph mcp install` for setup.
-- **Last verified:** `.venv/bin/python -m pytest -q` → 200 passed, 1 skipped (live, no key); SPA builds clean.
+- **Executable PoC findings** (`features.poc`, opt-in): `poc` task + `verify_poc` MCP tool execute the
+  target in the sandbox and confirm exploitation via an unforgeable nonce oracle → finding marked
+  `verified`. **Findings are typed** (`finding_type`: vulnerability/recon/harness/fuzz_crash/poc/…,
+  migration 0008) for sort/filter. Engagement test (`docs/engagement-brief.md`) success = a verified PoC.
+- **Last verified:** `.venv/bin/python -m pytest -q` → 210 passed, 1 skipped (live, no key); SPA builds clean.
 - **UI quickstart (updated):** `make ui` once → `make sandbox-build` once →
   `hexgraph ingest tests/fixtures/synthetic_fw.bin --name demo` → `hexgraph serve` → http://127.0.0.1:8765.
 - **How to re-verify:** `make test`; or run the UI (see UI quickstart below).
@@ -151,6 +155,15 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-05-31: **Executable/verified PoC findings + finding-type tagging + engagement test.** (1) PoC:
+  `features.poc` opt-in flips the policy to allow execution; `poc_probe.py` runs the target in the
+  sandbox with an attacker spec and an unforgeable `{{NONCE}}` oracle; `engine/poc.py` (verify_poc +
+  `poc` task) records a `verified` poc finding; `verify_poc` MCP tool. Verified live against the eval
+  firmware (injected echo ran, nonce in output). (2) **finding_type** column (migration 0008) +
+  `classify_finding`; findings panel gains a type filter + type/verified chips. (3) Real vulnerable
+  firmware `tests/fixtures/eval_fw/eval_fw.bin` (pre-auth command-injection RCE) + `docs/engagement-
+  brief.md` / `engagement-answer-key.md` (success = a verified PoC) + installable Claude skill +
+  `ingest` MCP tool. 210 tests pass. NOTE: run `make sandbox-build` to bake the new fuzz/poc probes.
 - 2026-05-30: **Coding-agent integration (both directions) + VR-eval UX pass.** (1) **MCP driver mode**:
   `hexgraph mcp` server (`mcp_server.py` + `engine/mcp_tools.py`) exposes sandboxed tools — read (inspect),
   write (record_finding/create_node/create_edge/create_hypothesis/annotate), run (run_task) — grouped and

@@ -82,6 +82,10 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
         <span className="tag">{finding.category}</span>
         <span className="tag">{finding.confidence} confidence</span>
         <span className="tag">{finding.status}</span>
+        {finding.finding_type && finding.finding_type !== "vulnerability" && (
+          <span className="tag" style={{ textTransform: "none" }}>{finding.finding_type.replace(/_/g, " ")}</span>
+        )}
+        {finding.verified && <span className="tag" style={{ color: "#2ea043", borderColor: "#2ea043" }}>✓ verified PoC</span>}
         {finding.origin && finding.origin !== "agent" && <span className="tag">{finding.origin}</span>}
       </div>
       <Lifecycle status={finding.status} />
