@@ -20,9 +20,14 @@ def build_report_md(session: Session, project_id: str) -> str:
     project = session.get(Project, project_id)
     if project is None:
         raise ValueError("project not found")
+    archived = {
+        t[0] for t in session.query(Target.id).filter(
+            Target.project_id == project_id, Target.archived.is_(True)
+        ).all()
+    }
     findings = [
         f for f in session.query(Finding).filter(Finding.project_id == project_id).all()
-        if f.status in REPORTABLE
+        if f.status in REPORTABLE and f.target_id not in archived  # exclude removed targets
     ]
     findings.sort(key=lambda f: (_SEV_ORDER.get(f.severity, 9), f.title))
 

@@ -84,6 +84,14 @@ export default function Workspace() {
   const viewTask = (tid: string) => { setSelTask(tid); setTab("tasks"); };
   const viewFinding = (fid: string) => { setSelTask(undefined); setSelNode(null); api.finding(fid).then((f) => { setSelFinding(f); setSelGraphId(f.id); }); };
   const bulk = async (ids: string[], status: string) => { await api.bulkStatus(ids, status); await load(); };
+  const removeTarget = async (t: TargetNode) => {
+    if (!projectId) return;
+    if (!window.confirm(`Remove "${t.name}" from the project? Its nodes and findings will be hidden `
+      + `(not deleted) — re-add the same file to restore them.`)) return;
+    await api.removeTarget(projectId, t.id);
+    if (selGraphId === t.id) { setSelGraphId(undefined); setSelNode(null); setSelFinding(null); }
+    await load();
+  };
   const clearTasks = async () => { if (projectId) { await api.clearTasks(projectId); setSelTask(undefined); await load(); } };
 
   const onGraphSelect = (id: string, type: string) => {
@@ -136,6 +144,10 @@ export default function Workspace() {
           </div>
           <div className="mt">{t.kind}{t.arch ? " · " + t.arch : ""}</div>
           <Launcher allowed={allowed} onChoose={(type) => setLaunchFor({ target: t, type })} />
+          <button className="btn sm icon ghost trash" title="Remove target (hides its nodes/findings)"
+                  onClick={(e) => { e.stopPropagation(); removeTarget(t); }}>
+            <Icon name="x" size={12} />
+          </button>
         </div>
         {childrenOf(t.id).map((c) => TreeRow(c, true))}
       </div>

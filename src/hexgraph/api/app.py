@@ -210,6 +210,13 @@ def create_app() -> FastAPI:
                 if recon and not docker_available():
                     raise HTTPException(400, "Docker is required to analyze a target. Start Docker, "
                                              "or upload with recon=false to register bytes only.")
+                # Re-adding bytes that were previously removed restores the archived
+                # target (and its findings) instead of creating a duplicate.
+                from hexgraph.engine.targets import restore_matching
+
+                restored = restore_matching(s, project, tmp)
+                if restored is not None:
+                    return {"target_id": restored.id, "name": restored.name, "restored": True}
                 target = ingest_file(s, project, tmp, name=name or file.filename)
                 result = {"target_id": target.id, "name": target.name, "recon": recon}
                 if recon:
@@ -219,6 +226,33 @@ def create_app() -> FastAPI:
                 return result
         finally:
             os.unlink(tmp)
+
+    @app.delete("/api/projects/{project_id}/targets/{target_id}")
+    def api_remove_target(project_id: str, target_id: str):
+        """Soft-remove a target + its subtree (nodes/findings hidden, not deleted).
+        Re-adding the same bytes restores them."""
+        from hexgraph.engine.targets import archive_target
+
+        with session_scope() as s:
+            if s.get(Project, project_id) is None:
+                raise HTTPException(404, "project not found")
+            try:
+                n = archive_target(s, project_id, target_id)
+            except ValueError as exc:
+                raise HTTPException(404, str(exc))
+            return {"archived": n}
+
+    @app.post("/api/projects/{project_id}/targets/{target_id}/restore")
+    def api_restore_target(project_id: str, target_id: str):
+        from hexgraph.engine.targets import restore_target
+
+        with session_scope() as s:
+            if s.get(Project, project_id) is None:
+                raise HTTPException(404, "project not found")
+            try:
+                return {"restored": restore_target(s, project_id, target_id)}
+            except ValueError as exc:
+                raise HTTPException(404, str(exc))
 
     @app.post("/api/projects/{project_id}/nodes")
     def api_create_node(project_id: str, body: NodeCreate):
@@ -256,8 +290,14 @@ def create_app() -> FastAPI:
             project = s.get(Project, project_id)
             if project is None:
                 raise HTTPException(404, "project not found")
-            targets = s.query(Target).filter(Target.project_id == project_id).all()
-            findings = s.query(Finding).filter(Finding.project_id == project_id).all()
+            targets = s.query(Target).filter(
+                Target.project_id == project_id, Target.archived.is_(False)
+            ).all()
+            live_ids = {t.id for t in targets}
+            findings = [
+                f for f in s.query(Finding).filter(Finding.project_id == project_id).all()
+                if f.target_id in live_ids  # hide findings under archived (removed) targets
+            ]
             tasks = s.query(Task).filter(Task.project_id == project_id).all()
             total_cost = round(sum(t.cost_estimate or 0.0 for t in tasks), 6)
             cost_source = "mock" if project.llm_backend.value == "mock" else project.llm_backend.value

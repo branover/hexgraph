@@ -135,6 +135,10 @@ class Target(Base):
     format: Mapped[str | None] = mapped_column(String(100), nullable=True)
     arch: Mapped[str | None] = mapped_column(String(100), nullable=True)
     metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # Soft removal: archived targets (and their nodes/findings) are hidden from the
+    # graph/lists but never deleted (durable knowledge). Re-adding the same bytes
+    # restores them. Cascades down the parent_id subtree.
+    archived: Mapped[bool] = mapped_column(default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     project: Mapped[Project] = relationship(back_populates="targets")

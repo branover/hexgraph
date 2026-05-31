@@ -88,6 +88,11 @@ export const api = {
   runsDiff: (run_a: string, run_b: string) => postJSON<RunDiff>("/api/runs/diff", { run_a, run_b }),
   // Authoring (no CLI required)
   createProject: (name: string, backend: string) => postJSON<Project>("/api/projects", { name, backend }),
+  async removeTarget(pid: string, tid: string): Promise<{ archived: number }> {
+    const r = await fetch(`/api/projects/${pid}/targets/${tid}`, { method: "DELETE" });
+    if (!r.ok) throw new Error(`${r.status}`);
+    return r.json();
+  },
   createNode: (pid: string, body: any) => postJSON<any>(`/api/projects/${pid}/nodes`, body),
   createEdge: (pid: string, body: any) => postJSON<any>(`/api/projects/${pid}/edges`, body),
   createAnnotation: (pid: string, body: any) => postJSON<any>(`/api/projects/${pid}/annotations`, body),
