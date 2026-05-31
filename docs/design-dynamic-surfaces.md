@@ -86,9 +86,9 @@ from a `features.*` toggle — there is no settable "tier" knob an agent could c
 | Tier | Enabled by | Permits |
 |---|---|---|
 | **0 — static-only** (default) | — | no exec, no network |
-| **1 — sandboxed-exec** (today's dynamic) | `features.poc` / `features.fuzzing` | exec; still `--network none` |
-| **2 — rehosted-network** | `features.rehost` | exec + network **to the emulated subnet HexGraph itself minted** — the scope is *computed*, so a routable public destination is structurally inexpressible |
-| **3 — live-remote-target** | `features.live` | **no local exec**; egress only to a user-registered device `host:port` allowlist; mandatory egress **audit log** + explicit confirmation |
+| **1 — sandboxed-exec** (today's dynamic) | `features.poc.enabled` / `features.fuzzing.enabled` | exec; still `--network none` |
+| **2 — rehosted-network** | `features.rehost.enabled` | exec + network **to the emulated subnet HexGraph itself minted** — the scope is *computed*, so a routable public destination is structurally inexpressible |
+| **3 — live-remote-target** | `features.live.enabled` | **no local exec**; egress only to a user-registered device `host:port` allowlist; mandatory egress **audit log** + explicit confirmation |
 
 **Invariants that never relax, at any tier** (enforced *below* the policy so no tier can opt
 out):
