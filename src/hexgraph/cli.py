@@ -100,6 +100,34 @@ def _cmd_targets(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_rehost(args: argparse.Namespace) -> int:
+    from hexgraph.engine.rehost import RehostError, rehost_firmware
+    from hexgraph.policy import PolicyViolation
+
+    init_db()
+    with session_scope() as session:
+        target = session.get(Target, args.target)
+        if target is None:
+            print(f"error: target {args.target} not found", file=sys.stderr)
+            return 1
+        project = session.get(Project, target.project_id)
+        try:
+            surface = rehost_firmware(session, project, target, brand=args.brand)
+        except PolicyViolation as exc:
+            print(f"error: {exc}\n(enable it with: hexgraph config set features.rehost.enabled true)",
+                  file=sys.stderr)
+            return 1
+        except RehostError as exc:
+            print(f"rehost failed: {exc}", file=sys.stderr)
+            return 1
+        ch = (surface.metadata_json or {}).get("channel", {})
+        print(f"rehosted → surface {surface.id} at {ch.get('base_url')} "
+              f"(container {ch.get('rehost', {}).get('container')})")
+        print("assess it: enable features.network, then run_task(surface, 'surface_recon'/'web_recon') "
+              "or http_request / verify_poc")
+    return 0
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     from hexgraph.engine.tasks import create_task
     from hexgraph.engine.worker import run_task_sync
@@ -311,6 +339,11 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--function", help="focus function (templated into the prompt/mock)")
     pr.add_argument("--mock-scenario", dest="mock_scenario")
     pr.set_defaults(func=_cmd_run)
+
+    prh = sub.add_parser("rehost", help="boot a firmware target under full-system emulation (FirmAE) and register its live web surface")
+    prh.add_argument("target", help="firmware target id")
+    prh.add_argument("--brand", help="device brand hint for FirmAE (default: auto)")
+    prh.set_defaults(func=_cmd_rehost)
 
     pf = sub.add_parser("findings", help="list findings in a project")
     pf.add_argument("project")

@@ -83,6 +83,17 @@ DEFAULTS: dict[str, Any] = {
             "enabled": False,
             "timeout": 30,
         },
+        "rehost": {
+            # OFF by default. Enabling this permits FULL-SYSTEM emulation of a
+            # firmware image (boot its kernel + userland + web server under
+            # qemu-system via FirmAE) so its live web surface can be assessed. The
+            # strongest execution capability, so it has its own gate. Assessing the
+            # booted device still needs features.network (it's a private-IP surface).
+            # (docs/design-rehosting.md)
+            "enabled": False,
+            "image": "hexgraph-firmae:latest",  # the FirmAE Docker image to drive
+            "timeout": 600,                       # boot wall-clock budget (s)
+        },
     },
 }
 
@@ -115,6 +126,9 @@ ALLOWED: dict[str, tuple[Any, set | None]] = {
     "features.agent.timeout": (int, None),
     "features.network.enabled": (bool, None),
     "features.network.timeout": (int, None),
+    "features.rehost.enabled": (bool, None),
+    "features.rehost.image": (str, None),
+    "features.rehost.timeout": (int, None),
 }
 
 
