@@ -2,10 +2,12 @@
 
 An intentionally-vulnerable "router admin" web service in a container — a **real,
 runnable target** for HexGraph's dynamic web-surface analysis (Phase 2 `web_recon`
-liveness, and the upcoming Phase 3 web PoC). It binds to a **local address only** and
-exercises the two bug classes the dynamic track is built for.
+liveness, and the upcoming Phase 3 web PoC). It is reachable only on the **private
+docker bridge** (or host loopback when published) and exercises the two bug classes the
+dynamic track is built for.
 
-⚠ **Deliberately insecure. Run only locally, in the container.**
+⚠ **Deliberately insecure. Run only locally, in the container; never publish it to a
+public host port — publish to `127.0.0.1` only.**
 
 ## Run it
 ```bash

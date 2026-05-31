@@ -2,7 +2,8 @@
 """Vulnrouter — an intentionally-vulnerable "router admin" web service, for testing
 HexGraph's dynamic web-surface analysis (recon / PoC) against a REAL, runnable target.
 
-⚠ DELIBERATELY INSECURE. Runs only in the test container, bound to a local address.
+⚠ DELIBERATELY INSECURE. Runs only inside the disposable test container; reachable on
+the private docker bridge. Never publish it to a public host port (publish to 127.0.0.1).
 Two planted bugs mirroring the cases HexGraph targets:
 
   • Auth bypass (CWE-287/697): /api/login compares only the FIRST len(token) bytes of
