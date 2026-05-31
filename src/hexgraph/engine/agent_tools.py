@@ -38,6 +38,10 @@ _STATIC_SPECS = [
              {"type": "object", "properties": {"function": {"type": "string"}}, "required": ["function"]}),
     ToolSpec("disassemble", "Disassemble one function (when pseudo-C is unclear).",
              {"type": "object", "properties": {"function": {"type": "string"}}, "required": ["function"]}),
+    ToolSpec("xrefs", "Find which functions CALL a given symbol/sink (e.g. system, popen, "
+             "strcpy) and where. With no symbol, map every dangerous sink in the binary. Use "
+             "this to trace from a dangerous sink back to the code that reaches it.",
+             {"type": "object", "properties": {"symbol": {"type": "string"}}}),
     ToolSpec("read_imports", "Return the target's imported symbols, linked libraries, and mitigation flags.",
              {"type": "object", "properties": {}}),
     ToolSpec("list_strings", "List notable strings in the target, optionally filtered by a substring.",
@@ -166,11 +170,51 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
             addr = f" @ {focus['address']}" if focus.get("address") else ""
             return _clip(f"// {fn}{addr} (callees: {', '.join(focus.get('callees', []) or [])})\n"
                          f"{focus.get('pseudocode', '')}")
+        if name == "xrefs":
+            return _xrefs(ctx, args.get("symbol"))
         if name == "fuzz_function":
             return _fuzz(ctx, args)
         return f"error: unknown tool {name!r}"
     except Exception as exc:  # noqa: BLE001 — tools never crash the task
         return f"error running {name}: {exc}"
+
+
+def _xrefs(ctx: ToolContext, symbol: str | None) -> str:
+    """Map call sites of a sink (or all dangerous sinks) — the callers that reach it."""
+    key = f"xrefs:{symbol or '*'}"
+    if key in ctx.cache:
+        return ctx.cache[key]
+    from hexgraph.sandbox.executor import get_executor
+    from hexgraph.sandbox.runner import docker_available
+
+    if not docker_available():
+        return "xrefs unavailable (Docker/sandbox not running)"
+    try:
+        out = get_executor().run_json_probe(
+            "xrefs_probe.py", ctx.target.path,
+            extra_args=[symbol] if symbol else None,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return f"xrefs failed: {exc}"
+    if symbol:
+        callers = out.get("callers") or []
+        if not callers:
+            text = f"no callers of {symbol!r} found (not imported/referenced, or unresolved)"
+        else:
+            text = f"callers of {symbol}:\n" + "\n".join(
+                f"- {c['caller']} (@ {c.get('caller_addr')}) calls at {c.get('at')}" for c in callers)
+    else:
+        sinks = out.get("sinks") or {}
+        if not sinks:
+            text = "no dangerous sinks (system/popen/strcpy/sprintf/…) referenced in this target"
+        else:
+            lines = []
+            for s, refs in sinks.items():
+                callers = ", ".join(sorted({c["caller"] for c in refs}))
+                lines.append(f"- {s}: reached from {callers}")
+            text = "dangerous sinks and who reaches them:\n" + "\n".join(lines)
+    ctx.cache[key] = _clip(text)
+    return ctx.cache[key]
 
 
 def _fuzz(ctx: ToolContext, args: dict) -> str:

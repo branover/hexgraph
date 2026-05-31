@@ -85,6 +85,13 @@ def list_strings(target_id: str, pattern: str | None = None) -> str:
     return _tool(target_id, "list_strings", {"pattern": pattern} if pattern else {})
 
 
+def xrefs(target_id: str, symbol: str | None = None) -> str:
+    """Find which functions CALL a symbol/sink and where (cross-references). With no
+    `symbol`, map every dangerous sink (system/popen/strcpy/sprintf/…) and who reaches
+    it — the fast way to trace from a sink back to the code that can drive it."""
+    return _tool(target_id, "xrefs", {"symbol": symbol} if symbol else {})
+
+
 def _node_dict(n: Node) -> dict:
     return {"id": n.id, "node_type": n.node_type, "name": n.name, "fq_name": n.fq_name,
             "address": n.address, "target_id": n.target_id, "attrs": n.attrs_json or {}}
@@ -485,6 +492,8 @@ _CATALOG = [
      {"type": "object", "properties": {"target_id": {"type": "string"}}, "required": ["target_id"]}),
     ("read", "list_strings", list_strings, "Notable strings in a target (optional substring filter).",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "pattern": {"type": "string"}}, "required": ["target_id"]}),
+    ("read", "xrefs", xrefs, "Cross-references: which functions CALL a symbol/sink and where (omit `symbol` to map all dangerous sinks). Trace a sink back to the code that reaches it.",
+     {"type": "object", "properties": {"target_id": {"type": "string"}, "symbol": {"type": "string"}}, "required": ["target_id"]}),
     ("read", "search", search, "Search the project graph (findings + functions).",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "q": {"type": "string"}}, "required": ["project_id", "q"]}),
     ("read", "list_findings", list_findings, "Existing findings in a project (with finding_type + verified flag).",
@@ -509,8 +518,8 @@ _CATALOG = [
      {"type": "object", "properties": {"project_id": {"type": "string"}, "statement": {"type": "string"}, "rationale": {"type": "string"}, "target_id": {"type": "string"}}, "required": ["project_id", "statement"]}),
     ("write", "link_evidence", link_evidence, "Attach a finding to a hypothesis as supporting/refuting evidence (recomputes the hypothesis status). relation = supports|refutes. This is how you confirm a hypothesis.",
      {"type": "object", "properties": {"hypothesis_id": {"type": "string"}, "finding_id": {"type": "string"}, "relation": {"type": "string"}}, "required": ["hypothesis_id", "finding_id", "relation"]}),
-    ("write", "set_hypothesis_status", set_hypothesis_status, "Pin a hypothesis verdict: confirmed|rejected|open|supported|refuted.",
-     {"type": "object", "properties": {"hypothesis_id": {"type": "string"}, "status": {"type": "string"}}, "required": ["hypothesis_id", "status"]}),
+    ("write", "set_hypothesis_status", set_hypothesis_status, "Pin a hypothesis verdict: confirmed|rejected|open|supported|refuted. Pass `rationale` to record why.",
+     {"type": "object", "properties": {"hypothesis_id": {"type": "string"}, "status": {"type": "string"}, "rationale": {"type": "string"}}, "required": ["hypothesis_id", "status"]}),
     ("write", "annotate", annotate, "Attach a note/tag/rename/type_decl to a graph entity (agent proposal, pending analyst approval). For parameters/explanations on a function, prefer create_node attrs.",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "node_kind": {"type": "string"}, "node_id": {"type": "string"}, "kind": {"type": "string"}, "value": {"type": "string"}}, "required": ["project_id", "node_kind", "node_id", "kind", "value"]}),
     ("write", "merge_duplicates", merge_duplicates, "Collapse duplicate binaries/nodes (e.g. sym.foo == foo) in a project, preserving all edges/findings.",

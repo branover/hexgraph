@@ -13,6 +13,17 @@ def test_r2_decompiler_focus_function(sandbox, monkeypatch):
     assert out["focus"]["pseudocode"]  # non-empty pseudo-C/disasm
 
 
+def test_xrefs_finds_sink_callers(sandbox):
+    # The cross-reference accelerator: vuln_httpd's only strcpy is reached from
+    # cgi_handler. Both the targeted query and the default sink sweep must show it.
+    out = sandbox.run_json_probe("xrefs_probe.py", fixture_path("vuln_httpd"), extra_args=["strcpy"])
+    callers = {c["caller"].lstrip("sym.") for c in out["callers"]}
+    assert "cgi_handler" in callers
+
+    sweep = sandbox.run_json_probe("xrefs_probe.py", fixture_path("vuln_httpd"))
+    assert "strcpy" in sweep["sinks"]
+
+
 def test_get_decompiler_default_is_r2(hg_home):
     # hg_home isolates HEXGRAPH_HOME so this is hermetic regardless of the
     # developer's real ~/.hexgraph/settings.json (Ghidra may be enabled there).

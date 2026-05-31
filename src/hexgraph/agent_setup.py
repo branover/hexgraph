@@ -56,6 +56,9 @@ up unfinished threads, follow related findings to siblings, and target functions
 that haven't been analyzed yet.
 
 ## 2. Investigate (all sandboxed)
+- `xrefs` (no symbol) maps the dangerous sinks (system/popen/strcpy/sprintf/…) and
+  who reaches them — start there to find the attack surface fast. `xrefs <sink>`
+  lists exactly which functions call a given sink and where.
 - `list_functions`, then `decompile_function` / `disassemble` the suspicious ones;
   follow callees and `list_strings`. Trace untrusted input → dangerous sink.
 - Go deeper with `run_task` (`static_analysis`, `harness_generation`, `fuzzing`),
