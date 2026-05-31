@@ -236,6 +236,19 @@ def _cmd_config(args: argparse.Namespace) -> int:
     return 1
 
 
+def _cmd_mcp(args: argparse.Namespace) -> int:
+    if args._mcpcmd == "install":
+        from hexgraph.agent_setup import install_help
+
+        print(install_help(args.agent))
+        return 0
+    # default: serve the MCP server on stdio
+    from hexgraph.mcp_server import serve_stdio
+
+    serve_stdio()
+    return 0
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     from hexgraph.api.app import run_server
 
@@ -307,6 +320,13 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--host", default=None)
     ps.add_argument("--port", type=int, default=None)
     ps.set_defaults(func=_cmd_serve)
+
+    pm = sub.add_parser("mcp", help="MCP server for coding agents (stdio); `mcp install` prints setup")
+    msub = pm.add_subparsers(dest="_mcpcmd")  # no subcommand → serve
+    mi = msub.add_parser("install", help="print how to register HexGraph with claude/codex/gemini")
+    mi.add_argument("--agent", choices=["claude", "codex", "gemini"], default=None)
+    mi.set_defaults(func=_cmd_mcp)
+    pm.set_defaults(func=_cmd_mcp, _mcpcmd=None)
 
     return p
 

@@ -1,0 +1,100 @@
+"""Connect a coding agent (Claude Code / Codex / gemini-cli) to HexGraph's MCP
+server, and the VR skill that teaches it the workflow + the hostile-target rules.
+
+`hexgraph mcp install [--agent ...]` prints the registration steps; it never edits
+the user's agent config silently.
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+
+# The agent's standing instructions. Whether HexGraph launches the agent
+# (delegate task) or the user drives it themselves, this is the context that makes
+# it use HexGraph safely and productively.
+SKILL = """\
+# HexGraph vulnerability-research agent
+
+You are doing vulnerability research through HexGraph, which exposes a sandboxed
+workbench over MCP (server name: `hexgraph`). Use ONLY the `hexgraph` tools to
+touch the target — they run every tool inside an isolated, network-less sandbox.
+
+## Hard rules (non-negotiable)
+- **Never execute, unpack, or open the target binary yourself.** No Bash/shell on
+  the target, no downloading it, no running it. The bytes are hostile. All target
+  handling goes through `hexgraph` tools (decompile/disassemble/strings/imports,
+  and `run_task` for recon/harness/fuzz).
+- **Never exfiltrate target bytes** off the machine.
+- Record results only via `record_finding` (it validates the schema). Do not
+  invent findings you can't back with tool output.
+
+## Workflow
+1. `list_targets(project_id)` → pick the target. `target_facts` / `read_imports`
+   for orientation; `list_functions` to see the attack surface.
+2. For suspicious functions: `decompile_function` (and `disassemble` if needed).
+   Follow callees. Look for memory-safety, injection, unsafe parsing, hardcoded
+   secrets, weak auth.
+3. To go deeper, `run_task` (e.g. `static_analysis`, `harness_generation`, then
+   `fuzzing` to confirm a crash) — HexGraph runs these in the sandbox.
+4. Check `list_findings(project_id)` first so you don't duplicate known issues.
+5. `record_finding(project_id, target_id, finding, task_id=<provided>)` for each
+   credible issue. Include evidence: function, sink, a decompiled snippet, and
+   clear reasoning. Severity/confidence honest.
+
+A finding object looks like:
+{"title": "...", "severity": "critical|high|medium|low|info",
+ "confidence": "high|medium|low", "category": "memory-safety|command-injection|...",
+ "summary": "...", "reasoning": "...",
+ "evidence": {"function": "...", "sink": "...", "decompiled_snippet": "..."}}
+"""
+
+
+def mcp_command() -> tuple[str, list[str]]:
+    """How to launch the MCP server. Prefer the installed entrypoint."""
+    if shutil.which("hexgraph"):
+        return "hexgraph", ["mcp"]
+    return "python", ["-m", "hexgraph.cli", "mcp"]
+
+
+def mcp_server_entry() -> dict:
+    cmd, args = mcp_command()
+    return {"command": cmd, "args": args}
+
+
+AGENTS = ("claude", "codex", "gemini")
+
+
+def install_help(agent: str | None = None) -> str:
+    """Human-readable registration steps for one agent (or all)."""
+    entry = mcp_server_entry()
+    cmd_str = entry["command"] + " " + " ".join(entry["args"])
+    blocks = []
+
+    if agent in (None, "claude"):
+        blocks.append(
+            "Claude Code:\n"
+            f"  claude mcp add hexgraph -- {cmd_str}\n"
+            "  # or add to .mcp.json / ~/.claude.json:\n"
+            "  " + json.dumps({"mcpServers": {"hexgraph": entry}}) + "\n"
+            "  Restrict it to HexGraph + read-only tools when delegating:\n"
+            '    --allowedTools "mcp__hexgraph Read Glob Grep" --disallowedTools "Bash"'
+        )
+    if agent in (None, "codex"):
+        blocks.append(
+            "Codex CLI (~/.codex/config.toml):\n"
+            "  [mcp_servers.hexgraph]\n"
+            f"  command = {json.dumps(entry['command'])}\n"
+            f"  args = {json.dumps(entry['args'])}"
+        )
+    if agent in (None, "gemini"):
+        blocks.append(
+            "gemini-cli (~/.gemini/settings.json):\n"
+            "  " + json.dumps({"mcpServers": {"hexgraph": entry}})
+        )
+
+    if not blocks:
+        return f"unknown agent {agent!r}; choose one of {AGENTS}"
+    header = ("Register HexGraph as an MCP server with your coding agent. Then point\n"
+              "the agent at a project and let it use the `hexgraph` tools.\n\n")
+    return header + "\n\n".join(blocks)
