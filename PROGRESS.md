@@ -31,6 +31,16 @@ then run the resume verifier, then continue at the next unchecked task.
   the new types; modernised selects + pill toggle switches; endpoint/param hand-authoring; search ranks
   nodes first. Deferred items (egress-audit view, schema-driven edge-attr form, a11y) tracked in
   `docs/ui-backlog.md`. A committed vulnerable web target (`tests/fixtures/vulnrouter/`) backs live testing.
+  **Firmware rehosting (Phase 4) — boot a REAL firmware's web UI:** `engine/rehost.py` Rehoster seam
+  (`get_rehoster()`) + `FirmAERehoster` (drives FirmAE in a privileged Docker container behind a stable
+  `HEXGRAPH_REHOST` marker contract; `docker/firmae/`), gated by **`features.rehost`** (`policy.assert_allows_rehost`).
+  `rehost_firmware()` boots the image and registers its live web server as a `web_app` surface CHILD of the
+  firmware; the probe joins the emulator container's netns (`run_probe(net_container=…)`) to reach the device's
+  private IP, then the existing surface_recon/web_recon/http_request/web-`verify_poc` flow assesses it
+  (needs `features.network`). MCP `rehost` tool, `hexgraph rehost` CLI, `make firmae-build` + `make iotgoat`,
+  `docs/engagement-rehosted.md`, SKILL §2b. HexGraph integration is fully unit-tested (`test_rehost.py`, fake
+  rehoster + netns plumbing); the FirmAE image build + live boot is the operator's heavy/best-effort step
+  (IoTGoat is the reference image). cookie-jar `session` handle on http_request for cross-call auth flows.
   **Phase 3 (dynamic web assessment) DONE — live targets are solvable end-to-end:** `http_probe.py` sends
   crafted request(s) from the sandbox (single-request for the `http_request` MCP tool; multi-step+oracle
   with a CookieJar for web PoCs, so auth flows work). `surfaces.run_http_request`/`run_web_poc` share an

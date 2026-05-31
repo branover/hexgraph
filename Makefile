@@ -9,7 +9,7 @@ PY ?= .venv/bin/python
 PIP ?= .venv/bin/pip
 export HEXGRAPH_LLM_BACKEND ?= mock
 
-.PHONY: help setup install venv ui sandbox-build test demo test-live fixtures serve vulnrouter clean
+.PHONY: help setup install venv ui sandbox-build test demo test-live fixtures serve vulnrouter firmae-build iotgoat clean
 
 help: ## Show this help
 	@echo "HexGraph — get started with:  make setup  &&  make serve"
@@ -46,6 +46,19 @@ serve: ## Start the loopback-only API/UI (http://127.0.0.1:8765)
 
 vulnrouter: ## Stand up the live vulnrouter web target + a project pointed at it (Claude engagement)
 	$(PY) scripts/vulnrouter_engagement.py
+
+firmae-build: ## Build the FirmAE rehosting image (heavy; needs privileged Docker + /dev/net/tun to run)
+	docker build -f docker/firmae/Dockerfile -t hexgraph-firmae:latest .
+
+IOTGOAT_URL ?= https://github.com/OWASP/IoTGoat/releases/download/v1.0/IoTGoat-rpi-2.img.gz
+iotgoat: ## Fetch IoTGoat (FW=<path> to use your own), rehost it, register its live web surface
+	@if [ -z "$(FW)" ]; then \
+		echo "downloading IoTGoat → /tmp/IoTGoat.img.gz (override with FW=<path>)"; \
+		curl -fSL "$(IOTGOAT_URL)" -o /tmp/IoTGoat.img.gz && gunzip -f /tmp/IoTGoat.img.gz; \
+		$(PY) scripts/rehost_engagement.py /tmp/IoTGoat.img --name "IoTGoat"; \
+	else \
+		$(PY) scripts/rehost_engagement.py "$(FW)" --name "IoTGoat"; \
+	fi
 
 test: ## Run the test suite against the mock backend (offline)
 	$(PY) -m pytest -q

@@ -44,6 +44,7 @@ class AnalysisPolicy:
     static_only: bool = True
     allow_execution: bool = False  # never run the target (v1)
     allow_network: bool = False    # sandboxes run --network none unless this is on
+    allow_rehost: bool = False     # full-system emulation of the firmware (features.rehost)
     tier: int = TIER_STATIC_ONLY
     # The bounded egress scope, when one applies. None == --network none. The scope is
     # built per-target (local_network_scope); the policy only authorizes "network at all".
@@ -52,18 +53,19 @@ class AnalysisPolicy:
 
 def current_policy() -> AnalysisPolicy:
     # Static-only by default. Enabling PoC/fuzzing flips on execution; enabling
-    # `features.network` flips on bounded egress (the local-network tier). This is the
-    # single, explicit place the static-only invariant is relaxed; a settings error
-    # fails closed at tier 0.
+    # `features.network` flips on bounded egress (the local-network tier); enabling
+    # `features.rehost` permits full-system emulation. This is the single, explicit place
+    # the static-only invariant is relaxed; a settings error fails closed at tier 0.
     try:
         from hexgraph import settings
 
         exec_on = bool(settings.get("features.fuzzing.enabled") or settings.get("features.poc.enabled"))
         net_on = bool(settings.get("features.network.enabled"))
-        if exec_on or net_on:
+        rehost_on = bool(settings.get("features.rehost.enabled"))
+        if exec_on or net_on or rehost_on:
             tier = TIER_LOCAL_NETWORK if net_on else TIER_SANDBOXED_EXEC
             return AnalysisPolicy(static_only=False, allow_execution=exec_on,
-                                  allow_network=net_on, tier=tier)
+                                  allow_network=net_on, allow_rehost=rehost_on, tier=tier)
     except Exception:  # noqa: BLE001 — a settings problem must never widen the policy
         pass
     return AnalysisPolicy()
@@ -73,6 +75,16 @@ def assert_allows_execution(policy: AnalysisPolicy | None = None) -> None:
     policy = policy or current_policy()
     if not policy.allow_execution:
         raise PolicyViolation("analysis policy is static-only; executing the target is not permitted")
+
+
+def assert_allows_rehost(policy: AnalysisPolicy | None = None) -> None:
+    """Gate full-system firmware emulation (booting the whole image). Opt-in via
+    features.rehost — the strongest execution capability, so it has its own gate."""
+    policy = policy or current_policy()
+    if not policy.allow_rehost:
+        raise PolicyViolation(
+            "firmware rehosting is not permitted (enable features.rehost to boot the firmware "
+            "under full-system emulation)")
 
 
 def egress_scope(policy: AnalysisPolicy | None = None) -> NetworkScope | None:

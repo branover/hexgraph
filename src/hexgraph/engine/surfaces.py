@@ -24,6 +24,12 @@ def _channel(target: Target) -> dict:
     return (target.metadata_json or {}).get("channel") or {}
 
 
+def _rehost_container(target: Target) -> str | None:
+    """If this surface is a rehosted firmware, the FirmAE container backing it — the probe
+    joins its network namespace to reach the emulated device's (private) IP."""
+    return (_channel(target).get("rehost") or {}).get("container")
+
+
 def register_web_surface(
     session: Session, project: Project, base_url: str, *,
     name: str | None = None, parent: Target | None = None,
@@ -206,7 +212,8 @@ def run_http_request(session: Session, project: Project, target: Target, *, requ
 
     channel = {"base_url": base_url, "allow": sorted(scope.allow), "timeout": timeout,
                "request": req}
-    result = runner.run_channel_probe("http_probe.py", channel=channel)
+    result = runner.run_channel_probe("http_probe.py", channel=channel,
+                                      net_container=_rehost_container(target))
     resp = result.get("response") or result
     if jar is not None and isinstance(resp, dict):
         jar.update(_parse_set_cookie(resp.get("set_cookie") or []))
@@ -229,7 +236,8 @@ def run_web_poc(session: Session, project: Project, target: Target, *, steps: li
     timeout = int(settings.get("features.network.timeout", 30) or 30)
     channel = {"base_url": base_url, "allow": sorted(scope.allow), "timeout": timeout,
                "steps": steps, "oracle": oracle}
-    return runner.run_channel_probe("http_probe.py", channel=channel)
+    return runner.run_channel_probe("http_probe.py", channel=channel,
+                                    net_container=_rehost_container(target))
 
 
 def run_web_recon(session: Session, project: Project, target: Target, task=None, runner=None) -> dict:
@@ -269,7 +277,8 @@ def run_web_recon(session: Session, project: Project, target: Target, task=None,
                "endpoints": [{"method": e.get("method", "GET"), "path": e.get("path", "/")}
                              for e in endpoints],
                "timeout": timeout}
-    result = runner.run_channel_probe("surface_probe.py", channel=channel)
+    result = runner.run_channel_probe("surface_probe.py", channel=channel,
+                                      net_container=_rehost_container(target))
 
     alive = 0
     for pr in result.get("probes", []):

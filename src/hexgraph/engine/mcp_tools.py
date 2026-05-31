@@ -644,6 +644,31 @@ def register_surface(project_id: str, base_url: str, name: str | None = None,
                 "endpoints": len((t.metadata_json or {}).get("endpoints", []))}
 
 
+def rehost(target_id: str, brand: str | None = None) -> dict:
+    """Boot a FIRMWARE target under full-system emulation (FirmAE) and register its live
+    web server as a `web_app` surface child — so you can then assess the running device
+    (surface_recon / web_recon / http_request / verify_poc), fused to the firmware's static
+    graph. Returns {surface_id, base_url}. Requires features.rehost (to boot) — and
+    features.network to then talk to it. Heavy + best-effort: many images don't boot
+    cleanly; the error says so when emulation fails."""
+    from hexgraph.engine.rehost import RehostError, rehost_firmware
+    from hexgraph.policy import PolicyViolation
+
+    with session_scope() as s:
+        t = s.get(Target, target_id)
+        if t is None:
+            return {"error": "target not found"}
+        try:
+            surface = rehost_firmware(s, s.get(Project, t.project_id), t, brand=brand)
+        except PolicyViolation:
+            return {"error": "rehosting not permitted — enable features.rehost in Settings"}
+        except RehostError as exc:
+            return {"error": str(exc)}
+        ch = (surface.metadata_json or {}).get("channel", {})
+        return {"surface_id": surface.id, "name": surface.name, "base_url": ch.get("base_url"),
+                "rehost": ch.get("rehost")}
+
+
 def http_request(target_id: str, method: str, path: str, params: dict | None = None,
                  headers: dict | None = None, body=None, json_body: bool = False,
                  session: str | None = None) -> dict:
@@ -907,6 +932,8 @@ _CATALOG = [
      {"type": "object", "properties": {"path": {"type": "string"}, "name": {"type": "string"}, "project_id": {"type": "string"}}, "required": ["path"]}),
     ("run", "run_task", run_task, "Run a HexGraph task and return its findings. Types: recon, static_analysis, harness_generation, fuzzing, poc, surface_recon (offline route->handler map), web_recon (live liveness probe of a web surface, needs features.network).",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "type": {"type": "string"}, "objective": {"type": "string"}, "params": {"type": "object"}}, "required": ["target_id", "type"]}),
+    ("run", "rehost", rehost, "Boot a FIRMWARE target under full-system emulation (FirmAE) and register its live web server as a web_app surface child — then assess the running device with surface_recon/web_recon/http_request/verify_poc, fused to the firmware's static graph. Requires features.rehost (boot) + features.network (assess). Heavy + best-effort.",
+     {"type": "object", "properties": {"target_id": {"type": "string"}, "brand": {"type": "string"}}, "required": ["target_id"]}),
     ("run", "register_surface", register_surface, "Register a WEB attack surface (web_app target via an HTTP Channel, no bytes); pass an optional offline route spec, then run_task(surface_recon) to map endpoints/params + routes_to→handler edges. Offline (no egress).",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "base_url": {"type": "string"}, "name": {"type": "string"}, "endpoints": {"type": "array"}}, "required": ["project_id", "base_url"]}),
 ]
