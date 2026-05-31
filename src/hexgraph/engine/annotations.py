@@ -53,6 +53,27 @@ def create_annotation(
     return ann
 
 
+def auto_note(
+    session: Session, project_id: str, *, node_kind: str, node_id: str, value: str, origin: str = "agent",
+) -> Annotation | None:
+    """Auto-populate a node's context from an LLM task (HITL: lands `proposed`).
+    De-duplicated — an identical note on the same node is not re-added (so re-runs
+    don't spam). Returns the existing/created annotation, or None for empty input."""
+    value = (value or "").strip()
+    if not value:
+        return None
+    existing = (
+        session.query(Annotation)
+        .filter(Annotation.project_id == project_id, Annotation.node_kind == node_kind,
+                Annotation.node_id == node_id, Annotation.kind == "note", Annotation.value == value)
+        .first()
+    )
+    if existing is not None:
+        return existing
+    return create_annotation(session, project_id, node_kind=node_kind, node_id=node_id,
+                             kind="note", value=value, origin=origin)
+
+
 def set_status(session: Session, annotation_id: str, status: str) -> Annotation:
     if status not in ("proposed", "confirmed", "rejected"):
         raise AnnotationError(f"invalid status {status!r}")

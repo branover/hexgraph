@@ -56,6 +56,14 @@ def persist_finding(
             type=EdgeType.about, origin="derived", confidence=1.0,
             attrs={"role": "primary"},
         )
+        # Auto-populate the node with context from the LLM call (agent-proposed
+        # note, deduped). Gives freshly-materialized nodes some description; the
+        # analyst confirms it before it feeds back into context as authoritative.
+        from hexgraph.engine.annotations import auto_note
+
+        sink = f" [sink: {finding.evidence.sink}]" if finding.evidence.sink else ""
+        auto_note(session, project_id, node_kind="node", node_id=node.id,
+                  value=f"[{finding.severity}] {finding.category}: {finding.title}{sink}")
     else:
         add_edge(
             session, project_id=project_id,
