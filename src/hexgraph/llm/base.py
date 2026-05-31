@@ -58,6 +58,26 @@ class Usage:
 
 
 @dataclass
+class ToolSpec:
+    """A tool advertised to the model: name, natural-language description, and a
+    JSON-Schema for its input. HexGraph executes the call (in the sandbox) and
+    returns the result — the model never touches the environment directly."""
+
+    name: str
+    description: str
+    input_schema: dict[str, Any]
+
+
+@dataclass
+class ToolCall:
+    """A tool invocation the model requested. `id` correlates the result back."""
+
+    id: str
+    name: str
+    input: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class LLMRequest:
     """A request to a backend.
 
@@ -65,6 +85,10 @@ class LLMRequest:
     `{{placeholders}}` (target_name, function, sibling_target_id, ...). The task
     layer builds these from its `TaskContext`; the llm layer stays decoupled
     from tasks.
+
+    For tool-use, `tools` advertises the callable tools and `messages` carries the
+    running conversation (provider-neutral turns — see the agent loop). When
+    `messages` is set the backend uses it instead of `prompt`.
     """
 
     task_type: str
@@ -76,15 +100,23 @@ class LLMRequest:
     template_vars: dict[str, Any] = field(default_factory=dict)
     # Stable key for response caching (the context bundle_sha). Set by the engine.
     cache_key: str | None = None
+    tools: list[ToolSpec] = field(default_factory=list)
+    messages: list[dict[str, Any]] | None = None
 
 
 @dataclass
 class LLMResponse:
     """Raw model output. `text` is the model's message content; for the mock's
-    normal scenarios it is the JSON object `{"findings": [...]}`."""
+    normal scenarios it is the JSON object `{"findings": [...]}`.
+
+    When the model asks to use tools instead of answering, `tool_calls` is
+    non-empty and `stop_reason` is "tool_use"; the agent loop runs the calls and
+    continues the conversation."""
 
     text: str
     usage: Usage
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    stop_reason: str = "end"
 
 
 # --- The seam ------------------------------------------------------------------

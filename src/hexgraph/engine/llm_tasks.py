@@ -26,7 +26,7 @@ from hexgraph.engine.recon import RISKY_SINKS
 from hexgraph.engine.refs import pick_sibling, resolve_target_ref
 from hexgraph.engine.tasks import write_trace
 from hexgraph.llm.registry import get_backend
-from hexgraph.llm.runner import run_findings
+from hexgraph.llm.runner import run_findings_agentic
 from hexgraph.tasks.base import TaskContext
 
 LLM_TASK_TYPES = {"static_analysis", "reverse_engineering", "pattern_sweep", "harness_generation"}
@@ -209,7 +209,16 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
     req = ctx.build_request(prompt=bundle.prompt)
     req.cache_key = bundle.row.bundle_sha
 
-    findings, usage = run_findings(backend, req)
+    # Agent loop: advertise the sandboxed tools and let the model investigate
+    # (decompile/strings/imports/…, fuzz when enabled) before concluding. Strict
+    # superset of a single pass — a backend that answers immediately is unchanged.
+    from hexgraph.engine.agent_tools import ToolContext, available_tools, run_tool
+
+    toolctx = ToolContext(session=session, project=project, target=target)
+    tools = available_tools(toolctx)
+    findings, usage, transcript = run_findings_agentic(
+        backend, req, tools=tools, tool_runner=lambda c: run_tool(toolctx, c.name, c.input),
+    )
 
     if task.type == "harness_generation":
         _compile_harnesses(findings)
@@ -222,6 +231,8 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
 
     write_trace(task, "prompt.txt", bundle.prompt)
     write_trace(task, "system.txt", system_prompt(task.type))
+    if transcript:
+        write_trace(task, "agent_trace.json", {"steps": transcript})
     write_trace(task, "bundle.json", {
         "bundle_sha": bundle.row.bundle_sha, "token_estimate": bundle.row.token_estimate,
         "token_budget": bundle.row.token_budget, "dropped": [d.kind for d in bundle.dropped],

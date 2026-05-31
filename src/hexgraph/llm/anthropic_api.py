@@ -17,10 +17,45 @@ from hexgraph.llm.base import (
     LLMResponse,
     LLMTimeoutError,
     RateLimitError,
+    ToolCall,
     TransientServerError,
     Usage,
 )
 from hexgraph.llm.prompting import system_prompt
+
+
+def _to_anthropic_messages(req: LLMRequest) -> list[dict]:
+    """Convert HexGraph's neutral conversation turns to Anthropic content blocks.
+    Consecutive tool results are coalesced into one user turn (the API requires all
+    tool_result blocks for an assistant's tool_use turn in the next single message)."""
+    if not req.messages:
+        return [{"role": "user", "content": req.prompt}]
+    out: list[dict] = []
+    pending_results: list[dict] = []
+
+    def flush_results():
+        if pending_results:
+            out.append({"role": "user", "content": list(pending_results)})
+            pending_results.clear()
+
+    for m in req.messages:
+        role = m.get("role")
+        if role == "tool":
+            pending_results.append({"type": "tool_result", "tool_use_id": m["tool_call_id"],
+                                    "content": m.get("content", "")})
+            continue
+        flush_results()
+        if role == "assistant":
+            blocks: list[dict] = []
+            if m.get("content"):
+                blocks.append({"type": "text", "text": m["content"]})
+            for tc in m.get("tool_calls", []):
+                blocks.append({"type": "tool_use", "id": tc.id, "name": tc.name, "input": tc.input})
+            out.append({"role": "assistant", "content": blocks or [{"type": "text", "text": ""}]})
+        else:
+            out.append({"role": "user", "content": m.get("content", "")})
+    flush_results()
+    return out
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 DEFAULT_MAX_TOKENS = 4096
@@ -74,13 +109,19 @@ class AnthropicAPIBackend:
 
         client = self._get_client()
         model = req.model or self.default_model
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "max_tokens": self.max_tokens,
+            "system": req.system or system_prompt(req.task_type),
+            "messages": _to_anthropic_messages(req),
+        }
+        if req.tools:
+            kwargs["tools"] = [
+                {"name": t.name, "description": t.description, "input_schema": t.input_schema}
+                for t in req.tools
+            ]
         try:
-            resp = client.messages.create(
-                model=model,
-                max_tokens=self.max_tokens,
-                system=req.system or system_prompt(req.task_type),
-                messages=[{"role": "user", "content": req.prompt}],
-            )
+            resp = client.messages.create(**kwargs)
         except anthropic.RateLimitError as exc:
             raise RateLimitError(str(exc)) from exc
         except anthropic.APITimeoutError as exc:
@@ -96,13 +137,18 @@ class AnthropicAPIBackend:
         text = "".join(
             getattr(block, "text", "") for block in resp.content if getattr(block, "type", "") == "text"
         )
+        tool_calls = [
+            ToolCall(id=block.id, name=block.name, input=dict(getattr(block, "input", {}) or {}))
+            for block in resp.content if getattr(block, "type", "") == "tool_use"
+        ]
         usage = Usage(
             input_tokens=resp.usage.input_tokens,
             output_tokens=resp.usage.output_tokens,
             cost_source="anthropic",
             cost_usd=_estimate_cost(model, resp.usage.input_tokens, resp.usage.output_tokens),
         )
-        return LLMResponse(text=text, usage=usage)
+        return LLMResponse(text=text, usage=usage, tool_calls=tool_calls,
+                           stop_reason=getattr(resp, "stop_reason", "end") or "end")
 
     def stream(self, req: LLMRequest) -> Iterator[str]:
         yield self.complete(req).text

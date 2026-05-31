@@ -3,7 +3,7 @@ import { api, TargetNode } from "../api";
 import { Icon } from "./Icon";
 
 const MODELS = ["(project default)", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"];
-const SCENARIOS = ["(default)", "critical_overflow", "no_findings", "malformed_then_valid", "error_rate_limit", "error_timeout"];
+const SCENARIOS = ["(default)", "critical_overflow", "agentic_overflow", "no_findings", "malformed_then_valid", "error_rate_limit", "error_timeout"];
 const EFFORT = ["low", "medium", "high"];
 
 // Deliberate task launch: objective/prompt, model, effort, budget, mock scenario,

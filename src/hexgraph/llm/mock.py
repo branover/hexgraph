@@ -28,6 +28,7 @@ from hexgraph.llm.base import (
     LLMTimeoutError,
     RateLimitError,
     SchemaValidationError,
+    ToolCall,
     TransientServerError,
     Usage,
 )
@@ -66,6 +67,17 @@ class MockLLMBackend:
             raise self._exception_for(scenario)
 
         fixture = self._load_fixture(req.task_type, scenario)
+
+        # Tool-use scenarios: on the first turn (no tool result yet in the
+        # conversation) the mock asks to call the fixture's tool(s); once results
+        # come back it falls through to emit findings. Drives the agent loop at $0.
+        # Scenarios without a "tool_calls" key behave exactly as before (single pass).
+        if fixture.get("tool_calls") and req.tools and not self._has_tool_result(req.messages):
+            filled = self._fill_templates(fixture["tool_calls"], req.template_vars)
+            calls = [ToolCall(id=f"call_{i}", name=tc["name"], input=tc.get("input", {}))
+                     for i, tc in enumerate(filled)]
+            return LLMResponse(text=str(fixture.get("thinking", "")), usage=_DEFAULT_USAGE,
+                               tool_calls=calls, stop_reason="tool_use")
 
         # malformed_then_valid: invalid text on attempt 1, valid object after.
         if "raw_text_first" in fixture and "on_retry" in fixture:
@@ -115,6 +127,10 @@ class MockLLMBackend:
     @staticmethod
     def _stable_hash(value: str) -> int:
         return int(hashlib.sha256(value.encode("utf-8")).hexdigest(), 16)
+
+    @staticmethod
+    def _has_tool_result(messages: list[dict] | None) -> bool:
+        return bool(messages) and any(m.get("role") == "tool" for m in messages)
 
     # --- fault injection (§4) -------------------------------------------------
 
