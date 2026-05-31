@@ -12,7 +12,11 @@ then run the resume verifier, then continue at the next unchecked task.
   run-compare diff UI. Remaining documented sub-items (not whole phases): richer approval gates (review-on-
   output / plan / spend), P7-5 (offline CVE / bounded dataflow / reviewable dedup), FTS5 search,
   SSE live activity, real-key cassette recording (`make test-live`), Ghidra decompiler.
-- **Last verified:** `.venv/bin/python -m pytest -q` → 128 passed, 1 skipped (live, no key); SPA builds clean.
+- **Optional features:** **Settings system** (`settings.py` managed `settings.json` layer + `/api/settings` +
+  `hexgraph config`; secrets status-only) and **Ghidra** (optional, settings-driven): headless decompiler
+  in the sandbox (`WITH_GHIDRA=1`), connect-to-running **bridge** mode, and **enrich_recon** (functions/
+  call-graph/structs into the graph). All degrade to radare2/normal recon when off.
+- **Last verified:** `.venv/bin/python -m pytest -q` → 154 passed, 1 skipped (live, no key); SPA builds clean.
 - **UI quickstart (updated):** `make ui` once → `make sandbox-build` once →
   `hexgraph ingest tests/fixtures/synthetic_fw.bin --name demo` → `hexgraph serve` → http://127.0.0.1:8765.
 - **How to re-verify:** `make test`; or run the UI (see UI quickstart below).
@@ -138,6 +142,15 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-05-30: **Settings system + Ghidra (optional) + UI fixes.** Managed `settings.json` layer
+  (`settings.py`, `/api/settings`, `hexgraph config`, Settings page) — env > settings.json > config.toml >
+  defaults; secrets status-only (never written/returned). Ghidra behind the Decompiler seam, settings-driven:
+  headless (`ghidra_probe.py` analyzeHeadless in sandbox, `WITH_GHIDRA=1`), bridge (`engine/ghidra_bridge.py`,
+  connect to a running Ghidra → list/import programs), enrich_recon (functions/calls/structs into the graph);
+  all fall back to radare2. UI fixes: Run-menu portal (no clip) + expandable detail box; LaunchModal redesign
+  (fixed columns, wrapping preview) + finding follow-ups now route through it with `parent_finding_id`;
+  graph collapses duplicate parallel edges (one per src→dst→type, merge at creation + at render). Makefile
+  collapsed to one-shot `make setup`. CLAUDE.md condensed to rules+orientation. 154 tests pass.
 - 2026-05-30: **Researcher depth — Chunk C: P7 viewer UI** (frontend only; backend endpoints already
   existed). `ReportModal` renders the project report (`/api/projects/{id}/report` markdown) in-app via
   a tiny offline md→HTML renderer (`.markdown` theme styles), with copy + download-.md. `RunCompareModal`
