@@ -249,6 +249,17 @@ select.sel { background: var(--bg); color: var(--fg); border: 1px solid var(--bo
 .settings .paths { font-size: 11px; line-height: 1.7; margin-top: 10px; }
 .settings .banner.err { background: rgba(255,93,108,.12); border: 1px solid rgba(255,93,108,.4); color: #ff8a93; padding: 9px 12px; border-radius: 8px; font-size: 12.5px; margin-bottom: 14px; }
 .dot.ok { background: #2ea043; } .dot.off { background: #6e7681; }
+
+/* addable export chips + firmware filesystem browser */
+.tag.addable { cursor: pointer; border: 1px dashed var(--border-strong); background: transparent; display: inline-flex; align-items: center; gap: 3px; }
+.tag.addable:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.tag.addable:disabled { opacity: .5; cursor: default; }
+.fsbrowser { max-height: 320px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; padding: 6px; background: var(--bg); font-size: 12.5px; }
+.fsbrowser details > summary { list-style: none; padding: 2px 0; color: var(--fg-dim); }
+.fsbrowser details > summary::-webkit-details-marker { display: none; }
+.fsfile { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+.fsfile .fname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fsfile .sz { font-size: 10.5px; }
 .badge.warn { color: #e3b341; }
 
 /* full-screen findings/tasks management view */

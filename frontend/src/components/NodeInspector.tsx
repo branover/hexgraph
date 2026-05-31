@@ -1,8 +1,10 @@
-import { GraphNode, TargetNode } from "../api";
+import { useState } from "react";
+import { GraphNode, TargetNode, api } from "../api";
 import { Icon, NODE_ICON } from "./Icon";
 import Launcher from "./Launcher";
 import Annotations from "./Annotations";
 import HypothesisPanel from "./HypothesisPanel";
+import FilesystemBrowser from "./FilesystemBrowser";
 
 // Node-type-aware detail shown when a target/function/symbol/string node is
 // selected in the graph (findings use the richer Inspector instead).
@@ -11,7 +13,17 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
   onLaunch: (type: string) => void; onChanged?: () => void; onViewFinding?: (fid: string) => void;
 }) {
   const isHypothesis = node.type === "node" && node.node_type === "hypothesis";
+  const isFunction = node.type === "node" && node.node_type === "function";
   const icon = node.type === "target" ? NODE_ICON[node.kind] : NODE_ICON[node.node_type] || "fn";
+  const [added, setAdded] = useState<Set<string>>(new Set());
+  const exports: string[] = (target?.metadata?.exports as string[]) || [];
+
+  const addNode = async (name: string, kind: string) => {
+    if (!projectId || !target) return;
+    try { await api.createNode(projectId, { node_type: kind, name, target_id: target.id }); } catch { /* dup ok */ }
+    setAdded((prev) => new Set(prev).add(name));
+    onChanged?.();
+  };
 
   return (
     <div className="insp scroll fade-in">
@@ -38,11 +50,35 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
                 {target.metadata.imports.slice(0, 40).map((i: string) => <span className="tag" key={i}>{i}</span>)}
               </div></>
           ) : null}
+          {exports.length > 0 && (
+            <>
+              <div className="sec">Exported functions ({exports.length}) <span className="muted">· click + to add as a node</span></div>
+              <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                {exports.slice(0, 80).map((e) => (
+                  <button key={e} className="tag addable" disabled={added.has(e)}
+                          title={added.has(e) ? "added" : "Add as a function node"}
+                          onClick={() => addNode(e, "function")}>
+                    {added.has(e) ? <Icon name="check" size={10} /> : <Icon name="plus" size={10} />} {e}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+          {node.kind === "firmware_image" && projectId && (
+            <FilesystemBrowser projectId={projectId} targetId={node.id} onChanged={onChanged} />
+          )}
         </>
       )}
 
       {isHypothesis && (
         <HypothesisPanel hypothesisId={node.id} onViewFinding={onViewFinding} onChanged={onChanged} />
+      )}
+
+      {isFunction && allowed.length > 0 && (
+        <div className="actions">
+          <Launcher allowed={allowed} onChoose={onLaunch} />
+          <span className="muted" style={{ fontSize: 11, alignSelf: "center" }}>run a task focused on this function</span>
+        </div>
       )}
 
       {node.type === "node" && !isHypothesis && (

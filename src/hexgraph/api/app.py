@@ -254,6 +254,33 @@ def create_app() -> FastAPI:
             except ValueError as exc:
                 raise HTTPException(404, str(exc))
 
+    @app.get("/api/targets/{target_id}/filesystem")
+    def api_target_filesystem(target_id: str):
+        """The unpacked filesystem manifest of a firmware target (browsable tree)."""
+        from hexgraph.engine.filesystem import list_filesystem
+
+        with session_scope() as s:
+            t = s.get(Target, target_id)
+            if t is None:
+                raise HTTPException(404, "target not found")
+            return list_filesystem(s.get(Project, t.project_id), t)
+
+    @app.post("/api/projects/{project_id}/targets/{target_id}/add-from-fs")
+    def api_add_from_fs(project_id: str, target_id: str, body: dict):
+        """Add a file from a firmware's unpacked filesystem as a child target."""
+        from hexgraph.engine.filesystem import FilesystemError, add_file_as_target
+
+        with session_scope() as s:
+            project = s.get(Project, project_id)
+            fw = s.get(Target, target_id)
+            if project is None or fw is None:
+                raise HTTPException(404, "not found")
+            try:
+                child = add_file_as_target(s, project, fw, body.get("rel", ""))
+            except FilesystemError as exc:
+                raise HTTPException(400, str(exc))
+            return {"target_id": child.id, "name": child.name, "kind": child.kind.value}
+
     @app.post("/api/projects/{project_id}/nodes")
     def api_create_node(project_id: str, body: NodeCreate):
         from hexgraph.engine.authoring import InvariantError, create_node

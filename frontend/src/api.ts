@@ -39,6 +39,7 @@ export interface SettingsView {
   paths: { config_toml: string; settings_json: string };
 }
 export interface GhidraStatus { enabled: boolean; ok: boolean; detail: string; mode?: string; [k: string]: any; }
+export interface FsEntry { rel: string; size?: number; is_elf?: boolean; child_target_id?: string | null; added?: boolean; }
 export interface GraphNode { id: string; type: "target" | "node" | "finding"; label: string; [k: string]: any; }
 export interface GraphEdge { id: string; source: string; target: string; type: string; src_kind?: string; dst_kind?: string; origin?: string; confidence?: number | null; }
 export interface Graph { project_id: string; nodes: GraphNode[]; edges: GraphEdge[]; }
@@ -94,6 +95,8 @@ export const api = {
     return r.json();
   },
   createNode: (pid: string, body: any) => postJSON<any>(`/api/projects/${pid}/nodes`, body),
+  filesystem: (tid: string) => getJSON<{ unpacked: boolean; method?: string; files: FsEntry[] }>(`/api/targets/${tid}/filesystem`),
+  addFromFs: (pid: string, fwId: string, rel: string) => postJSON<any>(`/api/projects/${pid}/targets/${fwId}/add-from-fs`, { rel }),
   createEdge: (pid: string, body: any) => postJSON<any>(`/api/projects/${pid}/edges`, body),
   createAnnotation: (pid: string, body: any) => postJSON<any>(`/api/projects/${pid}/annotations`, body),
   annotations: (nodeKind: string, nodeId: string) => getJSON<any[]>(`/api/annotations/${nodeKind}/${nodeId}`),

@@ -5,14 +5,13 @@ project and registers them."""
 
 from __future__ import annotations
 
-import shutil
-import tempfile
 from pathlib import Path
 
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import EdgeType, Project, Target, TargetKind
 from hexgraph.engine.edges import add_edge
+from hexgraph.engine.filesystem import persistent_base, record_manifest
 from hexgraph.engine.ingest import ingest_file
 from hexgraph.sandbox.executor import Executor, get_executor
 
@@ -23,38 +22,44 @@ def unpack_firmware(
     parent: Target,
     runner: Executor | None = None,
 ) -> list[Target]:
-    """Unpack `parent` and create a child target + `contains` edge per ELF found."""
+    """Unpack `parent` into a child target + `contains` edge per ELF, and persist
+    the full extracted tree (+ a manifest on the firmware) so any file can be
+    browsed and added as a target later."""
     runner = runner or get_executor()
     children: list[Target] = []
 
-    with tempfile.TemporaryDirectory(prefix="hexgraph-unpack-") as tmp:
-        manifest = runner.run_json_probe("unpack_probe.py", parent.path, outdir=tmp)
-        root = Path(manifest["root"].replace("/out", tmp, 1)) if manifest.get("root") else Path(tmp)
+    # Persist the extraction under the project data dir (not a temp dir) so the
+    # filesystem stays browsable and addable after unpack.
+    base = persistent_base(project, parent.id)
+    base.mkdir(parents=True, exist_ok=True)
+    manifest = runner.run_json_probe("unpack_probe.py", parent.path, outdir=str(base))
+    root_container = manifest.get("root") or "/out"
+    root_rel = root_container.replace("/out", "", 1).lstrip("/")  # "root" | "" (binwalk)
+    root = base / root_rel
+    files = manifest.get("files", [])
 
-        for entry in manifest.get("files", []):
-            if not entry.get("is_elf"):
-                continue
-            # Map the container path (/out/...) back to the host tmp dir.
-            host_path = Path(entry["container_path"].replace("/out", tmp, 1))
-            if not host_path.is_file():
-                # Fall back to joining root + rel if the rewrite missed.
-                host_path = root / entry["rel"]
-            if not host_path.is_file():
-                continue
+    for entry in files:
+        if not entry.get("is_elf"):
+            continue
+        host_path = base / (entry["container_path"].replace("/out", "", 1).lstrip("/"))
+        if not host_path.is_file():
+            host_path = root / entry["rel"]
+        if not host_path.is_file():
+            continue
 
-            child = ingest_file(
-                session, project, host_path, name=entry["rel"], parent=parent
-            )
-            add_edge(
-                session, project_id=project.id,
-                src=("target", parent.id), dst=("target", child.id),
-                type=EdgeType.contains, origin="tool", confidence=1.0,
-                created_by_tool="unpack", attrs={"path": entry["rel"]},
-            )
-            children.append(child)
+        child = ingest_file(session, project, host_path, name=entry["rel"], parent=parent)
+        add_edge(
+            session, project_id=project.id,
+            src=("target", parent.id), dst=("target", child.id),
+            type=EdgeType.contains, origin="tool", confidence=1.0,
+            created_by_tool="unpack", attrs={"path": entry["rel"]},
+        )
+        entry["child_target_id"] = child.id
+        children.append(child)
 
     if parent.kind != TargetKind.firmware_image:
         parent.kind = TargetKind.firmware_image
+    record_manifest(parent, method=manifest.get("method", "?"), root_rel=root_rel, files=files)
     return children
 
 

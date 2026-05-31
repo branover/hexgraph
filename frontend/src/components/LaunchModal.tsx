@@ -10,9 +10,10 @@ const EFFORT = ["low", "medium", "high"];
 // and a live pre-flight preview of the exact context bundle that will be sent.
 // Reused for finding follow-ups (prefilled objective/params + parent_finding_id).
 export default function LaunchModal({ target, taskType, isMock, initialObjective, initialParams,
-  parentFindingId, onClose, onLaunched }: {
+  parentFindingId, anchorKind, anchorId, onClose, onLaunched }: {
   target: TargetNode; taskType: string; isMock: boolean;
   initialObjective?: string; initialParams?: Record<string, any>; parentFindingId?: string;
+  anchorKind?: string; anchorId?: string;
   onClose: () => void; onLaunched: (taskId: string) => void;
 }) {
   const [objective, setObjective] = useState(initialObjective || "");
@@ -35,7 +36,7 @@ export default function LaunchModal({ target, taskType, isMock, initialObjective
     return {
       target_id: target.id, type: taskType, objective: objective.trim() || undefined,
       model: model === "(project default)" ? undefined : model, params,
-      parent_finding_id: parentFindingId,
+      parent_finding_id: parentFindingId, anchor_kind: anchorKind, anchor_id: anchorId,
     };
   };
 

@@ -31,7 +31,7 @@ export default function Workspace() {
   const [results, setResults] = useState<any | null>(null);
   const [modal, setModal] = useState<"node" | "edge" | "report" | "compare" | "ghidra" | null>(null);
   const [ghidraBridge, setGhidraBridge] = useState(false);
-  const [launchFor, setLaunchFor] = useState<{ target: TargetNode; type: string; objective?: string; params?: any; parentFindingId?: string } | null>(null);
+  const [launchFor, setLaunchFor] = useState<{ target: TargetNode; type: string; objective?: string; params?: any; parentFindingId?: string; anchorKind?: string; anchorId?: string } | null>(null);
   const [maxed, setMaxed] = useState(false);
   const [detailBig, setDetailBig] = useState(false);
   const searchTimer = useRef<any>();
@@ -185,10 +185,19 @@ export default function Workspace() {
     if (selTask) return <TaskDetail taskId={selTask} onViewFinding={viewFinding} onRerun={pollThenReload} />;
     if (selNode) {
       const tgt = selNode.type === "target" ? detail.targets.find((t) => t.id === selNode.id) : undefined;
-      const allowed = tgt ? (caps.target?.[tgt.kind] ?? ["recon"]) : [];
+      const owner = selNode.type === "node" ? detail.targets.find((t) => t.id === selNode.target_id) : undefined;
+      const allowed = tgt
+        ? (caps.target?.[tgt.kind] ?? ["recon"])
+        : (selNode.type === "node" ? (caps.node?.[selNode.node_type] ?? []) : []);
+      const onLaunch = (type: string) => {
+        if (tgt) setLaunchFor({ target: tgt, type });
+        else if (owner) setLaunchFor({
+          target: owner, type, params: { function: selNode.label },
+          anchorKind: "node", anchorId: selNode.id,
+        });
+      };
       return <NodeInspector node={selNode} target={tgt} allowed={allowed} isMock={isMock} projectId={projectId}
-                            onChanged={load} onViewFinding={viewFinding}
-                            onLaunch={(type) => tgt && setLaunchFor({ target: tgt, type })} />;
+                            onChanged={load} onViewFinding={viewFinding} onLaunch={onLaunch} />;
     }
     return <Inspector finding={selFinding} projectId={projectId} hypotheses={hypotheses} onChanged={load}
                       onLaunch={pollThenReload} onOpenLaunch={openLaunchForFinding} onViewTask={viewTask}
@@ -296,6 +305,7 @@ export default function Workspace() {
         <LaunchModal target={launchFor.target} taskType={launchFor.type} isMock={isMock}
                      initialObjective={launchFor.objective} initialParams={launchFor.params}
                      parentFindingId={launchFor.parentFindingId}
+                     anchorKind={launchFor.anchorKind} anchorId={launchFor.anchorId}
                      onClose={() => setLaunchFor(null)} onLaunched={pollThenReload} />
       )}
     </>
