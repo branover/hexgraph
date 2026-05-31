@@ -27,8 +27,8 @@ Post-MVP, **every new feature or major atomic change happens on its own branch i
 1. Run `make test` (and `make demo` if the loop is touched) green in the worktree.
 2. **Dispatch a subagent (Agent tool) to review the PR diff** — correctness, the security invariants (loopback / sandbox / secret-never-logged / the opt-in execution policy), test quality, and that docs/PROGRESS/migrations were updated.
 3. **Every requested change or piece of commentary the reviewer raises MUST be posted on the PR itself** — as a review with line-level comments / suggested changes (`gh pr review --comment` or `--request-changes`; `gh api .../pulls/{n}/comments` for inline suggestions), not only returned to the dispatching agent. This is a durable, public log for posterity. A verbose summary back to the dispatching agent is welcome **in addition**, never instead. The reviewer then **fixes the issues** (commit referencing the comment) or hands them back; re-verify after fixes.
-4. Only after the review passes (its PR comments addressed): `gh pr merge`. There is **no CI yet**, so this review + local `make test` *is* the gate.
-5. Clean up: `git worktree remove <path>` and delete the merged branch.
+4. Only after the review passes (its PR comments addressed): merge with **`gh pr merge --merge --delete-branch`** (the `--delete-branch` deletes the branch **both locally and on the remote**). There is **no CI yet**, so this review + local `make test` *is* the gate.
+5. **Clean up completely:** `git worktree remove <path>`, and ensure the merged branch is gone **locally and remotely** (`git branch -d <branch>` + `git push origin --delete <branch>` if `--delete-branch` didn't, then `git fetch -p`). Then fast-forward the primary `main` checkout. **Standing invariant: the only worktrees and branches that should ever exist (local or remote) are ones actively being worked on** — `git worktree list`, `git branch`, and `git branch -r` should show just `main` plus the live work. Prune anything stale on sight.
 
 **Creating a worktree (with its own isolated runtime):**
 ```bash
