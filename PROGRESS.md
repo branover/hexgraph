@@ -40,6 +40,10 @@ then run the resume verifier, then continue at the next unchecked task.
     `mcp_tools.propagate_finding(finding_id, target_id)` (clone a confirmed finding onto a matched
     sibling binary as a fresh finding to triage, wired `derived_from`→ source). SKILL §3 adds the
     confirm → link_same_code → propagate → verify rhythm.
+  - **`get_finding(finding_id)` read tool** — returns ONE finding in full incl. the complete `evidence`
+    (the only way through MCP to read `evidence.extra`, where verify_poc stores its result; the finding
+    analog of `get_node`). **`bypasses` edge type** (String col → zero-migration) for auth/logic bugs
+    where `taints` overstates the relationship.
   - **Feedback fixes:** `get_or_create_node` now fills a missing `address` on an existing (recon-seeded)
     node — the requested function-address feature was silently dropped before; `create_node` echoes
     back stored address+attrs. `link_evidence` accepts `confirms`/`contradicts` aliases.
