@@ -80,6 +80,11 @@ def get_or_create_node(
             merged = dict(existing.attrs_json or {})
             merged.update(attrs)
             existing.attrs_json = merged
+        # Fill in a location when we now have one and didn't before: recon
+        # materializes function nodes with address=None, so a later decompile or a
+        # human/agent author must be able to supply it. Never overwrite a known one.
+        if address and not existing.address:
+            existing.address = address
         # Upgrade to a body hash when one is provided (force_hash); never downgrade.
         if content_hash and (force_hash or not existing.content_hash):
             existing.content_hash = content_hash

@@ -198,8 +198,11 @@ def create_node(project_id: str, node_type: str, name: str, target_id: str | Non
                         address=address, attrs=attrs)
         except InvariantError as exc:
             return {"error": str(exc)}
+        # Echo back the stored address + attrs: a function node materialized by
+        # recon already exists by identity (target, fq_name), so create_node merges
+        # into it — the agent sees here whether its address/attrs actually landed.
         return {"id": n.id, "node_type": n.node_type, "name": n.name, "address": n.address,
-                "target_id": n.target_id}
+                "target_id": n.target_id, "attrs": n.attrs_json or {}}
 
 
 def create_edge(project_id: str, src_kind: str, src_id: str, dst_kind: str, dst_id: str,
@@ -247,7 +250,9 @@ def update_finding(finding_id: str, status: str | None = None, severity: str | N
 def link_evidence(hypothesis_id: str, finding_id: str, relation: str) -> dict:
     """Attach a finding to a hypothesis as supporting/refuting evidence. This is how
     you CONFIRM a hypothesis — the hypothesis status is recomputed from its evidence
-    (open → supported / refuted / contested). relation = 'supports' | 'refutes'."""
+    (open → supported / refuted / contested). relation = 'supports' | 'refutes'
+    ('confirms'→supports and 'contradicts'→refutes are accepted aliases). To pin a
+    hard verdict on a verified finding, also call set_hypothesis_status(id,'confirmed')."""
     from hexgraph.engine.hypotheses import HypothesisError, link_evidence as _le, summary
 
     with session_scope() as s:
@@ -262,13 +267,14 @@ def link_evidence(hypothesis_id: str, finding_id: str, relation: str) -> dict:
         return summary(s, hypothesis_id)
 
 
-def set_hypothesis_status(hypothesis_id: str, status: str) -> dict:
-    """Pin a hypothesis verdict: confirmed | rejected | open | supported | refuted."""
+def set_hypothesis_status(hypothesis_id: str, status: str, rationale: str | None = None) -> dict:
+    """Pin a hypothesis verdict: confirmed | rejected | open | supported | refuted.
+    Pass `rationale` to record WHY (kept as the hypothesis's status_note)."""
     from hexgraph.engine.hypotheses import HypothesisError, set_status, summary
 
     with session_scope() as s:
         try:
-            set_status(s, hypothesis_id, status)
+            set_status(s, hypothesis_id, status, rationale=rationale)
             return summary(s, hypothesis_id)
         except HypothesisError as exc:
             return {"error": str(exc)}
@@ -310,6 +316,14 @@ def get_schemas() -> dict:
         "edge_note": "A hypothesis IS a node (node_type='hypothesis'); link a finding to it with "
                      "dst_kind='node' + its id, or better use link_evidence(hypothesis_id, finding_id, "
                      "relation) which also updates the hypothesis status.",
+        "link_evidence_relations": ["supports", "refutes", "confirms", "contradicts"],
+        "link_evidence_note": "relation is supports|refutes (confirms→supports, contradicts→refutes are "
+                              "accepted aliases). The hypothesis status is then recomputed from its "
+                              "evidence; pin a hard verdict with set_hypothesis_status(id,'confirmed').",
+        "create_node_note": "Function/symbol/struct identity is (target, normalized name) — recon "
+                            "pre-materializes function nodes (address=null). create_node on an existing "
+                            "one MERGES: it fills a missing address and unions attrs (it won't overwrite "
+                            "a known address). The returned address/attrs show what actually landed.",
         "annotation_kinds": sorted(ANN_KINDS),
         "annotation_node_kinds": sorted(ANN_NODE_KINDS),
         "annotation_note": "Annotations from an agent land status='proposed' (pending analyst approval).",

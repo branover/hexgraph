@@ -20,9 +20,17 @@ from hexgraph.engine.edges import add_edge
 from hexgraph.engine.nodes import get_or_create_node
 
 # Evidence relations (stored as edge types). `contradicts` reads as refuting.
+# `confirms`/`contradicts` are accepted aliases for `supports`/`refutes`: agents
+# reach for "confirms" on a verified finding (it's an advertised edge type), so we
+# map it to a supporting edge rather than rejecting it.
 SUPPORTS = "supports"
 REFUTES = "refutes"
-RELATIONS = {SUPPORTS: EdgeType.supports, REFUTES: EdgeType.refutes}
+RELATIONS = {
+    SUPPORTS: EdgeType.supports,
+    REFUTES: EdgeType.refutes,
+    "confirms": EdgeType.supports,
+    "contradicts": EdgeType.refutes,
+}
 _REFUTING = (EdgeType.refutes.value, EdgeType.contradicts.value)
 
 # Derived states + the two sticky human verdicts.
@@ -84,13 +92,16 @@ def link_evidence(
     return edge
 
 
-def set_status(session: Session, hypothesis_id: str, status: str, *, origin: str = "human") -> Node:
+def set_status(session: Session, hypothesis_id: str, status: str, *, origin: str = "human",
+               rationale: str | None = None) -> Node:
     if status not in STATUSES:
         raise HypothesisError(f"invalid status {status!r} (allowed: {list(STATUSES)})")
     node = _require_hypothesis(session, hypothesis_id)
     attrs = dict(node.attrs_json or {})
     attrs["status"] = status
     attrs["status_origin"] = origin
+    if rationale:
+        attrs["status_note"] = rationale
     node.attrs_json = attrs
     # A human reopening to a derived state hands control back to the evidence.
     if origin == "human" and status in DERIVED:

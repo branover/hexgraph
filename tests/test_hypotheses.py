@@ -107,3 +107,25 @@ def test_invalid_relation_rejected(hg_home):
         import pytest
         with pytest.raises(HypothesisError):
             link_evidence(s, p, hypothesis_id=h.id, finding_id=f.id, relation="maybe")
+
+
+def test_confirms_alias_supports(hg_home):
+    # Agents reach for "confirms" (an advertised edge type) on a verified finding;
+    # it must be accepted as a supporting relation, not rejected.
+    with session_scope() as s:
+        p = create_project(s, name="hyp6")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        task = create_task(s, project=p, target_id=t.id, type="static_analysis")
+        f = _finding(s, p, t, task, "verified command injection")
+        h = create_hypothesis(s, p, statement="popen sink is reachable", target_id=t.id)
+        link_evidence(s, p, hypothesis_id=h.id, finding_id=f.id, relation="confirms")
+        out = summary(s, h.id)
+        assert out["status"] == "supported" and len(out["supports"]) == 1
+
+
+def test_set_status_records_rationale(hg_home):
+    with session_scope() as s:
+        p = create_project(s, name="hyp7")
+        h = create_hypothesis(s, p, statement="exploitable as RCE")
+        set_status(s, h.id, "confirmed", rationale="verified PoC echoes the nonce")
+        assert (h.attrs_json or {})["status_note"] == "verified PoC echoes the nonce"
