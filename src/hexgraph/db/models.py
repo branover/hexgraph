@@ -80,6 +80,7 @@ class EdgeType(str, enum.Enum):
     about = "about"
     annotates = "annotates"
     dataflow_hint = "dataflow_hint"
+    taints = "taints"          # untrusted data flows from src into dst (source→sink)
     related_to = "related_to"  # generic fallback (kept for back-compat)
 
 

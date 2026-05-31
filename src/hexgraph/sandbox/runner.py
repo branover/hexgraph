@@ -110,8 +110,12 @@ class SandboxRunner:
         if extra_args:
             probe_args += extra_args
 
-        # Dev convenience: mount local probes so edits don't require a rebuild.
-        if os.environ.get("HEXGRAPH_SANDBOX_DEV") == "1":
+        # Mount the installed probe scripts read-only, overlaying the image's baked
+        # copy, so probes stay in sync with the package and ADDING a probe never
+        # requires rebuilding the image (only toolchain changes do). Probes are our
+        # own trusted code; the target is still only at /artifact (ro) + /out.
+        # Set HEXGRAPH_SANDBOX_NO_MOUNT=1 to force the baked-in copy instead.
+        if PROBES_DIR.is_dir() and os.environ.get("HEXGRAPH_SANDBOX_NO_MOUNT") != "1":
             cmd += ["-v", f"{PROBES_DIR}:{CONTAINER_PROBES}:ro"]
 
         cmd += [self.image, "python3", f"{CONTAINER_PROBES}/{probe}", *probe_args]

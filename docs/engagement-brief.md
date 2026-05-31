@@ -1,11 +1,11 @@
 # Engagement brief — Aria Router AC1200 firmware review
 
 You are a vulnerability researcher. A firmware image for a consumer router (the
-**Aria Router AC1200**, firmware 1.2.3) is on disk at:
-
-```
-tests/fixtures/eval_fw/eval_fw.bin
-```
+**Aria Router AC1200**, firmware 1.2.3) is on disk. Your operator will give you
+its **absolute path** — use that exact path when you `ingest` (the MCP server may
+run from a different directory than the repo, so a relative path like
+`tests/fixtures/eval_fw/eval_fw.bin` may not resolve — always pass the absolute
+path you were given).
 
 Your job: **find the most serious exploitable vulnerability in this firmware and
 deliver a WORKING, VERIFIED proof-of-concept** — not just a written claim. Record

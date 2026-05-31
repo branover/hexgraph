@@ -195,7 +195,8 @@ def ingest(path: str, name: str | None = None, project_id: str | None = None) ->
     from hexgraph.sandbox.runner import docker_available
 
     if not os.path.isfile(path):
-        return {"error": f"file not found: {path}"}
+        return {"error": f"file not found: {path!r} (resolved from the MCP server's working "
+                          f"directory {os.getcwd()!r}). Pass an ABSOLUTE path."}
     with session_scope() as s:
         project = s.get(Project, project_id) if project_id else None
         if project is None:

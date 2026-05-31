@@ -41,12 +41,17 @@ is a squashfs rootfs with one genuinely exploitable bug planted in a CGI binary.
 
 ## Setup before the run (operator)
 
-- Build the sandbox image so it has the fuzz/PoC probes + toolchain:
-  `make sandbox-build` (or run with `HEXGRAPH_SANDBOX_DEV=1` to mount probes live).
+- Build the sandbox image once so it has the toolchain (radare2/clang/etc.):
+  `make sandbox-build`. (Probe scripts like `poc_probe.py` are mounted from the
+  install at run time, so adding/updating a probe does NOT need a rebuild — only
+  toolchain changes do. Set `HEXGRAPH_SANDBOX_NO_MOUNT=1` to force the baked copy.)
 - Enable **Settings → PoC verification** (or `hexgraph config set features.poc.enabled true`)
   so `verify_poc` is allowed to execute the target in the sandbox.
-- Install the MCP server + skill (`hexgraph mcp install --write-skill ~/.claude/skills`,
-  `claude mcp add hexgraph -- hexgraph mcp`).
+- Install the MCP SDK into the venv (`.venv/bin/pip install mcp`) + the skill
+  (`.venv/bin/hexgraph mcp install --write-skill ~/.claude/skills`), then register
+  the server with the **exact command `hexgraph mcp install` prints** (it uses the
+  absolute venv python — bare `hexgraph`/`python` won't resolve in the agent's PATH).
+  Confirm with `.venv/bin/hexgraph mcp --check`.
 - **Do NOT ingest the firmware yourself** — the agent must do it via the `ingest`
   tool. Start from a clean `HEXGRAPH_HOME` (no projects) so "did the agent ingest"
   is checkable. Make sure the `run` MCP tool group is enabled (default) so `ingest`
