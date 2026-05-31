@@ -645,13 +645,19 @@ def register_surface(project_id: str, base_url: str, name: str | None = None,
 
 
 def http_request(target_id: str, method: str, path: str, params: dict | None = None,
-                 headers: dict | None = None, body=None, json_body: bool = False) -> dict:
+                 headers: dict | None = None, body=None, json_body: bool = False,
+                 session: str | None = None) -> dict:
     """Send ONE crafted HTTP request to a registered web surface and return the response
     (status, headers, and the body, capped at 64 KiB) — your hands for live web testing:
     log in, probe an auth check, fire an injection payload, read what comes back. `body`
-    is form-encoded by default; set json_body=true to send it as JSON. Cookies are NOT
-    persisted between separate http_request calls — for an auth flow that needs a session
-    (login then access a protected route), use verify_poc with a multi-step `steps` spec.
+    is form-encoded by default; set json_body=true to send it as JSON.
+
+    Pass `session` (any label, e.g. "admin") to keep a COOKIE JAR across calls: cookies the
+    server sets are remembered and re-sent on the next http_request with the same label, so
+    a free-form auth flow works — log in once, then explore protected routes — without
+    copying the session cookie by hand. The response lists the jar's cookie names in
+    `session_cookies`. (For a single self-contained PoC, verify_poc's multi-step `steps`
+    still carries cookies within one run; `session` is for interactive, multi-call probing.)
 
     Egress is bounded and audited exactly like web_recon: it runs in the sandbox, follows
     no redirects, and the destination must be the surface's own loopback/private host.
@@ -667,7 +673,8 @@ def http_request(target_id: str, method: str, path: str, params: dict | None = N
                "headers": headers or None, "body": body, "json": bool(json_body)}
         req = {k: v for k, v in req.items() if v is not None}
         try:
-            return run_http_request(s, s.get(Project, t.project_id), t, request=req)
+            return run_http_request(s, s.get(Project, t.project_id), t, request=req,
+                                    http_session=session)
         except PolicyViolation:
             return {"error": "egress not permitted — enable features.network in Settings (bounded, local-only)"}
         except ValueError as exc:
@@ -894,8 +901,8 @@ _CATALOG = [
      {"type": "object", "properties": {"finding_id": {"type": "string"}, "target_id": {"type": "string"}, "function": {"type": "string"}, "notes": {"type": "string"}}, "required": ["finding_id", "target_id"]}),
     ("run", "verify_poc", verify_poc, "Prove an exploit and report verified true/false. Binary target -> runs it in the sandbox (spec {argv?,env?,stdin?,oracle:{output_contains|exit_code|crash}}, needs features.poc). Web surface -> sends HTTP steps (spec {steps:[{method,path,body?,...}],oracle:{body_contains|status_is|status_differs}}, cookies carry across steps for auth flows, needs features.network). Put {{NONCE}} in BOTH the payload and the oracle value for an unforgeable check. Pass finding_id to attach the result (always do this for a confirmed vuln).",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "poc": {"type": "object"}, "finding_id": {"type": "string"}}, "required": ["target_id", "poc"]}),
-    ("run", "http_request", http_request, "Send ONE crafted HTTP request to a registered web surface and return {status,headers,body} (body capped at 64 KiB) — your hands for live web testing (log in, probe an auth check, fire an injection payload, read the response). body is form-encoded unless json_body=true. No cookie persistence between calls (use verify_poc steps for auth flows). Bounded, sandboxed, local-only egress, audited. Requires features.network.",
-     {"type": "object", "properties": {"target_id": {"type": "string"}, "method": {"type": "string"}, "path": {"type": "string"}, "params": {"type": "object"}, "headers": {"type": "object"}, "body": {}, "json_body": {"type": "boolean"}}, "required": ["target_id", "method", "path"]}),
+    ("run", "http_request", http_request, "Send ONE crafted HTTP request to a registered web surface and return {status,headers,body} (body capped at 64 KiB) — your hands for live web testing (log in, probe an auth check, fire an injection payload, read the response). body is form-encoded unless json_body=true. Pass `session` (any label) to keep a cookie jar across calls so an auth flow works (log in, then explore protected routes) — response lists the jar in session_cookies. Bounded, sandboxed, local-only egress, audited. Requires features.network.",
+     {"type": "object", "properties": {"target_id": {"type": "string"}, "method": {"type": "string"}, "path": {"type": "string"}, "params": {"type": "object"}, "headers": {"type": "object"}, "body": {}, "json_body": {"type": "boolean"}, "session": {"type": "string"}}, "required": ["target_id", "method", "path"]}),
     ("run", "ingest", ingest, "Ingest a binary/firmware from a local path as a target (firmware unpacks into children); creates a project if none given.",
      {"type": "object", "properties": {"path": {"type": "string"}, "name": {"type": "string"}, "project_id": {"type": "string"}}, "required": ["path"]}),
     ("run", "run_task", run_task, "Run a HexGraph task and return its findings. Types: recon, static_analysis, harness_generation, fuzzing, poc, surface_recon (offline route->handler map), web_recon (live liveness probe of a web surface, needs features.network).",
