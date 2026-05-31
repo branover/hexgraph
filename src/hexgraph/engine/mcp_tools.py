@@ -187,6 +187,51 @@ def record_finding(project_id: str, target_id: str, finding: dict, task_id: str 
         return {"id": row.id, "title": row.title, "severity": row.severity, "finding_type": row.finding_type}
 
 
+def propagate_finding(finding_id: str, target_id: str, function: str | None = None,
+                      notes: str | None = None) -> dict:
+    """N-day propagation: clone an existing finding onto ANOTHER binary (`target_id`)
+    that shares the same vulnerable code (see link_same_code) — as a fresh finding to
+    triage, wired `derived_from` → the source. Saves re-typing the whole finding dict
+    for "the same bug, other binary". Pass `function` to point it at the sibling's
+    function name. Returns the new finding id."""
+    from hexgraph.db.models import EdgeType, Finding, Task
+    from hexgraph.engine.edges import add_edge
+    from hexgraph.engine.findings import persist_finding
+    from hexgraph.engine.tasks import create_task
+    from hexgraph.models.finding import Finding as FModelCls
+
+    with session_scope() as s:
+        src = s.get(Finding, finding_id)
+        target = s.get(Target, target_id)
+        if src is None:
+            return {"error": "source finding not found"}
+        if target is None or target.project_id != src.project_id:
+            return {"error": "target not found in the source finding's project"}
+        ev = dict(src.evidence_json or {})
+        if function:
+            ev["function"] = function
+        ev.setdefault("extra", {})
+        ev["extra"] = {**(ev.get("extra") or {}),
+                       "propagated_from": src.id, "propagated_from_target": src.target_id}
+        model = FModelCls(
+            title=src.title, severity=src.severity, confidence=src.confidence,
+            category=src.category,
+            summary=(src.summary or "") + f"\n\n[n-day] Same code as finding {src.id} in another binary; "
+                    "review/confirm this instance." + (f"\nNotes: {notes}" if notes else ""),
+            reasoning=src.reasoning, evidence=ev,
+        )
+        task = create_task(s, project=s.get(Project, src.project_id), target_id=target.id,
+                           type="agent_delegate", backend="agent")
+        row = persist_finding(s, project_id=src.project_id, target_id=target.id, task_id=task.id,
+                              finding=model, finding_type=src.finding_type)
+        row.origin = "agent"
+        # Wire the n-day link: new instance derived_from the original.
+        add_edge(s, project_id=src.project_id, src=("finding", row.id), dst=("finding", src.id),
+                 type=EdgeType.derived_from, origin="agent", confidence=0.9, attrs={"by": "n-day propagation"})
+        return {"id": row.id, "title": row.title, "target_id": target.id, "finding_type": row.finding_type,
+                "status": getattr(row.status, "value", row.status), "derived_from": src.id}
+
+
 def create_node(project_id: str, node_type: str, name: str, target_id: str | None = None,
                 address: str | None = None, attrs: dict | None = None) -> dict:
     """Add a node to the graph (function/symbol/string/struct/hypothesis/pattern/
@@ -317,6 +362,10 @@ def get_schemas() -> dict:
                     "argument to record_finding (and read it back via list_findings). Defaults to "
                     "'vulnerability' / is auto-classified from the producing task.",
         },
+        "record_finding_signature": "record_finding(project_id, target_id, finding, task_id=None, "
+                                    "finding_type=None) — project_id is FIRST, then target_id. Prefer "
+                                    "keyword args. For 'the same bug in another binary' use "
+                                    "propagate_finding(finding_id, target_id) instead of re-typing it.",
         "node_types": [t.value for t in NodeType if t != NodeType.task],
         "edge_types": [t.value for t in EdgeType],
         "edge_endpoint_kinds": ["target", "node", "finding", "task"],
@@ -447,6 +496,47 @@ def merge_duplicates(project_id: str) -> dict:
         return _merge(s, project_id)
 
 
+def link_same_code(project_id: str) -> dict:
+    """Cross-target n-day primitive: link function nodes that share identical code
+    (same content_hash) across DIFFERENT binaries with a `similar_to` edge. After you
+    confirm a bug in one binary, call this to find the same routine reused in other
+    firmware components, then check each for the same flaw. Returns the matched pairs."""
+    from hexgraph.db.models import Edge, EdgeType
+    from hexgraph.engine.crosstarget import link_same_code as _link
+
+    with session_scope() as s:
+        if s.get(Project, project_id) is None:
+            return {"error": "project not found"}
+        created = _link(s, project_id)
+        s.flush()
+
+        def findings_about(node_id: str) -> list[str]:
+            # Findings attached to this node via an `about` edge.
+            rows = (s.query(Edge)
+                    .filter(Edge.project_id == project_id, Edge.type == EdgeType.about.value,
+                            Edge.src_kind == "finding", Edge.dst_kind == "node", Edge.dst_id == node_id)
+                    .all())
+            return [r.src_id for r in rows]
+
+        def side(n: Node) -> dict:
+            fids = findings_about(n.id)
+            return {"node_id": n.id, "target_id": n.target_id, "finding_ids": fids,
+                    "has_findings": bool(fids)}
+
+        matches = []
+        edges = (s.query(Edge)
+                 .filter(Edge.project_id == project_id, Edge.type == EdgeType.similar_to.value)
+                 .limit(200).all())
+        for e in edges:
+            a, b = s.get(Node, e.src_id), s.get(Node, e.dst_id)
+            if a is None or b is None:
+                continue
+            matches.append({"function": a.name, "a": side(a), "b": side(b)})
+        return {"edges_created": created, "matches": matches,
+                "hint": "If one side has_findings and the other doesn't, the bug likely "
+                        "propagates — use propagate_finding(finding_id, target_id) on the bare side."}
+
+
 def run_task(target_id: str, type: str, objective: str | None = None, params: dict | None = None) -> dict:
     """Run a HexGraph task synchronously (recon/static_analysis/harness_generation/
     fuzzing/…) and return its status + the findings it produced."""
@@ -524,6 +614,10 @@ _CATALOG = [
      {"type": "object", "properties": {"project_id": {"type": "string"}, "node_kind": {"type": "string"}, "node_id": {"type": "string"}, "kind": {"type": "string"}, "value": {"type": "string"}}, "required": ["project_id", "node_kind", "node_id", "kind", "value"]}),
     ("write", "merge_duplicates", merge_duplicates, "Collapse duplicate binaries/nodes (e.g. sym.foo == foo) in a project, preserving all edges/findings.",
      {"type": "object", "properties": {"project_id": {"type": "string"}}, "required": ["project_id"]}),
+    ("write", "link_same_code", link_same_code, "Cross-target n-day primitive: link functions with identical code (same content_hash) across DIFFERENT binaries via similar_to edges, and return the matches (each side flags has_findings). Run after confirming a bug to find the same routine reused elsewhere.",
+     {"type": "object", "properties": {"project_id": {"type": "string"}}, "required": ["project_id"]}),
+    ("write", "propagate_finding", propagate_finding, "N-day: clone an existing finding onto another binary that shares the same code (per link_same_code) as a fresh finding to triage, wired derived_from→ the source. Avoids re-typing the whole finding for 'same bug, other binary'.",
+     {"type": "object", "properties": {"finding_id": {"type": "string"}, "target_id": {"type": "string"}, "function": {"type": "string"}, "notes": {"type": "string"}}, "required": ["finding_id", "target_id"]}),
     ("run", "verify_poc", verify_poc, "Execute a proof-of-concept against a target in the sandbox and report verified true/false (use {{NONCE}} in the injected command + oracle for an unforgeable check). Pass finding_id to attach the result. Requires PoC enabled.",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "poc": {"type": "object"}, "finding_id": {"type": "string"}}, "required": ["target_id", "poc"]}),
     ("run", "ingest", ingest, "Ingest a binary/firmware from a local path as a target (firmware unpacks into children); creates a project if none given.",

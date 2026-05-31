@@ -75,3 +75,43 @@ def test_cross_target_same_code(hg_home):
         assert link_same_code(s, pid) == 0
         edges = s.query(Edge).filter(Edge.project_id == pid, Edge.type == EdgeType.similar_to.value).all()
         assert len(edges) == 1 and edges[0].origin == "derived"
+
+
+def test_nday_propagate_flow(hg_home):
+    """The n-day MCP flow: link_same_code flags which side has a finding, and
+    propagate_finding clones it onto the bare sibling wired derived_from→ source."""
+    from hexgraph.engine import mcp_tools as M
+    from hexgraph.engine.edges import add_edge
+
+    with session_scope() as s:
+        p = create_project(s, name="nday")
+        a = ingest_file(s, p, fixture_path("vuln_httpd"), name="a")
+        b = ingest_file(s, p, fixture_path("libupnp.so"), name="b")
+        body = "void f(){ strcpy(buf, x); }"
+        na = materialize_function(s, project_id=p.id, target_id=a.id, name="f", pseudocode=body)
+        nb = materialize_function(s, project_id=p.id, target_id=b.id, name="f", pseudocode=body)
+        task = create_task(s, project=p, target_id=a.id, type="static_analysis")
+        f = persist_finding(s, project_id=p.id, target_id=a.id, task_id=task.id, finding=FModel(
+            title="overflow in f", severity="critical", confidence="high", category="memory-safety",
+            summary="s", reasoning="r", evidence=Evidence(function="f", sink="strcpy")),
+            finding_type="vulnerability")
+        add_edge(s, project_id=p.id, src=("finding", f.id), dst=("node", na.id),
+                 type=EdgeType.about, origin="agent", confidence=1.0)
+        pid, src_fid, bid, naid, nbid = p.id, f.id, b.id, na.id, nb.id
+
+    res = M.link_same_code(pid)
+    match = res["matches"][0]
+    sides = {match["a"]["node_id"]: match["a"], match["b"]["node_id"]: match["b"]}
+    assert sides[naid]["has_findings"] and not sides[nbid]["has_findings"]
+
+    prop = M.propagate_finding(finding_id=src_fid, target_id=bid, function="f")
+    assert prop["target_id"] == bid and prop["derived_from"] == src_fid
+    assert prop["status"] == "new"
+
+    # The propagated finding is wired derived_from→ the source.
+    with session_scope() as s:
+        e = (s.query(Edge).filter(Edge.project_id == pid, Edge.type == EdgeType.derived_from.value,
+                                  Edge.src_id == prop["id"], Edge.dst_id == src_fid).first())
+        assert e is not None
+        ev = s.get(__import__("hexgraph.db.models", fromlist=["Finding"]).Finding, prop["id"]).evidence_json
+        assert ev["extra"]["propagated_from"] == src_fid

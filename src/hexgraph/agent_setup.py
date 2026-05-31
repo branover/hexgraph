@@ -99,6 +99,13 @@ is **record → explore → verify → update**:
 to it** (PoC `confirms`→ vulnerability). A vulnerability without a linked, verified
 PoC is "suspected", not "confirmed" — say so in its confidence/reasoning.
 
+**n-day across binaries.** After confirming a bug, run `link_same_code(project_id)`
+— it links functions with identical code across the project's other binaries and
+flags which side already has findings. For each matched binary that's still bare,
+`propagate_finding(finding_id, target_id)` clones the finding onto it (wired
+`derived_from`→ the source) to triage, then verify a PoC there too. Firmware reuses
+the same routine across components; one bug is usually several.
+
 Pin every function/symbol/string/struct you reasoned about (even benign-but-
 relevant ones). Aim: at any moment — even mid-investigation — someone opening the
 project sees the attack surface, the input→sink paths, what's suspected vs
