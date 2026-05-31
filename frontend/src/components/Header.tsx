@@ -18,6 +18,9 @@ export default function Header({ project, cost }: {
         </span>
       )}
       <span className="badge">local · 127.0.0.1</span>
+      <Link to="/settings" className="btn sm icon ghost" title="Settings" style={{ marginLeft: 6 }}>
+        <Icon name="gear" size={14} />
+      </Link>
     </header>
   );
 }

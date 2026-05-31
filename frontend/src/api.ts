@@ -24,6 +24,18 @@ export interface RunDiff {
   dropped: { title: string; severity: string; category: string }[];
   changed: { title: string; from: string; to: string }[];
 }
+export interface SecretStatus { present: boolean; source: string | null; }
+export interface SettingsView {
+  settings: {
+    llm: { backend: string; model: string | null };
+    server: { host: string; port: number };
+    features: { ghidra: { enabled: boolean; mode: string; enrich_recon: boolean; timeout: number; bridge: { host: string; port: number } } };
+  };
+  secrets: Record<string, SecretStatus>;
+  availability: { docker: boolean; ghidra: { enabled: boolean; mode: string; bridge_client_installed: boolean } };
+  paths: { config_toml: string; settings_json: string };
+}
+export interface GhidraStatus { enabled: boolean; ok: boolean; detail: string; mode?: string; [k: string]: any; }
 export interface GraphNode { id: string; type: "target" | "node" | "finding"; label: string; [k: string]: any; }
 export interface GraphEdge { id: string; source: string; target: string; type: string; src_kind?: string; dst_kind?: string; origin?: string; confidence?: number | null; }
 export interface Graph { project_id: string; nodes: GraphNode[]; edges: GraphEdge[]; }
@@ -83,6 +95,14 @@ export const api = {
   hypothesis: (hid: string) => getJSON<Hypothesis>(`/api/hypotheses/${hid}`),
   linkEvidence: (hid: string, finding_id: string, relation: string) => postJSON<Hypothesis>(`/api/hypotheses/${hid}/evidence`, { finding_id, relation }),
   setHypothesisStatus: (hid: string, status: string) => postJSON<Hypothesis>(`/api/hypotheses/${hid}/status`, { status }),
+  // Settings (optional features + non-secret prefs; secrets are status-only)
+  getSettings: () => getJSON<SettingsView>("/api/settings"),
+  async patchSettings(patch: Record<string, any>): Promise<SettingsView> {
+    const r = await fetch("/api/settings", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `${r.status}`);
+    return r.json();
+  },
+  testGhidra: () => postJSON<GhidraStatus>("/api/settings/ghidra/test", {}),
   async addTarget(pid: string, file: File, recon: boolean): Promise<any> {
     const fd = new FormData();
     fd.append("file", file);
