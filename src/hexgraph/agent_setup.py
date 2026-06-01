@@ -243,6 +243,17 @@ with no dynamic confirmation at all is "suspected" — say so. Always state, in 
 highest rung you reached and what you could NOT establish (e.g. "code-present, lab-confirmed;
 production input path not yet found").
 
+- **input_reachable / static (ARGUE it when you can't trigger it live)** — if the service won't
+  boot (no rehost/remote/exec tier) you can still argue reachability over the graph instead of
+  triggering it. Build the path — `create_node` the untrusted **input**/`param`/`endpoint` source
+  and the **sink**, then `create_edge` the **`taints`** (best) / `calls` / `routes_to` dataflow
+  from source to sink — and call **`reachability(finding_id=…)`**. If a source→sink path exists it
+  UPGRADES `code_present/static` → `input_reachable/static`, records the path, and derives the
+  precondition (an auth boundary on the path ⇒ `requires_credentials`; an unauth boundary ⇒
+  `unauthenticated`). It is an ARGUMENT, never a demonstration — strictly weaker than a live
+  trigger, and it NEVER downgrades a dynamic claim. (This is exactly the DIR-823G situation: a real
+  cmdi sink HexGraph couldn't boot goahead to trigger — argue the path, state the precondition.)
+
 **n-day across binaries.** After confirming a bug, run `link_same_code(project_id)`
 — it links functions with identical code across the project's other binaries and
 flags which side already has findings. For each matched binary that's still bare,

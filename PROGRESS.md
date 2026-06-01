@@ -311,6 +311,30 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-01: **Verification oracles Phase 4 — Standard B, static (source→sink reachability ARGUMENT)**
+  ([`docs/design-verification-oracles.md`](docs/design-verification-oracles.md), branch
+  `build/static-reachability`). New `engine/reachability.py`: a multi-source, forward, bounded +
+  cycle-safe BFS over the typed graph that argues a finding is `input_reachable/static` when the
+  service can't be booted to trigger it live (the DIR-823G case — real cmdi sink, FirmAE couldn't
+  boot goahead). **Sources** = the untrusted boundary (`input`/`param`/`endpoint`/`socket`, or a
+  `function`/`symbol` explicitly `attrs.entry`); **sinks** = a `sink` node or any `attrs.is_sink`
+  node (a finding resolves its sink via `about`→node, falling back to a name match on
+  `evidence.sink`/`function`). **Traversal**: forward only (never reverse an edge) over
+  `taints` (strongest — `via_taint`), `dataflow_hint`, `calls`, `routes_to`, `writes`, `reads`,
+  `references`, `bypasses`; `contains` excluded (vacuous). **Precondition** derived from the path:
+  an auth boundary (`attrs.auth` set, `auth_check`, or a `bypasses` edge) ⇒ `requires_credentials`;
+  an explicitly-unauth start boundary ⇒ `unauthenticated`; else `unspecified`. **Precedence**:
+  `assurance.upgrade_if_stronger` encodes the ladder as a PARTIAL order so `input_reachable/static`
+  UPGRADES only the `code_present/static` floor and NEVER downgrades a dynamic claim
+  (`code_present/dynamic` ‖ `input_reachable/static` are incomparable tier-1; `input_reachable/dynamic`
+  wins all). Exposed as the `reachability(finding_id|sink_node_id)` MCP `run` tool (records the path
+  to `evidence.extra.reachability` + the upgraded assurance), AUTO-stamped in the static_analysis flow
+  (best-effort, advisory, after dupe-merge), and documented in `get_schemas['assurance']
+  .static_reachability` + SKILL §3. Envelope-only — no DB model change, no migration. Tests:
+  `tests/test_reachability.py` (13: taints/control/auth/bypasses paths + precondition matrix, no-path
+  stays at floor, non-source/backwards-edge/`contains` can't FALSELY claim reach, the partial-order
+  upgrade rule incl. not-downgrading dynamic, cyclic-graph termination + max_depth bound) + 2 new
+  `engine/assurance.py` rank/upgrade tests. Full suite: 412 passed, 2 skipped (Docker-gated).
 - 2026-06-01: **Verification oracles Phase 1 — `callback` / `canary_read` / `oob_write` (unforgeable
   oracles beyond reflected cmdi)** ([`docs/design-verification-oracles.md`](docs/design-verification-oracles.md),
   branch `build/oracles-phase1`). New `engine/oracles.py` (dispatched from `poc.verify_poc` when
