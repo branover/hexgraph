@@ -61,6 +61,10 @@ NEW_ORACLE_TYPES = frozenset({OOB_WRITE, CANARY_READ, CALLBACK, LIVENESS, UNAVAI
 # this delay between probes, and ALL must read DOWN — so a single transient hiccup never verifies.
 _LIVENESS_REPROBES = 3
 _LIVENESS_REPROBE_DELAY = 0.5  # seconds between down re-probes
+# Sanity caps so an operator-authored spec (a typo like reprobes=100000 / delay=60) can't block the
+# synchronous verify handler for an unbounded time; the verdict's worst-case latency stays bounded.
+_LIVENESS_MAX_REPROBES = 20
+_LIVENESS_MAX_DELAY = 10.0  # seconds
 
 # A canary big enough that it can't be guessed/confabulated by the model.
 _CANARY_PREFIX = "HEXGRAPH_CANARY_"
@@ -503,8 +507,10 @@ def verify_liveness(session, project, target, spec, runner, nonce, *, is_web, is
     already covered there) — see verify_poc's dispatch. The verdict is HexGraph's own out-of-band
     re-probe, never the exploit's response — unforgeable."""
     oracle = spec.get("oracle") or {}
-    reprobes = max(1, int(oracle.get("reprobes", _LIVENESS_REPROBES)))
-    delay = max(0.0, float(oracle.get("delay", _LIVENESS_REPROBE_DELAY)))
+    # Clamp to a sane range: floored so we always re-probe ≥1×, and capped so a stray huge value
+    # can't block the (synchronous) verify handler for an unbounded time.
+    reprobes = min(_LIVENESS_MAX_REPROBES, max(1, int(oracle.get("reprobes", _LIVENESS_REPROBES))))
+    delay = min(_LIVENESS_MAX_DELAY, max(0.0, float(oracle.get("delay", _LIVENESS_REPROBE_DELAY))))
     port = oracle.get("port") or spec.get("port") or (
         (spec.get("tcp") or {}).get("port") if isinstance(spec.get("tcp"), dict) else None)
 

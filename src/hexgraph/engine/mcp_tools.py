@@ -670,7 +670,8 @@ def get_schemas() -> dict:
                            "device, web_app, custom daemon). For a one-shot binary use the in-band "
                            "'crash' oracle instead (process death already covers it).",
                 "spec": "{steps:[...the DoS request...]|transport+port+payload, oracle:{type:'liveness'"
-                        "|'unavailable', probe?:{method,path}, port?:N, reprobes?:int=3, delay?:secs}}. "
+                        "|'unavailable', probe?:{method,path}, port?:N, reprobes?:int=3 (1..20), "
+                        "delay?:secs=0.5 (0..10)}}. "
                         "HexGraph probes the service is UP on its own channel (baseline), sends the "
                         "DoS input, then RE-PROBES it is DOWN and STAYS down across `reprobes` probes "
                         "(hysteresis) — a single transient blip does NOT verify. The verdict is "

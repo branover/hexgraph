@@ -253,6 +253,25 @@ def test_liveness_gated_by_network_tier(hg_home):
             verify_poc(s, p, t, _DOS_SPEC, runner=ScriptedWebRunner([True, False, False, False]))
 
 
+def test_liveness_reprobes_clamped_to_sane_range(hg_home):
+    """A stray-huge `reprobes` is capped so it can't block the (synchronous) verify handler for an
+    unbounded time. With reprobes=100000 the loop must stop at the cap (≤20 re-probes), and a
+    DOWN-throughout sequence still verifies."""
+    _enable_net()
+    from hexgraph.engine import oracles
+    with session_scope() as s:
+        p = create_project(s, name="dos_clamp")
+        t = _web(s, p)
+        spec = {"steps": [{"method": "POST", "path": "/crash"}],
+                "oracle": {"type": "liveness", "reprobes": 100000, "delay": 0}}
+        # baseline UP, then plenty of DOWN; the runner records how many liveness probes ran
+        r = ScriptedWebRunner([True] + [False] * 100)
+        out = verify_poc(s, p, t, spec, runner=r)
+        assert out["verified"] is True
+        # baseline (1) + at most the cap (20) re-probes = 21; never 100001
+        assert r.probe_i <= 1 + oracles._LIVENESS_MAX_REPROBES
+
+
 def test_is_liveness_recognizes_phase2_types(hg_home):
     from hexgraph.engine import oracles
     assert oracles.is_new_oracle({"oracle": {"type": "liveness"}})

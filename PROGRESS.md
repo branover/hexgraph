@@ -332,7 +332,8 @@ then run the resume verifier, then continue at the next unchecked task.
   `verify_poc` docstring + `_CATALOG` entry. Tests: `tests/test_oracles_liveness.py` (10 — verified
   sustained outage web+tcp, **transient blip does NOT verify** [the unforgeability test],
   inconclusive-when-already-down, 5xx-counts-as-down, every-probe-audited, binary→crash degradation,
-  network-tier gating). Full suite: 430 passed, 2 skipped (Docker-gated).
+  network-tier gating, reprobes/delay clamped to a sane range). Full suite: 431 passed, 2 skipped
+  (Docker-gated).
 - 2026-06-01: **PoC presentation — a verified PoC is now actionable** (branch `build/poc-presentation`,
   PR #46). **Regression fix:** `api_verify_finding` (one-click Re-verify) was DROPPING
   `evidence.extra.assurance` — it now refreshes the engine-computed assurance triple at BOTH the canonical
