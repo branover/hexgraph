@@ -197,6 +197,36 @@ def test_socket_guard_blocks_offlist_and_allows_onlist():
         srv.close()
 
 
+def test_socket_guard_allows_hostname_allowlist_entry():
+    """Regression: a HOSTNAME allowlist entry (localhost / host.docker.internal — all in
+    policy._LOCAL_HOSTNAMES, so a surface can be registered as http://localhost:PORT) must
+    NOT be over-blocked. create_connection('localhost', p) resolves to 127.0.0.1 then calls
+    the guarded inner connect with the IP; the guard must accept it because the install
+    expanded the hostname entry to its resolved-IP form. Pre-fix this raised EgressBlocked."""
+    eg = _load_egress()
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+
+    def _accept():
+        try:
+            conn, _ = srv.accept(); conn.close()
+        except OSError:
+            pass
+
+    threading.Thread(target=_accept, daemon=True).start()
+    try:
+        eg.install_socket_guard({f"localhost:{port}"})  # HOSTNAME entry, not an IP
+        s = socket.create_connection(("localhost", port), timeout=2)  # must NOT raise
+        s.close()
+        # a hostname+wrong-port (and its resolved IP) is still blocked
+        with pytest.raises(eg.EgressBlocked):
+            socket.create_connection(("localhost", port + 1), timeout=2)
+    finally:
+        srv.close()
+
+
 def test_socket_guard_leaves_dns_and_udp_alone():
     """CRITICAL: the guard must not interfere with name resolution or UDP — only TCP stream
     connects. getaddrinfo (and the UDP sockets a resolver opens) must flow through."""

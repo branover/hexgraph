@@ -90,6 +90,32 @@ def _check_addr(address) -> None:
         raise EgressBlocked(f"socket guard: destination not in allowlist: {dest(host, port)}")
 
 
+def _expand_allow(allow) -> set:
+    """Augment the guard's allowlist with the RESOLVED-IP forms of any hostname entries.
+
+    Entries are canonical `host:port` over the scope's *hostname*. But
+    `socket.create_connection(("localhost", p))` resolves the name, then calls the
+    (also-guarded) inner `connect()` with the resolved IP `("127.0.0.1", p)` — which would
+    NOT match a `localhost:p` entry and would wrongly raise `EgressBlocked`. So resolve each
+    hostname entry once at install and add its `ip:port` form. The hosts here are always
+    local (localhost / host.docker.internal / gateway.docker.internal / private IPs — the
+    policy scopes refuse anything else), so this never widens beyond loopback/private.
+    Resolution failures are skipped (such a connect would fail at the socket layer anyway)."""
+    entries = set(allow or ())
+    expanded = set(entries)
+    for entry in entries:
+        host, sep, port = entry.rpartition(":")
+        if not sep or not port.isdigit():
+            continue
+        try:
+            infos = socket.getaddrinfo(host, int(port), type=socket.SOCK_STREAM)
+        except (OSError, ValueError):
+            continue
+        for info in infos:
+            expanded.add(dest(info[4][0], port))
+    return expanded
+
+
 def install_socket_guard(allow) -> None:
     """Monkeypatch the stdlib TCP connect path so every outbound AF_INET/AF_INET6
     SOCK_STREAM connect is checked against `allow`. Idempotent and safe to call once at
@@ -103,7 +129,7 @@ def install_socket_guard(allow) -> None:
     global _GUARD_ALLOW, _INSTALLED
     global _orig_create_connection, _orig_connect, _orig_connect_ex
 
-    _GUARD_ALLOW = set(allow or ())
+    _GUARD_ALLOW = _expand_allow(allow)
     if _INSTALLED:
         return  # already patched; the refreshed _GUARD_ALLOW above is enough
 
