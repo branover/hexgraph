@@ -629,6 +629,43 @@ def get_schemas() -> dict:
         "annotation_kinds": sorted(ANN_KINDS),
         "annotation_node_kinds": sorted(ANN_NODE_KINDS),
         "annotation_note": "Annotations from an agent land status='proposed' (pending analyst approval).",
+        "verify_poc_oracles": {
+            "note": "verify_poc's oracle vocabulary. The classic in-band oracles prove a "
+                    "REFLECTED side effect (best for reflected cmdi / auth-bypass); the Phase-1 "
+                    "oracles below prove BROADER vuln classes by observing a side effect on a "
+                    "channel INDEPENDENT of the exploit's request, so the model can't forge them "
+                    "(docs/design-verification-oracles.md). All carry {{NONCE}} substitution.",
+            "in_band": {
+                "binary": ["output_contains", "exit_code", "exit_nonzero", "crash"],
+                "web": ["body_contains", "status_is", "status_differs"],
+                "tcp": ["response_contains"],
+            },
+            "callback": {
+                "use_for": "blind command-injection, SSRF, blind RCE, OOB exfil (NO reflected output)",
+                "spec": "{steps|request|transport+port..., oracle:{type:'callback', timeout?:secs, "
+                        "bind_host?}} — put a {{CALLBACK}} token (host:port + per-run nonce path) in "
+                        "the injected command/SSRF URL (e.g. 'wget http://{{CALLBACK}}'). HexGraph "
+                        "stands up a bounded LOCAL listener (loopback/private only, features.network-"
+                        "gated, audited) and verifies it received a hit carrying the nonce.",
+            },
+            "canary_read": {
+                "use_for": "arbitrary/relative file READ, path traversal, info/memory disclosure",
+                "spec": "{plant:{channel:'rootfs', path} OR {known_value:'<a secret HexGraph reads "
+                        "independently>'}, steps:[...the read...], oracle:{type:'canary_read'}}. "
+                        "HexGraph plants a RANDOM canary out-of-band (or uses known_value) BEFORE "
+                        "the exploit; the read primitive must return it. Use {{CANARY}} in the spec "
+                        "to reference the planted value. Unforgeable: a random planted value can't "
+                        "be guessed.",
+            },
+            "oob_write": {
+                "use_for": "arbitrary file/config/NVRAM WRITE, persistence",
+                "spec": "{steps:[...the write of {{NONCE}}...], oracle:{type:'oob_write', "
+                        "channel:'rootfs'|'remote'|'http', path?:'/loc' | request?:{method,path}}}. "
+                        "The exploit writes {{NONCE}}; HexGraph then INDEPENDENTLY reads that "
+                        "location (rootfs read_file / remote read_file / a follow-up GET) and checks "
+                        "the nonce landed. Reuses existing channels.",
+            },
+        },
         "assurance": {
             "ladder": _ASSURANCE_LADDER,
             "note": "Two STANDARDS of 'verified': code_present (the flaw exists in code) vs "
@@ -921,6 +958,16 @@ def verify_poc(target_id: str, poc: dict, finding_id: str | None = None) -> dict
     token, so a match proves the injected behaviour actually happened (not something the
     model could fabricate).
 
+    Beyond reflected output, THREE oracles prove broader vuln classes by observing a side
+    effect on a channel INDEPENDENT of the exploit's request (see get_schemas['verify_poc_oracles']):
+    - blind cmdi / SSRF / blind RCE → oracle {type:'callback'} + a {{CALLBACK}} token in the
+      payload (the target dials a bounded local listener HexGraph stands up; receiving the
+      per-run nonce is proof even with NO reflected output);
+    - arbitrary READ / traversal / disclosure → {plant:{channel,path}|{known_value}} + oracle
+      {type:'canary_read'} (HexGraph plants a random canary out-of-band, the read must return it);
+    - arbitrary WRITE / persistence → write {{NONCE}}, oracle {type:'oob_write', channel, path?}
+      (HexGraph reads the written location back out-of-band and checks the nonce landed).
+
     A verified run records the strongest assurance — input_reachable / dynamic (see
     get_schemas['assurance']) — which an agent CANNOT fake (it requires the oracle to fire).
     Declare the access level the PoC needed via `spec.precondition` ("unauthenticated" /
@@ -958,7 +1005,10 @@ def verify_poc(target_id: str, poc: dict, finding_id: str | None = None) -> dict
                 extra["poc"] = poc
                 extra["verification"] = {"verified": bool(r.get("verified")), "detail": r.get("detail"),
                                          "exit_code": r.get("exit_code"), "nonce": r.get("nonce"),
-                                         "output": (r.get("output") or "")[:2000]}
+                                         "output": (r.get("output") or "")[:2000],
+                                         # The engine-computed assurance (standard/method/precondition)
+                                         # — so a confirmed PoC records the right rung; cannot be faked.
+                                         "assurance": r.get("assurance")}
                 ev["extra"] = extra
                 if not ev.get("reproducer"):
                     ev["reproducer"] = json.dumps(poc)

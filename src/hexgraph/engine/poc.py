@@ -131,14 +131,29 @@ def verify_poc(session: Session, project: Project, target: Target, spec: dict,
       the bounded-egress network tier.
     - **binary** → run it in the sandbox (argv/env/stdin + an output/exit/crash oracle);
       policy-gated by `assert_allows_execution` (PoC/fuzzing enabled).
+    Beyond the in-band `{{NONCE}}`-in-output oracle (best for reflected cmdi), three Phase-1
+    oracles prove broader vuln classes by observing a side effect on an INDEPENDENT channel
+    (engine.oracles, docs/design-verification-oracles.md): **oob_write** (the exploit writes
+    `{{NONCE}}`, HexGraph reads it back out-of-band), **canary_read** (HexGraph plants a random
+    canary out-of-band, the exploit must read it back), and **callback** (a bounded local
+    listener the target dials back, substituted as `{{CALLBACK}}` — proves blind cmdi/SSRF/RCE).
     Every result also carries an **`assurance`** triple ({standard, method, precondition},
     docs/design-verification-oracles.md) the engine computes — so the two standards of "verified"
     (code-present vs input-reachable) are differentiated by code, not prose."""
+    from hexgraph.engine import oracles
+
     nonce = "HEXGRAPH_PWNED_" + secrets.token_hex(6)
     live = _substitute(copy.deepcopy(spec or {}), nonce)
     is_tcp, is_web = _is_tcp(live), _is_web(target)
 
-    if is_tcp:
+    if oracles.is_new_oracle(live):
+        # Phase-1 oracles observe a side effect on a channel INDEPENDENT of the exploit's
+        # request (a read-back, a planted canary, or a bounded callback listener) — not just
+        # the in-band response. Each runs the SAME exploit flow (web/tcp/binary) but evaluates
+        # its own unforgeable oracle. docs/design-verification-oracles.md.
+        result = oracles.verify(session, project, target, live, runner, nonce,
+                                is_web=is_web, is_tcp=is_tcp)
+    elif is_tcp:
         result = _verify_tcp_poc(session, project, target, live, runner, nonce)
     elif is_web:
         result = _verify_web_poc(session, project, target, live, runner, nonce)
