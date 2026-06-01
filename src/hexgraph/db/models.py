@@ -44,6 +44,7 @@ class TargetKind(str, enum.Enum):
     executable = "executable"
     shared_library = "shared_library"
     web_app = "web_app"      # a dynamic HTTP(S) attack surface reached via a Channel (design-dynamic-surfaces.md)
+    remote = "remote"        # a live device reached over SSH/telnet — the live-remote tier (docs/vr-feedback.md)
     unknown = "unknown"
 
 

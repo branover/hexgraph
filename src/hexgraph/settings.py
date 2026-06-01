@@ -95,6 +95,18 @@ DEFAULTS: dict[str, Any] = {
             "qemu_image": "hexgraph-qemu:latest",    # qemu+KVM image (full-OS disk images)
             "timeout": 600,                           # boot wall-clock budget (s)
         },
+        "remote": {
+            # OFF by default. The LIVE-REMOTE tier: connect to ONE operator-authorized device
+            # over SSH/telnet (a physical box on the bench, a rehosted device) and run the
+            # SAME read-only analysis we'd run on a static/rehosted image — enumerate the
+            # filesystem, read files, run a fixed allowlist of recon tools. Egress is pinned
+            # to that host (remote_scope) + audited. Credentials are SECRETS: never stored in
+            # the DB — read at connect from env (HEXGRAPH_REMOTE_PASSWORD / HEXGRAPH_REMOTE_KEY)
+            # or config.toml [remote]. (docs/design-rehosting.md / vr-feedback.md)
+            "enabled": False,
+            "timeout": 30,
+            "max_file_bytes": 262144,   # cap on a remote read_file (256 KiB)
+        },
     },
 }
 
@@ -131,6 +143,9 @@ ALLOWED: dict[str, tuple[Any, set | None]] = {
     "features.rehost.image": (str, None),
     "features.rehost.qemu_image": (str, None),
     "features.rehost.timeout": (int, None),
+    "features.remote.enabled": (bool, None),
+    "features.remote.timeout": (int, None),
+    "features.remote.max_file_bytes": (int, None),
 }
 
 
