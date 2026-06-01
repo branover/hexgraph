@@ -53,6 +53,36 @@ def target_facts(target_id: str) -> dict:
                 "dangerous_imports": sorted(set(imports) & _DANGEROUS)}
 
 
+def list_filesystem(target_id: str) -> dict:
+    """List a firmware target's unpacked filesystem (paths, sizes, which are ELFs / already
+    child targets). Use it to find config files, scripts, keys, and web assets to inspect —
+    then read_file to view one. Returns {unpacked, method, files:[{rel,size,is_elf,added}]}."""
+    from hexgraph.engine.filesystem import list_filesystem as _ls
+
+    with session_scope() as s:
+        t = s.get(Target, target_id)
+        if t is None:
+            return {"error": "target not found"}
+        return _ls(s.get(Project, t.project_id), t)
+
+
+def read_file(target_id: str, path: str) -> dict:
+    """Read ONE file from a firmware target's unpacked filesystem (a config, script, key,
+    web template — NOT the raw binary; decompile_function for code). Bounded (256 KiB),
+    path-traversal safe; text is returned as-is, binary as hex. `path` is relative to the
+    firmware's extracted root (see list_filesystem). Returns {rel,size,encoding,content,truncated}."""
+    from hexgraph.engine.filesystem import FilesystemError, read_file as _read
+
+    with session_scope() as s:
+        t = s.get(Target, target_id)
+        if t is None:
+            return {"error": "target not found"}
+        try:
+            return _read(s.get(Project, t.project_id), t, path)
+        except FilesystemError as exc:
+            return {"error": str(exc)}
+
+
 def _tool(target_id: str, name: str, args: dict) -> str:
     """Run a sandboxed inspection tool (decompile/strings/…) via the shared registry."""
     from hexgraph.engine.agent_tools import ToolContext, run_tool
@@ -351,6 +381,35 @@ def restore_node(project_id: str, node_id: str) -> dict:
         return {"id": n.id, "archived": n.archived}
 
 
+def archive_target(project_id: str, target_id: str) -> dict:
+    """Soft-remove a target + its whole subtree (children, nodes, findings) from the graph
+    (REVERSIBLE): they're hidden, not deleted; re-ingesting the same bytes, or restore_target,
+    brings them back. Use to declutter (e.g. an irrelevant firmware component). Returns how
+    many targets were archived. (Whole-project deletion is operator-only — not an MCP tool.)"""
+    from hexgraph.engine.targets import archive_target as _archive
+
+    with session_scope() as s:
+        if s.get(Project, project_id) is None:
+            return {"error": "project not found"}
+        try:
+            return {"archived": _archive(s, project_id, target_id)}
+        except ValueError as exc:
+            return {"error": str(exc)}
+
+
+def restore_target(project_id: str, target_id: str) -> dict:
+    """Un-archive a previously soft-removed target subtree (its nodes/findings reappear)."""
+    from hexgraph.engine.targets import restore_target as _restore
+
+    with session_scope() as s:
+        if s.get(Project, project_id) is None:
+            return {"error": "project not found"}
+        try:
+            return {"restored": _restore(s, project_id, target_id)}
+        except ValueError as exc:
+            return {"error": str(exc)}
+
+
 def delete_edge(edge_id: str) -> dict:
     """Permanently delete one edge (hard delete — re-create it with create_edge to
     bring it back). To remove a node's edges reversibly, archive the node instead."""
@@ -645,12 +704,13 @@ def register_surface(project_id: str, base_url: str, name: str | None = None,
 
 
 def rehost(target_id: str, brand: str | None = None) -> dict:
-    """Boot a FIRMWARE target under full-system emulation (FirmAE) and register its live
-    web server as a `web_app` surface child — so you can then assess the running device
-    (surface_recon / web_recon / http_request / verify_poc), fused to the firmware's static
-    graph. Returns {surface_id, base_url}. Requires features.rehost (to boot) — and
-    features.network to then talk to it. Heavy + best-effort: many images don't boot
-    cleanly; the error says so when emulation fails."""
+    """Boot a FIRMWARE target under full-system emulation and register its live web server
+    as a `web_app` surface child — so you can then assess the running device (surface_recon /
+    web_recon / http_request / verify_poc), fused to the firmware's static graph. The rehoster
+    is auto-selected from the image: qemu+KVM for a full-OS disk image (boots its own kernel),
+    FirmAE for a vendor firmware blob (extracts the rootfs + supplies a kernel). Returns
+    {surface_id, base_url}. Requires features.rehost (to boot) — and features.network to then
+    talk to it. Heavy + best-effort: many images don't boot cleanly; the error says so."""
     from hexgraph.engine.rehost import RehostError, rehost_firmware
     from hexgraph.policy import PolicyViolation
 
@@ -890,7 +950,11 @@ _CATALOG = [
      {"type": "object", "properties": {"project_id": {"type": "string"}}, "required": ["project_id"]}),
     ("read", "list_sockets", list_sockets, "List socket endpoints (tcp/udp/unix/…) with who listens/connects on each — the firmware's network map (server↔client over shared sockets).",
      {"type": "object", "properties": {"project_id": {"type": "string"}}, "required": ["project_id"]}),
-    ("read", "get_schemas", get_schemas, "The write-API contract: allowed enums + the Finding shape. Read before record_finding/create_node/create_edge/annotate to avoid guessing field names.",
+    ("read", "list_filesystem", list_filesystem, "List a firmware target's unpacked filesystem (paths/sizes/which are ELFs or already child targets) — find config files, scripts, keys, web assets to read with read_file.",
+     {"type": "object", "properties": {"target_id": {"type": "string"}}, "required": ["target_id"]}),
+    ("read", "read_file", read_file, "Read ONE file from a firmware target's unpacked filesystem (config/script/key/web template — NOT the raw binary; use decompile_function for code). Bounded 256 KiB, path-traversal safe; text as-is, binary as hex. `path` is relative to the extracted root (see list_filesystem).",
+     {"type": "object", "properties": {"target_id": {"type": "string"}, "path": {"type": "string"}}, "required": ["target_id", "path"]}),
+    ("read", "get_schemas", get_schemas, "The write-API contract: allowed enums, the Finding shape, per-type NODE attribute schemas (what to populate, the sink-vs-symbol rule), edge/socket attribute schemas, and the active decompiler. Read before record_finding/create_node/create_edge/annotate to avoid guessing.",
      {"type": "object", "properties": {}}),
     ("write", "record_finding", record_finding, "Record a new finding (the `finding` dict must match the Finding schema — call get_schemas). `finding_type` is a SEPARATE arg (vulnerability|poc|…), not a finding field. Pass task_id in delegate mode.",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "target_id": {"type": "string"}, "finding": {"type": "object"}, "finding_type": {"type": "string"}, "task_id": {"type": "string"}}, "required": ["project_id", "target_id", "finding"]}),
@@ -920,6 +984,10 @@ _CATALOG = [
      {"type": "object", "properties": {"project_id": {"type": "string"}, "node_id": {"type": "string"}}, "required": ["project_id", "node_id"]}),
     ("write", "delete_edge", delete_edge, "Permanently delete ONE edge by id (hard delete — recreate with create_edge to restore). To remove a node's edges reversibly, archive the node instead.",
      {"type": "object", "properties": {"edge_id": {"type": "string"}}, "required": ["edge_id"]}),
+    ("write", "archive_target", archive_target, "Soft-remove a target + its whole subtree (children/nodes/findings) from the graph (REVERSIBLE) — declutter an irrelevant component; re-ingesting the bytes or restore_target brings it back. (Whole-project deletion is operator-only, not an MCP tool.)",
+     {"type": "object", "properties": {"project_id": {"type": "string"}, "target_id": {"type": "string"}}, "required": ["project_id", "target_id"]}),
+    ("write", "restore_target", restore_target, "Un-archive a previously soft-removed target subtree (its nodes/findings reappear).",
+     {"type": "object", "properties": {"project_id": {"type": "string"}, "target_id": {"type": "string"}}, "required": ["project_id", "target_id"]}),
     ("write", "link_same_code", link_same_code, "Cross-target n-day primitive: link functions with identical code (same content_hash) across DIFFERENT binaries via similar_to edges, and return the matches (each side flags has_findings). Run after confirming a bug to find the same routine reused elsewhere.",
      {"type": "object", "properties": {"project_id": {"type": "string"}}, "required": ["project_id"]}),
     ("write", "propagate_finding", propagate_finding, "N-day: clone an existing finding onto another binary that shares the same code (per link_same_code) as a fresh finding to triage, wired derived_from→ the source. Avoids re-typing the whole finding for 'same bug, other binary'.",
@@ -932,7 +1000,7 @@ _CATALOG = [
      {"type": "object", "properties": {"path": {"type": "string"}, "name": {"type": "string"}, "project_id": {"type": "string"}}, "required": ["path"]}),
     ("run", "run_task", run_task, "Run a HexGraph task and return its findings. Types: recon, static_analysis, harness_generation, fuzzing, poc, surface_recon (offline route->handler map), web_recon (live liveness probe of a web surface, needs features.network).",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "type": {"type": "string"}, "objective": {"type": "string"}, "params": {"type": "object"}}, "required": ["target_id", "type"]}),
-    ("run", "rehost", rehost, "Boot a FIRMWARE target under full-system emulation (FirmAE) and register its live web server as a web_app surface child — then assess the running device with surface_recon/web_recon/http_request/verify_poc, fused to the firmware's static graph. Requires features.rehost (boot) + features.network (assess). Heavy + best-effort.",
+    ("run", "rehost", rehost, "Boot a FIRMWARE target under full-system emulation — auto-selects qemu+KVM for a full-OS disk image (.vmdk/.qcow2/partitioned .img) or FirmAE for a vendor blob (squashfs/cramfs/…) — and register its live web server as a web_app surface child, then assess the running device with surface_recon/web_recon/http_request/verify_poc, fused to the firmware's static graph. Requires features.rehost (boot) + features.network (assess). Heavy + best-effort.",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "brand": {"type": "string"}}, "required": ["target_id"]}),
     ("run", "register_surface", register_surface, "Register a WEB attack surface (web_app target via an HTTP Channel, no bytes); pass an optional offline route spec, then run_task(surface_recon) to map endpoints/params + routes_to→handler edges. Offline (no egress).",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "base_url": {"type": "string"}, "name": {"type": "string"}, "endpoints": {"type": "array"}}, "required": ["project_id", "base_url"]}),
