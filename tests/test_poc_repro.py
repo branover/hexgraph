@@ -79,13 +79,37 @@ def test_repro_command_binary(hg_home):
     assert "--serve" in cmd
     assert cmd.startswith("printf ")  # stdin piped in
     assert "{{NONCE}}" in cmd
-    # example: printf 'data {{NONCE}}' | QUERY_STRING='...{{NONCE}}' /path/to/diag --serve
+    # example: printf 'data {{NONCE}}' | env 'QUERY_STRING=...{{NONCE}}' /path/to/diag --serve
 
 
 def test_repro_command_binary_no_target():
     """No target context still yields a runnable binary line (placeholder path)."""
     cmd = repro_command({"argv": ["-x"], "oracle": {}}, None)
     assert isinstance(cmd, str) and "-x" in cmd
+
+
+def test_repro_command_binary_shell_safe_against_hostile_env_and_argv():
+    """The rendered line is for copy-paste; a hostile env KEY/VALUE, argv, or stdin must
+    not break out of quoting. shlex.split must round-trip to the literal tokens, and the
+    injected command must not appear as a bare (unquoted) shell word."""
+    import shlex
+
+    spec = {
+        "env": {"A; rm -rf / #": "v$(touch /pwned)", "OK": "fine"},
+        "argv": ["--x; reboot", "$(id)"],
+        "stdin": "payload; halt",
+        "oracle": {},
+    }
+    cmd = repro_command(spec, None)
+    assert isinstance(cmd, str)
+    # The whole pipeline tokenizes (as a POSIX shell would) to EXACTLY the literal tokens:
+    # every hostile value is one inert word, and the env utility carries the hostile key as
+    # a single KEY=VALUE token — no `;`, `$(...)`, or `#` ever becomes a separate shell word.
+    assert shlex.split(cmd) == [
+        "printf", "payload; halt", "|",
+        "env", "A; rm -rf / #=v$(touch /pwned)", "OK=fine",
+        "./target", "--x; reboot", "$(id)",
+    ]
 
 
 # ── re-verify preserves / refreshes the assurance triple ─────────────────────────────

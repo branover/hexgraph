@@ -85,30 +85,19 @@ def _tcp_command(spec: dict, target: Target | None) -> str:
     return f"printf {shlex.quote(str(payload))} | nc {shlex.quote(str(host))} {port}"
 
 
-def _binary_command(spec: dict, target: Target | None) -> list[str]:
-    """The argv/stdin/env invocation for a binary PoC, returned as a list (argv).
-    Mirrors poc_probe: env-prefixed, the target path, then the spec's extra argv."""
-    path = (target.path if target is not None else None) or "./target"
-    argv: list[str] = []
-    for k, v in (spec.get("env") or {}).items():
-        argv.append(f"{k}={v}")
-    argv.append(path)
-    argv += [str(a) for a in (spec.get("argv") or [])]
-    return argv
-
-
 def _binary_command_str(spec: dict, target: Target | None) -> str:
-    argv = _binary_command(spec, target)
-    # env assignments (KEY=VALUE) precede the program; quote only the value portion so
-    # the shell still treats the token as an assignment. Everything else is quoted whole.
-    rendered = []
-    for tok in argv:
-        if "=" in tok and not tok.startswith("/") and not tok.startswith("./"):
-            k, _, v = tok.partition("=")
-            rendered.append(f"{k}={shlex.quote(v)}")
-        else:
-            rendered.append(shlex.quote(tok))
-    cmd = " ".join(rendered)
+    path = (target.path if target is not None else None) or "./target"
+    parts: list[str] = []
+    # Set env via the `env` utility so the WHOLE `KEY=VALUE` token can be shlex-quoted —
+    # a bare `KEY=VALUE` prefix can't quote the key (quoting it stops being an assignment),
+    # so a hostile key (`A; rm -rf /`) would inject. `env 'KEY=VALUE'` neutralizes it.
+    env = spec.get("env") or {}
+    if env:
+        parts.append("env")
+        parts += [shlex.quote(f"{k}={v}") for k, v in env.items()]
+    parts.append(shlex.quote(path))
+    parts += [shlex.quote(str(a)) for a in (spec.get("argv") or [])]
+    cmd = " ".join(parts)
     stdin = spec.get("stdin")
     if stdin is not None:
         return f"printf {shlex.quote(str(stdin))} | {cmd}"
