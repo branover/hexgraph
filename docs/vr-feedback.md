@@ -25,26 +25,26 @@ their own PRs as we go.
   FirmAE boot is ~9 min, so it's not free — left as a documented manual step for now.
 
 ## Open ideas (ranked)
-0. **Provision the analysis gates together for a rehost engagement.** Rehosting a device you then
-   can't introspect/exploit is a half-loop: the DVRF run had `features.rehost`+`network` on but
-   `poc`+`remote` off, so the agent could boot + read the rootfs but not prove the MIPS pwnables
-   (verify_poc) or enumerate the live device (remote_run). Consider: `rehost` auto-registering the
-   booted device as a `remote` target (read-only) and/or guidance to enable poc+remote+network with
-   rehost. Also: many devices don't auto-start their httpd/services under emulation (DVRF), so the
-   live surface comes back empty — a bounded "start a known service / run a pwnable on port N" on
-   the rehosted device would make live analysis productive.
+0. **Provision the analysis gates together for a rehost engagement. — MOSTLY DONE.** Rehosting a
+   device you then can't introspect/exploit is a half-loop: the DVRF run had `features.rehost`+
+   `network` on but `poc`+`remote` off, so the agent could boot + read the rootfs but not prove the
+   pwnables or enumerate the live device. Shipped: `rehost` now **auto-registers the booted device
+   as a `remote` target** (when SSH/telnet is up) pinned to the emulator netns, and **`remote_launch`
+   brings up a service that didn't auto-start** so its socket can be tested live. *(merged)* Still
+   open: a one-switch "rehost engagement" preset (enable rehost+network+remote together) rather than
+   toggling each in Settings — operator convenience, not a capability gap.
 1. **Computed-output oracle for command injection.** Even with reflection-stripping, the
    strongest unforgeable check is a payload whose OUTPUT the target must *compute* and that does
    NOT appear in the request — e.g. inject `expr <a> \* <b>` (or `$((a*b))`) with random a,b and
    oracle on the product. Add an oracle type (`computed`/`math`) or have `verify_poc` auto-craft
    it for cmdi so a literal reflection can never satisfy it.
-2. **Non-HTTP live services.** Rehosted devices expose more than web: IoTGoat had a `shellback`
-   bind-shell on raw TCP/5483 and telnet on 65534 — both unauth RCE — unprovable because
-   `http_request`/`verify_poc` are HTTP-only and pinned to the surface base_url. Want: (a) a
-   sandboxed raw-TCP/banner-grab + bounded port-scan over the bounded-egress tier; (b) `rehost`
-   /`web_recon` to enumerate the device's listening ports (not just :80/:443); (c) let a PoC
-   target an arbitrary host:port on the rehost's private IP. *(partly addressed by the remote
-   SSH/telnet target work.)*
+2. **Non-HTTP live services. — DONE.** Rehosted devices expose more than web: IoTGoat had a
+   `shellback` bind-shell on raw TCP/5483 and telnet on 65534 — both unauth RCE — previously
+   unprovable because `http_request`/`verify_poc` were HTTP-only. Shipped: (a) **`tcp_request`** +
+   `tcp_probe` — a sandboxed raw-TCP send/banner-grab over the bounded-egress tier, with an
+   unforgeable reflection-stripping oracle; (b) `rehost` reports every device port that answered
+   (`ports`); (c) **`verify_poc` takes a `tcp` spec** targeting an arbitrary host:port on the
+   device's private IP; (d) `remote_launch` starts a daemon that didn't auto-start. *(merged)*
 3. **Credential-cracking seam.** The read-shadow → crack → log-in loop depends entirely on the
    analyst's own offline cracking. A `crack_hash(hash, wordlist?)` MCP tool + a small bundled
    firmware-creds wordlist would make it self-contained. (Note: a rehosted image's `/etc/shadow`

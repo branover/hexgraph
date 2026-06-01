@@ -304,6 +304,21 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-01: **Raw-TCP live testing + bounded service-launch (closing the live-exploit half-loop,
+  part 2 of 2).** Non-HTTP analogue of the web tools so a rehosted/remote device's *socket* services
+  (bind shells, vendor binary protocols, pwnable daemons) can be tested live: `sandbox/probes/
+  tcp_probe.py` (connect to host:port in the emulator netns, optionally send a payload, read a
+  bounded response; an `oracle` strips the sent bytes — reflection — before matching, so a verified
+  result is unforgeable, same {{NONCE}} principle as http_probe). `surfaces.run_tcp_probe` gates it
+  with a new `policy.local_tcp_scope(host, port)` (loopback/private only, this port) + EgressEvent
+  audit. `poc.verify_poc` gains a **`tcp` flavour** ({transport:"tcp", port, payload, oracle:
+  response_contains}), checked before web/binary since a rehosted device is also a web surface;
+  reaches the network tier (features.network), not exec. New MCP run-tools: **`tcp_request`** (raw
+  socket hands), **`remote_launch`** (the one non-read-only remote op — start a not-auto-started
+  daemon by binary path + shell-quoted args, backgrounded, features.remote + audited). SKILL §2c/2d
+  document the launch→tcp_request→verify_poc(tcp) loop. Closes vr-feedback #2 (non-HTTP services) and
+  most of #0. Tests: test_tcp.py (reflection oracle, scope refuses public, gate deny/allow+audit,
+  netns routing, verify_poc tcp + nonce substitution, launch command quoting).
 - 2026-06-01: **Rehost auto-registers the live device as a remote target (closing the live-exploit
   half-loop, part 1 of 2).** The FirmAE entry script now probes the booted device's ports (22/23/
   80/443/8080/8443/1337/9999 via `/dev/tcp`) and reports the open set in the `HEXGRAPH_REHOST`

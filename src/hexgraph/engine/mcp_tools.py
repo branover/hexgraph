@@ -805,6 +805,43 @@ def remote_run(target_id: str, tool: str, path: str | None = None) -> dict:
     return _remote_op(target_id, op="run_tool", tool=tool, path=path)
 
 
+def remote_launch(target_id: str, path: str, args: list | None = None) -> dict:
+    """Start a service on a live remote/rehosted device that didn't auto-start — by BINARY
+    PATH (+ optional args), backgrounded — so its socket comes up and you can test it live
+    (e.g. a rehosted firmware's vulnerable daemon that emulation didn't launch). `path` and
+    each arg are shell-quoted; this is the one non-read-only remote op (no arbitrary shell).
+    Then reach it with tcp_request / verify_poc (a `tcp` spec) on its port. Returns the launch
+    output (e.g. the pid). features.remote; egress pinned to the device + audited."""
+    return _remote_op(target_id, op="launch", path=path, args=args or [])
+
+
+def tcp_request(target_id: str, port: int, payload: str | None = None,
+                read_bytes: int | None = None) -> dict:
+    """Talk to a raw TCP service on a live device (rehosted surface or `remote` target) — the
+    non-HTTP analogue of http_request. Connect to the device's `<port>` (reached through the
+    emulator netns when rehosted), optionally send `payload` bytes, and read the response
+    (bounded). Omit `payload` to just grab a banner. Use it to fingerprint a listening
+    `socket`, or to drive a binary-protocol bug; to PROVE one, use verify_poc with a `tcp`
+    spec ({transport:"tcp", port, payload:"…{{NONCE}}…", oracle:{type:"response_contains",
+    value:"{{NONCE}}"}}) — the probe strips your sent bytes before matching, so a reflected
+    payload can't forge it. Bounded to the device's loopback/private host:port, audited.
+    Requires features.network."""
+    from hexgraph.engine.surfaces import run_tcp_probe
+    from hexgraph.policy import PolicyViolation
+
+    with session_scope() as s:
+        t = s.get(Target, target_id)
+        if t is None:
+            return {"error": "target not found"}
+        try:
+            return run_tcp_probe(s, s.get(Project, t.project_id), t, port=int(port),
+                                 payload=payload, read_bytes=read_bytes)
+        except PolicyViolation as exc:
+            return {"error": f"not permitted: {exc}"}
+        except ValueError as exc:
+            return {"error": str(exc)}
+
+
 def http_request(target_id: str, method: str, path: str, params: dict | None = None,
                  headers: dict | None = None, body=None, json_body: bool = False,
                  session: str | None = None) -> dict:
@@ -1068,10 +1105,14 @@ _CATALOG = [
      {"type": "object", "properties": {"project_id": {"type": "string"}}, "required": ["project_id"]}),
     ("write", "propagate_finding", propagate_finding, "N-day: clone an existing finding onto another binary that shares the same code (per link_same_code) as a fresh finding to triage, wired derived_from→ the source. Avoids re-typing the whole finding for 'same bug, other binary'.",
      {"type": "object", "properties": {"finding_id": {"type": "string"}, "target_id": {"type": "string"}, "function": {"type": "string"}, "notes": {"type": "string"}}, "required": ["finding_id", "target_id"]}),
-    ("run", "verify_poc", verify_poc, "Prove an exploit and report verified true/false. Binary target -> runs it in the sandbox (spec {argv?,env?,stdin?,oracle:{output_contains|exit_code|crash}}, needs features.poc). Web surface -> sends HTTP steps (spec {steps:[{method,path,body?,...}],oracle:{body_contains|status_is|status_differs}}, cookies carry across steps for auth flows, needs features.network). Put {{NONCE}} in BOTH the payload and the oracle value for an unforgeable check. Pass finding_id to attach the result (always do this for a confirmed vuln).",
+    ("run", "verify_poc", verify_poc, "Prove an exploit and report verified true/false. Binary target -> runs it in the sandbox (spec {argv?,env?,stdin?,oracle:{output_contains|exit_code|crash}}, needs features.poc). Web surface -> sends HTTP steps (spec {steps:[{method,path,body?,...}],oracle:{body_contains|status_is|status_differs}}, cookies carry across steps for auth flows, needs features.network). Raw TCP service -> spec {transport:'tcp', port, payload, oracle:{response_contains}} sends payload to the device's port and matches the response (needs features.network); use for a rehosted/remote device's non-HTTP daemon. Put {{NONCE}} in BOTH the payload and the oracle value for an unforgeable check. Pass finding_id to attach the result (always do this for a confirmed vuln).",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "poc": {"type": "object"}, "finding_id": {"type": "string"}}, "required": ["target_id", "poc"]}),
     ("run", "http_request", http_request, "Send ONE crafted HTTP request to a registered web surface and return {status,headers,body} (body capped at 64 KiB) — your hands for live web testing (log in, probe an auth check, fire an injection payload, read the response). body is form-encoded unless json_body=true. Pass `session` (any label) to keep a cookie jar across calls so an auth flow works (log in, then explore protected routes) — response lists the jar in session_cookies. Bounded, sandboxed, local-only egress, audited. Requires features.network.",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "method": {"type": "string"}, "path": {"type": "string"}, "params": {"type": "object"}, "headers": {"type": "object"}, "body": {}, "json_body": {"type": "boolean"}, "session": {"type": "string"}}, "required": ["target_id", "method", "path"]}),
+    ("run", "tcp_request", tcp_request, "Talk to a raw TCP service on a live device (rehosted surface or remote target) — the non-HTTP http_request. Connect to the device's port (through the emulator netns when rehosted), optionally send `payload` bytes, read the bounded response; omit payload to banner-grab. Fingerprint a listening socket, or drive a binary-protocol bug — to PROVE one use verify_poc with a tcp spec (it strips your sent bytes before matching). Bounded to the device host:port, audited. Requires features.network.",
+     {"type": "object", "properties": {"target_id": {"type": "string"}, "port": {"type": "integer"}, "payload": {"type": "string"}, "read_bytes": {"type": "integer"}}, "required": ["target_id", "port"]}),
+    ("run", "remote_launch", remote_launch, "Start a service on a live remote/rehosted device that didn't auto-start, by BINARY PATH (+ optional args), backgrounded — so its socket comes up for live testing (e.g. a rehosted firmware's vulnerable daemon emulation didn't launch). path + args are shell-quoted; the one non-read-only remote op (no arbitrary shell). Then reach it with tcp_request / verify_poc (tcp spec). Requires features.remote; egress pinned + audited.",
+     {"type": "object", "properties": {"target_id": {"type": "string"}, "path": {"type": "string"}, "args": {"type": "array"}}, "required": ["target_id", "path"]}),
     ("run", "ingest", ingest, "Ingest a binary/firmware from a local path as a target (firmware unpacks into children); creates a project if none given.",
      {"type": "object", "properties": {"path": {"type": "string"}, "name": {"type": "string"}, "project_id": {"type": "string"}}, "required": ["path"]}),
     ("run", "run_task", run_task, "Run a HexGraph task and return its findings. Types: recon, static_analysis, harness_generation, fuzzing, poc, surface_recon (offline route->handler map from a supplied spec), web_discover (LIVE crawl that DISCOVERS routes/params from links+forms+common paths — use this on a rehosted/registered surface, needs features.network), web_recon (live liveness probe, needs features.network).",

@@ -7,13 +7,16 @@ physical/networked box we don't have the firmware for.
   argv: remote_probe.py --channel <json>
 
 channel = {transport: "ssh"|"telnet", host, port, username, password?, key?, timeout,
-           op: "list_files"|"read_file"|"run_tool", path?, tool?, max_bytes?, max_entries?}
+           op: "list_files"|"read_file"|"run_tool"|"launch", path?, tool?, args?, max_bytes?, max_entries?}
 
-Read-only by construction: every op maps to a FIXED command template; a caller-supplied path
-is shell-quoted (never concatenated raw), and `run_tool` only accepts an allowlisted recon
-tool — there is no arbitrary-command op. Egress is pinned by the host-side scope to this one
-host:port (the live-remote tier) and audited. Credentials arrive in the channel (the host
-read them from env/config and never persists them) and are not echoed back.
+Read-only by construction, with ONE bounded exception: every op maps to a FIXED command
+template; a caller-supplied path is shell-quoted (never concatenated raw), and `run_tool` only
+accepts an allowlisted recon tool — there is no arbitrary-command op. The lone non-read-only op
+is `launch` (start a not-auto-started service by binary path + shell-quoted args, backgrounded)
+— still no arbitrary shell string, and the host gates it behind features.remote and audits it.
+Egress is pinned by the host-side scope to this one host:port (the live-remote tier) and
+audited. Credentials arrive in the channel (the host read them from env/config and never
+persists them) and are not echoed back.
 """
 
 from __future__ import annotations
@@ -68,6 +71,17 @@ def _build_command(ch: dict) -> str:
         return cmd
     if op == "ls":
         return f"ls -la {shlex.quote(ch.get('path') or '/')}"
+    if op == "launch":
+        # Bring up a service that didn't auto-start (so its socket can be tested live). NOT
+        # read-only — this runs a binary on the operator-authorized device — but bounded: a
+        # single shell-quoted binary path + shell-quoted args, backgrounded + detached with a
+        # redirect so we return immediately. The caller gates (features.remote) and audits it.
+        path = ch.get("path")
+        if not path:
+            return ""
+        argv = " ".join(shlex.quote(str(a)) for a in (ch.get("args") or []))
+        cmd = f"{shlex.quote(path)}{(' ' + argv) if argv else ''}"
+        return f"setsid {cmd} >/tmp/hg_launch.log 2>&1 < /dev/null & echo \"launched pid $!\""
     return ""
 
 
