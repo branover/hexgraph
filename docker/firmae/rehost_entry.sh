@@ -150,7 +150,10 @@ HEALER_PID=$!
 # Everything is best-effort/path-tolerant (scratch iid is usually 1 but glob to be safe).
 scratch_glob() { ls -d ./scratch/*/ 2>/dev/null | head -n1; }
 MAKEIMAGE_STALL="${HEXGRAPH_MAKEIMAGE_STALL:-300}"   # makeImage.log static this long → bail
-BOOT_BUDGET=144                                       # 144 * 5s = ~12 min hard ceiling
+BOOT_BUDGET="${HEXGRAPH_BOOT_BUDGET:-144}"            # N * 5s ceiling (default ~12 min); slow
+                                                      # MIPS images (e.g. DIR-823G, whose network
+                                                      # inference qemu boot runs well past 12 min)
+                                                      # need a higher ceiling — raise via env.
 
 # makeImage has finished (run.sh moved on to network inference) once it wrote time_image or
 # started makeNetwork.py. Either artifact means "extraction done — disarm the stall watchdog".
