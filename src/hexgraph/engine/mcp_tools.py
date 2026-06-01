@@ -689,6 +689,13 @@ def get_schemas() -> dict:
                     "an unauth boundary ⇒ unauthenticated). It NEVER downgrades a dynamic claim — a "
                     "live trigger always wins. taints is the strongest edge; a pure calls/routes_to "
                     "path argues reach but not operand-control, so prefer a taint path.",
+            "presentation": "A verified PoC is shown to the analyst with its assurance triple, the "
+                    "steps in plain language, and a copy-paste reproduction command (curl/nc/binary "
+                    "invocation) HexGraph derives from the spec. The analyst can one-click Re-verify "
+                    "(re-runs the STORED spec, no agent) — so keep the spec self-contained (complete "
+                    "steps/argv/oracle, {{NONCE}} in payload AND oracle; target resolved from the "
+                    "finding) and put a short how-it-works in summary/reasoning so it's actionable "
+                    "without your trace.",
         },
     }
 
@@ -1012,15 +1019,25 @@ def verify_poc(target_id: str, poc: dict, finding_id: str | None = None) -> dict
                 # nonce-substituted copy verify_poc ran — otherwise the placeholder is gone
                 # and a later re-verify carries a stale literal nonce that can never match.
                 extra["poc"] = poc
+                # The engine-computed assurance (standard/method/precondition) at the
+                # canonical extra.assurance AND nested in verification (matching _poc_finding)
+                # — so a confirmed PoC records the right rung; cannot be faked.
+                extra["assurance"] = r.get("assurance")
                 extra["verification"] = {"verified": bool(r.get("verified")), "detail": r.get("detail"),
                                          "exit_code": r.get("exit_code"), "nonce": r.get("nonce"),
                                          "output": (r.get("output") or "")[:2000],
-                                         # The engine-computed assurance (standard/method/precondition)
-                                         # — so a confirmed PoC records the right rung; cannot be faked.
                                          "assurance": r.get("assurance")}
+                # A human copy-paste reproduction command (display only; verify uses the spec).
+                from hexgraph.engine.poc_repro import repro_command
+                repro = None
+                try:
+                    repro = extra["repro_command"] = repro_command(poc, t)
+                except Exception:  # noqa: BLE001
+                    pass
                 ev["extra"] = extra
                 if not ev.get("reproducer"):
-                    ev["reproducer"] = json.dumps(poc)
+                    repro_str = repro if isinstance(repro, str) else (" ".join(repro) if repro else None)
+                    ev["reproducer"] = repro_str or json.dumps(poc)
                 f.evidence_json = ev
         return {"verified": bool(r.get("verified")), "detail": r.get("detail"),
                 "exit_code": r.get("exit_code"), "output": (r.get("output") or "")[:4000],

@@ -311,6 +311,22 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-01: **PoC presentation — a verified PoC is now actionable** (branch `build/poc-presentation`,
+  PR #46). **Regression fix:** `api_verify_finding` (one-click Re-verify) was DROPPING
+  `evidence.extra.assurance` — it now refreshes the engine-computed assurance triple at BOTH the canonical
+  `extra.assurance` and inside `verification` (matching `_poc_finding`); the MCP `verify_poc` attach path
+  too. **Human reproduction:** new `engine/poc_repro.py` `repro_command(spec, target)` derives a copy-paste
+  command per flavour — a chained `curl` per web step (method/path/params/headers/body vs the surface
+  base_url, `{{NONCE}}` left verbatim), `printf … | nc host port` for a tcp spec, `env … <target> argv`
+  (+ `printf stdin |`) for a binary spec; stored at `evidence.extra.repro_command` with a readable form in
+  `reproducer` (was raw JSON). **UI** (`Inspector.tsx` PoC panel): the assurance triple rendered with the
+  lab-confirmed (code_present/dynamic, amber) vs reachable (input_reachable, green) distinction legible, the
+  PoC steps in plain language (raw JSON kept in the collapsible), and the reproduction command with a copy
+  button; Verify/Re-verify preserved. **SKILL** (`agent_setup.py` + `get_schemas['assurance'].presentation`):
+  keep the PoC spec self-contained for one-click Re-verify (no agent), record a how-it-works in
+  summary/reasoning, note the assurance is shown to the user. Envelope-only — no frozen-schema change, no
+  migration. Tests: `tests/test_poc_repro.py` (repro_command per flavour; re-verify preserves/refreshes
+  assurance). Full suite: 419 passed, 2 skipped (Docker-gated). Playwright-verified the PoC panel.
 - 2026-06-01: **Verification oracles Phase 4 — Standard B, static (source→sink reachability ARGUMENT)**
   ([`docs/design-verification-oracles.md`](docs/design-verification-oracles.md), branch
   `build/static-reachability`). New `engine/reachability.py`: a multi-source, forward, bounded +

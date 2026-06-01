@@ -219,6 +219,17 @@ is **record → explore → verify → update**:
    status `confirmed`, and `link_evidence(..., "supports")` so the hypothesis
    flips to supported/confirmed. On failure, `update_finding` to lower confidence
    and `link_evidence(..., "refutes")`.
+   **Make the PoC spec SELF-CONTAINED.** A verified PoC is one-click **Re-verifiable** by
+   the analyst with NO agent in the loop — HexGraph re-runs the stored `poc` spec as-is.
+   So the spec must stand alone: complete `steps`/`argv`/`env`/`stdin`, a real `oracle`,
+   and `{{NONCE}}` in BOTH the injected payload AND the oracle value (never a hard-coded
+   nonce). The target is resolved from the finding — don't bake host/path into the spec.
+   HexGraph also derives a human copy-paste **reproduction command** (curl / nc / the
+   binary invocation) and shows it, the steps in plain language, AND the **assurance**
+   triple to the user. So in the finding's `summary`/`reasoning` record a short
+   **how-it-works** (the bug, why the oracle firing proves it, the access it needed) so
+   the finding is actionable WITHOUT re-reading your trace — and state the highest
+   assurance rung you reached honestly (see below).
 
 **Two standards of "verified" — record the floor, AIM for the strictest.** "Confirmed" is not
 one thing; the engine records an **assurance** triple `{standard, method, precondition}` per
