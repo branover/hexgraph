@@ -23,6 +23,36 @@ their own PRs as we go.
   brand is auto-inferred from firmware strings, but a *stripped* image (DVRF) names no vendor, so
   it still needs an explicit brand. A boot-and-retry-across-brands loop would close it but each
   FirmAE boot is ~9 min, so it's not free — left as a documented manual step for now.
+- **makeImage silent hang made the loop fragile (FIXED, this PR).** Across repeated DVRF boots, the
+  single biggest source of wasted ~12-min cycles was FirmAE's `makeImage` *silently hanging* with
+  "no device IP" and no signal. **Two distinct causes, both now handled:**
+  1. *Stale/leaked loop device* — a prior run leaks a loop backing
+     `/FirmAE/scratch/<iid>/image.raw`, which shadows the fresh loop. Hardened the cleanup: matches
+     `(deleted)`-backed loops, drops dmsetup/kpartx maps *before* detaching, repeats, logs the
+     un-clearable.
+  2. *Missing partition node (the deeper one, found live on this host)* — `add_partition` does
+     `losetup -Pf image.raw` then **busy-waits forever** for `/dev/loopNp1`, but `losetup -P` doesn't
+     reliably create that node in a privileged container (devtmpfs quirk), so it spins indefinitely.
+     Confirmed by hand: `losetup` showed loop0 but `/dev/loop0p1` was absent; `kpartx -a` + an
+     `mknod` of `/dev/loop0p1` (group `disk`) unblocked it immediately and the boot completed.
+     Shipped a **background partition-node healer** that does exactly this automatically.
+  Plus a **progress watchdog**: if makeImage makes no forward progress for `HEXGRAPH_MAKEIMAGE_STALL`s
+  (default 240) it fails fast with a `makeImage.log` + qemu-serial tail dump instead of stalling the
+  full budget. *(this PR)*
+- **No-shell rehosted device can't host the launch→tcp-PoC loop (open, honest limit).** DVRF under
+  FirmAE booted with **only port 80** open — no ssh/telnet, and its web 302-redirects to a dead
+  `:52000` "unconfigured router" splash (stock Linksys pre-setup state). So the live raw-TCP exploit
+  path is unreachable: there's no shell to `remote_launch` DVRF's `pwnable/Socket/socket_cmd` daemon,
+  and nothing auto-listens on a raw port. The machinery (tcp_probe/verify_poc-tcp/remote_launch) is
+  sound and was proven against a synthetic live netns socket, but a *device that ships no shell and no
+  pre-started vulnerable socket* simply can't be driven into a verified live TCP PoC without first
+  obtaining a shell (cred-crack, web RCE, or an auto-started service). Worth a SKILL note: when a
+  rehosted device exposes only a stub web UI and no shell, the verified-live-exploit loop is blocked
+  at "get initial access," not at HexGraph's tooling.
+- **Port-probe list misses high vendor ports (open, minor).** The rehost entry script probes a fixed
+  set (22/23/80/443/8080/8443/1337/9999); DVRF's real management UI lives on **:52000**, so `ports`
+  under-reports what's live. Consider a wider sweep (or an `nmap`-style top-ports scan) so the auto-
+  registered `remote`/raw-TCP intel reflects high-port vendor services.
 
 ## Open ideas (ranked)
 0. **Provision the analysis gates together for a rehost engagement. — MOSTLY DONE.** Rehosting a

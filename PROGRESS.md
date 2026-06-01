@@ -304,6 +304,28 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-01: **FirmAE boot-reliability hardening + real-firmware live-loop validation (DVRF).**
+  Durable fix for the recurring makeImage **silent hang** (~12-min stall → "no device IP"), which has
+  TWO distinct causes — both now handled in `docker/firmae/rehost_entry.sh`:
+  (1) **stale/leaked loop** backing `/FirmAE/scratch/<iid>/image.raw` shadows the fresh loop — cleanup
+  now matches **`(deleted)`-backed** loops, drops any `dmsetup`/kpartx map *before* detaching (so a
+  "busy" loop releases), repeats a few passes, and **logs** anything still wedged;
+  (2) **missing partition node (the deeper root cause, found live)** — FirmAE's `add_partition` runs
+  `losetup -Pf image.raw` then busy-waits forever for `/dev/loopNp1`, but `losetup -P` doesn't reliably
+  create that node in a privileged container, so it spins indefinitely (confirmed by hand: loop0 up but
+  `/dev/loop0p1` absent; `kpartx -a` + `mknod … group disk` unblocked it). Shipped a **background
+  partition-node healer** that creates the missing `p1` node automatically;
+  (3) a **fail-fast watchdog** tracks makeImage forward progress and, on no progress for
+  `HEXGRAPH_MAKEIMAGE_STALL`s (default 240) or a dead pipeline, prints a clear `ip:null` marker + dumps
+  `makeImage.log`/qemu-serial tails + tears down (`FirmAERehoster` maps `ip:null` → clean `RehostError`).
+  Docs: `docs/design-rehosting.md` "Honest limits". **Real-firmware validation:** DVRF (Linksys E1550, MIPS)
+  booted under FirmAE via `rehost_firmware()` (brand=linksys) → device **192.168.1.1**, web up on
+  **:80**, `web_app` surface registered. Honest live-loop result: DVRF's FirmAE boot exposes **only
+  port 80** (no ssh/telnet, web 302→dead :52000 unconfigured-router splash), so a **verified live raw-TCP
+  PoC is BLOCKED** — no shell to `remote_launch` the `socket_cmd`/`socket_bof` pwnable, nothing
+  auto-listening on a raw port. Demonstrated what IS reachable (live `tcp_request` to :80, the surface
+  graph). VR feedback in `docs/vr-feedback.md` (port-probe list misses high ports like DVRF's :52000;
+  no-shell rehosted devices can't host the launch→tcp-PoC loop). No model/DB change → no migration.
 - 2026-06-01: **Raw-TCP live testing + bounded service-launch (closing the live-exploit half-loop,
   part 2 of 2).** Non-HTTP analogue of the web tools so a rehosted/remote device's *socket* services
   (bind shells, vendor binary protocols, pwnable daemons) can be tested live: `sandbox/probes/

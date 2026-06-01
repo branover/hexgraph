@@ -103,7 +103,32 @@ boot is gated + documented.
   vendor squashfs blob, which has no bootable kernel of its own.)
 - **Loop devices are a global kernel resource.** A hard-killed emulator leaks a loop attached
   to FirmAE's fixed path (`/FirmAE/scratch/<iid>/image.raw`), which then shadows the next
-  run's fresh loop and corrupts `makeImage` ("Bad magic number"). The entry script (root in
-  the privileged container) detaches stale FirmAE loops at **startup and on exit (trap)**, and
-  `FirmAERehoster.stop()` uses `docker stop` (SIGTERM → trap) before `rm`, so teardown is
-  clean and runs self-heal across attempts.
+  run's fresh loop and — the worse failure mode — makes `makeImage` **silently HANG** at the
+  loop-mount step for the full ~12-min budget (it can also corrupt the image: "Bad magic
+  number"). The entry script (root in the privileged container) detaches stale FirmAE loops at
+  **startup and on exit (trap)**, and `FirmAERehoster.stop()` uses `docker stop` (SIGTERM →
+  trap) before `rm`, so teardown is clean and runs self-heal across attempts. The cleanup is
+  **robust**: it matches loops whose backing file is already deleted (`losetup -a` renders
+  these as `/…/image.raw (deleted)`), tears down any `dmsetup`/kpartx mapping sitting on top
+  *before* detaching the loop (so a "busy" loop actually releases), and repeats for a few
+  passes (detaching one can unblock another). Anything still wedged after that is **logged** to
+  `docker logs` rather than left to cause a silent future hang.
+- **Partition-node creation is the OTHER silent hang (self-healed).** FirmAE's `makeImage` calls
+  `add_partition`, which runs `losetup -Pf image.raw` and then **busy-waits forever (no timeout)**
+  for the partition node `/dev/loopNp1`. In a privileged container `losetup -P` does **not** reliably
+  create that node (a devtmpfs/udev quirk — observed live on this host: `losetup` shows the loop, but
+  `/dev/loop0p1` never appears), so `add_partition` spins indefinitely — a second ~12-min silent stall,
+  indistinguishable from the stale-loop one. We can't time out FirmAE's internal loop, so the entry
+  script runs a bounded **background healer** that watches for a scratch-backed loop missing its `p1`
+  node and creates it via `kpartx` (which maps the partition), mirrored to the exact `/dev/loopNp1`
+  path with group `disk` (`add_partition`'s second wait greps `ls -al` for "disk"). This turns the
+  hang into a clean boot rather than only failing fast on it.
+- **Fail fast, never hang silently.** Even with clean loops a boot can wedge (an unextractable
+  image, a kernel stall). The entry script runs a **watchdog** alongside FirmAE: while no IP
+  has appeared it tracks `makeImage`'s forward progress (the growing `image.raw` + advancing
+  `makeImage.log`); if there is **no progress for `HEXGRAPH_MAKEIMAGE_STALL` seconds**
+  (default 240) — or the FirmAE pipeline dies — it prints a clear `HEXGRAPH_REHOST {…ip:null…
+  detail:"makeImage stalled …"}` marker, **dumps the tails of `makeImage.log` +
+  `qemu.final.serial.log`** for diagnosis, tears down, and exits — instead of stalling out the
+  whole ~12-min budget. `FirmAERehoster` already surfaces an `ip:null` marker as a clean
+  `RehostError`, so callers get a fast, actionable failure.
