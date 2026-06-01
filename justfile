@@ -92,6 +92,30 @@ sandbox-build with_ghidra="0":
 test:
     {{py}} -m pytest -q
 
+# CI gate: FAIL FAST if Docker/the sandbox image is absent, then run the full suite.
+# A green OFFLINE `just test` validates NONE of the live egress/exec/rehost/remote paths
+# (they silently skip) — this recipe refuses to "pass" without them. Build the image first
+# with `just sandbox-build`. Override with allow_no_docker=1 only to deliberately run offline.
+[group('test')]
+test-ci allow_no_docker="0":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "{{allow_no_docker}}" != "1" ]; then
+        if ! docker version >/dev/null 2>&1; then
+            echo "✗ test-ci: Docker is not available — the security-critical live tests" >&2
+            echo "  (vulnrouter RCE/auth-bypass, web_discover, SSH remote, rehost) would SILENTLY" >&2
+            echo "  skip, so a 'green' run proves nothing about the egress/exec/rehost/remote paths." >&2
+            echo "  Start Docker + run 'just sandbox-build', or 'just test-ci allow_no_docker=1' to override." >&2
+            exit 1
+        fi
+        if ! docker image inspect {{sandbox_image}} >/dev/null 2>&1; then
+            echo "✗ test-ci: the {{sandbox_image}} image is missing — live tests would skip." >&2
+            echo "  Build it with: just sandbox-build" >&2
+            exit 1
+        fi
+    fi
+    {{py}} -m pytest -q -rs
+
 # Scored real-key detection test (opt-in): needs ANTHROPIC_API_KEY + the sandbox image; cassette-backed so CI replays at $0.
 [group('test')]
 test-live:

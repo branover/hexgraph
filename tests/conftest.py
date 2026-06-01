@@ -40,6 +40,82 @@ def fixture_path(name: str) -> str:
     return os.path.join(os.path.dirname(__file__), "fixtures", name)
 
 
+def container_ip(name: str) -> str:
+    """The single network IP of a running container. The naive
+    `{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}` template silently CONCATENATES
+    every attached network's IP (e.g. '172.17.0.2172.18.0.3'), yielding an unconnectable
+    address if a container is on >1 network. Emit a SPACE between each, then assert there's
+    exactly one non-empty dotted-quad and return it. (`.NetworkSettings.IPAddress` is unreliable
+    across Docker setups — empty or absent under rootless/custom networks — so we read Networks.)"""
+    import subprocess as _sp
+
+    ips = _sp.run(
+        ["docker", "inspect", "-f",
+         "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}", name],
+        check=True, capture_output=True, text=True,
+    ).stdout.split()
+    ips = [ip for ip in ips if ip]
+    assert len(ips) == 1, f"expected exactly one container IP for {name!r}, got {ips!r}"
+    ip = ips[0]
+    assert len(ip.split(".")) == 4, f"expected a dotted-quad IP for {name!r}, got {ip!r}"
+    return ip
+
+
+def wait_for_port(host: str, port: int, timeout: float = 30.0) -> None:
+    """Block until `host:port` accepts a TCP connection (bounded), instead of a blind
+    time.sleep — removes timing flakiness from the live-container fixtures without changing
+    what the tests prove. Raises if it never comes up within `timeout`."""
+    import socket
+    import time as _time
+
+    deadline = _time.monotonic() + timeout
+    last_err: Exception | None = None
+    while _time.monotonic() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=2.0):
+                return
+        except OSError as exc:  # refused / unreachable while the service boots
+            last_err = exc
+            _time.sleep(0.25)
+    raise TimeoutError(f"{host}:{port} not ready within {timeout}s (last: {last_err})")
+
+
+# ── Loud no-Docker visibility (review #5) ───────────────────────────────────────────────
+# The highest-value SECURITY round-trips (live vulnrouter RCE/auth-bypass, web_discover, SSH
+# remote ops, qemu/FirmAE rehost) are Docker-gated and SILENTLY skip when the sandbox image
+# is absent — so a no-Docker run can report "all green" while validating NONE of the live
+# egress/exec/rehost/remote paths. This hook makes that loud: it counts how many tests
+# skipped for lack of Docker and prints a clear summary line. `just test-ci` additionally
+# FAILS when Docker is expected but absent, so CI can't pass while skipping the live paths.
+def _skipped_for_docker(terminalreporter) -> int:
+    n = 0
+    for report in terminalreporter.stats.get("skipped", []):
+        reason = ""
+        lr = getattr(report, "longrepr", None)
+        if isinstance(lr, tuple) and len(lr) == 3:  # (path, lineno, message)
+            reason = lr[2] or ""
+        else:
+            reason = str(lr or "")
+        if "Docker" in reason or "sandbox image" in reason:
+            n += 1
+    return n
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    n = _skipped_for_docker(terminalreporter)
+    if n and not SANDBOX_READY:
+        terminalreporter.write_sep(
+            "!", f"DOCKER ABSENT: {n} security-critical/live test(s) SKIPPED "
+                 "(live vulnrouter RCE/auth-bypass, web_discover, SSH remote, rehost). "
+                 "A green OFFLINE run validates NONE of these egress/exec/rehost/remote "
+                 "paths — run `just test-ci` (or build the sandbox image) to exercise them.",
+            yellow=True, bold=True)
+    elif n:
+        terminalreporter.write_sep(
+            "-", f"{n} Docker-gated live test(s) skipped despite SANDBOX_READY "
+                 "(check Docker / the hexgraph-sandbox image).", yellow=True)
+
+
 @pytest.fixture
 def hg_home(tmp_path, monkeypatch):
     """Isolate HEXGRAPH_HOME + the SQLite engine in a tmp dir for a test."""

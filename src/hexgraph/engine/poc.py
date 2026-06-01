@@ -68,8 +68,16 @@ def _is_web(target: Target) -> bool:
 
 def _is_tcp(spec: dict) -> bool:
     """A raw-TCP PoC: `{transport:"tcp", port, payload?, oracle}` (or a nested `tcp` block).
-    Reaches a live socket service on the device — the network tier, not byte execution."""
-    return (spec.get("transport") == "tcp") or bool(spec.get("tcp"))
+    Reaches a live socket service on the device — the network tier, not byte execution.
+
+    Requires BOTH a tcp marker AND a port: an incidental/stray `tcp` field (or a
+    `transport:"tcp"` left on an otherwise-web/binary spec) without a reachable port
+    can't misroute a web spec into the TCP path or slip past the exec gate. The port
+    may sit at the top level or inside a nested `tcp` block."""
+    tcp = spec.get("tcp") if isinstance(spec.get("tcp"), dict) else {}
+    has_marker = (spec.get("transport") == "tcp") or bool(spec.get("tcp"))
+    has_port = bool(spec.get("port") or tcp.get("port"))
+    return has_marker and has_port
 
 
 def _verify_tcp_poc(session, project, target, spec, runner, nonce) -> dict:

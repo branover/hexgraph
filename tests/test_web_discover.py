@@ -9,7 +9,7 @@ import subprocess
 
 import pytest
 
-from conftest import SANDBOX_READY, fixture_path
+from conftest import SANDBOX_READY, container_ip, fixture_path, wait_for_port
 
 _spec = importlib.util.spec_from_file_location(
     "web_discover_probe", os.path.join(os.path.dirname(__file__), "..", "src", "hexgraph",
@@ -50,11 +50,8 @@ def vulnrouter():
     subprocess.run(["docker", "run", "-d", "--name", name, "-e", "ROUTER_FLAG=FLAG-D", img],
                    check=True, capture_output=True)
     try:
-        ip = subprocess.run(["docker", "inspect", "-f",
-                             "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", name],
-                            check=True, capture_output=True, text=True).stdout.strip()
-        import time
-        time.sleep(1.0)
+        ip = container_ip(name)
+        wait_for_port(ip, 8080)
         yield f"http://{ip}:8080"
     finally:
         subprocess.run(["docker", "rm", "-f", name], capture_output=True)

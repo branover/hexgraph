@@ -10,7 +10,8 @@ from hexgraph.engine.agent_tools import ToolContext, available_tools, run_tool
 from hexgraph.engine.ingest import create_project, ingest_file
 from hexgraph.engine.tasks import create_task
 from hexgraph.engine.worker import run_task_sync
-from hexgraph.llm.base import LLMRequest, LLMResponse, ToolCall, ToolSpec, Usage
+from hexgraph.llm.base import (LLMRequest, LLMResponse, RateLimitError, ToolCall, ToolSpec,
+                               Usage)
 from hexgraph.llm.runner import run_findings_agentic
 from hexgraph import settings as st
 
@@ -82,6 +83,65 @@ def test_step_budget_forces_answer():
         tools=[_SPEC], tool_runner=lambda c: "x", max_steps=3,
     )
     assert findings == []  # forced final answer, no exception
+
+
+def test_loop_runs_multiple_tool_calls_in_one_turn():
+    """A single turn returning TWO ToolCalls must run BOTH, in order, and feed both results
+    back (review #12)."""
+    turns = [
+        LLMResponse(text="look at both", usage=_U, stop_reason="tool_use", tool_calls=[
+            ToolCall("c1", "decompile_function", {"function": "a"}),
+            ToolCall("c2", "disassemble", {"function": "b"})]),
+        LLMResponse(text=json.dumps({"findings": []}), usage=_U),
+    ]
+    be = FakeBackend(turns)
+    seen = []
+    findings, _u, transcript = run_findings_agentic(
+        be, LLMRequest(task_type="static_analysis", task_id="t", prompt="go"),
+        tools=[_SPEC, ToolSpec("disassemble", "d", {"type": "object", "properties": {}})],
+        tool_runner=lambda c: seen.append(c.name) or f"ran {c.name}",
+    )
+    assert findings == [] and seen == ["decompile_function", "disassemble"]  # both, in order
+    assert [t["tool"] for t in transcript] == ["decompile_function", "disassemble"]
+    # the second turn saw BOTH tool results fed back
+    tool_msgs = [m for m in be.saw_messages[1] if m.get("role") == "tool"]
+    assert {m["name"] for m in tool_msgs} == {"decompile_function", "disassemble"}
+
+
+def test_loop_retries_on_rate_limit_then_succeeds():
+    """A backend that raises RateLimitError once, then returns findings, must be RETRIED by
+    the agentic loop (base_delay=0) and ultimately succeed (review #12)."""
+    class Flaky:
+        name = "flaky"
+        def __init__(self):
+            self.calls = 0
+        def complete(self, req):
+            self.calls += 1
+            if self.calls == 1:
+                raise RateLimitError("429 slow down")
+            return LLMResponse(text=json.dumps({"findings": []}), usage=_U)
+
+    be = Flaky()
+    findings, _u, transcript = run_findings_agentic(
+        be, LLMRequest(task_type="static_analysis", task_id="t", prompt="go"),
+        tools=[_SPEC], tool_runner=lambda c: "x", base_delay=0.0,
+    )
+    assert findings == [] and be.calls == 2  # retried once, then succeeded
+
+
+def test_loop_repairs_invalid_json_on_reask():
+    """The final step returns invalid JSON; the schema-repair path re-asks and the next reply
+    is valid — the loop must recover and produce findings (review #12)."""
+    turns = [
+        LLMResponse(text="not json {{{", usage=_U),                 # final step: unparseable
+        LLMResponse(text=json.dumps({"findings": []}), usage=_U),   # re-ask: valid
+    ]
+    be = FakeBackend(turns)
+    findings, _u, _transcript = run_findings_agentic(
+        be, LLMRequest(task_type="static_analysis", task_id="t", prompt="go"),
+        tools=[_SPEC], tool_runner=lambda c: "x", base_delay=0.0,
+    )
+    assert findings == [] and be.i == 2  # consumed the bad reply, then the repaired one
 
 
 def test_read_imports_tool_offline(hg_home):

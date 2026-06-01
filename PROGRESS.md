@@ -176,9 +176,15 @@ then run the resume verifier, then continue at the next unchecked task.
     (boot-and-retry loop is ~9 min/boot, left manual), provisioning poc/remote/network together for a
     rehost engagement, starting non-auto-started device services, a computed-output cmdi oracle,
     non-HTTP live services, a credential-cracking seam.
-- **Last verified:** `.venv/bin/python -m pytest -q` → **319 passed, 2 skipped** (live test skips without a
-  key; one Docker-gated when the sandbox image is absent); SPA builds clean. Sandbox image
-  (`WITH_GHIDRA=1`) includes Ghidra + qemu + firmware extractors and works end-to-end.
+- **Last verified:** `.venv/bin/python -m pytest -q` → **357 passed, 2 skipped** (the realkey test skips
+  without a key; the MCP-SDK-absence test skips when the SDK is installed). With Docker + the sandbox
+  image present the Docker-gated live tests RUN; SPA builds clean. Sandbox image (`WITH_GHIDRA=1`) includes
+  Ghidra + qemu + firmware extractors and works end-to-end.
+- **A green OFFLINE run (no Docker) validates NONE of the live egress/exec/rehost/remote paths** — the
+  security-critical round-trips (live vulnrouter RCE/auth-bypass, web_discover, SSH remote ops, qemu/FirmAE
+  rehost) are Docker-gated and SKIP without the sandbox image. `conftest.py`'s terminal-summary hook prints
+  a LOUD count of those skips, and **`just test-ci` FAILS FAST when Docker/the image is absent** (the CI gate
+  that refuses to "pass" while skipping the live paths; `allow_no_docker=1` to override).
 - **UI quickstart (updated):** `just ui` once → `just sandbox-build` once →
   `hexgraph ingest tests/fixtures/synthetic_fw.bin --name demo` → `hexgraph serve` → http://127.0.0.1:8765.
 - **How to re-verify:** `just test`; or run the UI (see UI quickstart below).
@@ -447,6 +453,22 @@ then run the resume verifier, then continue at the next unchecked task.
   documents it. `register_remote_target` gained `parent`/`net_container`. Addresses VR feedback #0.
   Tests: test_rehost.py (ssh-preferred, telnet-fallback, none-open). *(Next: raw-TCP probe +
   non-HTTP verify_poc + bounded service-launch so binary socket services can be tested live.)*
+- 2026-06-01: **Test-confidence + CI-visibility hardening (`build/test-confidence`).** Closed the
+  test-coverage/CI gaps from the code review (357 passed, 2 skipped). (#5) `conftest.py` gained a
+  `pytest_terminal_summary` hook that LOUDLY counts Docker-gated security/live tests that SKIPPED, plus a
+  `just test-ci` recipe that FAILS FAST when Docker/the sandbox image is absent (so CI can't go green while
+  silently skipping the live egress/exec/rehost/remote paths) — RESUME-HERE updated. (#8) direct tests for
+  the new MCP run-tools `tcp_request`/`remote_launch`/`register_remote` (success shape, features-off
+  error-string not exception, int(port) coercion) + a run-group catalog-membership assertion. (#9) tightened
+  `poc._is_tcp` to require BOTH a tcp marker AND a port (an incidental `tcp` field can't misroute a web spec
+  or skip the exec gate), with web-vs-tcp dispatch + binary-gate tests. (#11) offline pins for the
+  no-secret-leak scrub (`run_remote` strips password/key) and the dedup edge-cascade (earlier row survives,
+  later row's edges gone, distinct finding untouched). (#12) agent-loop recovery tests (two tool calls in one
+  turn; RateLimitError-then-retry; invalid-JSON schema-repair re-ask). (#16) aligned `tcp_probe._check_oracle`
+  reflection-stripping with `http_probe` (raw + URL- + HTML-encoded forms) so the raw-TCP oracle is as
+  unforgeable as the web one, with a transformed-reflection test. (#13) replaced fixed `time.sleep` in the
+  live sshd/vulnrouter/web_discover fixtures with a bounded `wait_for_port` readiness poll + a single-non-empty
+  container-IP assert (`conftest.container_ip`/`wait_for_port`). No DB model change → no migration.
 - 2026-06-01: **Live-device + rehosting-engagement track (autonomous overnight).** Shipped, each
   PR-reviewed + merged + VR-vetted: gap #1 disk-image rootfs extraction (Sleuth Kit, PR #20), gap #2
   `web_discover` bounded crawl (PR #21), `verify_poc` web-oracle reflection-stripping (PR #22), the
