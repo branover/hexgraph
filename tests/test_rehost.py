@@ -61,12 +61,13 @@ def test_get_rehoster_by_name_and_auto(tmp_path, monkeypatch):
 
 class _FakeRehoster:
     name = "fake"
-    def __init__(self, ip="192.168.0.1"):
+    def __init__(self, ip="192.168.0.1", ports=()):
         self.ip = ip
+        self.ports = tuple(ports)
         self.stopped = []
     def rehost(self, firmware_path, *, brand=None, timeout=None):
         return RehostResult(ip=self.ip, base_url=f"http://{self.ip}", handle="firmae-test",
-                            detail="fake boot")
+                            detail="fake boot", ports=self.ports)
     def stop(self, handle):
         self.stopped.append(handle)
 
@@ -106,6 +107,45 @@ def test_rehost_opt_in_registers_surface_and_audits(hg_home):
         assert len(ev) == 1 and ev[0].allowed is True
         # the audited dest is the same host:port form the egress allowlist uses
         assert ev[0].dest == "10.0.0.5:80"
+
+
+def test_rehost_auto_registers_remote_device_when_ssh_open(hg_home):
+    """A booted device that answers on SSH/telnet is auto-registered as a `remote` child
+    target pinned to the emulator netns — so the agent can enumerate the LIVE device."""
+    settings.update_settings({"features": {"rehost": {"enabled": True}}})
+    with session_scope() as s:
+        p, t = _firmware(s)
+        surface = rehost_firmware(s, p, t, rehoster=_FakeRehoster("192.168.0.50", ports=(22, 80)))
+        rehost_info = surface.metadata_json["channel"]["rehost"]
+        assert rehost_info["ports"] == [22, 80]
+        rt_id = rehost_info["remote_target_id"]
+        assert rt_id
+        rt = s.get(Target, rt_id)
+        assert rt.kind == TargetKind.remote and rt.parent_id == t.id
+        rch = rt.metadata_json["channel"]
+        # SSH preferred, pinned to the device IP and the emulator's netns
+        assert rch["transport"] == "ssh" and rch["host"] == "192.168.0.50" and rch["port"] == 22
+        assert rch["net_container"] == "firmae-test"
+
+
+def test_rehost_prefers_telnet_when_only_telnet_open(hg_home):
+    settings.update_settings({"features": {"rehost": {"enabled": True}}})
+    with session_scope() as s:
+        p, t = _firmware(s)
+        surface = rehost_firmware(s, p, t, rehoster=_FakeRehoster("192.168.0.51", ports=(23, 80)))
+        rt = s.get(Target, surface.metadata_json["channel"]["rehost"]["remote_target_id"])
+        assert rt.metadata_json["channel"]["transport"] == "telnet"
+        assert rt.metadata_json["channel"]["port"] == 23
+
+
+def test_rehost_no_remote_when_no_shell_port(hg_home):
+    """No SSH/telnet → no remote target (just the web surface), and rehost still works."""
+    settings.update_settings({"features": {"rehost": {"enabled": True}}})
+    with session_scope() as s:
+        p, t = _firmware(s)
+        surface = rehost_firmware(s, p, t, rehoster=_FakeRehoster("192.168.0.52", ports=(80,)))
+        assert "remote_target_id" not in surface.metadata_json["channel"]["rehost"]
+        assert s.query(Target).filter(Target.kind == TargetKind.remote).count() == 0
 
 
 def test_assess_rehosted_surface_joins_emulator_netns(hg_home):

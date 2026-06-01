@@ -45,6 +45,7 @@ class RehostResult:
     base_url: str           # http://<ip>[:port] — the device's web surface
     handle: str             # the FirmAE container name (probe joins its netns)
     detail: str = ""
+    ports: tuple[int, ...] = ()   # device ports that answered (22/23 → auto-remote; others → raw-TCP)
 
 
 # Our FirmAE image's entrypoint prints this line once the device is up, carrying the
@@ -165,7 +166,8 @@ class FirmAERehoster(Rehoster):
         port = info.get("port") or 80
         base = f"http://{ip}" if port == 80 else f"http://{ip}:{port}"
         return RehostResult(ip=ip, base_url=base, handle=name,
-                            detail=info.get("detail", f"FirmAE emulated the firmware at {ip}"))
+                            detail=info.get("detail", f"FirmAE emulated the firmware at {ip}"),
+                            ports=tuple(info.get("ports") or ()))
 
     def stop(self, handle: str) -> None:
         _stop_container(handle)
@@ -226,7 +228,8 @@ class QemuDiskRehoster(Rehoster):
         default_port = 443 if scheme == "https" else 80
         base = f"{scheme}://{ip}" if port == default_port else f"{scheme}://{ip}:{port}"
         return RehostResult(ip=ip, base_url=base, handle=name,
-                            detail=info.get("detail", "qemu disk-image emulation"))
+                            detail=info.get("detail", "qemu disk-image emulation"),
+                            ports=tuple(info.get("ports") or ()))
 
     def stop(self, handle: str) -> None:
         _stop_container(handle)
@@ -331,10 +334,18 @@ def rehost_firmware(session: Session, project: Project, firmware: Target,
     surface = register_web_surface(
         session, project, result.base_url, name=f"{firmware.name} (rehosted)", parent=firmware)
     # Record the rehost handle on the surface's channel so the probe joins the emulator's
-    # network namespace to reach the device IP.
+    # network namespace to reach the device IP. Also auto-register the running device as a
+    # `remote` target when it exposes SSH/telnet — so the agent can enumerate the LIVE device
+    # (not just the extracted rootfs) and bring up / reach services for live testing. Track
+    # the open ports so raw-TCP testing knows what's listening.
+    remote_target = _auto_register_remote(session, project, firmware, result)
     meta = dict(surface.metadata_json or {})
     channel = dict(meta.get("channel") or {})
     channel["rehost"] = {"container": result.handle, "ip": result.ip, "rehoster": rehoster.name}
+    if result.ports:
+        channel["rehost"]["ports"] = list(result.ports)
+    if remote_target is not None:
+        channel["rehost"]["remote_target_id"] = remote_target.id
     meta["channel"] = channel
     surface.metadata_json = meta
     session.flush()
@@ -347,6 +358,26 @@ def rehost_firmware(session: Session, project: Project, firmware: Target,
     record_egress(session, project_id=project.id, target_id=surface.id, task_id=None,
                   dest=dest, allowed=True, tool="rehost", detail=result.detail)
     return surface
+
+
+def _auto_register_remote(session: Session, project: Project, firmware: Target,
+                          result: RehostResult) -> Target | None:
+    """If the booted device answers on SSH (22) or telnet (23), register it as a `remote`
+    child target pinned to the emulator's netns — so the agent can run the same read-only
+    live-device analysis (and, with features.remote, launch services) over that channel.
+    Prefers SSH. Registration is metadata-only (no secret, no connection); USING it is still
+    gated by features.remote. Returns the target, or None when neither port is open."""
+    if 22 in result.ports:
+        transport, port = "ssh", 22
+    elif 23 in result.ports:
+        transport, port = "telnet", 23
+    else:
+        return None
+    from hexgraph.engine.remote import register_remote_target
+
+    return register_remote_target(
+        session, project, result.ip, port=port, transport=transport,
+        name=f"{firmware.name} (rehosted device)", parent=firmware, net_container=result.handle)
 
 
 def rehost_container(target: Target) -> str | None:

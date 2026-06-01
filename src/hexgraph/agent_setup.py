@@ -79,7 +79,10 @@ URL (or a `web_app` target already exists), assess it dynamically:
   image boots cleanly. **For a FirmAE/vendor image, if rehost says it couldn't bring up the
   device network, retry with the vendor brand** — `rehost(fw, brand="linksys")` (or netgear/
   dlink/tplink/tenda/…): FirmAE's network inference is vendor-keyed. FirmAE MIPS/ARM boots are
-  slow (~9 min) — be patient.
+  slow (~9 min) — be patient. rehost returns `ports` (every device port that answered) and, if
+  the device exposes SSH/telnet, a **`remote_target_id`** — a `remote` target auto-pinned to the
+  emulator so you can enumerate the LIVE device (remote_list_files/remote_run, needs
+  features.remote), not just the extracted rootfs.
 - **`register_surface(project_id, base_url, endpoints?)`** registers the surface as a
   `web_app` target (a Channel, no bytes). `run_task(id, "surface_recon")` maps a route spec
   YOU supply into `endpoint`/`param` nodes + `routes_to` edges to the handler function (the
