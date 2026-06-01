@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Regenerate the bundled test targets. Outputs are committed so CI is hermetic;
-# re-run this only when the sources change. (See context/fixtures/targets/README.md.)
+# re-run this only when the sources change. The build recipes below are the
+# source of truth (the old context/fixtures/targets/README.md is retired).
 set -euo pipefail
 cd "$(dirname "$0")"
 

@@ -370,7 +370,7 @@ tier / executor:
   bounded local-network via network, and rehosting — each its own opt-in gate).
 
 **The Finding is the heart of the product.** Every task and backend emits the same frozen schema
-(`context/schemas/finding.schema.json`); `finding_type` (DB envelope) classifies it for triage.
+(`src/hexgraph/schemas/finding.schema.json`); `finding_type` (DB envelope) classifies it for triage.
 
 ### Data model
 

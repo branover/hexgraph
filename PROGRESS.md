@@ -318,6 +318,23 @@ then run the resume verifier, then continue at the next unchecked task.
   `test_ingest_basename_collision_no_overwrite` (two distinct `image.bin` → distinct artifacts, each
   reads back its own bytes, sizes+sha256 differ) and `test_unpack_children_sharing_basename_keep_own_bytes`
   (unpack side, fake executor, two same-basename ELFs). 331 passed, 2 skipped. (PR #30.)
+- 2026-06-01: **Retired the MVP `context/` bundle (relocate-and-reconcile, branch
+  `build/retire-context-bundle`).** Moved the two LIVE assets *into the package* so they ship in the
+  wheel and no longer depend on a repo-root folder: `context/schemas/finding.schema.json` →
+  `src/hexgraph/schemas/finding.schema.json`, `context/fixtures/mock_llm/**` →
+  `src/hexgraph/llm/fixtures/mock_llm/**`. `paths.py` now resolves `finding_schema_path()` /
+  `mock_fixtures_dir()` relative to the package `__file__` (not `repo_root()`); `repo_root()` kept
+  for migrations/`tests/fixtures` but re-anchored on the `pyproject.toml`/`.git` sentinel instead of
+  `context/SPEC.md`. `pyproject.toml` package-data extended (`schemas/*.json`,
+  `llm/fixtures/mock_llm/**/*.json`, `*.yaml`) — verified the 11 data files land in a built wheel.
+  Deleted the superseded `context/SPEC.md`, `context/README.md`, `context/fixtures/targets/README.md`;
+  moved `mock-llm-provider.md` to `docs/` (durable design value) with a provenance banner. `context/`
+  is gone entirely. Repointed all refs (CLAUDE.md "Read before writing code" + tree, README, code
+  docstrings). Reconciled docs to the shipped security model: `design-vision.md` got a
+  "partially-superseded" banner (static-only → graduated opt-in policy seam); `design-dynamic-surfaces.md`
+  flipped to IMPLEMENTED, corrected its tier table to the real flags (`features.network`/Tier 2
+  TIER_LOCAL_NETWORK, `features.remote`/Tier 3 TIER_LIVE_REMOTE), and trimmed Phasing to "delivered".
+  `make test` green (329 passed, 2 Docker-skipped); no DB model change → no migration.
 - 2026-06-01: **Raw-TCP live testing + bounded service-launch (closing the live-exploit half-loop,
   part 2 of 2).** Non-HTTP analogue of the web tools so a rehosted/remote device's *socket* services
   (bind shells, vendor binary protocols, pwnable daemons) can be tested live: `sandbox/probes/

@@ -1,4 +1,4 @@
-"""MockLLMBackend — a first-class backend, not a test stub (SPEC §6, mock-llm-provider).
+"""MockLLMBackend — a first-class backend, not a test stub (see docs/mock-llm-provider.md).
 
 Three fidelity layers:
   1. Fixture replay   — return the canned JSON at fixtures/<task_type>/<scenario>.json

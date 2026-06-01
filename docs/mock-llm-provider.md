@@ -1,5 +1,11 @@
 # Mock / Sandbox LLM Provider — design & best practices
 
+> Design reference for the mock backend (`src/hexgraph/llm/mock.py`). Originally
+> part of the retired MVP `context/` bundle; preserved here for its durable design
+> rationale (the three fidelity layers, the scenario matrix, and the contract-test
+> discipline). The canonical seam rules now live in `CLAUDE.md`; the frozen schema
+> lives at `src/hexgraph/schemas/finding.schema.json`.
+
 **Purpose:** develop, test, iterate on, and demo HexGraph **without a real API key and without spending a cent on tokens.** The mock must be realistic enough to trigger every code path the real backends would (findings parsing, graph-edge creation, follow-up spawning, triage states, error handling, retries, streaming, cost display).
 
 This is a standard problem with a well-trodden solution. The patterns below are the industry norms for testing against an expensive/non-deterministic external dependency (LLM APIs, payment gateways, third-party SaaS): **provider abstraction + dependency injection, fixtures/golden files, record-replay (VCR/cassette), contract tests, deterministic seeding, and fault injection.** Apply them as described.
@@ -8,7 +14,7 @@ This is a standard problem with a well-trodden solution. The patterns below are 
 
 ## 1. It implements the same interface as the real backends
 
-There is ONE `LLMBackend` interface (see `SPEC.md` §6). There are (at least) three implementations:
+There is ONE `LLMBackend` interface (`src/hexgraph/llm/base.py`). There are (at least) three implementations:
 
 - `AnthropicAPIBackend` — real, uses the user's `ANTHROPIC_API_KEY`.
 - `ClaudeCodeBackend` — real, uses a local Claude Code connection.

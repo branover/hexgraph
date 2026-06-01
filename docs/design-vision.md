@@ -1,5 +1,18 @@
 # HexGraph Design Vision
 
+> **⚠ Historical — v2 vision, partially superseded.** This document captures the v2
+> target shape and is preserved for its data-model, graph-taxonomy, and workflow
+> rulings (most of which shipped). **One foundational premise has since evolved:** the
+> "the target is never executed / static-only" invariant below was *not* an absolute
+> ban — it grew into the **graduated, opt-in policy seam** (`policy.py`): static-only is
+> the enforced default, and `features.poc`/`features.fuzzing` (sandboxed execution),
+> `features.network` (bounded local-network egress), `features.rehost` (full-system
+> emulation), and `features.remote` (one authorized live device) each raise a higher
+> tier behind its own gate. See **`CLAUDE.md`** and **`README.md`** for the authoritative,
+> current security model, and `docs/design-dynamic-surfaces.md` for the dynamic-surface
+> design as shipped. Read §1's "never executed" / "out of scope: dynamic execution" lines
+> as the v2 *starting point*, not today's product.
+
 > **This is a design vision — the "what" and "why" — not an implementation plan.**
 > It defines the target shape of the product, resolves the contradictions surfaced by
 > the dimension proposals and adversarial critiques, unifies terminology, and makes
@@ -46,7 +59,7 @@ gets smarter as the researcher works. HexGraph is an **instrument panel, not an 
   (`--network none`, `--read-only`, resource caps, tmpfs, timeout). **The target is never
   executed** (static/RE only in v1). **The LLM never sees raw bytes — only tool output.**
 - **The graph is relational** in SQLite via SQLAlchemy (UUID ids). **Neo4j is out of scope.**
-- **The Finding is canonical** (`context/schemas/finding.schema.json`); every task and every
+- **The Finding is canonical** (`src/hexgraph/schemas/finding.schema.json`); every task and every
   backend emits exactly that shape. The schema has top-level `additionalProperties: false`,
   a closed `suggested_followups.items.task_type` enum, and `confidence` as a `low|medium|high`
   enum (all verified in code, mirrored by `extra="forbid"` Pydantic models).
