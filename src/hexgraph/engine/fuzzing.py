@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Finding as FindingRow
 from hexgraph.db.models import Project, Target, TargetKind, Task, TaskStatus
+from hexgraph.engine.assurance import derive_fuzz_assurance
 from hexgraph.engine.findings import persist_finding
 from hexgraph.engine.tasks import write_trace
 from hexgraph.models.finding import Evidence, Finding, FollowupSuggestion
@@ -90,9 +91,13 @@ def _crash_finding(crash: dict, function: str | None, target_name: str) -> Findi
             function=function or crash.get("function"),
             reproducer=crash.get("reproducer_sha256"),
             backtrace=[crash["summary"]] if crash.get("summary") else None,
+            # LAB-CONFIRMED: the harness fired the bug in isolation (code_present/dynamic) — proven
+            # real, but the harness feeds the function directly, so the production input path is NOT
+            # established. See engine/assurance.py + docs/design-verification-oracles.md.
             extra={"engine": "libfuzzer", "crash_kind": kind,
                    "reproducer_size": crash.get("reproducer_size"),
-                   "faulting_function": crash.get("function")},
+                   "faulting_function": crash.get("function"),
+                   "assurance": derive_fuzz_assurance()},
         ),
         suggested_followups=[
             FollowupSuggestion(

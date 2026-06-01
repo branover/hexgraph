@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from hexgraph.db.models import EdgeType
 from hexgraph.db.models import Finding as FindingRow
 from hexgraph.db.models import FindingStatus, Task
+from hexgraph.engine.assurance import assurance_of, default_for
 from hexgraph.engine.edges import add_edge
 from hexgraph.engine.nodes import materialize_function
 from hexgraph.models.finding import Finding
@@ -55,6 +56,16 @@ def persist_finding(
     if finding_type is None:
         task = session.get(Task, task_id)
         finding_type = classify_finding(task.type if task else None, finding.category)
+
+    # Floor: every finding that makes a vuln claim documents AT LEAST its assurance level
+    # (code_present/static) unless a stronger one was already recorded — verify_poc set it, or an
+    # agent declared input_reachable. Never overwrites a stronger claim. (design-verification-oracles.md)
+    evidence_json = finding.evidence.model_dump(exclude_none=True)
+    if assurance_of(evidence_json) is None:
+        floor = default_for(finding_type)
+        if floor is not None:
+            evidence_json.setdefault("extra", {})["assurance"] = floor
+
     row = FindingRow(
         project_id=project_id,
         target_id=target_id,
@@ -65,7 +76,7 @@ def persist_finding(
         category=finding.category,
         summary=finding.summary,
         reasoning=finding.reasoning,
-        evidence_json=finding.evidence.model_dump(exclude_none=True),
+        evidence_json=evidence_json,
         suggested_followups_json=[
             f.model_dump(exclude_none=True) for f in (finding.suggested_followups or [])
         ],

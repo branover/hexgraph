@@ -31,6 +31,10 @@ UNAUTHENTICATED = "unauthenticated"
 REQUIRES_CREDENTIALS = "requires_credentials"
 UNSPECIFIED = "unspecified"
 
+# Scope of a DYNAMIC test — the crux of "lab-confirmed" vs "reachable in the deployed system":
+HARNESS = "harness"        # the code was executed in ISOLATION (a binary/fuzz harness) → code_present
+ENTRYPOINT = "entrypoint"  # the trigger went through the LIVE DEPLOYED input boundary → input_reachable
+
 _VALID_STANDARDS = {CODE_PRESENT, INPUT_REACHABLE, UNCONFIRMED}
 _VALID_METHODS = {STATIC, DYNAMIC}
 
@@ -45,6 +49,47 @@ def assurance(standard: str, method: str, precondition: str = UNSPECIFIED,
     if detail:
         out["detail"] = detail
     return out
+
+
+# Findings carrying a vuln claim must document AT LEAST the floor; recon/annotation don't.
+_VULN_FINDING_TYPES = {"vulnerability", "poc", "fuzz_crash", "harness", "verified", "other"}
+
+
+def assurance_of(evidence: dict | None) -> dict | None:
+    """The finding's assurance triple, if any. Canonical location is `evidence.extra.assurance`;
+    a PoC also nests it under `evidence.extra.verification.assurance` (verify_poc) — read both so
+    callers have one accessor regardless of which path produced the finding."""
+    extra = (evidence or {}).get("extra") or {}
+    return extra.get("assurance") or ((extra.get("verification") or {}).get("assurance"))
+
+
+def default_for(finding_type: str | None) -> dict | None:
+    """The FLOOR assurance to stamp on a finding that carries a vuln claim but recorded none —
+    so every flaw documents at least the minimum level reached. A finding with no dynamic trigger
+    and no argued reachability is, by default, only `code_present` / `static` / `unspecified`.
+    Returns None for non-vuln findings (recon/annotation), which make no exploitability claim."""
+    if (finding_type or "vulnerability") in _VULN_FINDING_TYPES:
+        return assurance(CODE_PRESENT, STATIC, UNSPECIFIED)
+    return None
+
+
+def summary_line(a: dict | None) -> str:
+    """One-line `standard / method / precondition` for reasoning text / display."""
+    if not a:
+        return "—"
+    s = f"{a.get('standard')} / {a.get('method')} / {a.get('precondition')}"
+    return s + " (inferred precondition)" if a.get("precondition_inferred") else s
+
+
+# The assurance ladder, weakest → strongest — advertised to agents (SKILL / get_schemas) so they
+# document the floor and STRIVE for the ceiling. (The middle two are not strictly comparable: one
+# proves the bug fires but not that it's reached; the other argues reach but not that it fires.)
+LADDER = [
+    f"{CODE_PRESENT} / {STATIC}     — 'looks vulnerable': observed in decompilation/pattern, NOT executed. May be a false positive. The FLOOR.",
+    f"{CODE_PRESENT} / {DYNAMIC}    — LAB-CONFIRMED: the bug was fired by executing the code in isolation (a harness/fuzzer). Proven real; the production input path is NOT established (which ≠ unreachable — it may exist directly or via composition). Strictly beats the static guess.",
+    f"{INPUT_REACHABLE} / {STATIC}  — a source→sink path from a real input boundary is ARGUED over the graph; not triggered.",
+    f"{INPUT_REACHABLE} / {DYNAMIC} — triggered END-TO-END through the live deployed input boundary (the running service's real input). STRONGEST: reached AND fires.",
+]
 
 
 def _infer_web_precondition(spec: dict) -> tuple[str, bool]:
@@ -73,24 +118,54 @@ def _infer_web_precondition(spec: dict) -> tuple[str, bool]:
 
 
 def derive_poc_assurance(verification: dict, spec: dict, *, is_web: bool, is_tcp: bool) -> dict:
-    """Derive the assurance triple for a `verify_poc` result. A PoC is always a DYNAMIC method
-    (it drove a real input boundary); a *verified* one establishes `input_reachable` (the trigger
-    fired through real input). An unverified PoC establishes neither standard here (a separate
-    static finding may still assert `code_present`)."""
-    verified = bool(verification.get("verified"))
-    standard = INPUT_REACHABLE if verified else UNCONFIRMED
+    """Derive the assurance triple for a `verify_poc` result — distinguishing the SCOPE of the
+    dynamic test, which is the crux of "lab-confirmed code bug" vs "reachable in the real system":
 
+      - **entrypoint** scope — the trigger fired through the LIVE DEPLOYED input boundary (the
+        running service's real network/socket input: a web/tcp surface). That establishes
+        `input_reachable` (reached AND fired).
+      - **harness** scope — the bug was PROVEN by executing the code in ISOLATION (a binary run in
+        the sandbox, fed crafted argv/stdin directly). That establishes `code_present` *dynamically*
+        — the flaw is real (not a static guess), but the production input path is NOT established
+        (which does not mean none exists — it may be reachable directly or via composition with
+        other bugs / unexpected state). Strictly better than `code_present/static` ("looks
+        vulnerable"), strictly weaker than triggering it through the real input boundary.
+
+    A live web/tcp surface ⇒ entrypoint; an isolated binary exec ⇒ harness; override with
+    `spec["scope"]` ("entrypoint"/"harness") when the agent justifies it (e.g. a CGI invoked
+    exactly as the httpd would). An unverified PoC establishes neither standard (`unconfirmed`)."""
+    if not bool(verification.get("verified")):
+        return assurance(UNCONFIRMED, DYNAMIC, UNSPECIFIED)
+
+    declared_scope = (spec or {}).get("scope")
+    if declared_scope in (HARNESS, ENTRYPOINT):
+        scope = declared_scope
+    else:
+        scope = ENTRYPOINT if (is_web or is_tcp) else HARNESS  # live surface vs isolated exec
+
+    if scope == HARNESS:
+        # Proven-real by lab execution; production input path not established.
+        return assurance(CODE_PRESENT, DYNAMIC, UNSPECIFIED,
+                         detail="lab-confirmed: the code was executed in isolation and the bug "
+                                "fired; the production input path is not established")
+
+    # entrypoint scope → triggered through the live deployed input boundary
     declared = (spec or {}).get("precondition")
     if declared:
         precondition, inferred = str(declared), False
     elif is_web:
         precondition, inferred = _infer_web_precondition(spec or {})
     elif is_tcp:
-        # a raw-socket PoC to a listening service is reached without web auth
-        precondition, inferred = UNAUTHENTICATED, True
+        precondition, inferred = UNAUTHENTICATED, True  # a raw-socket service reached without web auth
     else:
-        # a binary PoC drives argv/stdin/env directly — "reachability" is the local exec boundary,
-        # not a network principal; leave the network precondition unspecified.
         precondition, inferred = UNSPECIFIED, False
+    return assurance(INPUT_REACHABLE, DYNAMIC, precondition, precondition_inferred=inferred,
+                     detail="triggered through the live deployed input boundary")
 
-    return assurance(standard, DYNAMIC, precondition, precondition_inferred=inferred)
+
+def derive_fuzz_assurance() -> dict:
+    """A fuzzing crash executes the vulnerable code via a generated HARNESS that feeds the
+    function directly — it PROVES the code is vulnerable (code_present, dynamic, lab-confirmed),
+    but bypasses the production input path, so it is NOT input_reachable on its own."""
+    return assurance(CODE_PRESENT, DYNAMIC, UNSPECIFIED,
+                     detail="lab-confirmed by a fuzzing harness; production input path not established")

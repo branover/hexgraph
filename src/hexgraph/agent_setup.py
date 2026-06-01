@@ -198,9 +198,28 @@ is **record → explore → verify → update**:
    flips to supported/confirmed. On failure, `update_finding` to lower confidence
    and `link_evidence(..., "refutes")`.
 
-**Rule: a confirmed vulnerability finding MUST have a verified PoC finding linked
-to it** (PoC `confirms`→ vulnerability). A vulnerability without a linked, verified
-PoC is "suspected", not "confirmed" — say so in its confidence/reasoning.
+**Two standards of "verified" — record the floor, AIM for the strictest.** "Confirmed" is not
+one thing; the engine records an **assurance** triple `{standard, method, precondition}` per
+finding (see `get_schemas['assurance']`). Climb this ladder and don't overstate:
+- **code_present / static** — "looks vulnerable" from decompilation only. Every vuln finding is
+  auto-floored here, so you ALWAYS document at least this. It may be a false positive.
+- **code_present / dynamic (LAB-CONFIRMED)** — you executed the code in ISOLATION and the bug
+  *fired* (a `fuzzing` harness, or a `poc` run of the extracted binary in the sandbox). This
+  PROVES the code is genuinely vulnerable even if you haven't found how user input reaches it in
+  the deployed system — a missing path doesn't mean none exists (it may be reachable directly or
+  by chaining other bugs). Strictly beats the static guess. Pursue this whenever a static suspicion
+  is worth confirming.
+- **input_reachable / dynamic** — you triggered it END-TO-END through the live deployed input
+  boundary (a rehosted/remote **web or socket surface**), so it's both reached AND fires. The
+  STRONGEST. Strive for this; declare the access it needed via `verify_poc` `spec.precondition`
+  (aim `unauthenticated`; say `requires_credentials:<which>` honestly — cf. the IoTGoat cmdi,
+  which was lab-real but only root-reachable).
+
+So a verified `poc` against an **isolated binary** is lab-confirmed (`code_present/dynamic`); only
+a verified PoC against the **live service surface** is `input_reachable/dynamic`. A vulnerability
+with no dynamic confirmation at all is "suspected" — say so. Always state, in the finding, the
+highest rung you reached and what you could NOT establish (e.g. "code-present, lab-confirmed;
+production input path not yet found").
 
 **n-day across binaries.** After confirming a bug, run `link_same_code(project_id)`
 — it links functions with identical code across the project's other binaries and

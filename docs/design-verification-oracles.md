@@ -59,14 +59,35 @@ Tag each finding's verification with:
    `requires_credentials:<which>` / `requires_config:<x>`). "Reachable in normal operation" is
    meaningless without stating *for whom*.
 
-The assurance ladder, weakest → strongest:
-- **A, static** — "the sink exists" (a static_analysis finding citing the code). Lowest.
-- **B, static** — "a source→sink path exists" (a reachability/taint argument over the graph, no
-  blocking guard) — reachability *argued*, not triggered.
-- **B, dynamic** — verify_poc drove a real input boundary and the unforgeable oracle fired —
-  reachability *demonstrated*; implies A. Highest.
+**Crucially, `method` cuts across BOTH standards** — so `code_present` has a static *and* a
+dynamic form, and the dynamic form is the "verified in laboratory conditions" rung:
 
-These live in `evidence.extra` (e.g. `assurance: {standard, method, precondition}`) — the DB
+|                     | **static** (observed/argued)                                  | **dynamic** (executed)                                                                 |
+|---------------------|---------------------------------------------------------------|----------------------------------------------------------------------------------------|
+| **code_present**    | "looks vulnerable" — decompilation/pattern only; may be a false positive. The FLOOR. | **LAB-CONFIRMED** — a harness/fuzzer *fired the bug* by executing the code in ISOLATION. The flaw is **proven real**; the production input path is NOT established (which ≠ unreachable — it may exist directly, or via composition with other bugs / unexpected state). |
+| **input_reachable** | a source→sink path from a real input is *argued* over the graph; not triggered. | triggered END-TO-END through the live deployed input boundary. Reached AND fires. STRONGEST. |
+
+The distinction the engine must make is therefore the **SCOPE of a dynamic test**:
+- **harness** — the code was run in isolation (an extracted binary in the sandbox fed crafted
+  argv/stdin; a libFuzzer harness calling the function). ⇒ `code_present / dynamic`. We proved the
+  *code* is vulnerable; we did **not** prove the deployed system routes user input to it.
+- **entrypoint** — the trigger went through the LIVE deployed input boundary (the running
+  service's real network/socket input — a rehosted/remote web or tcp surface). ⇒ `input_reachable
+  / dynamic`.
+
+So an isolated binary/fuzz PoC is `code_present/dynamic` (lab-confirmed), and only a live
+web/socket-surface PoC is `input_reachable/dynamic`. `code_present/dynamic` is strictly stronger
+than `code_present/static` ("the bug is real" vs "the bug might be real"); the reason it isn't
+`input_reachable` is **honesty about the path, not doubt about the bug**.
+
+The assurance ladder, weakest → strongest (the middle two aren't strictly comparable — one proves
+it *fires* but not that it's *reached*; the other argues *reach* but not that it fires):
+- **code_present / static** — the sink exists in code (cited); not executed. Lowest; may be a false positive.
+- **code_present / dynamic** — lab-confirmed: executed in isolation and the bug fired. Proven real; production path unestablished.
+- **input_reachable / static** — a source→sink path from a real input boundary is argued over the graph; not triggered.
+- **input_reachable / dynamic** — triggered end-to-end through the live deployed input boundary. Highest.
+
+These live in `evidence.extra` (`assurance: {standard, method, precondition[, detail]}`) — the DB
 envelope, not the frozen finding schema — and drive how the UI/report phrases the claim.
 
 ### Proving each standard in HexGraph's terms
@@ -74,6 +95,11 @@ envelope, not the frozen finding schema — and drive how the UI/report phrases 
 - **Standard A (code-present):** static_analysis + decompile evidence citing the sink; optionally
   re-confirm the construct exists (re-decompile) to kill false pattern matches. Largely supported
   — formalize "cite the sink" as the bar.
+- **Standard A, dynamic — LAB-CONFIRMED (harness scope):** execute the vulnerable code in
+  ISOLATION and observe the bug fire — a libFuzzer/ASan harness (`fuzzing` task), or a binary PoC
+  run in the sandbox with crafted argv/stdin (`poc` task). Proves the *code* is genuinely
+  vulnerable (kills the false-positive doubt) without asserting the deployed input path. This is
+  strictly above "looks vulnerable" and is what `fuzz_crash` and isolated binary PoCs record today.
 - **Standard B, static (reachability argument):** mark **input-source** nodes (endpoint/param/
   input/socket = the untrusted boundary) and compute a path to the sink over the typed graph's
   `taints`/`calls`/`routes_to` edges + xrefs, recording the path and any auth/guard gating it

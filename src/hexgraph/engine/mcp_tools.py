@@ -216,7 +216,13 @@ def record_finding(project_id: str, target_id: str, finding: dict, task_id: str 
     """Persist an agent-produced finding (the `finding` dict must match the frozen
     Finding schema — call get_schemas). `finding_type` is a SEPARATE classifier
     (vulnerability|poc|recon|harness|fuzz_crash|annotation|other) — pass it here,
-    NOT inside the finding dict. Pass the given `task_id` in delegate mode."""
+    NOT inside the finding dict. Pass the given `task_id` in delegate mode.
+
+    ASSURANCE (get_schemas['assurance']): a vuln finding is auto-floored to code_present/static
+    — the engine documents at least the minimum. STRIVE HIGHER: to claim input_reachable, either
+    verify it dynamically (verify_poc) or, for a static reachability argument, set
+    evidence.extra.assurance = {standard, method, precondition} (e.g. input_reachable/static/
+    unauthenticated) — state requires_credentials honestly; don't claim what you didn't show."""
     from hexgraph.db.models import Task
     from hexgraph.engine.findings import FINDING_TYPES, persist_finding
     from hexgraph.engine.tasks import create_task
@@ -556,6 +562,7 @@ def get_schemas() -> dict:
 
     from hexgraph.db.models import EdgeType, FindingStatus, NodeType
     from hexgraph.engine.annotations import KINDS as ANN_KINDS, NODE_KINDS as ANN_NODE_KINDS
+    from hexgraph.engine.assurance import LADDER as _ASSURANCE_LADDER
     from hexgraph.engine.edge_schemas import SOCKET_KINDS, describe_edges
     from hexgraph.engine.node_schemas import describe_nodes
     from hexgraph.engine.findings import FINDING_TYPES
@@ -622,6 +629,21 @@ def get_schemas() -> dict:
         "annotation_kinds": sorted(ANN_KINDS),
         "annotation_node_kinds": sorted(ANN_NODE_KINDS),
         "annotation_note": "Annotations from an agent land status='proposed' (pending analyst approval).",
+        "assurance": {
+            "ladder": _ASSURANCE_LADDER,
+            "note": "Two STANDARDS of 'verified': code_present (the flaw exists in code) vs "
+                    "input_reachable (it's triggerable via user input in normal operation), each by "
+                    "method static (argued) or dynamic (a live trigger fired an unforgeable oracle), "
+                    "under a precondition (unauthenticated / requires_credentials / unspecified). The "
+                    "engine records this per finding in evidence.extra.assurance: a verified verify_poc "
+                    "→ input_reachable/dynamic (the strongest claims are engine-set and can't be faked); "
+                    "any other vuln finding defaults to the FLOOR code_present/static. AIM FOR THE "
+                    "STRICTEST: don't stop at code_present — craft a verify_poc to demonstrate "
+                    "input_reachable/dynamic, and prefer an unauthenticated precondition (pass "
+                    "spec.precondition to verify_poc, or evidence.extra.assurance to record_finding, to "
+                    "declare the precondition / an argued input_reachable-static — but state "
+                    "requires_credentials honestly; never claim unauth you didn't achieve).",
+        },
     }
 
 
@@ -899,8 +921,14 @@ def verify_poc(target_id: str, poc: dict, finding_id: str | None = None) -> dict
     token, so a match proves the injected behaviour actually happened (not something the
     model could fabricate).
 
+    A verified run records the strongest assurance — input_reachable / dynamic (see
+    get_schemas['assurance']) — which an agent CANNOT fake (it requires the oracle to fire).
+    Declare the access level the PoC needed via `spec.precondition` ("unauthenticated" /
+    "requires_credentials:<which>"); otherwise it's inferred conservatively. AIM for an
+    unauthenticated trigger; if you had to authenticate, say so — don't overstate reachability.
+
     Pass `finding_id` to attach the result to that finding (its evidence.extra.poc +
-    .verification) so it shows as `verified` in list_findings — the typed home for a
+    .verification + .assurance) so it shows as `verified` in list_findings — the typed home for a
     confirmed exploit. ALWAYS attach: a confirmed vuln finding must carry its verified PoC."""
     from hexgraph.db.models import Finding
     from hexgraph.engine.poc import verify_poc as _verify
