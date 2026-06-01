@@ -304,6 +304,16 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-01: **Rehost auto-registers the live device as a remote target (closing the live-exploit
+  half-loop, part 1 of 2).** The FirmAE entry script now probes the booted device's ports (22/23/
+  80/443/8080/8443/1337/9999 via `/dev/tcp`) and reports the open set in the `HEXGRAPH_REHOST`
+  marker; `RehostResult.ports` carries them. When the device exposes SSH/telnet, `rehost_firmware`
+  auto-registers it as a `remote` child target pinned to the emulator netns (`net_container`), so
+  the agent enumerates the LIVE device (remote_list_files/remote_run, features.remote) — not just
+  the extracted rootfs. The `rehost` MCP tool returns `remote_target_id` + `ports`; SKILL §2b
+  documents it. `register_remote_target` gained `parent`/`net_container`. Addresses VR feedback #0.
+  Tests: test_rehost.py (ssh-preferred, telnet-fallback, none-open). *(Next: raw-TCP probe +
+  non-HTTP verify_poc + bounded service-launch so binary socket services can be tested live.)*
 - 2026-06-01: **Live-device + rehosting-engagement track (autonomous overnight).** Shipped, each
   PR-reviewed + merged + VR-vetted: gap #1 disk-image rootfs extraction (Sleuth Kit, PR #20), gap #2
   `web_discover` bounded crawl (PR #21), `verify_poc` web-oracle reflection-stripping (PR #22), the

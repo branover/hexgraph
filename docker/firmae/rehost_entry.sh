@@ -60,7 +60,16 @@ done
 if [ -z "$IP" ]; then
     echo "HEXGRAPH_REHOST {\"ip\":null,\"web\":false,\"detail\":\"FirmAE did not assign an IP (extraction or boot failed)\"}"
 else
-    echo "HEXGRAPH_REHOST {\"ip\":\"$IP\",\"web\":$WEB,\"port\":$PORT,\"detail\":\"FirmAE emulation\"}"
+    # Which of the device's management/listening ports answer — so HexGraph can auto-register
+    # a `remote` (SSH/telnet) target for live enumeration, and learn what raw-TCP services are
+    # up. A bash /dev/tcp connect (with a hard timeout) is a dependency-free port probe.
+    PORTS=""
+    for p in 22 23 80 443 8080 8443 1337 9999; do
+        if timeout 3 bash -c "exec 3<>/dev/tcp/$IP/$p" 2>/dev/null; then
+            PORTS="${PORTS:+$PORTS,}$p"
+        fi
+    done
+    echo "HEXGRAPH_REHOST {\"ip\":\"$IP\",\"web\":$WEB,\"port\":$PORT,\"ports\":[$PORTS],\"detail\":\"FirmAE emulation\"}"
 fi
 # Keep the emulation (qemu) running so HexGraph's probe can reach the device via this
 # container's network namespace. HexGraph tears the container down when done.

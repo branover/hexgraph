@@ -26,20 +26,29 @@ def _channel(target: Target) -> dict:
 
 def register_remote_target(session: Session, project: Project, host: str, *, port: int | None = None,
                            username: str = "root", transport: str = "ssh",
-                           name: str | None = None) -> Target:
+                           name: str | None = None, parent: Target | None = None,
+                           net_container: str | None = None) -> Target:
     """Register a live remote device as a `remote` Target (no bytes; reached via an SSH/telnet
-    Channel). Credentials are NOT taken here — they're read from env/config at connect time."""
+    Channel). Credentials are NOT taken here — they're read from env/config at connect time.
+
+    `parent` makes it a child of (e.g.) a rehosted firmware; `net_container` pins the probe to
+    that emulator's network namespace (a rehosted device's SSH/telnet lives on a private IP
+    reachable only inside the FirmAE container) instead of the default bridge."""
     transport = (transport or "ssh").lower()
     if transport not in ("ssh", "telnet"):
         raise ValueError("transport must be 'ssh' or 'telnet'")
     if not (host or "").strip():
         raise ValueError("a remote target needs a host")
     port = int(port or (22 if transport == "ssh" else 23))
+    channel = {"kind": transport, "host": host, "port": port,
+               "username": username, "transport": transport}
+    if net_container:
+        channel["net_container"] = net_container
     target = Target(
-        project_id=project.id, name=name or f"{username}@{host}:{port} ({transport})",
+        project_id=project.id, parent_id=parent.id if parent else None,
+        name=name or f"{username}@{host}:{port} ({transport})",
         path="", kind=TargetKind.remote,
-        metadata_json={"channel": {"kind": transport, "host": host, "port": port,
-                                   "username": username, "transport": transport}},
+        metadata_json={"channel": channel},
     )
     session.add(target)
     session.flush()

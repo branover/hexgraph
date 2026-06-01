@@ -715,7 +715,13 @@ def rehost(target_id: str, brand: str | None = None) -> dict:
     `brand` (FirmAE path only): the device vendor — linksys/netgear/dlink/tplink/tenda/… —
     FirmAE keys its network-inference NVRAM profiles on it. It's auto-inferred from the
     firmware's strings when present, but if rehost reports it couldn't bring up the device
-    network, RETRY with the right brand explicitly (a stripped image won't name its vendor)."""
+    network, RETRY with the right brand explicitly (a stripped image won't name its vendor).
+
+    If the booted device exposes SSH/telnet, rehost ALSO auto-registers it as a `remote`
+    target (returned as `remote_target_id`) pinned to the emulator — run remote_list_files /
+    remote_run on it to enumerate the LIVE device, not just the extracted rootfs (needs
+    features.remote). `ports` lists every device port that answered, so you know which
+    raw-TCP services are up to test."""
     from hexgraph.engine.rehost import RehostError, rehost_firmware
     from hexgraph.policy import PolicyViolation
 
@@ -730,8 +736,11 @@ def rehost(target_id: str, brand: str | None = None) -> dict:
         except RehostError as exc:
             return {"error": str(exc)}
         ch = (surface.metadata_json or {}).get("channel", {})
+        rehost_info = ch.get("rehost") or {}
         return {"surface_id": surface.id, "name": surface.name, "base_url": ch.get("base_url"),
-                "rehost": ch.get("rehost")}
+                "rehost": rehost_info,
+                "remote_target_id": rehost_info.get("remote_target_id"),
+                "ports": rehost_info.get("ports", [])}
 
 
 def register_remote(project_id: str, host: str, port: int | None = None, username: str = "root",
