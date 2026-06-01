@@ -305,6 +305,21 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-01: **Structural refactor — split the `api/app.py` god-function into APIRouter modules**
+  (code-review structure finding #6). `create_app()` was ~1100 lines defining all ~55 endpoints as
+  nested closures in one factory (untestable per-route, a merge-conflict hotspot, forced every helper +
+  per-route lazy import into one scope). Extracted ten top-level routers under `src/hexgraph/api/routers/`:
+  `projects` (10), `targets` (6), `graph` (10 — nodes/edges/sockets/schemas/`/graph/{id}`), `findings` (9),
+  `tasks_runs` (9 — tasks/runs/preview/detail/trace/rerun), `hypotheses` (4), `annotations` (3),
+  `settings` (3), `ghidra` (2), `capabilities` (1); shared request models + `*_dict` response shapers moved
+  to `routers/_shared.py`. `create_app()` now shrinks to `FastAPI(...)` + lifespan + the **two security
+  middlewares unchanged** (`_host_guard` Host-allowlist, `_same_origin_guard` Sec-Fetch-Site CSRF) +
+  `include_router(...)` ×10 + `/health` + the SPA static mount (still LAST, after all API routes). Pure
+  move/restore: **route count unchanged (64, identical paths/methods verified)**, `make test` green
+  (344 passed, 2 skipped — same as main), trust-boundary + SPA-mount intact. One behaviour-preserving care:
+  `targets.py` calls `runner.docker_available()` via the module (not a name bound at import) so the existing
+  `monkeypatch("hexgraph.sandbox.runner.docker_available")` tests still take effect; `verify_poc` stays a
+  lazy in-function import for the same reason. No DB model change → no migration.
 - 2026-06-01: **FirmAE boot-reliability hardening + real-firmware live-loop validation (DVRF).**
   Durable fix for the recurring makeImage **silent hang** (~12-min stall → "no device IP"), which has
   TWO distinct causes — both now handled in `docker/firmae/rehost_entry.sh`:
