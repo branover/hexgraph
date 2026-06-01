@@ -14,10 +14,8 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from starlette.middleware.trustedhost import TrustedHostMiddleware
-
 from hexgraph import __version__
-from hexgraph.api.loopback import allowed_hosts, assert_loopback
+from hexgraph.api.loopback import assert_loopback, host_allowed
 from hexgraph.config import load_config
 from hexgraph.db.models import Finding, FindingStatus, Node, Project, Target, Task
 from hexgraph.db.session import session_scope
@@ -192,23 +190,36 @@ def create_app() -> FastAPI:
     app = FastAPI(title="HexGraph", version=__version__, lifespan=_lifespan)
 
     # --- Operator-machine trust boundary (loopback API has no auth by design) ---
-    # 1) Host-header allowlist: the PRIMARY anti-DNS-rebinding defense. A malicious page
-    #    that DNS-rebinds to 127.0.0.1 still carries the ATTACKER'S Host header, which is
-    #    not loopback → rejected here before any handler runs. Respects the deliberate
-    #    non-loopback bind override (then widens to "*", see loopback.allowed_hosts).
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts(load_config().host))
+    # 1) Host-header guard: the PRIMARY anti-DNS-rebinding defense. A malicious page that
+    #    DNS-rebinds to 127.0.0.1 still carries the ATTACKER'S Host header, which is not
+    #    loopback → rejected here before any handler runs. Implemented in-house (not
+    #    Starlette's TrustedHostMiddleware) because that matches on `host.split(':')[0]`,
+    #    which mangles a bracketed IPv6 loopback `[::1]:8765` → `[` and would lock out the UI
+    #    on systems where localhost resolves to ::1. `host_allowed` parses IPv6 correctly and
+    #    respects the deliberate non-loopback bind override (widens to allow-all).
+    _bind_host = load_config().host
+
+    @app.middleware("http")
+    async def _host_guard(request: Request, call_next):
+        if not host_allowed(request.headers.get("host", ""), _bind_host):
+            return JSONResponse({"detail": "invalid host header"}, status_code=400)
+        return await call_next(request)
 
     # 2) Same-origin (CSRF) guard on state-changing /api/* requests. Browsers set
-    #    `Sec-Fetch-Site` automatically: the SPA's same-origin fetches send `same-origin`
-    #    (allowed); a cross-site page's request sends `cross-site` (rejected). Non-browser
-    #    clients (the CLI/MCP/tests) call the engine in-process, not over HTTP, so they're
-    #    unaffected; any that DID call HTTP omit the header (treated as non-browser → allowed).
+    #    `Sec-Fetch-Site` automatically. Allow a mutation ONLY when it is `same-origin` (the
+    #    SPA's own fetches) or when the header is ABSENT (non-browser clients — though the
+    #    CLI/MCP/tests call the engine in-process, not HTTP, so this is belt-and-suspenders).
+    #    Everything else — `cross-site` AND `same-site` AND `none` — is rejected. Rejecting
+    #    `same-site` is essential: a page on `evil.localhost` resolves to 127.0.0.1 and is
+    #    same-SITE to `localhost`, so it would otherwise pass both this guard and the Host
+    #    check and flip the sandbox-relaxing feature gates.
     @app.middleware("http")
     async def _same_origin_guard(request: Request, call_next):
         if request.method not in _SAFE_METHODS and request.url.path.startswith("/api/"):
-            if request.headers.get("sec-fetch-site") == "cross-site":
+            sfs = request.headers.get("sec-fetch-site")
+            if sfs is not None and sfs != "same-origin":
                 return JSONResponse(
-                    {"detail": "cross-site request rejected (same-origin only)"},
+                    {"detail": f"cross-origin request rejected (Sec-Fetch-Site: {sfs}); same-origin only"},
                     status_code=403,
                 )
         return await call_next(request)

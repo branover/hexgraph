@@ -371,12 +371,16 @@ then run the resume verifier, then continue at the next unchecked task.
 - 2026-06-01: **Security hardening — operator-machine trust boundary (2 high-sev review findings).**
   (1) The loopback API had no Host/CSRF/auth guard → a page the operator visits could DNS-rebind to
   127.0.0.1 and flip the sandbox-relaxing feature gates (PATCH /api/settings) or hit DELETE/task
-  endpoints. Added `TrustedHostMiddleware` (allowlist = loopback names/IPs + `testserver`; widens to
-  `*` only on a deliberate non-loopback bind via `HEXGRAPH_I_KNOW_WHAT_IM_DOING`, mirroring
-  `assert_loopback`) — the primary anti-rebinding defense — plus a same-origin guard middleware that
-  rejects state-changing `/api/*` requests carrying `Sec-Fetch-Site: cross-site` (the SPA's
-  same-origin fetches send `same-origin` and pass; the CLI/MCP/tests call the engine in-process, not
-  HTTP, so they're unaffected). `api/loopback.allowed_hosts()` + `tests/test_trust_boundary.py`.
+  endpoints. Added a custom **Host-header guard** (`loopback.host_allowed`; allowlist = loopback
+  names/IPs + `testserver`, widens to `*` only on a deliberate non-loopback bind via
+  `HEXGRAPH_I_KNOW_WHAT_IM_DOING`) — the primary anti-rebinding defense. NOT Starlette's
+  `TrustedHostMiddleware`, which matches on `host.split(':')[0]` and would mangle a bracketed IPv6
+  loopback `[::1]:8765` → `[`, locking out the UI where localhost resolves to ::1; `host_allowed`
+  parses IPv6 correctly. Plus a **same-origin guard** that allows a state-changing `/api/*` request
+  ONLY when `Sec-Fetch-Site` is `same-origin` (the SPA's own fetches) or ABSENT (non-browser; the
+  CLI/MCP/tests call the engine in-process, not HTTP) — **`cross-site` AND `same-site` AND `none` are
+  rejected**. Rejecting `same-site` is essential: a page on `evil.localhost` resolves to 127.0.0.1
+  and is same-SITE to `localhost`, so it would otherwise slip past both guards. `tests/test_trust_boundary.py`.
   (2) `run_remote()` put SSH/telnet creds into the `--channel` JSON → serialized onto the docker run
   argv (world-readable via `ps`/`/proc/<pid>/cmdline`). Now the secret is delivered out-of-band via
   the `HG_CHANNEL_SECRET` env var (new `secret=` param on `SandboxRunner.run_probe`/`run_channel_probe`,

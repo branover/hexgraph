@@ -44,6 +44,31 @@ def allowed_hosts(bind_host: str | None = None) -> list[str]:
     return hosts
 
 
+def _hostname_only(host_header: str) -> str:
+    """Extract just the hostname from a Host header, stripping any :port — and handling a
+    bracketed IPv6 literal (`[::1]` / `[::1]:8765`), which a naive `split(':')[0]` mangles to
+    `[`. A bare (unbracketed) IPv6 literal has multiple colons and no port, so it's returned
+    as-is."""
+    h = (host_header or "").strip()
+    if h.startswith("["):                      # [v6] or [v6]:port
+        return h[1:h.index("]")] if "]" in h else h.strip("[]")
+    if h.count(":") == 1:                       # name:port or v4:port
+        return h.rsplit(":", 1)[0]
+    return h                                     # bare hostname/IPv4, or bare IPv6 literal
+
+
+def host_allowed(host_header: str, bind_host: str | None = None) -> bool:
+    """Is this request's Host header permitted? The primary anti-DNS-rebinding defense
+    (a rebinding page carries the attacker's OWN domain, not loopback). Parses the host
+    correctly (incl. bracketed IPv6) before matching, so `[::1]:8765` is accepted on systems
+    where localhost resolves to ::1. Widens to allow-all only on a deliberate non-loopback
+    bind (see allowed_hosts)."""
+    if "*" in allowed_hosts(bind_host):
+        return True
+    name = _hostname_only(host_header)
+    return name == "testserver" or is_loopback(name)
+
+
 def assert_loopback(host: str) -> None:
     """Raise unless `host` is loopback or the override env is set (warn even then)."""
     if is_loopback(host):
