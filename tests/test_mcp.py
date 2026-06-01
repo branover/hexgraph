@@ -96,8 +96,105 @@ def test_catalog_group_filtering():
     write_only = {t["name"] for t in mcp_tools.catalog({"write"})}
     assert {"record_finding", "create_node", "create_edge"} <= write_only
     assert "decompile_function" not in write_only
+    # the RUN group must advertise every live/network/exec run-tool (review #8) — these were
+    # added without a catalog-membership assertion, so a drop would go unnoticed.
+    run_only = {t["name"] for t in mcp_tools.catalog({"run"})}
+    assert {"tcp_request", "remote_launch", "register_remote", "rehost",
+            "http_request", "verify_poc"} <= run_only
+    assert "decompile_function" not in run_only
     # every catalog entry is tagged with a known group
     assert all(t["group"] in mcp_tools.GROUPS for t in mcp_tools.catalog())
+
+
+# ── direct tests for the new run-tools (review #8): only the engine/probe layer beneath
+#    them was covered. A fake runner stands in for the sandbox so we exercise the MCP wrapper
+#    itself — success shape, the features-off `{"error": "...not permitted..."}` string (NOT an
+#    exception), and int(port) coercion — all offline. ─────────────────────────────────────
+class _FakeExecutor:
+    """Stands in for the sandbox executor; records channel-probe calls, replays a response."""
+    def __init__(self, response):
+        self.response = response
+        self.calls = []
+
+    def run_channel_probe(self, probe, *, channel, net_container=None, secret=None, **kw):
+        self.calls.append({"probe": probe, "channel": channel, "secret": secret})
+        return dict(self.response)
+
+
+def _patch_executor(monkeypatch, fake):
+    monkeypatch.setattr("hexgraph.sandbox.executor.get_executor", lambda *a, **k: fake)
+
+
+def _rehosted_surface(s):
+    from hexgraph.engine.surfaces import register_web_surface
+    p = create_project(s, name="dev")
+    surface = register_web_surface(s, p, "http://192.168.0.1", name="rehosted")
+    ch = dict(surface.metadata_json["channel"])
+    ch["rehost"] = {"container": "firmae-xyz", "ip": "192.168.0.1"}
+    surface.metadata_json = {**surface.metadata_json, "channel": ch}
+    s.flush()
+    return p, surface
+
+
+def test_mcp_tcp_request_success_and_port_coercion(hg_home, monkeypatch):
+    from hexgraph import settings
+    settings.update_settings({"features": {"network": {"enabled": True}}})
+    fake = _FakeExecutor({"ok": True, "response": "BusyBox v1.0"})
+    _patch_executor(monkeypatch, fake)
+    with session_scope() as s:
+        _p, surface = _rehosted_surface(s)
+        tid = surface.id
+    out = mcp_tools.tcp_request(tid, port="1337", payload="ping")   # port as a STRING
+    assert out.get("ok") is True and out["response"] == "BusyBox v1.0"
+    # int(port) coercion: the probe channel carries an int, allowlist is host:int.
+    chan = fake.calls[0]["channel"]
+    assert chan["port"] == 1337 and chan["allow"] == ["192.168.0.1:1337"]
+
+
+def test_mcp_tcp_request_features_off_returns_error_string(hg_home):
+    """network off → the gate raises PolicyViolation internally, but the MCP tool must return
+    a `{"error": "...not permitted..."}` string, never propagate the exception."""
+    with session_scope() as s:
+        _p, surface = _rehosted_surface(s)
+        tid = surface.id
+    out = mcp_tools.tcp_request(tid, port=1337, payload="x")
+    assert "error" in out and "not permitted" in out["error"]
+
+
+def test_mcp_remote_launch_success_and_features_off(hg_home, monkeypatch):
+    from hexgraph import settings
+    from hexgraph.engine.remote import register_remote_target
+
+    # features.remote OFF → error string, not an exception.
+    with session_scope() as s:
+        p = create_project(s, name="rem-off")
+        t = register_remote_target(s, p, "192.168.1.5", port=22, username="root")
+        tid = t.id
+    off = mcp_tools.remote_launch(tid, "/usr/sbin/telnetd", args=["-p", "23"])
+    assert "error" in off and "not permitted" in off["error"]
+
+    # features.remote ON → success shape from the fake probe.
+    settings.update_settings({"features": {"remote": {"enabled": True}}})
+    fake = _FakeExecutor({"ok": True, "output": "launched pid 4242"})
+    _patch_executor(monkeypatch, fake)
+    out = mcp_tools.remote_launch(tid, "/usr/sbin/telnetd", args=["-p", "23"])
+    assert out.get("ok") is True and "4242" in out["output"]
+    assert fake.calls[0]["probe"] == "remote_probe.py"
+    assert fake.calls[0]["channel"]["op"] == "launch"
+
+
+def test_mcp_register_remote_success_and_port_coercion(hg_home):
+    with session_scope() as s:
+        p = create_project(s, name="reg-rem")
+        pid = p.id
+    out = mcp_tools.register_remote(pid, "192.168.1.50", port="2222", username="admin",
+                                    transport="ssh")
+    assert "error" not in out and out["kind"] == "remote"
+    # int(port) coercion happened in register_remote_target.
+    assert out["channel"]["port"] == 2222 and out["channel"]["host"] == "192.168.1.50"
+    assert out["channel"]["username"] == "admin"
+    # no secret material anywhere in the returned channel
+    assert "password" not in str(out) and "key" not in out["channel"]
 
 
 def test_enabled_groups_from_settings(hg_home):

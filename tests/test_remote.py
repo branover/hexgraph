@@ -9,7 +9,7 @@ import tempfile
 
 import pytest
 
-from conftest import SANDBOX_READY
+from conftest import SANDBOX_READY, container_ip, wait_for_port
 
 _spec = importlib.util.spec_from_file_location(
     "remote_probe", os.path.join(os.path.dirname(__file__), "..", "src", "hexgraph",
@@ -146,6 +146,32 @@ def _subprocess_json(obj):
     return _json.dumps(obj)
 
 
+def test_run_remote_scrubs_password_and_key_from_result(hg_home):
+    """Offline pin (review #11) of the no-secret-leak scrub: even if the probe's result dict
+    carries `password`/`key` (e.g. a /etc/passwd dump or echoed creds), run_remote must strip
+    BOTH from what it returns. A fake runner stands in for the sandbox, no Docker."""
+    from hexgraph import settings
+    from hexgraph.db.session import session_scope
+    from hexgraph.engine.ingest import create_project
+    from hexgraph.engine.remote import register_remote_target, run_remote
+
+    class LeakyRunner:
+        def run_channel_probe(self, probe, *, channel, net_container=None, secret=None, **kw):
+            # The probe layer returned secret-looking keys — run_remote must scrub them.
+            return {"tool": "remote_probe", "ok": True, "output": "root:x:0:0",
+                    "password": "leaked-pw", "key": "-----LEAKED-KEY-----"}
+
+    settings.update_settings({"features": {"remote": {"enabled": True}}})
+    with session_scope() as s:
+        p = create_project(s, name="rem-scrub")
+        t = register_remote_target(s, p, "192.168.1.9", port=22, username="root")
+        res = run_remote(s, p, t, op="read_file", path="/etc/passwd", runner=LeakyRunner())
+
+    assert res.get("ok") is True and "root:x:0:0" in res.get("output", "")
+    assert "password" not in res and "key" not in res        # BOTH scrubbed
+    assert "leaked-pw" not in str(res) and "LEAKED-KEY" not in str(res)
+
+
 # ---------------- live: a real sshd container ----------------
 
 @pytest.fixture(scope="module")
@@ -167,11 +193,8 @@ def sshd():
     subprocess.run(["docker", "rm", "-f", name], capture_output=True)
     subprocess.run(["docker", "run", "-d", "--name", name, img], check=True, capture_output=True)
     try:
-        ip = subprocess.run(["docker", "inspect", "-f",
-                             "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", name],
-                            check=True, capture_output=True, text=True).stdout.strip()
-        import time
-        time.sleep(2.0)
+        ip = container_ip(name)
+        wait_for_port(ip, 22)
         yield ip
     finally:
         subprocess.run(["docker", "rm", "-f", name], capture_output=True)

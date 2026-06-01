@@ -14,7 +14,7 @@ import subprocess
 
 import pytest
 
-from conftest import SANDBOX_READY, fixture_path
+from conftest import SANDBOX_READY, container_ip, fixture_path, wait_for_port
 
 # --- import the in-sandbox probe module directly for offline unit tests ---
 _spec = importlib.util.spec_from_file_location(
@@ -128,11 +128,8 @@ def vulnrouter():
     subprocess.run(["docker", "run", "-d", "--name", name, "-e", f"ROUTER_FLAG={flag}", img],
                    check=True, capture_output=True)
     try:
-        ip = subprocess.run(["docker", "inspect", "-f",
-                             "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", name],
-                            check=True, capture_output=True, text=True).stdout.strip()
-        import time
-        time.sleep(1.0)
+        ip = container_ip(name)
+        wait_for_port(ip, 8080)
         yield {"base_url": f"http://{ip}:8080", "flag": flag}
     finally:
         subprocess.run(["docker", "rm", "-f", name], capture_output=True)

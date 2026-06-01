@@ -29,6 +29,36 @@ def test_probe_oracle_strips_reflection():
     assert ok is True
 
 
+def test_probe_oracle_strips_transformed_reflection():
+    """Parity with http_probe (review #16): a service that echoes our payload back in a
+    TRANSFORMED form — URL-encoded or HTML-entity-encoded, possibly wrapped in markup /
+    whitespace — still must NOT satisfy the oracle. Only output the service genuinely
+    PRODUCED counts. Documents the guarantee: raw + %-encoded + &lt;/&gt;/&amp; forms are
+    stripped before matching."""
+    from hexgraph.sandbox.probes import tcp_probe
+
+    nonce = "HEXGRAPH_PWNED_xyz789"
+    sent = f"<x>{nonce}</x>".encode()  # payload contains chars that get encoded on reflection
+
+    # 1) HTML-entity-encoded reflection wrapped in surrounding markup/whitespace → not proof.
+    html_reflected = f"  <pre>echo: &lt;x&gt;{nonce}&lt;/x&gt;</pre>\n"
+    ok, detail = tcp_probe._check_oracle({"type": "response_contains", "value": nonce},
+                                         html_reflected, sent)
+    assert ok is False and "reflected" in detail
+
+    # 2) URL-encoded reflection → also stripped, not proof.
+    url_reflected = f"got=%3Cx%3E{nonce}%3C%2Fx%3E\n"
+    ok2, _ = tcp_probe._check_oracle({"type": "response_contains", "value": nonce},
+                                     url_reflected, sent)
+    assert ok2 is False
+
+    # 3) The nonce appears as standalone PRODUCED output (not just a reflected copy) → verified.
+    produced = f"<pre>&lt;x&gt;{nonce}&lt;/x&gt;</pre>\nuid=0(root) {nonce}\n"
+    ok3, _ = tcp_probe._check_oracle({"type": "response_contains", "value": nonce},
+                                     produced, sent)
+    assert ok3 is True
+
+
 def test_probe_payload_and_decode():
     from hexgraph.sandbox.probes import tcp_probe
 

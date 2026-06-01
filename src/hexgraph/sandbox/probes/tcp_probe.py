@@ -31,8 +31,21 @@ from __future__ import annotations
 import json
 import socket
 import sys
+import urllib.parse
 
 MAX_BYTES = 64 * 1024
+
+
+def _echoed_forms(sent: bytes) -> list[str]:
+    """Every form the bytes we SENT could be reflected back as — raw, URL-encoded
+    (quote / quote_plus), and HTML-entity-encoded — so a service that merely echoes our
+    payload (verbatim OR transformed by its templating/encoding) can't satisfy the oracle.
+    Mirrors http_probe._echoed_strings so the raw-TCP oracle is as unforgeable as the web one."""
+    s = sent.decode("utf-8", "replace")
+    if not s:
+        return []
+    return [s, urllib.parse.quote(s), urllib.parse.quote_plus(s),
+            s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")]
 
 
 def _flag(args, name, default=None):
@@ -105,9 +118,8 @@ def _check_oracle(oracle: dict, response: str, sent: bytes) -> tuple[bool, str]:
     if not isinstance(val, str):
         return False, "oracle needs a string `value`"
     stripped = response
-    sent_str = sent.decode("utf-8", "replace")
-    if sent_str:
-        stripped = stripped.replace(sent_str, "")
+    for echo in _echoed_forms(sent):
+        stripped = stripped.replace(echo, "")
     ok = val in stripped
     if not ok and val in response:
         return False, f"{val!r} present only as reflected input — not proof of execution"
