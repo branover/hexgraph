@@ -302,15 +302,23 @@ def test_canary_read_known_http_request_rejected(hg_home):
         assert out["verified"] is False and "non-reflective" in out["detail"]
 
 
-def test_request_echoes_covers_method_and_keys():
-    """Defense-in-depth: the reflection stripper covers EVERY submitted surface — the verb, param
-    NAMES, header names — not just values (so no 'reflect via another field' remains)."""
+def test_request_echoes_covers_all_surfaces_but_skips_short():
+    """The reflection stripper reaches EVERY submitted surface (verb/path/param+header KEYS and
+    values/nested body) for tokens long enough to carry the secret, AND skips short structural
+    tokens so it can't over-strip a legitimate secret."""
     from hexgraph.engine import oracles
-    echoes = oracles._request_echoes({"method": "FOOVERB", "path": "/p",
-                                      "params": {"PKEY": "pv"}, "headers": {"X-HKEY": "hv"},
-                                      "body": {"BKEY": ["bv1", {"NESTED": "bv2"}]}})
-    for token in ("FOOVERB", "/p", "PKEY", "pv", "X-HKEY", "hv", "BKEY", "bv1", "NESTED", "bv2"):
+    echoes = oracles._request_echoes(
+        {"method": "GET", "path": "/longpath/secretishvalue",
+         "params": {"id": "x", "LONGPARAMKEY": "LONGPARAMVALUE1"},
+         "headers": {"X-Short": "y", "X-LONGHEADERKEY": "LONGHEADERVAL1"},
+         "body": {"k": ["LONGBODYVALUE01", {"NESTEDLONGKEY1": "LONGNESTEDVAL1"}]}})
+    # long surfaces — including KEY NAMES and nested body — ARE collected (would be stripped)
+    for token in ("/longpath/secretishvalue", "LONGPARAMKEY", "LONGPARAMVALUE1", "X-LONGHEADERKEY",
+                  "LONGHEADERVAL1", "LONGBODYVALUE01", "NESTEDLONGKEY1", "LONGNESTEDVAL1"):
         assert token in echoes, token
+    # short structural tokens are NOT stripped (no over-strip of a legit secret)
+    for token in ("GET", "id", "x", "y", "k", "X-Short"):
+        assert token not in echoes, token
 
 
 def test_canary_read_not_forgeable_by_reflection(hg_home, monkeypatch):

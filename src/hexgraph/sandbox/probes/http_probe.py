@@ -161,7 +161,11 @@ def _echoed_strings(step: dict) -> list[str]:
             _collect_strings(step[key], raw)
     out: list[str] = []
     for v in raw:
-        if not v:
+        # Only strip echoes long enough to carry the matched value (the {{NONCE}} is a long random
+        # token); skipping short structural tokens (the verb, `id`/`q`/`data` key names) avoids
+        # scrubbing a coincidental fragment from a legitimate response — and can't enable a forgery,
+        # since a short echo can't contain the long nonce.
+        if not v or len(v) < 12:
             continue
         out += [v, urllib.parse.quote(v), urllib.parse.quote_plus(v),
                 v.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")]
