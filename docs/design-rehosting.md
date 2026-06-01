@@ -68,9 +68,28 @@ Every outbound request is audited to `EgressEvent`; the boot itself is recorded 
 - MCP: a `rehost` run-tool (gated by `features.rehost`) so a driver agent can boot + assess.
 
 ## Honest limits
-Full-system rehosting is best-effort: many vendor images don't boot cleanly (missing NVRAM
+Full-system rehosting is best-effort: many images don't boot cleanly (missing NVRAM
 defaults, watchdogs, custom init). FirmAE's heuristics get a large fraction up; when a boot
 fails or no web port answers, `rehost_firmware` reports that clearly rather than pretending.
-IoTGoat is a known-good FirmAE target, used as the reference. Heavy deps (FirmAE image,
-qemu-system, privileged Docker + `/dev/net/tun`) are env-gated exactly like the Ghidra and
-sandbox toolchains — offline tests use a fake rehoster; live boot is gated + documented.
+Heavy deps (FirmAE image, qemu-system, privileged Docker + `/dev/net/tun`) are env-gated
+exactly like the Ghidra and sandbox toolchains — offline tests use a fake rehoster; live
+boot is gated + documented.
+
+**What "best-effort" means, concretely** (validated end-to-end on this build):
+- FirmAE runs as designed for **traditional vendor firmware** (sysvinit / `/etc/init.d/rcS`
+  boot, squashfs/cramfs/jffs2 rootfs). For those, the seam takes you from a firmware blob to
+  a live `web_app` surface.
+- **OpenWrt-based images (incl. OWASP IoTGoat) extract, build, and boot, but do NOT bring up
+  their network/web under FirmAE** — OpenWrt's `procd`→`ubus`→`netifd`→`uhttpd` service chain
+  fails to initialize under FirmAE's emulation harness (the boot console loops
+  "Failed to connect to ubus"). FirmAE infers the interface (e.g. `eth0`/`192.168.1.1`) and
+  the web service (`uhttpd`) but the guest never serves, so there's no surface to assess.
+  For IoTGoat specifically, run it via **direct `qemu-system-arm`** (its native rpi target)
+  or VirtualBox (the x86 image) rather than FirmAE; to demonstrate the rehosting seam live,
+  point it at a **vendor firmware from FirmAE's known-good set**.
+- **Loop devices are a global kernel resource.** A hard-killed emulator leaks a loop attached
+  to FirmAE's fixed path (`/FirmAE/scratch/<iid>/image.raw`), which then shadows the next
+  run's fresh loop and corrupts `makeImage` ("Bad magic number"). The entry script (root in
+  the privileged container) detaches stale FirmAE loops at **startup and on exit (trap)**, and
+  `FirmAERehoster.stop()` uses `docker stop` (SIGTERM → trap) before `rm`, so teardown is
+  clean and runs self-heal across attempts.

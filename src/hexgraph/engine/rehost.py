@@ -152,6 +152,10 @@ class FirmAERehoster(Rehoster):
             proc.kill()
 
     def stop(self, handle: str) -> None:
+        # `docker stop` sends SIGTERM first, so the entry script's trap detaches the loop
+        # devices it created (they're a global kernel resource — a hard `rm -f`/SIGKILL
+        # would leak them and poison the next run). Then remove the container.
+        subprocess.run(["docker", "stop", "-t", "15", handle], capture_output=True)
         subprocess.run(["docker", "rm", "-f", handle], capture_output=True)
 
 
