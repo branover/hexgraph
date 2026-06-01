@@ -12,10 +12,16 @@ the import flow and the Decompiler wrapper are unit-testable with a fake.
 
 from __future__ import annotations
 
+import re
 from typing import Protocol
 
 from hexgraph.engine.ghidra import ghidra_config
 from hexgraph.sandbox.decompiler import Decompiler
+
+# A symbol name we're willing to interpolate into a remote_eval string. Mirrors
+# decompile_probe._SAFE_NAME: only the characters that occur in real symbol names,
+# so a caller-supplied function name can never carry Python/string-breakout syntax.
+_SAFE_NAME = re.compile(r"^[A-Za-z0-9_.@$:]+$")
 
 
 class BridgeUnavailable(RuntimeError):
@@ -56,21 +62,23 @@ class _RemoteOps:
         )
         focus = None
         if function:
-            pseudo = self.b.remote_eval(
-                "(lambda f: __import__('ghidra.app.decompiler', fromlist=['DecompInterface'])"
-                ".DecompInterface() if f else None)(None)"
-            )  # placeholder; real decompile uses the helper below
             pseudo = self._decompile_one(function)
             focus = {"name": function, "resolved": function, "pseudocode": pseudo, "disasm": "", "callees": []}
         return {"functions": names[:400], "focus": focus, "tool": "ghidra_bridge"}
 
     def _decompile_one(self, function: str) -> str:
+        # Never build eval'd code by interpolating a caller-supplied name. Validate it
+        # against the strict symbol-name allowlist, then pass it as a BOUND variable
+        # (`fn` in the bridge eval namespace) so it's data, not code.
+        if not _SAFE_NAME.match(function or ""):
+            raise BridgeUnavailable(f"unsafe Ghidra function name: {function!r}")
         return self.b.remote_eval(
-            "(lambda fn: (lambda di: (di.openProgram(currentProgram), "
+            "(lambda di: (di.openProgram(currentProgram), "
             "di.decompileFunction([f for f in currentProgram.getFunctionManager().getFunctions(True) "
             "if f.getName()==fn][0], 60, __import__('ghidra.util.task', fromlist=['ConsoleTaskMonitor'])"
             ".ConsoleTaskMonitor()).getDecompiledFunction().getC())[1])("
-            "__import__('ghidra.app.decompiler', fromlist=['DecompInterface']).DecompInterface()))(%r)" % function
+            "__import__('ghidra.app.decompiler', fromlist=['DecompInterface']).DecompInterface())",
+            fn=function,
         )
 
 

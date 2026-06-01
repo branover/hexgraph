@@ -582,12 +582,12 @@ later agents build on.
 - **Review-on-output** (default for real backends) — agent runs to completion but findings/
   renames land in a **`proposed` review state** surfaced in a **Review Queue**; nothing mutates
   the curated graph until accepted. *This is cheap, high-value, and needs no `plan()`.*
-- **Plan-gated** — show the plan + cost before spending. **Feasibility ruling:** `plan()` is
-  defined in the protocol but **not wired into execution**, so true mid-task suspension is
-  *net-new infrastructure*, not "expose the existing seam." For v1, implement the gate on the
-  **launch side** (the §6 preview already builds the prompt + cost) requiring human confirm
-  before `POST /api/tasks`; defer real mid-task suspension until the `TaskHandler` protocol is
-  actually the execution path.
+- **Plan-gated** — show the plan + cost before spending. **Feasibility ruling:** there is no
+  separate `plan()` step — each task type is a single `execute_*` function (dispatched in
+  `engine/worker.py`) that runs straight through — so true mid-task suspension is *net-new
+  infrastructure*, not "expose the existing seam." For v1, implement the gate on the **launch
+  side** (the §6 preview already builds the prompt + cost) requiring human confirm before
+  `POST /api/tasks`; defer real mid-task suspension until an `execute_*` can yield mid-run.
 - **Always-on spend gate** — a per-project budget ceiling; reads `usage.cost_usd` (which the
   runner already returns); mock estimates $0 so it never trips, preserving offline dev.
 

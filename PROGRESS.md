@@ -311,6 +311,29 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-01: **Declutter + defense-in-depth hardening (code-review backlog #10/#14/#15/#17/#18/#19 +
+  router-split note; branch `build/declutter-hardening`).** Dead code: deleted the unused `TaskHandler`
+  Protocol + `ToolStep` dataclass from `tasks/base.py` (nothing implemented them — dispatch is the
+  if/elif over `execute_*` in `engine/worker.py`; kept `TaskContext`, rewrote the module docstring to
+  describe the real model) and their re-exports; pruned the dead `ls` branch in
+  `remote_probe._build_command` (`ls`∉`TOOLS`, so the allowlist already rejected it). Hardening:
+  `policy._host_is_local` now rejects IPv4-mapped/6to4/Teredo IPv6 forms outright so a disguised
+  `::ffff:169.254.169.254` can't smuggle the cloud-metadata IP past the link-local exclusion (#14);
+  `ghidra_bridge._decompile_one` validates the function name against a strict `_SAFE_NAME` regex and
+  passes it as a BOUND `fn` eval var instead of `%r`-interpolating it (#17), and dropped a dead
+  placeholder remote_eval. Decluttered deps: removed the host-side `analysis` extra (r2pipe/lief/pyelftools
+  are sandbox-only) and unused `jinja2` from the `server` extra; dropped `lief` from `Dockerfile.sandbox`
+  (no probe imports it; kept python-magic, which recon_probe uses); **deleted the unmaintained M1-era root
+  `Dockerfile` + `docker-compose.yml`** (docker-out-of-docker socket-mount footgun, referenced by no
+  recipe/doc/test; in git history) and the README section that documented `docker compose up` (#18).
+  Refactor: extracted the MCP `_CATALOG`/`GROUPS`/`catalog()` (the agent-facing prompt copy) into a new
+  `engine/mcp_catalog.py`; `mcp_tools` keeps the ~50 tool impls and re-exports `GROUPS`/`catalog` lazily
+  via PEP 562 `__getattr__` so the dependency is strictly one-way (catalog→tools) with no import cycle
+  in either load order (#19). Made `routers/targets.py` call `executor.get_executor()` via the module to
+  match the `runner.docker_available()` monkeypatch surface (router-split note). New regression tests in
+  `test_review_regressions.py` (host-is-local mapped-IPv6 rejection, run_tool/ls allowlist boundary,
+  ghidra name validation/binding). `just test` green: **360 passed, 2 skipped** (357 baseline + 3 new,
+  no new skips).
 - 2026-06-01: **Structural refactor — split the `api/app.py` god-function into APIRouter modules**
   (code-review structure finding #6). `create_app()` was ~1100 lines defining all ~55 endpoints as
   nested closures in one factory (untestable per-route, a merge-conflict hotspot, forced every helper +

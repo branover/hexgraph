@@ -20,8 +20,9 @@ from hexgraph.engine.ingest import ingest_file
 from hexgraph.engine.pipeline import analyze_target
 from hexgraph.engine.targets import archive_target, restore_matching, restore_target
 from hexgraph.engine.unpack import build_links_against
-from hexgraph.sandbox import runner  # call runner.docker_available() so tests can monkeypatch it
-from hexgraph.sandbox.executor import get_executor
+# Import the modules (not the names) so tests can monkeypatch runner.docker_available /
+# executor.get_executor and have HTTP routes pick up the patched callable.
+from hexgraph.sandbox import executor, runner
 
 router = APIRouter()
 
@@ -54,7 +55,7 @@ def api_add_target(
             target = ingest_file(s, project, tmp, name=name or file.filename)
             result = {"target_id": target.id, "name": target.name, "recon": recon}
             if recon:
-                summary = analyze_target(s, project, target, get_executor())
+                summary = analyze_target(s, project, target, executor.get_executor())
                 build_links_against(s, project)
                 result["children"] = summary.get("children", [])
             return result
