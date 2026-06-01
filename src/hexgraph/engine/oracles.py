@@ -23,6 +23,14 @@ tcp) + the new bounded callback listener, and all still behind the policy seam:
     like `{{NONCE}}`, runs the exploit, and verifies the listener received a hit carrying the
     nonce. The listener is the audited INGRESS mirror of the bounded-egress tier
     (engine.callback_listener).
+  - **liveness** / **unavailable** (denial of service — Phase 2) — proves DoS by an unforgeable
+    LIVENESS TRANSITION HexGraph observes out-of-band: probe the live service is UP (a baseline
+    response on its own, independent channel) BEFORE the exploit, send the DoS input, then
+    RE-PROBE that it is DOWN and STAYS down across N probes (hysteresis), so a single transient
+    blip is NOT a verified DoS — only a sustained baseline-UP → sustained-DOWN transition counts.
+    The verdict comes from HexGraph's own re-probe, never the exploit's response, so it can't be
+    forged. For a BINARY target, process death is already the sandbox `crash` oracle
+    (signal/exit/timeout) — liveness degrades to that path rather than reimplementing it.
 
 Each is a DYNAMIC oracle and flows through `derive_poc_assurance` unchanged: fired through a
 live web/tcp/remote surface ⇒ input_reachable/dynamic; an isolated binary/harness ⇒
@@ -33,6 +41,7 @@ frozen finding schema.
 from __future__ import annotations
 
 import secrets
+import time
 import urllib.parse
 
 from sqlalchemy.orm import Session
@@ -43,8 +52,15 @@ from hexgraph.db.models import Project, Target
 OOB_WRITE = "oob_write"
 CANARY_READ = "canary_read"
 CALLBACK = "callback"
+LIVENESS = "liveness"
+UNAVAILABLE = "unavailable"  # alias of LIVENESS (denial-of-service / service-unavailable)
 
-NEW_ORACLE_TYPES = frozenset({OOB_WRITE, CANARY_READ, CALLBACK})
+NEW_ORACLE_TYPES = frozenset({OOB_WRITE, CANARY_READ, CALLBACK, LIVENESS, UNAVAILABLE})
+
+# Liveness-oracle defaults (hysteresis): after the DoS input, re-probe DOWN this many times with
+# this delay between probes, and ALL must read DOWN — so a single transient hiccup never verifies.
+_LIVENESS_REPROBES = 3
+_LIVENESS_REPROBE_DELAY = 0.5  # seconds between down re-probes
 
 # A canary big enough that it can't be guessed/confabulated by the model.
 _CANARY_PREFIX = "HEXGRAPH_CANARY_"
@@ -56,8 +72,13 @@ _MIN_ECHO_LEN = 12
 
 
 def is_new_oracle(spec: dict) -> bool:
-    """True if the spec's oracle is one of the Phase-1 types handled here."""
+    """True if the spec's oracle is one of the extended (Phase 1/2) types handled here."""
     return ((spec or {}).get("oracle") or {}).get("type") in NEW_ORACLE_TYPES
+
+
+def is_liveness(spec: dict) -> bool:
+    """True if the spec's oracle is the DoS liveness/unavailable oracle (Phase 2)."""
+    return ((spec or {}).get("oracle") or {}).get("type") in (LIVENESS, UNAVAILABLE)
 
 
 def fresh_canary() -> str:
@@ -418,10 +439,118 @@ def _sub_token(spec: dict, token: str, value: str) -> dict:
     return walk(spec)
 
 
+# --------------------------------------------------------------------------------------
+# liveness / unavailable (denial of service). The oracle is a LIVENESS TRANSITION HexGraph
+# observes ITSELF on the service's own channel, independent of the exploit's response:
+#   baseline UP  →  send the DoS input  →  re-probe DOWN, and STAYS down (hysteresis).
+# A liveness probe is just a benign request HexGraph sends through the SAME bounded, gated,
+# audited channel as web/tcp verify (run_http_request / run_tcp_probe) — so the probes are
+# policy-gated + every one is audited to EgressEvent. We never trust the exploit's own output.
+# --------------------------------------------------------------------------------------
+
+def _liveness_probe_web(session, project, target, request: dict | None, runner) -> tuple[bool, str]:
+    """Probe a live web surface ONCE and decide UP/DOWN. UP = we got a real HTTP response with a
+    non-5xx status; DOWN = connection refused/timeout/error OR a 5xx (per the spec). The request
+    is a benign liveness GET (default `GET /`); it goes through run_http_request, which is policy-
+    gated + audits the egress, so every probe is logged. Returns (up?, detail)."""
+    from hexgraph.engine.surfaces import run_http_request
+
+    req = dict(request or {"method": "GET", "path": "/"})
+    req.setdefault("method", "GET")
+    req.setdefault("path", "/")
+    resp = run_http_request(session, project, target, request=req, runner=runner) or {}
+    if not resp.get("ok"):
+        return False, f"no response ({resp.get('error') or 'unreachable'})"
+    status = resp.get("status")
+    try:
+        is_5xx = 500 <= int(status) < 600
+    except (TypeError, ValueError):
+        is_5xx = False
+    if is_5xx:
+        return False, f"server-error status {status}"
+    return True, f"status {status}"
+
+
+def _liveness_probe_tcp(session, project, target, port: int, runner) -> tuple[bool, str]:
+    """Probe a live raw-TCP service ONCE: UP = the connect succeeds (we got `ok`), DOWN = the
+    connect is refused/times out. A bare connect (no payload, no oracle) through run_tcp_probe,
+    which is policy-gated + audits the egress. Returns (up?, detail)."""
+    from hexgraph.engine.surfaces import run_tcp_probe
+
+    resp = run_tcp_probe(session, project, target, port=int(port), payload=None, oracle=None,
+                         read_bytes=1, runner=runner) or {}
+    if resp.get("ok"):
+        return True, f"connect to :{port} succeeded"
+    return False, f"connect to :{port} failed ({resp.get('error') or 'refused'})"
+
+
+def _probe_once(session, project, target, oracle, port, runner, *, is_tcp) -> tuple[bool, str]:
+    if is_tcp:
+        return _liveness_probe_tcp(session, project, target, port, runner)
+    return _liveness_probe_web(session, project, target, oracle.get("probe"), runner)
+
+
+def verify_liveness(session, project, target, spec, runner, nonce, *, is_web, is_tcp) -> dict:
+    """liveness/unavailable (DoS): prove the service transitions UP → sustained-DOWN.
+
+    `spec.oracle = {type:'liveness'|'unavailable', probe?, reprobes?, delay?, port?}`. `probe`
+    is the benign liveness HTTP request (default `GET /`); `port` is the raw-TCP port. We:
+      1. Baseline-probe UP. If it's ALREADY down, the result is INCONCLUSIVE (not a verified DoS).
+      2. Send the DoS input (the exploit, via the same web/tcp boundary), discarding its response.
+      3. Re-probe DOWN `reprobes` times (default 3) with `delay`s between; ALL must read DOWN
+         (hysteresis), so a single transient blip is NOT a verified DoS.
+    For a BINARY target this routes to the sandbox `crash` oracle instead (process death is
+    already covered there) — see verify_poc's dispatch. The verdict is HexGraph's own out-of-band
+    re-probe, never the exploit's response — unforgeable."""
+    oracle = spec.get("oracle") or {}
+    reprobes = max(1, int(oracle.get("reprobes", _LIVENESS_REPROBES)))
+    delay = max(0.0, float(oracle.get("delay", _LIVENESS_REPROBE_DELAY)))
+    port = oracle.get("port") or spec.get("port") or (
+        (spec.get("tcp") or {}).get("port") if isinstance(spec.get("tcp"), dict) else None)
+
+    if is_tcp and not port:
+        return {"verified": False, "exit_code": None, "output": "", "nonce": nonce, "spec": spec,
+                "detail": "liveness: a tcp liveness oracle needs a `port` to probe"}
+
+    # 1. Baseline — must be UP before we can claim we knocked it down.
+    up, base_detail = _probe_once(session, project, target, oracle, port, runner, is_tcp=is_tcp)
+    if not up:
+        return {"verified": False, "exit_code": None, "output": "", "nonce": nonce, "spec": spec,
+                "detail": (f"liveness: INCONCLUSIVE — the service was already DOWN at baseline "
+                           f"({base_detail}); a DoS can only be verified against a service that "
+                           f"was UP first")}
+
+    # 2. Send the DoS input through the live boundary (we don't trust its response).
+    run = run_exploit(session, project, target, spec, runner, is_web=is_web, is_tcp=is_tcp)
+
+    # 3. Re-probe DOWN with hysteresis: EVERY re-probe must read DOWN. A single UP re-probe means
+    #    the service recovered / only blipped → NOT a verified DoS (transient hiccup rejected).
+    down_details: list[str] = []
+    for i in range(reprobes):
+        if i and delay:
+            time.sleep(delay)
+        up, d = _probe_once(session, project, target, oracle, port, runner, is_tcp=is_tcp)
+        down_details.append(("UP" if up else "DOWN") + f":{d}")
+        if up:
+            return {"verified": False, "exit_code": run.get("exit_code"),
+                    "output": "; ".join(down_details)[:2000], "nonce": nonce, "spec": spec,
+                    "detail": (f"liveness: NOT verified — after the DoS input the service was still "
+                               f"reachable on re-probe {i + 1}/{reprobes} ({d}); a transient blip is "
+                               f"not a sustained outage")}
+
+    return {"verified": True, "exit_code": run.get("exit_code"),
+            "output": "; ".join(down_details)[:2000], "nonce": nonce, "spec": spec,
+            "detail": (f"liveness: VERIFIED denial of service — baseline UP ({base_detail}), then "
+                       f"DOWN across all {reprobes} re-probe(s) after the DoS input (sustained "
+                       f"outage; verdict from HexGraph's own out-of-band probe, unforgeable)")}
+
+
 _EVALUATORS = {
     OOB_WRITE: verify_oob_write,
     CANARY_READ: verify_canary_read,
     CALLBACK: verify_callback,
+    LIVENESS: verify_liveness,
+    UNAVAILABLE: verify_liveness,
 }
 
 

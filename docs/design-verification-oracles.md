@@ -2,10 +2,11 @@
 
 **Status:** Phase 0/0b done (the assurance triple); **Phase 1 IMPLEMENTED** (the `callback`,
 `canary_read`, and `oob_write` oracles + the bounded callback listener — see "Phase 1 — status"
-below); **Phase 4 IMPLEMENTED** (Standard B, static — the source→sink reachability ARGUMENT over
-the typed graph; see "Phase 4 — status"). Phases 2–3 remain proposed. Captures how HexGraph
-proves a *broad* class of vulnerabilities — not just command-injection — with **unforgeable**
-oracles.
+below); **Phase 2 IMPLEMENTED** (the DoS `liveness`/`unavailable` oracle — baseline-up →
+sustained-down with hysteresis; see "Phase 2 — status"); **Phase 4 IMPLEMENTED** (Standard B,
+static — the source→sink reachability ARGUMENT over the typed graph; see "Phase 4 — status").
+Phase 3 remains proposed. Captures how HexGraph proves a *broad* class of vulnerabilities — not
+just command-injection — with **unforgeable** oracles.
 
 ## The problem
 
@@ -147,7 +148,7 @@ Verification is unforgeable when it uses a channel *different from* the exploit'
 | Blind cmdi / SSRF / blind RCE / OOB exfil | **callback**: target connects/requests back to a HexGraph canary carrying the nonce | bounded canary listener | **have** (Phase 1) |
 | Read primitive (traversal, file/mem disclosure) | **planted canary**: HexGraph writes a random secret out-of-band; the exploit must read it back verbatim | rootfs/remote write → response compare | **have** (Phase 1) |
 | Write primitive (file/config/NVRAM/persistence) | **OOB side-effect read**: exploit writes `{{NONCE}}`; HexGraph reads that location independently | `remote_read_file`/`read_file`/follow-up GET | **have** (Phase 1) |
-| Denial of service | **liveness transition**: service UP (baseline) → DOWN, re-probed with hysteresis | independent re-probe | new |
+| Denial of service | **liveness transition**: service UP (baseline) → DOWN, re-probed with hysteresis | independent re-probe | **have** (Phase 2) |
 | Memory-corruption RCE | **spectrum** (below) | sandbox/qemu + callback | partial |
 | Auth bypass / privesc | **differential**: perform a privileged action, observe its privileged effect | response / state read-back | partial (`status_differs`) |
 
@@ -233,7 +234,9 @@ setting then read it back changed). Largely have; document as a first-class orac
   primitives — a large fraction of real bugs — with modest new code (the read/write oracles
   reuse existing channels). These produce **Standard B, dynamic** results (on a live surface).
   Shipped as `engine/oracles.py` + `engine/callback_listener.py`; see "Phase 1 — status".
-- **Phase 2:** the **DoS liveness** oracle (baseline-up → sustained-down, hysteresis).
+- **Phase 2 — DONE:** the **DoS liveness** oracle (baseline-up → sustained-down, hysteresis).
+  Shipped as the `liveness`/`unavailable` oracle in `engine/oracles.py`, dispatched from
+  `verify_poc`; see "Phase 2 — status".
 - **Phase 3:** **ASan/sanitizer builds + crash-state capture** for the memory-corruption rungs.
 - **Phase 4 — DONE:** **Standard B, static** — explicit **source→sink reachability** over the
   typed graph (mark input-source nodes; record the `taints`/`calls`/`routes_to` path + the gating
@@ -296,6 +299,48 @@ that netns on the device-facing gateway IP (the ingress analogue of `run_channel
 =...)`), exposed via `CallbackListener(host=<gateway_ip>)`. **Deferred:** a fully end-to-end
 rehost-netns callback validation needs a cooperative firmware whose exploit can dial back; the
 mechanism ships now, live validation is a follow-up (does not block the local must-haves).
+
+## Phase 2 — status (IMPLEMENTED)
+
+The DoS **`liveness`** oracle (alias **`unavailable`**) ships as `verify_liveness` in
+`engine/oracles.py`, dispatched from `engine/poc.py::verify_poc` when `spec.oracle.type` is
+`liveness`/`unavailable`. It lives in the PoC spec + `evidence.extra` (the DB envelope) — the
+frozen `finding.schema.json` is untouched.
+
+**The oracle = an unforgeable LIVENESS TRANSITION HexGraph observes ITSELF**, on the service's own
+channel, independent of the exploit's response:
+1. **Baseline UP.** Probe the live service is reachable BEFORE sending anything (web: a benign
+   `GET /` — or `oracle.probe` — that returns a non-5xx; raw-TCP: a bare connect succeeds). If it
+   is **already DOWN** at baseline, the result is **INCONCLUSIVE** (not a verified DoS) — reported
+   honestly, never claimed.
+2. **Send the DoS input** through the SAME live boundary the web/tcp PoC paths use (`run_exploit`
+   → `_verify_web_poc`/`_verify_tcp_poc`); its response is discarded (we don't trust it).
+3. **Re-probe DOWN with hysteresis.** Re-probe `reprobes` times (default 3) with `delay`s between;
+   **EVERY** re-probe must read DOWN (connection-refused/timeout/5xx). A single UP re-probe means
+   the service only blipped/recovered → **NOT verified** (a transient hiccup is rejected). Only a
+   sustained baseline-UP → sustained-DOWN transition verifies.
+
+**Unforgeable.** The verdict is computed solely from HexGraph's own out-of-band re-probes, NEVER
+from anything in the model's/exploit's response — there is no in-band text the model could write
+to fake it, and the hysteresis kills a transient blip. (Proven by
+`test_liveness_transient_blip_does_not_verify`.)
+
+**Policy-seam + audit.** Each probe is benign network egress sent through `run_http_request` /
+`run_tcp_probe`, which already assert the bounded-network tier (`features.network` +
+`assert_allows_egress` over the per-target loopback/private `NetworkScope`) and **audit every
+probe to `EgressEvent`** — so the liveness oracle relaxes NO gate outside the policy seam, fails
+closed (refused when network is off), and every up/down probe is logged. The DoS input itself is
+audited by the web/tcp PoC path as usual.
+
+**Binary degradation.** For a one-shot **binary** target (not a live web/tcp surface), process
+death is already the sandbox **`crash`** oracle (signal/exit/timeout). `verify_poc` detects a
+binary liveness oracle and rewrites it to `{type:'crash'}`, running the normal binary path — it
+does NOT reimplement or network-probe. (Proven by `test_liveness_binary_degrades_to_crash_oracle`.)
+
+**Assurance.** A live web/tcp surface ⇒ `input_reachable / dynamic`; the binary-degraded path is
+an isolated exec ⇒ `code_present / dynamic` — both via `derive_poc_assurance` unchanged. An
+inconclusive/transient result is `unconfirmed`. Re-verify (`POST /api/findings/{id}/verify`)
+re-runs the stored spec through `verify_poc` and preserves the assurance, like the other oracles.
 
 ## Phase 4 — status (IMPLEMENTED)
 
