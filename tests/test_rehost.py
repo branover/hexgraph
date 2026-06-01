@@ -132,3 +132,14 @@ def test_assess_rehosted_surface_joins_emulator_netns(hg_home):
 
 def test_get_rehoster_default(hg_home):
     assert get_rehoster().name == "firmae"
+
+
+def test_infer_brand_from_firmware_strings(tmp_path):
+    from hexgraph.engine.rehost import _infer_brand
+    fw = tmp_path / "fw.bin"
+    fw.write_bytes(b"\x00" * 100 + b"Netgear R6700 httpd build" + b"\x00" * 100)
+    assert _infer_brand(str(fw)) == "netgear"
+    fw.write_bytes(b"no vendor strings here at all")
+    assert _infer_brand(str(fw)) is None
+    fw.write_bytes(b"... TP-Link Archon ...")
+    assert _infer_brand(str(fw)) == "tplink"

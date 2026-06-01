@@ -76,7 +76,10 @@ URL (or a `web_app` target already exists), assess it dynamically:
   full-OS disk image, or FirmAE for a vendor firmware blob) and registers its web server as a
   `web_app` surface child — then assess that surface with the tools below. Needs
   features.rehost (to boot) + features.network (to talk to it); best-effort, since not every
-  image boots cleanly.
+  image boots cleanly. **For a FirmAE/vendor image, if rehost says it couldn't bring up the
+  device network, retry with the vendor brand** — `rehost(fw, brand="linksys")` (or netgear/
+  dlink/tplink/tenda/…): FirmAE's network inference is vendor-keyed. FirmAE MIPS/ARM boots are
+  slow (~9 min) — be patient.
 - **`register_surface(project_id, base_url, endpoints?)`** registers the surface as a
   `web_app` target (a Channel, no bytes). `run_task(id, "surface_recon")` maps a route spec
   YOU supply into `endpoint`/`param` nodes + `routes_to` edges to the handler function (the

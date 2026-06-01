@@ -14,7 +14,25 @@ their own PRs as we go.
   request's own reflected payload (raw + URL/HTML-encoded) before matching, and flags a match
   on a 401/403. *(this PR)*
 
+## From the DVRF (Linksys MIPS) FirmAE engagement
+- **FirmAE branch validated**: an agent rehosted a real vendor MIPS firmware (DVRF) via FirmAE
+  — extract (sasquatch) → boot (mipsel) → network (192.168.1.1) → web up. *(merged: sasquatch in
+  the FirmAE image + rehost timeout 600→900; `brand` documented + auto-inferred + a no-IP error
+  that tells you to pass it.)*
+- **Auto-brand limit (open):** `rehost(fw)` failed network-inference but `brand="linksys"` worked;
+  brand is auto-inferred from firmware strings, but a *stripped* image (DVRF) names no vendor, so
+  it still needs an explicit brand. A boot-and-retry-across-brands loop would close it but each
+  FirmAE boot is ~9 min, so it's not free — left as a documented manual step for now.
+
 ## Open ideas (ranked)
+0. **Provision the analysis gates together for a rehost engagement.** Rehosting a device you then
+   can't introspect/exploit is a half-loop: the DVRF run had `features.rehost`+`network` on but
+   `poc`+`remote` off, so the agent could boot + read the rootfs but not prove the MIPS pwnables
+   (verify_poc) or enumerate the live device (remote_run). Consider: `rehost` auto-registering the
+   booted device as a `remote` target (read-only) and/or guidance to enable poc+remote+network with
+   rehost. Also: many devices don't auto-start their httpd/services under emulation (DVRF), so the
+   live surface comes back empty — a bounded "start a known service / run a pwnable on port N" on
+   the rehosted device would make live analysis productive.
 1. **Computed-output oracle for command injection.** Even with reflection-stripping, the
    strongest unforgeable check is a payload whose OUTPUT the target must *compute* and that does
    NOT appear in the request — e.g. inject `expr <a> \* <b>` (or `$((a*b))`) with random a,b and
