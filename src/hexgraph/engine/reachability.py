@@ -154,20 +154,26 @@ def _forward_adjacency(session: Session, project_id: str) -> dict[str, list[tupl
     return adj
 
 
+def _node_index(session: Session, project_id: str) -> dict[str, Node]:
+    """Hydrate every node in the project once into {id: Node}, so the BFS / precondition derivation
+    look nodes up from memory instead of a per-neighbor `session.get` round-trip."""
+    return {n.id: n for n in session.query(Node).filter(Node.project_id == project_id).all()}
+
+
 def _bfs_path(
-    session: Session, project_id: str, *, source_ids: set[str], sink_id: str, max_depth: int,
-    adj: dict[str, list[tuple[str, Edge]]],
+    *, source_ids: set[str], sink_id: str, max_depth: int,
+    adj: dict[str, list[tuple[str, Edge]]], nodes: dict[str, Node],
 ) -> list[dict] | None:
     """BFS from any source toward `sink_id` over the forward adjacency. Returns the path as a
     list of step dicts (the node/edge sequence) or None. Cycle-safe (visited set) and depth-bound
-    (`max_depth` hops) so it terminates on big/cyclic graphs."""
+    (`max_depth` hops) so it terminates on big/cyclic graphs. `nodes` is the pre-hydrated
+    {id: Node} index, so lookups are in-memory (no per-neighbor DB round-trip)."""
     # Multi-source BFS: seed the frontier with every source. Each queue item is
     # (node_id, path_steps) where path_steps is the list of {node, edge?} dicts so far.
-    start_nodes = {n.id: n for n in session.query(Node).filter(Node.id.in_(source_ids)).all()}
     visited: set[str] = set(source_ids)
     queue: deque[tuple[str, list[dict]]] = deque()
     for sid in source_ids:
-        snode = start_nodes.get(sid)
+        snode = nodes.get(sid)
         if snode is None or snode.archived:
             continue
         queue.append((sid, [{"node_id": sid, "node_type": snode.node_type, "name": snode.name}]))
@@ -180,7 +186,7 @@ def _bfs_path(
         for (nbr, edge) in adj.get(cur, ()):  # noqa: B007
             if nbr in visited:
                 continue
-            nbr_node = session.get(Node, nbr)
+            nbr_node = nodes.get(nbr)
             if nbr_node is None or nbr_node.archived:
                 continue
             step = {
@@ -196,20 +202,20 @@ def _bfs_path(
     return None
 
 
-def _derive_precondition(session: Session, path: list[dict]) -> tuple[str, str]:
+def _derive_precondition(path: list[dict], nodes: dict[str, Node]) -> tuple[str, str]:
     """Derive (precondition, why) from what the recorded path crosses, per the module docstring.
     requires_credentials wins if ANY auth boundary is crossed; else unauthenticated if the path
-    STARTS at an explicitly-unauth boundary; else unspecified."""
+    STARTS at an explicitly-unauth boundary; else unspecified. `nodes` is the pre-hydrated index."""
     # Any auth gate anywhere on the path (a node flagged as an auth check, an auth-bearing node
     # requiring creds, or a `bypasses` edge) ⇒ the reachability requires credentials.
     for step in path:
         if step.get("edge_type") == "bypasses":
             return A.REQUIRES_CREDENTIALS, "path traverses a `bypasses` (auth/logic-defeat) edge"
-        node = session.get(Node, step["node_id"])
+        node = nodes.get(step["node_id"])
         if node is not None and _node_is_auth_gate(node):
             return (A.REQUIRES_CREDENTIALS,
                     f"path crosses an auth boundary at {node.node_type} {node.name!r}")
-    first = session.get(Node, path[0]["node_id"]) if path else None
+    first = nodes.get(path[0]["node_id"]) if path else None
     if first is not None and _node_is_unauth(first):
         return A.UNAUTHENTICATED, f"reached from unauthenticated {first.node_type} {first.name!r}"
     return A.UNSPECIFIED, "no auth boundary or unauth marker on the path"
@@ -234,26 +240,25 @@ def find_source_to_sink_path(
 
     `path` is the ordered node/edge sequence (the argument). `via_taint` is True iff at least one
     `taints`/`dataflow_hint` edge was used (the stronger dataflow argument)."""
-    sink = session.get(Node, sink_node_id)
-    if sink is None or sink.project_id != project_id:
+    nodes = _node_index(session, project_id)
+    sink = nodes.get(sink_node_id)
+    if sink is None:
         raise ReachabilityError(f"sink node {sink_node_id} not found in project")
     if sink.archived:
         raise ReachabilityError("sink node is archived")
 
-    sources = [
-        n for n in session.query(Node).filter(
-            Node.project_id == project_id, Node.archived.is_(False)
-        ).all()
-        if n.id != sink_node_id and is_source(n)
-    ]
-    if not sources:
+    source_ids = {
+        nid for nid, n in nodes.items()
+        if nid != sink_node_id and not n.archived and is_source(n)
+    }
+    if not source_ids:
         return None
     adj = _forward_adjacency(session, project_id)
-    path = _bfs_path(session, project_id, source_ids={n.id for n in sources},
-                     sink_id=sink_node_id, max_depth=max_depth, adj=adj)
+    path = _bfs_path(source_ids=source_ids, sink_id=sink_node_id, max_depth=max_depth,
+                     adj=adj, nodes=nodes)
     if path is None:
         return None
-    precondition, why = _derive_precondition(session, path)
+    precondition, why = _derive_precondition(path, nodes)
     return {
         "path": path,
         "via_taint": any(step.get("via_taint") for step in path),
