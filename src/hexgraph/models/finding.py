@@ -1,7 +1,7 @@
-"""The Finding — the heart of the product (SPEC §4).
+"""The Finding — the heart of the product.
 
 Defined once, here, as a Pydantic model that mirrors
-`context/schemas/finding.schema.json` exactly. Every task type and every LLM
+`hexgraph/schemas/finding.schema.json` exactly. Every task type and every LLM
 backend (mock and real) emits exactly this shape; that uniformity is what makes
 triage and the graph possible.
 

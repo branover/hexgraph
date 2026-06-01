@@ -1,7 +1,7 @@
-"""Contract test — prevents mock drift (CLAUDE.md, mock-llm-provider §7).
+"""Contract test — prevents mock drift (CLAUDE.md, docs/mock-llm-provider §7).
 
 Every finding in every mock fixture (and, later, every recorded cassette) must
-validate against context/schemas/finding.schema.json. Changing the schema forces
+validate against hexgraph/schemas/finding.schema.json. Changing the schema forces
 fixtures to update or this test fails.
 """
 
@@ -44,7 +44,7 @@ FIXTURES = _discover_fixture_files()
 
 
 def test_fixtures_exist() -> None:
-    assert FIXTURES, "no mock fixtures discovered — check context/fixtures/mock_llm"
+    assert FIXTURES, "no mock fixtures discovered — check hexgraph/llm/fixtures/mock_llm"
 
 
 @pytest.mark.parametrize("relpath,data", FIXTURES, ids=[c[0] for c in FIXTURES])
