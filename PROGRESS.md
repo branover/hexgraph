@@ -311,6 +311,15 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-01: **Verification-oracles design captured** ([`docs/design-verification-oracles.md`]
+  (docs/design-verification-oracles.md)) — how to prove vuln classes BEYOND command-injection
+  (memory-corruption RCE, DoS, read/write primitives, SSRF, blind variants) with unforgeable
+  oracles. Core principle: an oracle is unforgeable when HexGraph observes the vuln's side effect
+  on a channel INDEPENDENT of the exploit's own request (the `{{NONCE}}`-in-output check is one
+  instance). Taxonomy + per-class design (callback/canary listener, planted-canary read,
+  out-of-band side-effect read, liveness/DoS, crash/ASan RCE spectrum), all bounded by the policy
+  seam + audited; oracle types live in the PoC spec / `evidence.extra` envelope, not the frozen
+  finding schema. Phase 1 (callback/canary + read/write oracles) to implement next. *(proposal)*
 - 2026-06-01: **Code-review #44 — full discover→test-live loop for a WEB RCE on rehosted IoTGoat
   (validation; branch `docs/iotgoat-44`).** Drove the engine end-to-end against OWASP IoTGoat
   (x86 OpenWrt disk image): ingest + gap-#1 disk-image extraction (344 rootfs children), qemu
