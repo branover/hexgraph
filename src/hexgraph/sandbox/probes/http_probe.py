@@ -31,11 +31,17 @@ from __future__ import annotations
 
 import http.cookiejar
 import json
+import os
 import ssl
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+
+# Shared bounded-egress chokepoint, a sibling module. As a sandbox script the probes dir is
+# already sys.path[0]; when loaded by file path (tests) it isn't, so add it explicitly.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _egress  # noqa: E402
 
 MAX_BODY = 64 * 1024  # bytes of response body returned to the model
 
@@ -90,8 +96,13 @@ def _build(base: str, spec: dict):
 
 def _do(opener, base: str, spec: dict, allow: set, timeout: int) -> dict:
     method, url, req = _build(base, spec)
-    dest = _dest(url)
-    if dest not in allow:
+    dest = _dest(url)  # canonical "host:port" (or "<malformed>" sentinel → always refused)
+    try:
+        # Explicit pre-connect check via the shared chokepoint; the socket guard installed
+        # at startup is the backstop. `dest` is already canonical, so split-free matching.
+        if dest not in allow:
+            raise _egress.EgressBlocked(dest)
+    except _egress.EgressBlocked:
         return {"method": method, "url": url, "dest": dest,
                 "error": "destination not in allowlist", "ok": False}
     try:
@@ -185,6 +196,7 @@ def main() -> int:
         return 2
     base = (channel.get("base_url") or "").rstrip("/")
     allow = set(channel.get("allow") or [])
+    _egress.install_socket_guard(allow)  # can't-forget backstop on every TCP connect
     timeout = int(channel.get("timeout", 15))
     jar = http.cookiejar.CookieJar()
     # Embedded devices serve HTTPS with self-signed/expired certs (LuCI, vendor admin UIs);

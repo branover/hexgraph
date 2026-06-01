@@ -121,6 +121,60 @@ New primitives alongside `assert_allows_execution`: `assert_allows_egress(dest)`
 for every outbound action at Tiers 2–3. The seam rule holds: feature code says
 `assert_allows_egress(dest)` + `get_executor()`, never `if tier == 3`.
 
+### Centralized app-layer egress guard (shipped — review #7 middle ground)
+
+With `features.network` on, the egress container runs with `--network bridge` (full LAN+
+internet L3 reach). What confines a probe to its loopback/private target is an
+**application-level** allowlist check. Originally each egress probe re-implemented its own
+ad-hoc `dest in allow` string compare; a new probe that forgot it — or an unsuppressed
+redirect / DNS-resolution mismatch — would get unconfined egress. (Note: this container runs
+**HexGraph's own network-client probe code**, *not* the hostile target's bytes, so this is
+defense-in-depth for our code, not an open hole.)
+
+The interim hardening (shipped) centralizes that check into one shared chokepoint,
+`sandbox/probes/_egress.py` (stdlib-only, since the sandbox image has no `hexgraph`):
+
+- `dest(host, port)` — the canonical `"host:port"` normalization (mirrors how the policy
+  scopes build entries; unbrackets IPv6) used for matching.
+- `ensure_allowed(host, port, allow)` — the explicit pre-connect check, raising
+  `EgressBlocked` off-list (probes translate it into their existing
+  `{"error": "destination not in allowlist"}` shape).
+- `install_socket_guard(allow)` — the **can't-forget backstop**: monkeypatches
+  `socket.create_connection` / `socket.socket.connect{,_ex}` so *every* outbound
+  **TCP (AF_INET/AF_INET6, SOCK_STREAM)** connect is checked against `allow`, even one a
+  probe forgot to gate. It deliberately leaves **DNS resolution, UDP, and AF_UNIX**
+  untouched (guarding `getaddrinfo`/UDP would break name resolution), and lets the
+  legitimate on-allowlist target connect through (incl. the rehost device's private IP).
+
+All five egress probes (`http_probe`, `tcp_probe`, `surface_probe`, `web_discover_probe`,
+`remote_probe`) call `install_socket_guard(allow)` once at startup and route their explicit
+check through the shared helper. A contract test statically asserts every egress probe
+adopts the guard, so a *new* egress probe that forgets it fails CI.
+
+### Future hardening — kernel-level egress confinement (Option B, deferred)
+
+The robust end-state is **kernel-enforced** egress containment, not probe code: each
+ephemeral egress container gets a per-container **nftables/iptables OUTPUT chain that is
+DROP-default and ALLOWs only the run's allowlisted `host:port`** (plus the DNS resolver, if
+needed). The kernel — not a Python monkeypatch — then drops any packet to an off-allowlist
+destination, so a buggy/forgetful probe, a followed redirect, or a DNS-resolution mismatch
+*cannot* reach a host outside the computed scope.
+
+It is **deferred** because it is large and erodes the isolation floor:
+
+- Installing per-container firewall rules needs **`NET_ADMIN`** inside the container (which
+  contradicts `--cap-drop ALL`), or host-side veth/`nftables` rules keyed to each ephemeral
+  container's network namespace — a non-trivial sidecar that must be torn down with the
+  disposable container and must never widen capabilities/root.
+- The **rehost** path joins the emulator's network namespace
+  (`--network container:<emulator>`), so per-probe rules can't simply live on the probe's own
+  netns — the shared-netns case needs separate handling.
+- It must remain **fail-closed** and never relax outside the policy seam.
+
+Until that lands, the **centralized app-layer guard above is the shipped interim**: a single
+robust-by-construction chokepoint instead of N copy-pasted checks. (Referenced from the
+`sandbox/probes/_egress.py` module docstring.)
+
 The unforgeable **`{{NONCE}}` oracle** (`engine/poc.py`) generalises directly to network
 PoCs: an injected command echoes the nonce in an HTTP response, or an auth bypass reaches a
 nonce-gated page — proving the exploit really crossed the boundary instead of trusting the

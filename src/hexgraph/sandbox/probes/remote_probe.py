@@ -27,6 +27,11 @@ import os
 import shlex
 import sys
 
+# Shared bounded-egress chokepoint, a sibling module. As a sandbox script the probes dir is
+# already sys.path[0]; when loaded by file path (tests) it isn't, so add it explicitly.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _egress  # noqa: E402
+
 MAX_OUT = 256 * 1024
 
 
@@ -174,7 +179,10 @@ def main() -> int:
     ch = _merge_secret(ch)  # creds arrive via HG_CHANNEL_SECRET env (never argv)
     # Defense-in-depth on top of the host-side scope: only ever dial the allowlisted host:port.
     allow = set(ch.get("allow") or [])
-    if f"{ch.get('host')}:{int(ch.get('port', 22))}" not in allow:
+    _egress.install_socket_guard(allow)  # can't-forget backstop on every TCP connect
+    try:
+        _egress.ensure_allowed(ch.get("host"), int(ch.get("port", 22)), allow)
+    except _egress.EgressBlocked:
         print(json.dumps({"ok": False, "error": "destination not in allowlist"}))
         return 0
     command = _build_command(ch)

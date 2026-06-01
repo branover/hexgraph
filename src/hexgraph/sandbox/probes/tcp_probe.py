@@ -29,9 +29,15 @@ bounded-egress policy tier and audited by the caller. stdlib only.
 from __future__ import annotations
 
 import json
+import os
 import socket
 import sys
 import urllib.parse
+
+# Shared bounded-egress chokepoint, a sibling module. As a sandbox script the probes dir is
+# already sys.path[0]; when loaded by file path (tests) it isn't, so add it explicitly.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _egress  # noqa: E402
 
 MAX_BYTES = 64 * 1024
 
@@ -135,7 +141,10 @@ def main() -> int:
         return 2
     host, port = ch.get("host"), int(ch.get("port", 0))
     allow = set(ch.get("allow") or [])
-    if f"{host}:{port}" not in allow:
+    _egress.install_socket_guard(allow)  # can't-forget backstop on every TCP connect
+    try:
+        _egress.ensure_allowed(host, port, allow)  # explicit pre-connect check
+    except _egress.EgressBlocked:
         print(json.dumps({"tool": "tcp_probe", "ok": False, "error": "destination not in allowlist"}))
         return 0
     timeout = int(ch.get("timeout", 15))

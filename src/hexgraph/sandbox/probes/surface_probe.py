@@ -18,10 +18,16 @@ bounded-egress policy tier.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
 from urllib.parse import urlparse
+
+# Shared bounded-egress chokepoint, a sibling module. As a sandbox script the probes dir is
+# already sys.path[0]; when loaded by file path (tests) it isn't, so add it explicitly.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _egress  # noqa: E402
 
 
 def _flag(args, name, default=None):
@@ -40,8 +46,11 @@ def _dest(url: str) -> str:
 
 
 def _probe_one(url: str, method: str, allow: set, timeout: int) -> dict:
-    dest = _dest(url)
-    if dest not in allow:
+    dest = _dest(url)  # canonical "host:port"
+    try:
+        if dest not in allow:  # explicit pre-connect check; socket guard is the backstop
+            raise _egress.EgressBlocked(dest)
+    except _egress.EgressBlocked:
         return {"url": url, "skipped": "destination not in allowlist", "dest": dest}
     opener = urllib.request.build_opener(_NoRedirect)
     req = urllib.request.Request(url, method=method)
@@ -65,6 +74,7 @@ def main() -> int:
         return 2
     base = (channel.get("base_url") or "").rstrip("/")
     allow = set(channel.get("allow") or [])
+    _egress.install_socket_guard(allow)  # can't-forget backstop on every TCP connect
     timeout = int(channel.get("timeout", 15))
     probes = []
     for ep in channel.get("endpoints") or []:
