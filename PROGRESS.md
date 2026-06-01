@@ -311,6 +311,20 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-01: **Verification oracles Phase 0b — lab-confirmed vs reachable + the assurance floor +
+  agent guidance.** Refined the model so `code_present` has BOTH a static and a *dynamic* form,
+  differentiating "looks vulnerable" (static observation) from **lab-confirmed** (the bug was fired
+  by executing the code in ISOLATION — a harness/fuzzer — proving it's real even when the production
+  input path isn't established). `derive_poc_assurance` now keys on the dynamic **scope**: a live
+  web/tcp surface ⇒ `input_reachable/dynamic` (real deployed input); an isolated binary exec ⇒
+  `code_present/dynamic` (lab-confirmed); `spec["scope"]` overrides. `fuzz_crash` now records
+  `code_present/dynamic` (was floored to static). `persist_finding` stamps the **floor**
+  (`code_present/static`) on any vuln finding lacking assurance, so EVERY flaw documents at least
+  its level and a stronger declared/derived claim is never overwritten. `get_schemas['assurance']`
+  + the `verify_poc`/`record_finding` docstrings + SKILL §3 now teach the 4-rung ladder: record the
+  floor, AIM for the strictest (`input_reachable/dynamic`, `unauthenticated`), state preconditions
+  honestly. design-verification-oracles.md updated with the 2×2 + scope. Tests: test_assurance.py
+  (lab-confirmed vs reachable, scope override, fuzz, floor stamped/preserved/skipped).
 - 2026-06-01: **Verification oracles Phase 0 — the two standards of "verified", built into the
   engine** (`engine/assurance.py`). The engine now COMPUTES a per-PoC **assurance triple**
   `{standard, method, precondition}` and records it on the finding (`evidence.extra.verification.
