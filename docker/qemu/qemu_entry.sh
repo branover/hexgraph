@@ -36,12 +36,19 @@ for _ in $(seq 1 90); do                       # ~7.5 min for the OS to boot + s
         echo "HEXGRAPH_REHOST {\"ip\":\"127.0.0.1\",\"web\":false,\"detail\":\"qemu exited during boot\"}"
         tail -n 30 /tmp/qemu-serial.log 2>/dev/null; sleep infinity
     fi
-    # Prefer plain HTTP on :80 (hostfwd 8080); fall back to an HTTPS-only guest on :443
-    # (hostfwd 8443), carrying the scheme so HexGraph builds https:// (not cleartext-on-TLS).
-    if curl -ksS -m 4 -o /dev/null "http://127.0.0.1:${HOSTPORT}/" 2>/dev/null; then
+    # Pick the REAL UI, not a redirect. Many admin UIs (LuCI, vendor consoles) answer :80
+    # with a 30x → https; registering that http port would leave the agent stuck on
+    # redirects. So: prefer http :80 only if it returns a non-redirect (<300); otherwise, if
+    # https :443 answers at all, register that (carry scheme=https so it's not cleartext-on-TLS);
+    # else fall back to whatever http :80 gave (e.g. a redirect when there's no https).
+    hc="$(curl -ksS -m 4 -o /dev/null -w '%{http_code}' "http://127.0.0.1:${HOSTPORT}/" 2>/dev/null)"
+    sc="$(curl -ksS -m 4 -o /dev/null -w '%{http_code}' "https://127.0.0.1:8443/" 2>/dev/null)"
+    if [ -n "$hc" ] && [ "$hc" != "000" ] && [ "$hc" -lt 300 ] 2>/dev/null; then
         WEB=true; PORT=$HOSTPORT; SCHEME=http; break
-    elif curl -ksS -m 4 -o /dev/null "https://127.0.0.1:8443/" 2>/dev/null; then
-        WEB=true; PORT=8443; SCHEME=https; break
+    elif [ -n "$sc" ] && [ "$sc" != "000" ]; then
+        WEB=true; PORT=8443; SCHEME=https; break       # http redirects to https, or https-only
+    elif [ -n "$hc" ] && [ "$hc" != "000" ]; then
+        WEB=true; PORT=$HOSTPORT; SCHEME=http; break    # http answers (e.g. a redirect), no https
     fi
     sleep 5
 done

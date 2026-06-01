@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import http.cookiejar
 import json
+import ssl
 import sys
 import urllib.error
 import urllib.parse
@@ -149,7 +150,15 @@ def main() -> int:
     allow = set(channel.get("allow") or [])
     timeout = int(channel.get("timeout", 15))
     jar = http.cookiejar.CookieJar()
-    opener = urllib.request.build_opener(_NoRedirect, urllib.request.HTTPCookieProcessor(jar))
+    # Embedded devices serve HTTPS with self-signed/expired certs (LuCI, vendor admin UIs);
+    # we're ASSESSING a hostile target, not trusting it, so don't verify TLS (like curl -k).
+    # Containment is the allowlist + no-redirects + the bounded-egress scope, not cert chains.
+    tls = ssl.create_default_context()
+    tls.check_hostname = False
+    tls.verify_mode = ssl.CERT_NONE
+    opener = urllib.request.build_opener(
+        _NoRedirect, urllib.request.HTTPSHandler(context=tls),
+        urllib.request.HTTPCookieProcessor(jar))
 
     if channel.get("request") is not None:  # single-request mode (http_request tool)
         r = _do(opener, base, channel["request"], allow, timeout)
