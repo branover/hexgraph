@@ -121,7 +121,7 @@ class FirmAERehoster(Rehoster):
             raise RehostUnavailable("Docker is not running — rehosting needs it.")
         if not _image_present(self.image):
             raise RehostUnavailable(
-                f"FirmAE image {self.image!r} not found — build it (make firmae-build) "
+                f"FirmAE image {self.image!r} not found — build it (just firmae-build) "
                 "or set features.rehost.image.")
         if not os.path.isfile(firmware_path):
             raise RehostError(f"firmware not found: {firmware_path}")
@@ -197,7 +197,7 @@ class QemuDiskRehoster(Rehoster):
             raise RehostUnavailable("Docker is not running — rehosting needs it.")
         if not _image_present(self.image):
             raise RehostUnavailable(
-                f"qemu rehoster image {self.image!r} not found — build it (make qemu-build) "
+                f"qemu rehoster image {self.image!r} not found — build it (just qemu-build) "
                 "or set features.rehost.qemu_image.")
         if not os.path.isfile(firmware_path):
             raise RehostError(f"firmware not found: {firmware_path}")

@@ -39,7 +39,7 @@ then run the resume verifier, then continue at the next unchecked task.
   `HEXGRAPH_REHOST` marker contract, gated by **`features.rehost`** (`policy.assert_allows_rehost`). `rehost_firmware()`
   registers the live web server as a `web_app` surface CHILD of the firmware; the probe joins the emulator container's
   netns (`run_probe(net_container=…)`) to reach the device's private IP, then surface_recon/web_recon/http_request/
-  web-`verify_poc` assess it (needs `features.network`). MCP `rehost`, `hexgraph rehost` CLI, `make firmae-build`/
+  web-`verify_poc` assess it (needs `features.network`). MCP `rehost`, `hexgraph rehost` CLI, `just firmae-build`/
   `qemu-build`/`iotgoat`, `docs/engagement-rehosted.md`, SKILL §2b. **Validated end-to-end on IoTGoat x86: auto-selected
   qemu, booted OpenWrt (uhttpd up), registered the surface, http_request reached it.** FirmAE-image fixes shipped
   (binwalk 2.3.4 from source, in-container postgres, loop-device self-heal + graceful teardown); FirmAE doesn't run
@@ -53,11 +53,11 @@ then run the resume verifier, then continue at the next unchecked task.
   `_egress_gate` (policy + per-target local-only NetworkScope + EgressEvent audit). `poc.verify_poc`
   branches web_app→HTTP oracle (`body_contains`/`status_is`/`status_differs`, gated by features.network)
   vs binary→exec (features.poc); `{{NONCE}}` shared so a web RCE is unforgeable. SKILL §2b +
-  `docs/engagement-vulnrouter.md` + `make vulnrouter`. **Validated**: an agent (MCP only, no source) solved
+  `docs/engagement-vulnrouter.md` + `just vulnrouter`. **Validated**: an agent (MCP only, no source) solved
   vulnrouter — auth bypass + RCE verified → 6 findings/11 nodes/29 edges. Plus **graph-quality + tool
   contracts**: every target-bound node gets a `contains` edge (no orphans); `engine/node_schemas.py`
   advertised via `get_schemas` with per-type `use_when`/recommended attrs + the sink-vs-symbol rule;
-  `run_task` folds dupes; `test_tool_contract.py` locks it. `make sandbox-build` now forwards
+  `run_task` folds dupes; `test_tool_contract.py` locks it. `just sandbox-build` now forwards
   `--build-arg WITH_GHIDRA`. UI: PoC verification panel + re-verify, edit-any-field (finding+node),
   firmware file viewer, search-includes-targets, edge inspector, Author modals (`name·type·target` +
   type help + draw-to-connect), tighter Settings inputs.
@@ -66,7 +66,7 @@ then run the resume verifier, then continue at the next unchecked task.
   (evidence-derived status, sticky human verdict, open hypotheses feed context), in-app report viewer +
   run-compare diff UI. Remaining documented sub-items (not whole phases): richer approval gates (review-on-
   output / plan / spend), P7-5 (offline CVE / bounded dataflow / reviewable dedup), FTS5 search,
-  SSE live activity, real-key cassette recording (`make test-live`). (Ghidra decompiler is DONE —
+  SSE live activity, real-key cassette recording (`just test-live`). (Ghidra decompiler is DONE —
   see Optional features below.)
 - **Optional features (settings-driven, `settings.py` + `/api/settings` + `hexgraph config`; secrets status-only):**
   **Ghidra** (headless `WITH_GHIDRA=1` / bridge / enrich_recon), and **Fuzzing** (`fuzzing` task, off by
@@ -179,18 +179,19 @@ then run the resume verifier, then continue at the next unchecked task.
 - **Last verified:** `.venv/bin/python -m pytest -q` → **319 passed, 2 skipped** (live test skips without a
   key; one Docker-gated when the sandbox image is absent); SPA builds clean. Sandbox image
   (`WITH_GHIDRA=1`) includes Ghidra + qemu + firmware extractors and works end-to-end.
-- **UI quickstart (updated):** `make ui` once → `make sandbox-build` once →
+- **UI quickstart (updated):** `just ui` once → `just sandbox-build` once →
   `hexgraph ingest tests/fixtures/synthetic_fw.bin --name demo` → `hexgraph serve` → http://127.0.0.1:8765.
-- **How to re-verify:** `make test`; or run the UI (see UI quickstart below).
+- **How to re-verify:** `just test`; or run the UI (see UI quickstart below).
 - **v2 sequencing:** P0 seams/migrations → P1 typed graph → P2 context bundle/CAS → P3 task anchors →
   P4 React notebook UI → P5 finding/task management → P6 HITL/triage → P7 search/report/cross-target →
   P8 real-key vuln-target test. Thin future-proofing seams (entitlements, metering, executor, policy,
   principal, suggester) land in P0 with local defaults — **ask a seam, never branch on backend/tier/executor.**
-- **UI quickstart:** `make sandbox-build` once → `hexgraph ingest tests/fixtures/synthetic_fw.bin --name demo`
+- **UI quickstart:** `just sandbox-build` once → `hexgraph ingest tests/fixtures/synthetic_fw.bin --name demo`
   → `hexgraph serve` → open http://127.0.0.1:8765 → click a target, pick task type + scenario, Run.
 - **Open notes / gotchas:**
   - **Docker required** for recon/unpack/decompile/harness/demo; `jonsnow` is in the `docker` group.
-    Build the sandbox image once with `make sandbox-build` (re-run after editing probes or the Dockerfile).
+    Build the sandbox image once with `just sandbox-build` (re-run only after a Dockerfile/toolchain
+    change — probes are mounted from the install at runtime, so editing/adding a probe needs no rebuild).
   - Python 3.12.3 (spec asks 3.11+ — fine).
   - Schema changes: `db/models.py` uses `create_all` (no migrations) — delete `~/.hexgraph/hexgraph.db`
     (or use a fresh `HEXGRAPH_HOME`) after changing columns; tests use isolated temp homes.
@@ -239,7 +240,7 @@ then run the resume verifier, then continue at the next unchecked task.
       **Deviation:** vanilla JS (fetch) instead of HTMX — one vendored lib (Cytoscape) kept the UI fully
       offline; HTMX added no value over plain fetch here. Cytoscape vendored at web/static/vendor/.
 - [x] M2-T8 `tests/fixtures/build.sh` (vuln_httpd, libupnp.so, synthetic_fw.bin built+committed);
-      `make demo` runs ingest→recon→finding→graph offline, exit 0
+      `just demo` runs ingest→recon→finding→graph offline, exit 0
 
 ## M3 — LLM tasks via the interface ✅
 - [x] M3-T1 `sandbox/decompiler.py` Decompiler seam + R2Decompiler; `decompile_probe.py`; radare2 6.1.4 in image
@@ -260,7 +261,7 @@ then run the resume verifier, then continue at the next unchecked task.
 - [x] M4-T2 pattern_sweep: homes the finding ON the matched sibling + seed→sibling related_to edge
 - [x] M4-T3 harness_generation: `compile_probe.py` + `engine/harness.py` actually compile the emitted
       source in the sandbox (gcc added to image); real build result replaces the mock's claim
-- [x] M4-T4 `make demo` extended: static_analysis → spawn pattern_sweep follow-up → sibling finding +
+- [x] M4-T4 `just demo` extended: static_analysis → spawn pattern_sweep follow-up → sibling finding +
       related_to + parent_finding_id. 66 tests pass.
 
 ## M5 — Polish ✅
@@ -268,7 +269,7 @@ then run the resume verifier, then continue at the next unchecked task.
 - [x] M5-T2 `engine/dedup.py` (signature = target+category+title+function+sink) + POST /api/projects/{id}/dedup
 - [x] M5-T3 Export: `hexgraph findings <p> --export f.json`, GET /api/projects/{id}/export (graph+findings),
       graph export (`hexgraph graph --export`, from M2)
-- [x] M5-T4 README finalized (markers flipped; CLI/UI/backends/roadmap accurate); `make demo` is the
+- [x] M5-T4 README finalized (markers flipped; CLI/UI/backends/roadmap accurate); `just demo` is the
       documented acceptance run (ends with the spawn chain)
 
 ## v2 execution — phases (detail in `docs/implementation-plan.md`)
@@ -278,7 +279,7 @@ then run the resume verifier, then continue at the next unchecked task.
 - [x] P3 Task anchors (`anchor_kind`/`anchor_id`, migration `0004`) + edge-anchored context; `engine/capabilities.py` + `/api/capabilities`; `engine/suggester.py` FollowupSuggester+RuleBasedSuggester + `/api/findings/{id}/suggestions` (entitlement-gated); pattern_sweep edge carries `matched_from_finding_id`. 93 tests pass.
 - [x] P4 Analyst-notebook UI (React+Vite+TS in `frontend/`, served at `/`): graph hub + visual grammar +
   progressive disclosure, Inspector (detail/triage/followups/suggestions), capability-filtered launchers,
-  findings management (sort/filter/group/counts), cost badge. Verified via Playwright. `make ui` builds it.
+  findings management (sort/filter/group/counts), cost badge. Verified via Playwright. `just ui` builds it.
   **Deferred:** SSE live activity (polls now), pre-flight context preview, non-finding node detail.
 - [x] P5 Finding/task management: API (project tasks, task detail+trace, rerun, finding components, bulk-status);
   SPA Findings|Tasks tabs, TasksPanel/TaskDetail (provenance: bundle id + trace + produced findings + re-run),
@@ -291,7 +292,7 @@ then run the resume verifier, then continue at the next unchecked task.
   same-code-as (`similar_to` via content_hash); run-compare backend from P2. 106 tests pass.
   Deferred: search/report UI + FTS5; P7-5 (CVE/dataflow/dedup-review).
 - [x] P8 Real-key validation: `tests/fixtures/vuln_fw/` (cgi/cmd/creds planted bugs + expectations.json);
-  `hexgraph/eval.py` scored harness; `make test-live` (key-gated, cassette-backed, tight budget); no-key CI
+  `hexgraph/eval.py` scored harness; `just test-live` (key-gated, cassette-backed, tight budget); no-key CI
   proves bugs statically present + scoring logic. 102 pass / 1 skipped.
 
 ## UI backlog
@@ -337,6 +338,24 @@ then run the resume verifier, then continue at the next unchecked task.
   real-world firmware limit, not a HexGraph tooling gap (the raw-TCP machinery —
   `tcp_probe`/`verify_poc`-tcp/`remote_launch` — remains proven against a synthetic live netns socket).
   VR feedback in `docs/vr-feedback.md`. No model/DB change → no migration.
+- 2026-06-01: **build: migrate the build tooling from `make`/Makefile to `just`/justfile (branch
+  `build/justfile-migration`, PR).** The Makefile had accreted heavy/optional targets with no signal
+  about which a basic user needs, which are testing/demo-only, or *when* to rebuild. Replaced it with a
+  documented `justfile`: a `default` recipe that runs `just --list`, every recipe doc-commented and put
+  in a `[group(...)]` — **setup** (install/venv/setup), **run** (serve), **build** (ui, sandbox-build),
+  **test** (test/test-live/fixtures), **demo** (demo), **rehosting (optional, heavy)** (firmae-build,
+  qemu-build, vulnrouter, iotgoat), **maintenance** (clean). Each rebuild-sensitive recipe states WHEN
+  to rebuild (e.g. `ui` after any `frontend/` change; `sandbox-build` only after a Dockerfile/toolchain
+  change — **probes are mounted from the install at runtime, no rebuild needed**) and prerequisites
+  (Docker; FirmAE=privileged+/dev/net/tun; qemu=/dev/kvm). Parameterised recipes preserved
+  (`sandbox-build with_ghidra="0"`, `iotgoat fw=""`, top-of-file port/image vars); `clean` is
+  `[confirm]`-gated. No targets dropped — all 1:1 (help → `default`/`--list`). The Makefile is now a
+  3-line shim that prints "use `just`". Updated every `make X` reference repo-wide → `just X`
+  (CLAUDE.md, README, docs/*, scripts, src comments, frontend Settings hint, Dockerfiles,
+  docker-compose, conftest skips); documented installing `just` (the official no-sudo one-liner /
+  `snap`) in README + CLAUDE.md as a dev dependency. Verified: `just --list` renders the groups cleanly;
+  `just test` green (331 passed, 2 Docker-skipped); heavy Docker/KVM recipes `--dry-run`-checked for
+  valid bodies. No DB model change → no migration.
 - 2026-06-01: **fix: firmware-unpack basename collision (silent graph corruption).** `ingest_file`
   copied every artifact to a flat `artifacts/<basename>`, so two different files (or two unpacked
   firmware children) sharing a basename — e.g. `bin/foo` and `sbin/foo`, or two firmwares both named
@@ -367,7 +386,7 @@ then run the resume verifier, then continue at the next unchecked task.
   "partially-superseded" banner (static-only → graduated opt-in policy seam); `design-dynamic-surfaces.md`
   flipped to IMPLEMENTED, corrected its tier table to the real flags (`features.network`/Tier 2
   TIER_LOCAL_NETWORK, `features.remote`/Tier 3 TIER_LIVE_REMOTE), and trimmed Phasing to "delivered".
-  `make test` green (329 passed, 2 Docker-skipped); no DB model change → no migration.
+  `just test` green (329 passed, 2 Docker-skipped); no DB model change → no migration.
 - 2026-06-01: **Security hardening — operator-machine trust boundary (2 high-sev review findings).**
   (1) The loopback API had no Host/CSRF/auth guard → a page the operator visits could DNS-rebind to
   127.0.0.1 and flip the sandbox-relaxing feature gates (PATCH /api/settings) or hit DELETE/task
@@ -387,7 +406,7 @@ then run the resume verifier, then continue at the next unchecked task.
   passed by NAME on the docker argv with the value only in the child process env); `remote_probe`
   reads + merges it. Only the non-secret descriptor stays on the argv; result-scrub of password/key
   preserved. Test asserts the secret is absent from the constructed argv yet reaches the probe via env.
-  No DB model change → no migration. `make test` green.
+  No DB model change → no migration. `just test` green.
 - 2026-06-01: **Raw-TCP live testing + bounded service-launch (closing the live-exploit half-loop,
   part 2 of 2).** Non-HTTP analogue of the web tools so a rehosted/remote device's *socket* services
   (bind shells, vendor binary protocols, pwnable daemons) can be tested live: `sandbox/probes/
@@ -443,7 +462,7 @@ then run the resume verifier, then continue at the next unchecked task.
   `classify_finding`; findings panel gains a type filter + type/verified chips. (3) Real vulnerable
   firmware `tests/fixtures/eval_fw/eval_fw.bin` (pre-auth command-injection RCE) + `docs/engagement-
   brief.md` / `engagement-answer-key.md` (success = a verified PoC) + installable Claude skill +
-  `ingest` MCP tool. 210 tests pass. NOTE: run `make sandbox-build` to bake the new fuzz/poc probes.
+  `ingest` MCP tool. 210 tests pass. NOTE: run `just sandbox-build` to bake the new fuzz/poc probes.
 - 2026-05-30: **Coding-agent integration (both directions) + VR-eval UX pass.** (1) **MCP driver mode**:
   `hexgraph mcp` server (`mcp_server.py` + `engine/mcp_tools.py`) exposes sandboxed tools — read (inspect),
   write (record_finding/create_node/create_edge/create_hypothesis/annotate), run (run_task) — grouped and
@@ -477,7 +496,7 @@ then run the resume verifier, then continue at the next unchecked task.
   all fall back to radare2. UI fixes: Run-menu portal (no clip) + expandable detail box; LaunchModal redesign
   (fixed columns, wrapping preview) + finding follow-ups now route through it with `parent_finding_id`;
   graph collapses duplicate parallel edges (one per src→dst→type, merge at creation + at render). Makefile
-  collapsed to one-shot `make setup`. CLAUDE.md condensed to rules+orientation. 154 tests pass.
+  collapsed to one-shot `just setup`. CLAUDE.md condensed to rules+orientation. 154 tests pass.
 - 2026-05-30: **Researcher depth — Chunk C: P7 viewer UI** (frontend only; backend endpoints already
   existed). `ReportModal` renders the project report (`/api/projects/{id}/report` markdown) in-app via
   a tiny offline md→HTML renderer (`.markdown` theme styles), with copy + download-.md. `RunCompareModal`
@@ -514,7 +533,7 @@ then run the resume verifier, then continue at the next unchecked task.
   and a prioritized gap analysis. Finding schema stays frozen; migrations are a committed prerequisite.
   **Next: turn this into an implementation plan.** 15 cross-cutting rulings + 13 open questions captured.
 - 2026-05-30: **M5 complete → MVP done (M0–M5).** Accept/dismiss status (API+UI), dedup engine+endpoint,
-  findings/project export (CLI + API), README finalized. 69 tests pass; `make demo` green. Remaining
+  findings/project export (CLI + API), README finalized. 69 tests pass; `just demo` green. Remaining
   work is polish (see UI backlog) + optional hardening (cassettes, Ghidra, Celery, compose smoke test).
 - 2026-05-30: **M4 complete** — follow-up spawner (endpoint + UI + parent_finding_id), pattern_sweep
   homes findings on the matched sibling with related_to edges, harness_generation compiles the emitted
@@ -532,8 +551,8 @@ then run the resume verifier, then continue at the next unchecked task.
   Live server verified driving the critical_overflow flow. Real backends (T5) + decompiler (T1) left.
 - 2026-05-30: **M2 complete** — sandbox runner (locked-down docker), recon + firmware-unpack probes,
   engine (recon/unpack/graph/worker/pipeline), JSON API + offline Cytoscape UI, fixtures built,
-  `make demo` exits 0. 44 tests pass (Docker-gated tests skip without the sandbox image).
-  Sandbox image: `make sandbox-build` (radare2 deferred to M3). UI uses vanilla JS not HTMX (noted).
+  `just demo` exits 0. 44 tests pass (Docker-gated tests skip without the sandbox image).
+  Sandbox image: `just sandbox-build` (radare2 deferred to M3). UI uses vanilla JS not HTMX (noted).
 - 2026-05-30: **M1 complete** — config (no-key-leak), SQLAlchemy models + session, ingest,
   CLI (init/ingest/targets), FastAPI on loopback + bind guard, docker-compose/Dockerfile.
   39 tests pass. git ownership fixed by user.

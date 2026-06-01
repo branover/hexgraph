@@ -78,7 +78,7 @@ Every outbound request is audited to `EgressEvent`; the boot itself is recorded 
 `EgressEvent`/run note so there's a durable log that the device was emulated.
 
 ## Surfaces
-- CLI: `hexgraph rehost <firmware-target>` (+ `make iotgoat` to fetch IoTGoat, ingest it,
+- CLI: `hexgraph rehost <firmware-target>` (+ `just iotgoat` to fetch IoTGoat, ingest it,
   rehost, and register the surface — the "hand it to Claude" harness for a real image).
 - MCP: a `rehost` run-tool (gated by `features.rehost`) so a driver agent can boot + assess.
 

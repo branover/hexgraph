@@ -4,9 +4,9 @@ full-system emulation (FirmAE), register its web server as a surface, and print 
 hand the engagement to a Claude Code agent.
 
     .venv/bin/python scripts/rehost_engagement.py /path/to/firmware.img [--brand auto]
-or: make iotgoat FW=/path/to/IoTGoat-rpi.img   (downloads IoTGoat if FW is unset)
+or: just iotgoat fw=/path/to/IoTGoat-rpi.img   (downloads IoTGoat if fw is unset)
 
-Prereqs: the FirmAE image built (`make firmae-build`) and Docker with /dev/net/tun +
+Prereqs: the FirmAE image built (`just firmae-build`) and Docker with /dev/net/tun +
 --privileged available. Enables features.rehost + features.network for you.
 Tear down the emulator with:  docker rm -f <the container name printed below>
 """
@@ -27,7 +27,7 @@ def main() -> int:
     import os
     if not os.path.isfile(args.firmware):
         print(f"error: firmware image not found: {args.firmware}\n"
-              "(download IoTGoat with `make iotgoat`, or pass an existing image path.)",
+              "(download IoTGoat with `just iotgoat`, or pass an existing image path.)",
               file=sys.stderr)
         return 2
 

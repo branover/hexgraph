@@ -39,7 +39,7 @@ FastAPI (still loopback-only). This is additive to the backend and reversible at
 1. **Migrations first** — the project DB is durable researcher knowledge; never silently reset it.
 2. **Data foundations before rich UI** — the typed graph + context spine are what make the UI worth
    looking at. But land a **polished vertical slice by end of Phase 4** so there's an early "wow."
-3. **Mock-first**; the contract test and `make demo` stay green every phase.
+3. **Mock-first**; the contract test and `just demo` stay green every phase.
 4. **Seam discipline** (the table above) and **CLAUDE.md updates** are acceptance criteria, not afterthoughts.
 
 ---
@@ -52,7 +52,7 @@ FastAPI (still loopback-only). This is additive to the backend and reversible at
 - **P0-4 Analysis policy.** `engine/policy.py` with `static_only=True`, `allow_execution=False`; the executor asserts policy before running a probe. Future dynamic/fuzz tasks flip a policy + executor profile.
 - **P0-5 Principal seam.** `current_principal()` → a local single-user principal threaded through the API (no auth yet) so multi-user/ACLs attach later.
 - **CLAUDE.md:** document the five seams + the migration workflow + the "ask a seam, never branch" rule.
-- **Acceptance:** `alembic upgrade head` works on a fresh and an existing DB; all tests + `make demo` unchanged; seams present with local defaults.
+- **Acceptance:** `alembic upgrade head` works on a fresh and an existing DB; all tests + `just demo` unchanged; seams present with local defaults.
 
 ## Phase 1 — Typed graph core *(the keystone — A1/B9)*
 **Goal:** sub-file nodes + typed attributed edges; stop discarding ~80% of what the sandbox computes.
@@ -127,17 +127,17 @@ FastAPI (still loopback-only). This is additive to the backend and reversible at
 ## Phase 8 — Real-key validation harness & the cheap vuln target
 **Goal:** prove HexGraph finds *real* vulns with a *real* model, cheaply and repeatably. (Cassette infra lands in P2; this phase builds the target + scored test.)
 - **P8-1 Multi-vuln test firmware** (`tests/fixtures/vuln_fw/`): a few tiny ELFs each planting one distinct, statically-findable bug mapped to a finding category — stack overflow (`strcpy`), command injection (`system`), format string, hardcoded secret, weak crypto. Small enough that context + `max_tokens` stay tiny.
-- **P8-2 Scored real-backend test.** Run `static_analysis`/`reverse_engineering` with `--backend anthropic`, bounded (focused functions, tight context budget, `max_tokens` cap), assert a **detection rate** over the planted set. **Record a cassette once** → CI replays at **$0**; `make test-live` runs live (opt-in, key-gated, behind the spend gate, target cost ≈ a few cents).
+- **P8-2 Scored real-backend test.** Run `static_analysis`/`reverse_engineering` with `--backend anthropic`, bounded (focused functions, tight context budget, `max_tokens` cap), assert a **detection rate** over the planted set. **Record a cassette once** → CI replays at **$0**; `just test-live` runs live (opt-in, key-gated, behind the spend gate, target cost ≈ a few cents).
 - **P8-3 Cost guardrails** verified (spend gate trips, context budget respected) so live runs can't surprise-bill.
-- **CLAUDE.md:** how to run `make test-live`, expected cost, how to re-record cassettes.
-- **Acceptance:** cassette replay is green in CI at $0; `make test-live` detects ≥ the agreed fraction of planted vulns within a bounded dollar budget.
+- **CLAUDE.md:** how to run `just test-live`, expected cost, how to re-record cassettes.
+- **Acceptance:** cassette replay is green in CI at $0; `just test-live` detects ≥ the agreed fraction of planted vulns within a bounded dollar budget.
 
 ---
 
 ## Test & validation strategy
-- **Mock-first, always green:** contract test + `make demo` stay passing every phase; mock remains the default, offline, $0 backend.
+- **Mock-first, always green:** contract test + `just demo` stay passing every phase; mock remains the default, offline, $0 backend.
 - **Cassettes (P2):** real-model behavior is recorded once and replayed in CI at $0; re-record deliberately.
-- **Real-key (P8):** a tiny, scored, multi-vuln target with hard token/cost ceilings; opt-in `make test-live`.
+- **Real-key (P8):** a tiny, scored, multi-vuln target with hard token/cost ceilings; opt-in `just test-live`.
 - **Migrations (P0):** every schema-touching phase ships an Alembic migration tested on an existing DB.
 
 ## Disposition of the design doc's 13 open questions

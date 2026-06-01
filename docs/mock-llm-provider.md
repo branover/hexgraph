@@ -33,7 +33,7 @@ Because the mock is a drop-in for the interface, **no task/agent code knows or c
 ## 2. Three fidelity layers (build them in this order)
 
 ### Layer 1 — Fixture replay (canned golden responses)  ← build first
-Curated JSON responses live under `fixtures/mock_llm/<task_type>/<scenario>.json`. Each file is a complete, schema-valid response object for that task type (e.g. a list of `Finding`s for `static_analysis`, an annotation set for `reverse_engineering`). The mock looks up the fixture for the requested `(task_type, scenario)` and returns it. Deterministic, instant, offline. This is the backbone of unit tests, CI, and `make demo`.
+Curated JSON responses live under `fixtures/mock_llm/<task_type>/<scenario>.json`. Each file is a complete, schema-valid response object for that task type (e.g. a list of `Finding`s for `static_analysis`, an annotation set for `reverse_engineering`). The mock looks up the fixture for the requested `(task_type, scenario)` and returns it. Deterministic, instant, offline. This is the backbone of unit tests, CI, and `just demo`.
 
 ### Layer 2 — Templated / synthetic responses (constructable)
 Pure canned data can reference functions/strings that don't exist in the actual target, which means downstream code (graph edges, follow-up targeting, "open function in decompiler") can't be fully exercised. So the mock can also **construct** a response from the real upstream tool output carried in the `TaskContext` — e.g. pick a real function name from the actual Ghidra/r2 decompilation, embed it in a templated finding, and reference a real sibling target for a `pattern_sweep`. This keeps mock output *coherent with real ingestion* so edges resolve and follow-ups point at things that exist. Implement templates as fixtures containing `{{placeholders}}` filled from `TaskContext` (target name, a chosen function symbol, a sibling target id, a real string from `strings`).
@@ -66,7 +66,7 @@ A "scenario" selects which behavior the mock exhibits for a task type. Provide a
 Scenario selection precedence:
 1. Explicit per-task argument `mock_scenario="..."` (used heavily in tests).
 2. Env default `HEXGRAPH_MOCK_SCENARIO` (used for demos).
-3. Deterministic fallback: `hash(task_id) % len(pool)` picks from the task type's scenario pool, so a full `make demo` naturally shows a realistic mix without configuration.
+3. Deterministic fallback: `hash(task_id) % len(pool)` picks from the task type's scenario pool, so a full `just demo` naturally shows a realistic mix without configuration.
 
 `fixtures/mock_llm/_manifest.yaml` lists, per task type, the default scenario and the available scenarios.
 
@@ -105,8 +105,8 @@ The biggest risk with mocks is that they drift from reality and tests pass while
 
 ## 8. Developer ergonomics / acceptance for the mock itself
 
-- `HEXGRAPH_LLM_BACKEND=mock` is the **default** in `pytest` and in `make demo`.
-- `make demo` runs the complete loop on the bundled test target(s) using only fixtures — no key, no network — and exits non-zero on any failure. This doubles as a smoke test.
+- `HEXGRAPH_LLM_BACKEND=mock` is the **default** in `pytest` and in `just demo`.
+- `just demo` runs the complete loop on the bundled test target(s) using only fixtures — no key, no network — and exits non-zero on any failure. This doubles as a smoke test.
 - A developer can force a scenario from the CLI: `hexgraph run <target> --type static_analysis --mock-scenario high_severity`.
 - Document in the project README: "To develop without an API key, do nothing — the mock is the default. To use a real model, set `HEXGRAPH_LLM_BACKEND=anthropic` and `ANTHROPIC_API_KEY`."
 

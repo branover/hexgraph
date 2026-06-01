@@ -56,6 +56,9 @@ no external coding agent is required (it's an alternative driver, not a dependen
 - **Python 3.11+**
 - **Docker**, runnable by your user (`docker run --rm hello-world` should work). The analysis sandbox
   runs in a container; required for ingest/recon, decompilation, firmware unpack, and PoC/fuzzing.
+- **[`just`](https://just.systems)** — the task runner for the recipes below. Install without sudo:
+  `curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to ~/.local/bin`
+  (then ensure `~/.local/bin` is on your `PATH`), or `snap install just`. Run `just` to see all recipes.
 - Linux or macOS.
 
 No API key is required — the default mock backend is fully offline.
@@ -66,16 +69,16 @@ No API key is required — the default mock backend is fully offline.
 
 ```bash
 git clone <your-fork-or-path> hexgraph && cd hexgraph
-make setup          # one-shot: venv + deps + SPA build + sandbox image + DB init
-make serve          # → http://127.0.0.1:8765
+just setup          # one-shot: venv + deps + SPA build + sandbox image + DB init
+just serve          # → http://127.0.0.1:8765
 ```
 
-`make setup` is the whole install. If you prefer the individual steps (or want Ghidra — see below):
+`just setup` is the whole install. If you prefer the individual steps (or want Ghidra — see below):
 
 ```bash
-make install                     # create .venv and install the hexgraph CLI + dev extras
-make ui                          # build the React SPA into src/hexgraph/web/dist
-make sandbox-build               # build the analysis sandbox image (hexgraph-sandbox:latest)
+just install                     # create .venv and install the hexgraph CLI + dev extras
+just ui                          # build the React SPA into src/hexgraph/web/dist
+just sandbox-build               # build the analysis sandbox image (hexgraph-sandbox:latest)
 .venv/bin/hexgraph serve
 ```
 
@@ -83,7 +86,7 @@ make sandbox-build               # build the analysis sandbox image (hexgraph-sa
 Ghidra (adds a JDK + ~400 MB) build with:
 
 ```bash
-make sandbox-build WITH_GHIDRA=1
+just sandbox-build with_ghidra=1
 ```
 
 The sandbox image also bundles **firmware extractors** (sasquatch / jefferson / ubi_reader / binwalk)
@@ -97,7 +100,7 @@ extra setup.
 Run the whole loop on the bundled test targets and exit 0:
 
 ```bash
-make demo
+just demo
 ```
 
 Or drive it yourself:
@@ -162,7 +165,7 @@ reverse the firmware *and* drive its running web server in one graph:
 ```bash
 hexgraph config set features.rehost.enabled true    # to boot
 hexgraph config set features.network.enabled true   # to then assess the running device
-make iotgoat                                         # fetch + rehost + register IoTGoat
+just iotgoat                                         # fetch + rehost + register IoTGoat
 # or, by hand:
 hexgraph rehost <firmware-target> [--brand <hint>]
 ```
@@ -170,8 +173,8 @@ hexgraph rehost <firmware-target> [--brand <hint>]
 `rehost` **auto-selects the emulator** by image type: qemu+KVM for a full-OS disk image (e.g. IoTGoat's
 x86 OpenWrt `.img`), FirmAE for a vendor blob (squashfs/cramfs/…). Booting needs `features.rehost`;
 assessing the running device with `surface_recon` / `http_request` / `verify_poc` needs
-`features.network`. Build the rehosting images first with `make firmae-build` / `make qemu-build`.
-`make vulnrouter` stands up a live vulnrouter web target + project for a guided engagement; worked
+`features.network`. Build the rehosting images first with `just firmae-build` / `just qemu-build`.
+`just vulnrouter` stands up a live vulnrouter web target + project for a guided engagement; worked
 examples live in `docs/engagement-vulnrouter.md` and `docs/engagement-rehosted.md`.
 
 ---
@@ -242,7 +245,7 @@ over whichever backend you pick.
 
 | Backend | Status | Notes |
 |---|---|---|
-| `mock` | ✅ | Deterministic, schema-valid findings from fixtures. No key, no network. Default for dev, CI, `make demo`. |
+| `mock` | ✅ | Deterministic, schema-valid findings from fixtures. No key, no network. Default for dev, CI, `just demo`. |
 | `anthropic` | ✅ | BYOK via `ANTHROPIC_API_KEY` (env or config). Real token usage + cost. Install with `pip install -e ".[byok]"`. |
 | `claude_code` | ✅ | Uses your local `claude` CLI (headless); fails clearly if absent. |
 
@@ -262,11 +265,11 @@ static-only/local defaults hold unless you opt in.
 
 | Feature | Enable | What it adds |
 |---|---|---|
-| **Ghidra** | `hexgraph config set features.ghidra.enabled true` (needs `make sandbox-build WITH_GHIDRA=1`) | Headless-Ghidra decompiler + optional recon enrichment; can also connect to a running Ghidra (`features.ghidra.mode bridge`). Degrades to radare2 when off. |
+| **Ghidra** | `hexgraph config set features.ghidra.enabled true` (needs `just sandbox-build with_ghidra=1`) | Headless-Ghidra decompiler + optional recon enrichment; can also connect to a running Ghidra (`features.ghidra.mode bridge`). Degrades to radare2 when off. |
 | **Fuzzing** | `hexgraph config set features.fuzzing.enabled true` | The `fuzzing` task: compiles a generated libFuzzer+ASan harness and records a finding per crash. **Relaxes the static-only policy to allow execution** (still `--network none`, capped, timed). |
 | **PoC verification** | `hexgraph config set features.poc.enabled true` | The `poc` task + `verify_poc`: **executes the target** with an attacker input and confirms exploitation via an unforgeable `{{NONCE}}` oracle. Foreign-arch (MIPS/ARM/…) runs under qemu-user with the firmware rootfs as sysroot. Also policy-gated. |
 | **Network** | `hexgraph config set features.network.enabled true` | Bounded **local-network egress** for live web assessment (`http_request` + web `verify_poc`). Raises the policy from `--network none`; a per-target deny-all-but-loopback/private allowlist (no public hosts), every request audited to an `EgressEvent`. |
-| **Rehost** | `hexgraph config set features.rehost.enabled true` | Boots a firmware image under **full-system emulation** (qemu+KVM for full-OS disk images, FirmAE for vendor blobs) and registers its live web UI as a `web_app` surface. Separate policy gate (`assert_allows_rehost`); pair with **Network** to assess the running device. Needs `make firmae-build` / `make qemu-build`. |
+| **Rehost** | `hexgraph config set features.rehost.enabled true` | Boots a firmware image under **full-system emulation** (qemu+KVM for full-OS disk images, FirmAE for vendor blobs) and registers its live web UI as a `web_app` surface. Separate policy gate (`assert_allows_rehost`); pair with **Network** to assess the running device. Needs `just firmae-build` / `just qemu-build`. |
 | **Coding-agent (MCP)** | `features.mcp.{read,write,run}` + `hexgraph mcp install` | Drive HexGraph from Claude Code/Codex/gemini-cli (above). |
 | **Delegate** | `hexgraph config set features.agent.enabled true` | The `agent_delegate` task: HexGraph launches your agent headless, restricted to its sandboxed tools. |
 
@@ -289,7 +292,7 @@ A confirmed PoC is surfaced as a `verified` finding. Foreign-arch (MIPS/ARM/…)
 under qemu-user automatically, with the parent firmware's extracted rootfs as the sysroot — no extra
 setup. `features.fuzzing.enabled true` works the same way for the `fuzzing` task.
 
-To use Ghidra instead of radare2: `make sandbox-build WITH_GHIDRA=1`, then
+To use Ghidra instead of radare2: `just sandbox-build with_ghidra=1`, then
 `hexgraph config set features.ghidra.enabled true` and re-run a decompile/recon task.
 
 ---
@@ -392,7 +395,7 @@ scope.** SQLite runs in WAL mode so the UI and an agent's MCP server share it co
 
 ### Bundled test targets
 
-Under `tests/fixtures/` (regenerate with `make fixtures`): `vuln_httpd` (unbounded `strcpy` in a fake
+Under `tests/fixtures/` (regenerate with `just fixtures`): `vuln_httpd` (unbounded `strcpy` in a fake
 CGI handler), `libupnp.so` (same sink in `ssdp_recv`, a pattern-sweep sibling), and `synthetic_fw.bin`
 (a squashfs firmware that unpacks into both). Escalating, obfuscated, CVE-class challenge targets live
 under `tests/fixtures/challenges/` (`./build.sh` to rebuild; `README.md` there is the answer key).
@@ -402,13 +405,13 @@ under `tests/fixtures/challenges/` (`./build.sh` to rebuild; `README.md` there i
 ## Development
 
 ```bash
-make test            # full suite (mock backend; sandbox/Docker tests auto-skip without the image)
-make demo            # the full offline loop, exits 0 — doubles as a smoke test
-make fixtures        # rebuild the bundled test targets
-make sandbox-build [WITH_GHIDRA=1]   # rebuild the analysis sandbox image
-make ui              # rebuild the SPA
-make serve           # start the server from the venv
-make help            # list all targets
+just                 # list all recipes, grouped (setup / run / build / test / demo / rehosting / maintenance)
+just test            # full suite (mock backend; sandbox/Docker tests auto-skip without the image)
+just demo            # the full offline loop, exits 0 — doubles as a smoke test
+just fixtures        # rebuild the bundled test targets
+just sandbox-build [with_ghidra=1]   # rebuild the analysis sandbox image (only after a Dockerfile/toolchain change)
+just ui              # rebuild the SPA (after any frontend/ change)
+just serve           # start the server from the venv
 ```
 
 Source (`src/hexgraph/`): `models/` (Finding), `llm/` (backend seam + mock + agent runner),
@@ -434,7 +437,7 @@ published to `127.0.0.1:8765`. It launches the disposable analysis sandbox via t
 socket, so build the sandbox image on the host first:
 
 ```bash
-make sandbox-build          # (add WITH_GHIDRA=1 for Ghidra)
+just sandbox-build          # (add with_ghidra=1 for Ghidra)
 docker compose up
 ```
 

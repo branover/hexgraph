@@ -1,7 +1,7 @@
 """Scored detection harness (P8).
 
 Runs the analysis tasks over a target set with known planted bugs and scores how
-many the agent detected. Used by `make test-live` (real backend, cassette-backed
+many the agent detected. Used by `just test-live` (real backend, cassette-backed
 so reruns are $0) and the no-key fixture checks. Detection = a static_analysis
 finding whose category matches the binary's expected category set.
 """

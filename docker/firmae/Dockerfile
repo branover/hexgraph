@@ -1,7 +1,7 @@
 # HexGraph FirmAE rehosting image (docs/design-rehosting.md).
 #
 # Wraps FirmAE (full-system firmware emulation) behind the stable rehost_entry.sh contract
-# that HexGraph's FirmAERehoster drives. Build:  make firmae-build
+# that HexGraph's FirmAERehoster drives. Build:  just firmae-build
 #
 # This faithfully reproduces FirmAE's own core/Dockerfile toolchain — crucially it builds
 # **binwalk 2.3.4 from source** (FirmAE's extractor passes flags like --run-as=root that
