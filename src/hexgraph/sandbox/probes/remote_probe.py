@@ -23,10 +23,27 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import shlex
 import sys
 
 MAX_OUT = 256 * 1024
+
+
+def _merge_secret(ch: dict) -> dict:
+    """Merge credentials delivered out-of-band via the HG_CHANNEL_SECRET env var (not argv,
+    so they never appear on the world-readable docker command line). Env-supplied fields
+    take precedence; the var is cleared once consumed."""
+    blob = os.environ.pop("HG_CHANNEL_SECRET", None)
+    if not blob:
+        return ch
+    try:
+        secret = json.loads(blob)
+    except (ValueError, TypeError):
+        return ch
+    if isinstance(secret, dict):
+        ch = {**ch, **secret}
+    return ch
 
 # Allowlisted read-only recon tools (fixed command templates; no caller shell). A few take an
 # optional `path` arg (shell-quoted). Mirrors what we'd run on an extracted/rehosted rootfs.
@@ -157,6 +174,7 @@ def main() -> int:
     except json.JSONDecodeError as exc:
         print(json.dumps({"error": f"bad --channel json: {exc}"}))
         return 2
+    ch = _merge_secret(ch)  # creds arrive via HG_CHANNEL_SECRET env (never argv)
     # Defense-in-depth on top of the host-side scope: only ever dial the allowlisted host:port.
     allow = set(ch.get("allow") or [])
     if f"{ch.get('host')}:{int(ch.get('port', 22))}" not in allow:

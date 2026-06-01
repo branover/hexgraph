@@ -11,6 +11,7 @@ dist/
 
 # HexGraph runtime data (never commit projects/artifacts/keys)
 .hexgraph/
+.hghome*/        # per-worktree HEXGRAPH_HOME used during dev (DB, settings.json, projects)
 *.db
 *.sqlite3
 

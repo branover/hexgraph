@@ -87,6 +87,65 @@ def test_register_remote_target_no_secret_stored(hg_home, monkeypatch):
     assert _remote_secret() == {"password": "s3cr3t"}
 
 
+# ---------- offline: creds reach the probe via env, NEVER via the docker argv ----------
+
+def test_secret_not_in_docker_argv_but_reaches_env(hg_home, monkeypatch):
+    """run_remote must NOT put the password/key on the docker command line (visible via
+    `ps`/`/proc/<pid>/cmdline`); it delivers them through HG_CHANNEL_SECRET (env), where
+    remote_probe merges them back onto the channel. Asserts both halves."""
+    import subprocess as _subprocess
+
+    from hexgraph import settings
+    from hexgraph.db.session import session_scope
+    from hexgraph.engine.ingest import create_project
+    from hexgraph.engine.remote import register_remote_target, run_remote
+    from hexgraph.sandbox.runner import RunResult, SandboxRunner
+
+    settings.update_settings({"features": {"remote": {"enabled": True}}})
+    monkeypatch.setenv("HEXGRAPH_REMOTE_PASSWORD", "SUPERSECRETpw")
+    monkeypatch.setenv("HEXGRAPH_REMOTE_KEY", "-----PRIVATE-KEY-MATERIAL-----")
+
+    captured = {}
+
+    def fake_run(cmd, *a, **kw):
+        captured["cmd"] = cmd
+        captured["env"] = kw.get("env")
+        # Emulate the probe: read the secret from the env we were handed and prove it merged.
+        env = kw.get("env") or {}
+        blob = env.get("HG_CHANNEL_SECRET")
+        out = {"tool": "remote_probe", "ok": True, "saw_password": False, "saw_key": False}
+        if blob:
+            import json as _json
+            sec = _json.loads(blob)
+            out["saw_password"] = sec.get("password") == "SUPERSECRETpw"
+            out["saw_key"] = sec.get("key") == "-----PRIVATE-KEY-MATERIAL-----"
+        return type("P", (), {"returncode": 0, "stdout": _subprocess_json(out), "stderr": ""})()
+
+    monkeypatch.setattr(_subprocess, "run", fake_run)
+
+    with session_scope() as s:
+        p = create_project(s, name="rem-argv")
+        t = register_remote_target(s, p, "203.0.113.9", port=2222, username="root", transport="ssh")
+        res = run_remote(s, p, t, op="run_tool", tool="uname", runner=SandboxRunner())
+
+    argv = " ".join(captured["cmd"])
+    # The secret must NOT appear anywhere on the docker argv (the world-readable surface).
+    assert "SUPERSECRETpw" not in argv
+    assert "PRIVATE-KEY-MATERIAL" not in argv
+    # ...and the docker invocation passes the secret by NAME only (value pulled from our env).
+    assert "HG_CHANNEL_SECRET" in captured["cmd"]
+    assert captured["env"]["HG_CHANNEL_SECRET"]  # the value lives in the child process env
+    # ...and the probe genuinely received + merged it.
+    assert res.get("saw_password") is True and res.get("saw_key") is True
+    # secrets are still scrubbed from the returned result
+    assert "password" not in res and "key" not in res
+
+
+def _subprocess_json(obj):
+    import json as _json
+    return _json.dumps(obj)
+
+
 # ---------------- live: a real sshd container ----------------
 
 @pytest.fixture(scope="module")

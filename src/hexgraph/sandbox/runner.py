@@ -65,6 +65,7 @@ class SandboxRunner:
         extra_ro_mounts: list[tuple[str, str]] | None = None,
         allow_network: bool = False,
         net_container: str | None = None,
+        secret: dict | None = None,
     ) -> RunResult:
         """Run a probe script over `artifact` inside the sandbox.
 
@@ -79,6 +80,10 @@ class SandboxRunner:
         rehosted firmware's device IP, which lives on a tap inside the FirmAE container.
         The caller is responsible for the per-destination allowlist + audit (engine.audit)
         — this is the single, explicit place `--network none` is relaxed.
+
+        `secret` (a JSON-able dict) is delivered to the probe via the `HG_CHANNEL_SECRET`
+        env var instead of the argv — so credentials NEVER appear on the docker command
+        line (visible via `ps`/`/proc/<pid>/cmdline`). The probe reads + merges it.
         """
         if requires_execution:
             from hexgraph.policy import assert_allows_execution
@@ -126,6 +131,10 @@ class SandboxRunner:
             "-e", "TMPDIR=/scratch",
             "-e", "XDG_CACHE_HOME=/scratch",
             "-e", "XDG_CONFIG_HOME=/scratch",
+            # Secrets (e.g. SSH/telnet creds) are passed by NAME only: docker reads the
+            # value from THIS process's env (set below), so it never lands on the docker
+            # argv where `ps`/`/proc/<pid>/cmdline` (world-readable) could expose it.
+            *(["-e", "HG_CHANNEL_SECRET"] if secret else []),
             # A channel probe (live target, no bytes at rest) mounts no artifact.
             *(["-v", f"{artifact}:/artifact:ro"] if artifact is not None else []),
         ]
@@ -152,8 +161,15 @@ class SandboxRunner:
 
         cmd += [self.image, "python3", f"{CONTAINER_PROBES}/{probe}", *probe_args]
 
+        run_env = None
+        if secret:
+            # The secret value lives ONLY in the child docker process's environment,
+            # keyed by the name we passed via `-e HG_CHANNEL_SECRET` above. Never on argv.
+            run_env = {**os.environ, "HG_CHANNEL_SECRET": json.dumps(secret)}
+
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout)
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout,
+                                  env=run_env)
         except subprocess.TimeoutExpired as exc:
             subprocess.run(["docker", "kill", name], capture_output=True)
             target = artifact.name if artifact is not None else "live channel"
@@ -190,16 +206,22 @@ class SandboxRunner:
             raise SandboxError(f"probe {probe} did not emit valid JSON: {exc}") from exc
 
     def run_channel_probe(self, probe: str, *, channel: dict, outdir: str | Path | None = None,
-                          extra_args: list[str] | None = None, net_container: str | None = None) -> dict:
+                          extra_args: list[str] | None = None, net_container: str | None = None,
+                          secret: dict | None = None) -> dict:
         """Run a probe that talks to a live Channel — no artifact file is mounted; the
         connection descriptor (incl. the per-run egress allowlist) is passed as
         `--channel <json>`. Runs with bounded egress (policy-checked). `net_container` joins
         a rehosted firmware's container netns to reach its emulated device IP. The CALLER
-        must already have asserted `assert_allows_egress` + recorded the audit event."""
+        must already have asserted `assert_allows_egress` + recorded the audit event.
+
+        `secret` carries any sensitive channel fields (e.g. SSH/telnet creds): it is NOT
+        put in `--channel`/argv but delivered via the `HG_CHANNEL_SECRET` env var, so it
+        cannot leak through the world-readable docker command line. The probe merges it
+        back onto the channel."""
         result = self.run_probe(
             probe, None, outdir=outdir,
             extra_args=["--channel", json.dumps(channel), *(extra_args or [])],
-            allow_network=True, net_container=net_container,
+            allow_network=True, net_container=net_container, secret=secret,
         )
         try:
             return json.loads(result.stdout)

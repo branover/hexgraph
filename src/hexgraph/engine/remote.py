@@ -112,13 +112,18 @@ def run_remote(session: Session, project: Project, target: Target, *, op: str,
     runner = runner or get_executor()
     timeout = int(settings.get("features.remote.timeout", 30) or 30)
     cap = int(max_bytes or settings.get("features.remote.max_file_bytes", 262144) or 262144)
+    # NON-secret connection descriptor → goes in `--channel` (and thus the docker argv).
     channel = {"transport": ch.get("transport", "ssh"), "host": host, "port": port,
                "username": ch.get("username", "root"), "timeout": timeout,
                "allow": sorted(scope.allow), "op": op, "path": path, "tool": tool,
-               "args": args or [], "max_bytes": cap, **_remote_secret()}
+               "args": args or [], "max_bytes": cap}
+    # Credentials (password/key) are delivered out-of-band via HG_CHANNEL_SECRET (env var,
+    # not argv) so they can't leak through `ps`/`/proc/<pid>/cmdline`. The probe merges them.
+    secret = _remote_secret() or None
     # net_container: a rehosted device's SSH/telnet lives in the emulator's netns (set on the
     # channel when the remote target was derived from a rehost); a physical box uses the bridge.
     net_container = ch.get("net_container")
-    result = runner.run_channel_probe("remote_probe.py", channel=channel, net_container=net_container)
+    result = runner.run_channel_probe("remote_probe.py", channel=channel,
+                                      net_container=net_container, secret=secret)
     result.pop("password", None); result.pop("key", None)  # never echo secrets back
     return result

@@ -368,6 +368,26 @@ then run the resume verifier, then continue at the next unchecked task.
   flipped to IMPLEMENTED, corrected its tier table to the real flags (`features.network`/Tier 2
   TIER_LOCAL_NETWORK, `features.remote`/Tier 3 TIER_LIVE_REMOTE), and trimmed Phasing to "delivered".
   `make test` green (329 passed, 2 Docker-skipped); no DB model change → no migration.
+- 2026-06-01: **Security hardening — operator-machine trust boundary (2 high-sev review findings).**
+  (1) The loopback API had no Host/CSRF/auth guard → a page the operator visits could DNS-rebind to
+  127.0.0.1 and flip the sandbox-relaxing feature gates (PATCH /api/settings) or hit DELETE/task
+  endpoints. Added a custom **Host-header guard** (`loopback.host_allowed`; allowlist = loopback
+  names/IPs + `testserver`, widens to `*` only on a deliberate non-loopback bind via
+  `HEXGRAPH_I_KNOW_WHAT_IM_DOING`) — the primary anti-rebinding defense. NOT Starlette's
+  `TrustedHostMiddleware`, which matches on `host.split(':')[0]` and would mangle a bracketed IPv6
+  loopback `[::1]:8765` → `[`, locking out the UI where localhost resolves to ::1; `host_allowed`
+  parses IPv6 correctly. Plus a **same-origin guard** that allows a state-changing `/api/*` request
+  ONLY when `Sec-Fetch-Site` is `same-origin` (the SPA's own fetches) or ABSENT (non-browser; the
+  CLI/MCP/tests call the engine in-process, not HTTP) — **`cross-site` AND `same-site` AND `none` are
+  rejected**. Rejecting `same-site` is essential: a page on `evil.localhost` resolves to 127.0.0.1
+  and is same-SITE to `localhost`, so it would otherwise slip past both guards. `tests/test_trust_boundary.py`.
+  (2) `run_remote()` put SSH/telnet creds into the `--channel` JSON → serialized onto the docker run
+  argv (world-readable via `ps`/`/proc/<pid>/cmdline`). Now the secret is delivered out-of-band via
+  the `HG_CHANNEL_SECRET` env var (new `secret=` param on `SandboxRunner.run_probe`/`run_channel_probe`,
+  passed by NAME on the docker argv with the value only in the child process env); `remote_probe`
+  reads + merges it. Only the non-secret descriptor stays on the argv; result-scrub of password/key
+  preserved. Test asserts the secret is absent from the constructed argv yet reaches the probe via env.
+  No DB model change → no migration. `make test` green.
 - 2026-06-01: **Raw-TCP live testing + bounded service-launch (closing the live-exploit half-loop,
   part 2 of 2).** Non-HTTP analogue of the web tools so a rehosted/remote device's *socket* services
   (bind shells, vendor binary protocols, pwnable daemons) can be tested live: `sandbox/probes/
