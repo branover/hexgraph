@@ -133,6 +133,10 @@ LLM tasks themselves use a tool-use **agent loop** (above) over a plain BYOK key
 - CLI: `hexgraph init | db upgrade | ingest <path> [--name --project --backend --no-recon] | targets <p> | run <target> --type T [--objective --model --backend --function --mock-scenario] | rehost <target> [--brand] | findings <p> | graph <p> --export f.json | prune <p> | config list|get|set | serve`.
 - Runtime data under `~/.hexgraph/` (override with `HEXGRAPH_HOME`, db with `HEXGRAPH_DB_PATH`).
 
+## Environment gotchas
+
+- **`grep` is aliased to ripgrep (`rg`) on this system.** So GNU-grep flags don't apply: there's no `--include` (use `--glob`/`-g`), recursion and smart-case are on by default, and PCRE differs. Prefer the dedicated Grep tool; when you must shell out, use ripgrep syntax.
+
 ## Read before writing code
 
 1. `context/SPEC.md` — source of truth (constraints, data model, task types, acceptance criteria).
