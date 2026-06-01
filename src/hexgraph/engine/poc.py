@@ -131,24 +131,40 @@ def verify_poc(session: Session, project: Project, target: Target, spec: dict,
       the bounded-egress network tier.
     - **binary** → run it in the sandbox (argv/env/stdin + an output/exit/crash oracle);
       policy-gated by `assert_allows_execution` (PoC/fuzzing enabled).
-    Returns {verified, exit_code, output, detail, nonce, spec}."""
+    Every result also carries an **`assurance`** triple ({standard, method, precondition},
+    docs/design-verification-oracles.md) the engine computes — so the two standards of "verified"
+    (code-present vs input-reachable) are differentiated by code, not prose."""
     nonce = "HEXGRAPH_PWNED_" + secrets.token_hex(6)
     live = _substitute(copy.deepcopy(spec or {}), nonce)
+    is_tcp, is_web = _is_tcp(live), _is_web(target)
 
-    if _is_tcp(live):
-        return _verify_tcp_poc(session, project, target, live, runner, nonce)
-    if _is_web(target):
-        return _verify_web_poc(session, project, target, live, runner, nonce)
+    if is_tcp:
+        result = _verify_tcp_poc(session, project, target, live, runner, nonce)
+    elif is_web:
+        result = _verify_web_poc(session, project, target, live, runner, nonce)
+    else:
+        result = _verify_binary_poc(session, project, target, live, runner, nonce)
+
+    # Label what was actually proven (the engine decides this, not the caller): a PoC is a
+    # DYNAMIC method; a verified one establishes `input_reachable` under the spec's precondition.
+    from hexgraph.engine.assurance import derive_poc_assurance
+    result["assurance"] = derive_poc_assurance(result, live, is_web=is_web, is_tcp=is_tcp)
+    return result
+
+
+def _verify_binary_poc(session, project, target, live, runner, nonce) -> dict:
+    """Binary PoC: execute the target in the sandbox (argv/env/stdin + an output/exit/crash
+    oracle). {{NONCE}} already substituted. Policy-gated by `assert_allows_execution` (PoC/
+    fuzzing on). Foreign-arch firmware binaries run under qemu-user (poc_probe picks qemu-<arch>
+    from the ELF header); a dynamically-linked one needs its sibling libs, so mount the parent
+    firmware's extracted rootfs as the qemu sysroot."""
+    import tempfile
 
     from hexgraph.policy import assert_allows_execution
 
     assert_allows_execution()  # opt-in gate: raises unless PoC/fuzzing is enabled
     runner = runner or get_executor()
-    import tempfile
 
-    # Foreign-arch firmware binaries run under qemu-user (poc_probe picks qemu-<arch>
-    # from the ELF header). A dynamically-linked one needs its sibling libs, so mount
-    # the parent firmware's extracted rootfs as the qemu sysroot.
     extra_mounts: list[tuple[str, str]] = []
     if target.parent_id and not live.get("sysroot"):
         from hexgraph.engine.filesystem import host_root
@@ -167,6 +183,14 @@ def verify_poc(session: Session, project: Project, target: Target, spec: dict,
     return {**result, "nonce": nonce, "spec": live}
 
 
+def _assurance_str(a: dict | None) -> str:
+    """One-line `standard / method / precondition` for the finding reasoning."""
+    if not a:
+        return "—"
+    s = f"{a.get('standard')} / {a.get('method')} / {a.get('precondition')}"
+    return s + " (inferred precondition)" if a.get("precondition_inferred") else s
+
+
 def _poc_finding(spec: dict, verification: dict, function: str | None, target_name: str, category: str) -> Finding:
     verified = bool(verification.get("verified"))
     return Finding(
@@ -179,7 +203,9 @@ def _poc_finding(spec: dict, verification: dict, function: str | None, target_na
                  + ("succeeded" if verified else "did NOT confirm the issue")
                  + f" against {target_name}."),
         reasoning="Oracle: " + (verification.get("detail") or "—")
-        + (f"\nExit: {verification.get('exit_code')}" if verification.get("exit_code") is not None else ""),
+        + (f"\nExit: {verification.get('exit_code')}" if verification.get("exit_code") is not None else "")
+        + (f"\nAssurance: {_assurance_str(verification.get('assurance'))}"
+           if verification.get("assurance") else ""),
         evidence=Evidence(
             function=function,
             reproducer=json.dumps(spec),
@@ -188,6 +214,7 @@ def _poc_finding(spec: dict, verification: dict, function: str | None, target_na
                 "exit_code": verification.get("exit_code"),
                 "output": (verification.get("output") or "")[:2000],
                 "nonce": verification.get("nonce"),
+                "assurance": verification.get("assurance"),
             }},
         ),
         suggested_followups=[FollowupSuggestion(

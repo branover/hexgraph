@@ -311,6 +311,18 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-01: **Verification oracles Phase 0 — the two standards of "verified", built into the
+  engine** (`engine/assurance.py`). The engine now COMPUTES a per-PoC **assurance triple**
+  `{standard, method, precondition}` and records it on the finding (`evidence.extra.verification.
+  assurance` + the reasoning line) — so code-present (A) vs input-reachable (B) is differentiated
+  by code, not by prose handed to an agent. `verify_poc` (refactored: the binary path extracted to
+  `_verify_binary_poc`, all three flavours fall through to one assurance step) sets method=`dynamic`
+  always, standard=`input_reachable` when verified else `unconfirmed`, and a precondition that
+  honors a spec-declared value, else makes the WEAKEST honest inference (single unauth web step →
+  `unauthenticated`; login step/cookie/multi-step → `requires_credentials`; tcp → `unauthenticated`;
+  binary → `unspecified`) — never overstating "reachable for anyone". Tests: `test_assurance.py`
+  (the standard/method/precondition matrix, the finding records it, verify_poc attaches it e2e via a
+  fake runner). Next: Phase 1 (callback/canary listener + canary_read/oob_write oracle types).
 - 2026-06-01: **Verification-oracles design captured** ([`docs/design-verification-oracles.md`]
   (docs/design-verification-oracles.md)) — how to prove vuln classes BEYOND command-injection
   (memory-corruption RCE, DoS, read/write primitives, SSRF, blind variants) with unforgeable
