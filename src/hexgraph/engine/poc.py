@@ -146,7 +146,9 @@ def verify_poc(session: Session, project: Project, target: Target, spec: dict,
         result = _verify_binary_poc(session, project, target, live, runner, nonce)
 
     # Label what was actually proven (the engine decides this, not the caller): a PoC is a
-    # DYNAMIC method; a verified one establishes `input_reachable` under the spec's precondition.
+    # DYNAMIC method, but the SCOPE decides the standard — a verified live web/tcp surface PoC
+    # establishes `input_reachable`, while a verified isolated binary exec is `code_present`
+    # (lab-confirmed); see derive_poc_assurance / docs/design-verification-oracles.md.
     from hexgraph.engine.assurance import derive_poc_assurance
     result["assurance"] = derive_poc_assurance(result, live, is_web=is_web, is_tcp=is_tcp)
     return result
