@@ -26,7 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         snmp uml-utilities util-linux vlan \
         postgresql postgresql-client \
         mtd-utils gzip bzip2 arj lhasa p7zip p7zip-full cabextract cramfsswap \
-        squashfs-tools sleuthkit cpio lzop lzma srecord zlib1g-dev liblzma-dev liblzo2-dev \
+        squashfs-tools sleuthkit cpio lzop lzma srecord zlib1g-dev liblzma-dev liblzo2-dev liblz4-dev libzstd-dev \
         python3-magic unrar default-jdk \
         qemu-system-arm qemu-system-mips qemu-system-mipsel qemu-system-x86 qemu-utils \
     && rm -rf /var/lib/apt/lists/*
@@ -42,7 +42,16 @@ RUN wget -q https://github.com/ReFirmLabs/binwalk/archive/refs/tags/v2.3.4.tar.g
     && python3 setup.py install \
     && cd / && rm -rf v2.3.4.tar.gz binwalk-2.3.4
 
-# Clone FirmAE and fetch its prebuilt binaries (qemu kernels, sasquatch, console, etc.).
+# sasquatch (onekey-sec fork) — the patched unsquashfs FirmAE's extractor invokes by name to
+# unpack vendor/LZMA squashfs (most real vendor firmware; stock unsquashfs chokes on it).
+# FirmAE's download.sh doesn't reliably put it on PATH, so build + install it ourselves.
+RUN (git clone --depth 1 https://github.com/onekey-sec/sasquatch.git /tmp/sasquatch \
+        && make -C /tmp/sasquatch/squashfs-tools -j"$(nproc)" \
+        && install -m 0755 /tmp/sasquatch/squashfs-tools/sasquatch /usr/local/bin/sasquatch \
+        && rm -rf /tmp/sasquatch) \
+    || echo "WARN: sasquatch build failed; vendor-LZMA squashfs extraction degraded"
+
+# Clone FirmAE and fetch its prebuilt binaries (qemu kernels, console, etc.).
 ARG FIRMAE_REF=master
 RUN git clone --depth 1 --branch "${FIRMAE_REF}" https://github.com/pr0v3rbs/FirmAE /FirmAE
 WORKDIR /FirmAE

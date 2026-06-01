@@ -710,7 +710,12 @@ def rehost(target_id: str, brand: str | None = None) -> dict:
     is auto-selected from the image: qemu+KVM for a full-OS disk image (boots its own kernel),
     FirmAE for a vendor firmware blob (extracts the rootfs + supplies a kernel). Returns
     {surface_id, base_url}. Requires features.rehost (to boot) — and features.network to then
-    talk to it. Heavy + best-effort: many images don't boot cleanly; the error says so."""
+    talk to it. Heavy + best-effort: many images don't boot cleanly; the error says so.
+
+    `brand` (FirmAE path only): the device vendor — linksys/netgear/dlink/tplink/tenda/… —
+    FirmAE keys its network-inference NVRAM profiles on it. It's auto-inferred from the
+    firmware's strings when present, but if rehost reports it couldn't bring up the device
+    network, RETRY with the right brand explicitly (a stripped image won't name its vendor)."""
     from hexgraph.engine.rehost import RehostError, rehost_firmware
     from hexgraph.policy import PolicyViolation
 
@@ -1062,7 +1067,7 @@ _CATALOG = [
      {"type": "object", "properties": {"path": {"type": "string"}, "name": {"type": "string"}, "project_id": {"type": "string"}}, "required": ["path"]}),
     ("run", "run_task", run_task, "Run a HexGraph task and return its findings. Types: recon, static_analysis, harness_generation, fuzzing, poc, surface_recon (offline route->handler map from a supplied spec), web_discover (LIVE crawl that DISCOVERS routes/params from links+forms+common paths — use this on a rehosted/registered surface, needs features.network), web_recon (live liveness probe, needs features.network).",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "type": {"type": "string"}, "objective": {"type": "string"}, "params": {"type": "object"}}, "required": ["target_id", "type"]}),
-    ("run", "rehost", rehost, "Boot a FIRMWARE target under full-system emulation — auto-selects qemu+KVM for a full-OS disk image (.vmdk/.qcow2/partitioned .img) or FirmAE for a vendor blob (squashfs/cramfs/…) — and register its live web server as a web_app surface child, then assess the running device with surface_recon/web_recon/http_request/verify_poc, fused to the firmware's static graph. Requires features.rehost (boot) + features.network (assess). Heavy + best-effort.",
+    ("run", "rehost", rehost, "Boot a FIRMWARE target under full-system emulation — auto-selects qemu+KVM for a full-OS disk image (.vmdk/.qcow2/partitioned .img) or FirmAE for a vendor blob (squashfs/cramfs/…) — and register its live web server as a web_app surface child, then assess the running device with surface_recon/web_discover/http_request/verify_poc, fused to the firmware's static graph. For a FirmAE/vendor image, pass `brand` (linksys/netgear/dlink/tplink/tenda/…) if it reports it couldn't bring up the network (FirmAE's profile is vendor-keyed; auto-inferred when the firmware names its vendor). Requires features.rehost (boot) + features.network (assess). Heavy + best-effort.",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "brand": {"type": "string"}}, "required": ["target_id"]}),
     ("run", "register_remote", register_remote, "Register a LIVE remote device (physical box or rehosted device) as a `remote` target reached over SSH/telnet — then analyze it read-only with remote_list_files/remote_read_file/remote_run. Creds come from operator env/config (HEXGRAPH_REMOTE_PASSWORD/KEY or config.toml [remote]), never stored. Requires features.remote.",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "host": {"type": "string"}, "port": {"type": "integer"}, "username": {"type": "string"}, "transport": {"type": "string"}, "name": {"type": "string"}}, "required": ["project_id", "host"]}),

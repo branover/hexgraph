@@ -73,6 +73,33 @@ def _image_present(image: str) -> bool:
     return r.returncode == 0
 
 
+# Vendor token (lowercased, as it appears in firmware strings) → FirmAE brand. FirmAE keys
+# its NVRAM/network-inference profiles on the brand, so getting it right is often the
+# difference between "no device IP" and a clean boot.
+_VENDOR_BRANDS = [
+    (b"linksys", "linksys"), (b"netgear", "netgear"), (b"d-link", "dlink"), (b"dlink", "dlink"),
+    (b"tp-link", "tplink"), (b"tplink", "tplink"), (b"tenda", "tenda"), (b"trendnet", "trendnet"),
+    (b"zyxel", "zyxel"), (b"belkin", "belkin"), (b"asuswrt", "asus"), (b"asus", "asus"),
+    (b"mikrotik", "mikrotik"), (b"ubiquiti", "ubiquiti"), (b"openwrt", "openwrt"),
+    (b"dd-wrt", "ddwrt"), (b"buffalo", "buffalo"), (b"actiontec", "actiontec"),
+]
+
+
+def _infer_brand(firmware_path: str) -> str | None:
+    """Best-effort vendor brand from the firmware's own bytes (first 24 MB, case-insensitive)
+    — so plain rehost() picks the right FirmAE profile instead of failing network inference.
+    Returns None when nothing matches (FirmAE then runs with its 'auto' path)."""
+    try:
+        with open(firmware_path, "rb") as fh:
+            blob = fh.read(24 << 20).lower()
+    except OSError:
+        return None
+    for token, brand in _VENDOR_BRANDS:
+        if token in blob:
+            return brand
+    return None
+
+
 class FirmAERehoster(Rehoster):
     """Drive FirmAE inside a privileged Docker container (it bundles qemu-system + kernels).
     Our `hexgraph-firmae` image's entrypoint runs FirmAE's analyze+run on the mounted
@@ -98,6 +125,11 @@ class FirmAERehoster(Rehoster):
         if not os.path.isfile(firmware_path):
             raise RehostError(f"firmware not found: {firmware_path}")
 
+        # FirmAE's network-inference uses per-VENDOR NVRAM/boot profiles; with no brand it
+        # often can't bring the network up (observed on DVRF: auto → "no device IP", but
+        # brand=linksys boots fine). So if the caller didn't name a brand, infer it from the
+        # firmware's own strings (e.g. an E1550 image contains "linksys") before falling back.
+        brand = brand or _infer_brand(firmware_path)
         name = f"hexgraph-firmae-{uuid.uuid4().hex[:10]}"
         budget = int(timeout or self.timeout)
         # Privileged + /dev/net/tun: FirmAE creates a tap and runs qemu-system. The
@@ -122,7 +154,10 @@ class FirmAERehoster(Rehoster):
         ip = info.get("ip")
         if not ip:
             self.stop(name)
-            raise RehostError("FirmAE booted but reported no device IP")
+            hint = (f" (tried brand={brand!r})" if brand else
+                    " — FirmAE's network inference is vendor-keyed; retry with the device's "
+                    "brand, e.g. rehost(..., brand='linksys'|'netgear'|'dlink'|'tplink'|'tenda')")
+            raise RehostError(f"FirmAE booted but couldn't bring up the device network{hint}")
         if not info.get("web"):
             # leave the container up for diagnosis is unhelpful; tear down + report
             self.stop(name)
