@@ -33,6 +33,7 @@ frozen finding schema.
 from __future__ import annotations
 
 import secrets
+import urllib.parse
 
 from sqlalchemy.orm import Session
 
@@ -56,6 +57,47 @@ def is_new_oracle(spec: dict) -> bool:
 
 def fresh_canary() -> str:
     return _CANARY_PREFIX + secrets.token_hex(10)
+
+
+def _steps_of(spec: dict) -> list:
+    """The request step(s) the EXPLOIT submits (web/single-request shape)."""
+    return (spec or {}).get("steps") or ([spec["request"]] if (spec or {}).get("request") else [])
+
+
+def _request_echoes(req: dict) -> list[str]:
+    """Everything a request SUBMITTED (path, query/body values), raw + URL/HTML-encoded — so a
+    server's reflection of our own input can be stripped from a response before matching. Mirrors
+    http_probe._echoed_strings; the shared principle that keeps these oracles unforgeable."""
+    if not isinstance(req, dict):
+        return []
+    vals: list[str] = []
+    if req.get("path"):
+        vals.append(str(req["path"]))
+    body = req.get("body")
+    if isinstance(body, dict):
+        vals += [str(v) for v in body.values()]
+    elif isinstance(body, (str, bytes)):
+        vals.append(body.decode() if isinstance(body, bytes) else body)
+    for v in (req.get("params") or {}).values():
+        vals.append(str(v))
+    out: list[str] = []
+    for v in vals:
+        if not v:
+            continue
+        out += [v, urllib.parse.quote(v), urllib.parse.quote_plus(v),
+                v.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")]
+    return out
+
+
+def _strip_reflections(text: str, requests) -> str:
+    """Remove the verification path's own submitted input (reflections) from `text` before the
+    oracle matches its secret. A value that survives stripping was PRODUCED by the target (a real
+    read/write), not echoed back from what we sent — this is what closes the reflection-forgery."""
+    for req in requests or []:
+        for echo in _request_echoes(req):
+            if echo:
+                text = text.replace(echo, "")
+    return text
 
 
 # --------------------------------------------------------------------------------------
@@ -138,16 +180,16 @@ def _plant(session: Session, project: Project, target: Target, *, channel: str, 
            value: str) -> None:
     """Plant a canary out-of-band so the exploit's read primitive must retrieve it. Only the
     `rootfs` channel can WRITE (filesystem); `remote`/`http` are read-only here, so canary_read
-    over them must instead read an EXISTING secret the verifier reads independently (see
-    `known_value`)."""
+    over them must instead read an EXISTING secret HexGraph reads independently (see
+    `plant.known={channel,path}`)."""
     channel = (channel or "").lower()
     if channel == "rootfs":
         _rootfs_plant(session, project, target, path, value)
         return
     raise ValueError(
         f"cannot PLANT a canary over channel {channel!r} — only 'rootfs' supports an OOB write. "
-        "For a live remote/web target, supply `plant.known_value` (a secret HexGraph reads "
-        "independently) instead of planting one.")
+        "For a live remote/web target, supply `plant.known={channel,path}` (an existing secret "
+        "HexGraph reads out-of-band) instead of planting one.")
 
 
 def _rootfs_plant(session: Session, project: Project, target: Target, rel: str | None, value: str) -> None:
@@ -205,22 +247,50 @@ def verify_oob_write(session, project, target, spec, runner, nonce, *, is_web, i
         return {"verified": False, "detail": f"oob_write read-back error: {exc}",
                 "exit_code": run.get("exit_code"), "output": run.get("output"),
                 "nonce": nonce, "spec": spec}
-    verified = bool(nonce) and nonce in content
+    # Reflection-strip the READ-BACK's own request from its response before matching. For
+    # rootfs/remote the read-back is a direct file read (no request to echo); for the `http`
+    # channel a reflective read-back endpoint could echo a nonce we put in its params — strip
+    # that, so a match means the nonce was genuinely WRITTEN to the location, not reflected.
+    matchable = _strip_reflections(content, [oracle.get("request")] if oracle.get("request") else [])
+    verified = bool(nonce) and nonce in matchable
+    note = ""
+    if not verified and bool(nonce) and nonce in content:
+        note = " [present only as reflected read-back input — not proof of a write]"
     return {"verified": verified, "exit_code": run.get("exit_code"),
             "output": (content or "")[:2000], "nonce": nonce, "spec": spec,
             "detail": (f"oob_write: nonce {'FOUND' if verified else 'NOT found'} at the "
                        f"independently-read {oracle.get('channel')} location "
-                       f"{oracle.get('path') or oracle.get('request')!r}")}
+                       f"{oracle.get('path') or oracle.get('request')!r}{note}")}
 
 
 def verify_canary_read(session, project, target, spec, runner, nonce, *, is_web, is_tcp) -> dict:
-    """canary_read: PLANT a random canary out-of-band (or use a verifier-read `known_value`)
-    BEFORE running the read exploit, then check the exploit's response contains it.
-    `spec.plant = {channel, path?, known_value?}`, `spec.oracle = {type:'canary_read'}`."""
+    """canary_read: establish a secret OUT-OF-BAND, then check the read exploit retrieves it.
+    Two forms (both unforgeable — HexGraph knows the value, the agent/exploit does not):
+      - `spec.plant = {channel:'rootfs', path}` → plant a FRESH random canary at `path`.
+      - `spec.plant = {known:{channel,path|request}}` → read an EXISTING secret out-of-band; that
+        read IS the ground truth. (An agent-supplied `known_value` literal is REJECTED — it could
+        be reflected.) `spec.oracle = {type:'canary_read'}`. The exploit's request references the
+        PATH, never the value, and the response is reflection-stripped before matching."""
     plant = spec.get("plant") or {}
-    known = plant.get("known_value")
+    if plant.get("known_value") is not None:
+        # An agent-supplied literal is NOT ground truth — a reflective endpoint would echo it and
+        # forge the read. Require HexGraph to establish the value out-of-band instead.
+        return {"verified": False, "exit_code": None, "output": "", "nonce": nonce, "spec": spec,
+                "detail": "canary_read: `plant.known_value` (an agent literal) is not accepted — "
+                          "use `plant.known={channel,path}` so HexGraph reads the ground-truth "
+                          "secret out-of-band, or `plant={channel:'rootfs',path}` to plant a fresh canary."}
+    known = plant.get("known")
     if known:
-        canary = str(known)  # verifier knows this ground truth independently; don't plant
+        # Read an EXISTING secret out-of-band → that read IS the ground truth (the agent never sees it).
+        try:
+            canary = _read_back(session, project, target, channel=(known.get("channel")),
+                                path=known.get("path"), request=known.get("request"), runner=runner).strip()
+        except ValueError as exc:
+            return {"verified": False, "detail": f"canary_read known-secret read error: {exc}",
+                    "exit_code": None, "output": "", "nonce": nonce, "spec": spec}
+        if not canary:
+            return {"verified": False, "exit_code": None, "output": "", "nonce": nonce, "spec": spec,
+                    "detail": "canary_read: the known-secret read returned nothing — no ground truth to match."}
     else:
         canary = fresh_canary()
         try:
@@ -230,18 +300,19 @@ def verify_canary_read(session, project, target, spec, runner, nonce, *, is_web,
             return {"verified": False, "detail": f"canary_read plant error: {exc}",
                     "exit_code": None, "output": "", "nonce": nonce, "spec": spec}
 
-    # The exploit reads the canary back. Substitute the canary anywhere the spec references it
-    # via {{CANARY}} (e.g. a traversal path the verifier chose), so the exploit targets exactly
-    # where we planted. The in-band response is the channel here (a read primitive's whole point
-    # is to return data), but the value is one HexGraph established out-of-band → unforgeable.
-    sub = _sub_token(spec, "{{CANARY}}", canary)
-    run = run_exploit(session, project, target, sub, runner, is_web=is_web, is_tcp=is_tcp)
+    # Run the read exploit AS WRITTEN — its request references the PATH where the canary lives
+    # (a traversal the agent chose), NOT the canary VALUE. We deliberately do NOT substitute the
+    # canary into the request: the value is a fresh random HexGraph established out-of-band, so the
+    # exploit cannot know it, and a reflective endpoint cannot echo it. Belt-and-suspenders, we
+    # also strip the exploit request's own reflections from the response before matching.
+    run = run_exploit(session, project, target, spec, runner, is_web=is_web, is_tcp=is_tcp)
     body = str(run.get("output") or "")
-    verified = canary in body
+    matchable = _strip_reflections(body, _steps_of(spec))
+    verified = bool(canary) and canary in matchable
     return {"verified": verified, "exit_code": run.get("exit_code"),
             "output": body[:2000], "nonce": nonce, "spec": spec,
-            "detail": (f"canary_read: planted canary {'RETRIEVED' if verified else 'NOT retrieved'} "
-                       f"by the read primitive (ground truth established out-of-band)")}
+            "detail": (f"canary_read: out-of-band-established secret {'RETRIEVED' if verified else 'NOT retrieved'} "
+                       f"by the read primitive (value never sent in the request → not reflection-forgeable)")}
 
 
 def verify_callback(session, project, target, spec, runner, nonce, *, is_web, is_tcp) -> dict:
@@ -264,12 +335,12 @@ def verify_callback(session, project, target, spec, runner, nonce, *, is_web, is
     # tool. The denial is audited and PROPAGATES (like _egress_gate / assert_allows_execution) —
     # the MCP/CLI layer turns it into the "enable features.network" message. No gate is relaxed
     # outside the policy seam.
-    dest = f"{bind_host}:0"  # provisional; the audited dest is refined once bound
+    gate_scope = local_tcp_scope(bind_host, 1)  # port-independent: the gate is host/network-level
     try:
-        assert_allows_egress(next(iter(local_tcp_scope(bind_host, 1).allow)),
-                             local_tcp_scope(bind_host, 1), current_policy())
+        assert_allows_egress(next(iter(gate_scope.allow)), gate_scope, current_policy())
     except PolicyViolation:
-        record_egress(session, project_id=project.id, target_id=target.id, dest=dest, allowed=False,
+        record_egress(session, project_id=project.id, target_id=target.id,
+                      dest=f"{bind_host} (callback listener, pre-bind)", allowed=False,
                       tool="callback_listener",
                       detail="blocked: callback listener requires the bounded-network tier")
         raise

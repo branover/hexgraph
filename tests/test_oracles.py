@@ -132,6 +132,30 @@ def test_oob_write_rootfs_read_is_traversal_safe(hg_home, tmp_path):
             oracles._rootfs_read(s, p, fw, "../../../../etc/passwd")
 
 
+def test_oob_write_http_not_forgeable_by_reflection(hg_home):
+    """oob_write over the http read-back channel: a reflective read-back endpoint that echoes its
+    OWN request params (which an attacker loaded with {{NONCE}}) must NOT verify — the read-back's
+    reflections are stripped before matching, so only a genuinely-WRITTEN nonce counts."""
+    _enable_net()
+
+    class ReflectReadBack:
+        def run_channel_probe(self, probe, *, channel, net_container=None, secret=None):
+            req = channel.get("request")
+            if req:  # the read-back GET — echo its params back (the forgery attempt)
+                echo = " ".join(str(v) for v in (req.get("params") or {}).values())
+                return {"response": {"status": 200, "body": echo}}
+            return {"steps": [{"status": 200, "body": "written"}]}  # the exploit write step
+
+    with session_scope() as s:
+        p = create_project(s, name="oob_refl")
+        t = _web(s, p)
+        spec = {"steps": [{"method": "POST", "path": "/noop", "body": {"x": "{{NONCE}}"}}],
+                "oracle": {"type": "oob_write", "channel": "http",
+                           "request": {"method": "GET", "path": "/search", "params": {"q": "{{NONCE}}"}}}}
+        out = verify_poc(s, p, t, spec, runner=ReflectReadBack())
+        assert out["verified"] is False
+
+
 # ── canary_read ────────────────────────────────────────────────────────────────────────
 
 class ReadRunner:
@@ -192,14 +216,14 @@ def test_canary_read_not_forgeable_with_wrong_value(hg_home, monkeypatch):
         assert out["verified"] is False
 
 
-def test_canary_read_known_value_no_plant_needed(hg_home):
-    """For a live target where HexGraph can't WRITE a canary, it may instead supply a
-    `known_value` it read independently (e.g. an /etc/shadow line); the exploit must return it."""
+def test_canary_read_rejects_agent_known_value_literal(hg_home):
+    """An agent-supplied `known_value` literal is NOT ground truth (a reflective endpoint could
+    echo it) — the oracle REJECTS it and directs to plant or read a known secret out-of-band."""
     _enable_net()
 
-    class EchoKnown:
+    class Echo:
         def run_channel_probe(self, probe, *, channel, net_container=None, secret=None):
-            return {"steps": [{"status": 200, "body": "root:$6$KNOWNHASH:0:0"}]}
+            return {"steps": [{"status": 200, "body": "$6$KNOWNHASH"}]}
 
     with session_scope() as s:
         p = create_project(s, name="canary3")
@@ -207,31 +231,60 @@ def test_canary_read_known_value_no_plant_needed(hg_home):
         spec = {"plant": {"known_value": "$6$KNOWNHASH"},
                 "steps": [{"method": "GET", "path": "/download?f=../../etc/shadow"}],
                 "oracle": {"type": "canary_read"}}
-        out = verify_poc(s, p, t, spec, runner=EchoKnown())
+        out = verify_poc(s, p, t, spec, runner=Echo())
+        assert out["verified"] is False and "known_value" in out["detail"]
+
+
+def test_canary_read_known_secret_read_out_of_band(hg_home):
+    """The `known` form: HexGraph reads the ground-truth secret OUT-OF-BAND (here over http), then
+    the exploit must return it. The agent never sees the value, so it can't be reflection-forged."""
+    _enable_net()
+    SECRET = "S3cr3t_FROM_DEVICE_ABC123"
+
+    class ReturnsSecret:
+        def run_channel_probe(self, probe, *, channel, net_container=None, secret=None):
+            if channel.get("request"):                       # the OOB known-read (run_http_request)
+                return {"response": {"status": 200, "body": SECRET}}
+            return {"steps": [{"status": 200, "body": f"...{SECRET}..."}]}  # the exploit read
+
+    with session_scope() as s:
+        p = create_project(s, name="canary_known")
+        t = _web(s, p)
+        spec = {"plant": {"known": {"channel": "http", "request": {"method": "GET", "path": "/secret"}}},
+                "steps": [{"method": "GET", "path": "/download?f=../../secret"}],
+                "oracle": {"type": "canary_read"}}
+        out = verify_poc(s, p, t, spec, runner=ReturnsSecret())
         assert out["verified"] is True
 
 
-def test_canary_read_substitutes_canary_token(hg_home, monkeypatch):
-    """A {{CANARY}} token in the spec is replaced with the planted value before running, so the
-    exploit can target exactly where HexGraph planted."""
+def test_canary_read_not_forgeable_by_reflection(hg_home, monkeypatch):
+    """The canary VALUE is never placed in the exploit request, so a maliciously-REFLECTIVE target
+    (echoing the request back) cannot produce it → must NOT verify. This is the forgery the
+    previous {{CANARY}}-into-the-request design allowed."""
     _enable_net()
     from hexgraph.engine import oracles
-    seen = {}
-    monkeypatch.setattr(oracles, "_plant", lambda *a, **k: None)
+    planted = {"value": None}
+    monkeypatch.setattr(oracles, "_plant",
+                        lambda session, project, target, *, channel, path, value: planted.__setitem__("value", value))
 
-    class CaptureRunner:
+    class ReflectRunner:
+        def __init__(self): self.seen = None
         def run_channel_probe(self, probe, *, channel, net_container=None, secret=None):
-            seen["path"] = channel["steps"][0]["path"]
-            return {"steps": [{"status": 200, "body": "x"}]}
+            self.seen = channel
+            step = channel["steps"][0]
+            echo = str(step.get("path", "")) + " " + " ".join(str(v) for v in (step.get("params") or {}).values())
+            return {"steps": [{"status": 200, "body": echo}]}  # reflect the request — the attack
 
     with session_scope() as s:
-        p = create_project(s, name="canary4")
+        p = create_project(s, name="canary_refl")
         t = _web(s, p)
+        r = ReflectRunner()
         spec = {"plant": {"channel": "rootfs", "path": "/www/c.txt"},
-                "steps": [{"method": "GET", "path": "/read?marker={{CANARY}}"}],
+                "steps": [{"method": "GET", "path": "/read?f=../../www/c.txt", "params": {"x": "anything"}}],
                 "oracle": {"type": "canary_read"}}
-        verify_poc(s, p, t, spec, runner=CaptureRunner())
-        assert "HEXGRAPH_CANARY_" in seen["path"] and "{{CANARY}}" not in seen["path"]
+        out = verify_poc(s, p, t, spec, runner=r)
+        assert planted["value"] not in str(r.seen)   # the value never reached the request
+        assert out["verified"] is False               # so reflection can't forge the read
 
 
 # ── callback (unit, faked exploit) ───────────────────────────────────────────────────────
