@@ -67,6 +67,21 @@ that haven't been analyzed yet.
   tool to flip it yourself.)
 - Go deeper with `run_task` (`static_analysis`, `harness_generation`, `fuzzing`),
   and **`verify_poc`** to PROVE exploitability (a confirmed PoC is the gold bar).
+  - **Fuzzing is coverage-guided when source is available.** If you pass the target's own
+    `.c`/`.cc` source(s) (task param `target_sources`, or recorded on the target as
+    `metadata_json.fuzz_target_sources`), HexGraph compiles them WITH the harness under
+    SanitizerCoverage+ASan — libFuzzer then gets real coverage feedback from the code under
+    test. With only a prebuilt, uninstrumented `.so` it still runs, but coverage-BLIND.
+    (You can also pass a `seeds` param — host paths of known/interesting inputs — to jump-start
+    the fuzzer past trivial input gates.)
+    Each `fuzz_crash` finding records this on `evidence.extra.fuzz`: a deterministic
+    `exploitability` rating (likely_exploitable / probably_exploitable / info_leak / dos —
+    read from the ASan report, no LLM), a normalized-stack-hash `dedup_key` (one finding per
+    unique root cause; `dupe_count` = how many inputs collapsed onto it), a **minimized
+    reproducer** (`minimized_reproducer_sha`, shrunk with libFuzzer's own -minimize_crash),
+    and a `coverage_instrumented` flag. **Trust the flag:** when `coverage_instrumented=false`
+    it was a black-box run — do NOT overstate coverage or completeness. `list_findings` shows
+    a compact `fuzz` summary; `get_finding` returns the full `evidence.extra.fuzz`.
 
 ## 2b. Live web / service surfaces (routers, admin consoles, APIs)
 Many firmware bugs live in a web app, not just the binary. If you're given a base

@@ -319,7 +319,30 @@ Two feature cards (same toggle grammar as the Ghidra/fuzzing cards): **Source & 
 
 Each phase is independently shippable through the worktree→PR-review-subagent→merge gate, ships green `just test` (mock `MockFuzzer`/`MockBuilder` fixtures keep it offline/$0; Docker-gated tests skip without the image), updates `PROGRESS.md`, and ships its Alembic migration with any model change.
 
-**Phase 0 — Instrument the target + better triage (immediate, biggest bang-for-buck, no new subsystem).** When a `.so`/source is present, build the *target* with `-fsanitize=fuzzer-no-link,address` so SanCov+ASan are in the target's own objects. Replace `(kind, frame0)` dedup with the normalized stack-hash + bucketing; add `afl-tmin` reproducer minimization; add the deterministic exploitability classifier. All in `engine/fuzzing.py` + `fuzz_probe.py` on the existing image (clang already present). *No schema change.* Makes today's fuzzing immediately less coverage-blind and far less noisy. *Risk:* low.
+**Phase 0 — Instrument the target + better triage (immediate, biggest bang-for-buck, no new subsystem). — ✅ DONE.** When a `.so`/source is present, build the *target* with `-fsanitize=fuzzer-no-link,address` so SanCov+ASan are in the target's own objects. Replace `(kind, frame0)` dedup with the normalized stack-hash + bucketing; add `afl-tmin` reproducer minimization; add the deterministic exploitability classifier. All in `engine/fuzzing.py` + `fuzz_probe.py` on the existing image (clang already present). *No schema change.* Makes today's fuzzing immediately less coverage-blind and far less noisy. *Risk:* low.
+
+> **Shipped (`build/fuzz-phase0`).** `fuzz_probe.py` now compiles target SOURCE (`--target-source=`)
+> under `-fsanitize=fuzzer-no-link,address` and links it into the libFuzzer harness → real
+> coverage-guided fuzzing; with only an uninstrumented `.so` it stays coverage-blind and reports
+> `coverage_instrumented=false` (honest — instrumenting a prebuilt binary is the later AFL++
+> qemu-mode phase). Crash dedup is a **normalized stack-hash** (`dedup_key`): top-N ASan frames with
+> addresses / module offsets / build paths / line:col / anon-namespace+template noise / sanitizer
+> interceptor frames stripped, stopped at the program-entry frame — deterministic and
+> path-independent; one finding per bucket with a `dupe_count`. Reproducers are minimized with
+> libFuzzer's own `-minimize_crash=1 -runs=R` (no AFL++ / afl-tmin needed — they aren't in the
+> existing image; the design's afl-tmin mention is satisfied by libFuzzer here per the Phase-0 brief).
+> A deterministic, documented **exploitability classifier** reads the sanitizer report (READ vs WRITE,
+> UAF/double-free, SEGV near-PC, stack-overflow recursion, OOM/leak/timeout) → `{rating, access,
+> signals}`, which refines severity. Engine `resolve_target_sources` mounts source from the task param
+> `target_sources` or `target.metadata_json.fuzz_target_sources`. Everything new rides
+> `evidence.extra.fuzz` (frozen schema untouched, no migration). `derive_fuzz_assurance()` semantics
+> unchanged (`code_present/dynamic`). Tests: `test_fuzz_triage.py` (pure dedup + classifier +
+> severity), extended `test_fuzzing.py` (the `evidence.extra.fuzz` envelope, source-mount vs lib-link,
+> `resolve_target_sources`), and Docker-gated `test_fuzz_e2e.py` (an instrumented build finds +
+> classifies a planted heap-write bug). **Known limit:** the base sandbox image ships no
+> `llvm-symbolizer`, so ASan frames are module+offset at runtime — within-run dedup is still
+> deterministic, but symbolized cross-build dedup / function attribution awaits the dedicated
+> `hexgraph-fuzz` image (Phase 3+).
 
 **Phase 1 — Source-tree foundation + IDE browse (no exec, no new gate).** `source_tree` table (0012) + `source_file` node vocab + lazy materialization (`engine/source.py`, mirroring `filesystem.py`); `built_from`/`located_in`/`harnesses` edges; the `EDGE_KINDS` widening lands here if `source_tree` becomes an endpoint, else with 0014; the read-only Source tab (extract `<FileTree>`, the Graph⇆Source switch, finding→source jump); promote existing transient harnesses to `source_file`s (backfill, back-compat read path). *Risk:* the `EDGE_KINDS` validator change touches `authoring.py`+`edges.py` — keep it minimal and well-tested.
 
