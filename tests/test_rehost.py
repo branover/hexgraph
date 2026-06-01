@@ -8,10 +8,55 @@ from hexgraph import policy, settings
 from hexgraph.db.models import EgressEvent, Target, TargetKind
 from hexgraph.db.session import session_scope
 from hexgraph.engine.ingest import create_project, ingest_file
-from hexgraph.engine.rehost import RehostResult, get_rehoster, rehost_firmware
+from hexgraph.engine.rehost import (FirmAERehoster, QemuDiskRehoster, RehostResult,
+                                    _looks_like_disk_image, get_rehoster, rehost_firmware,
+                                    select_rehoster)
 from hexgraph.engine.surfaces import _rehost_container
 
 from conftest import fixture_path
+
+
+def _write(tmp_path, name, data: bytes) -> str:
+    p = tmp_path / name
+    p.write_bytes(data)
+    return str(p)
+
+
+def test_looks_like_disk_image(tmp_path):
+    # MBR with a non-empty partition entry (type 0x83) + boot signature → disk image
+    mbr = bytearray(512)
+    mbr[450] = 0x83  # partition 1 type byte (offset 446 + 4)
+    mbr[510], mbr[511] = 0x55, 0xAA
+    assert _looks_like_disk_image(_write(tmp_path, "disk.img", bytes(mbr) + b"\x00" * 1024))
+    # qcow2 + vmdk magics, GPT
+    assert _looks_like_disk_image(_write(tmp_path, "a.qcow2", b"QFI\xfb" + b"\x00" * 100))
+    assert _looks_like_disk_image(_write(tmp_path, "a.bin", b"KDMV" + b"\x00" * 100))
+    assert _looks_like_disk_image(_write(tmp_path, "g.bin", b"\x00" * 512 + b"EFI PART" + b"\x00" * 100))
+    # extension-based for VM containers
+    assert _looks_like_disk_image(_write(tmp_path, "x.vmdk", b"random"))
+    # a vendor squashfs blob is NOT a disk image → FirmAE
+    assert not _looks_like_disk_image(_write(tmp_path, "fw.bin", b"hsqs" + b"\x00" * 2048))
+    assert not _looks_like_disk_image(_write(tmp_path, "u.bin", b"\x27\x05\x19\x56" + b"\x00" * 64))  # uImage
+
+
+def test_select_rehoster_routes_by_image_type(tmp_path, monkeypatch):
+    monkeypatch.delenv("HEXGRAPH_REHOSTER", raising=False)
+    disk = _write(tmp_path, "d.vmdk", b"KDMV")
+    blob = _write(tmp_path, "f.bin", b"hsqs" + b"\x00" * 64)
+    assert select_rehoster(disk).name == "qemu"
+    assert select_rehoster(blob).name == "firmae"
+    # explicit override wins
+    monkeypatch.setenv("HEXGRAPH_REHOSTER", "firmae")
+    assert select_rehoster(disk).name == "firmae"
+
+
+def test_get_rehoster_by_name_and_auto(tmp_path, monkeypatch):
+    monkeypatch.delenv("HEXGRAPH_REHOSTER", raising=False)
+    assert isinstance(get_rehoster(name="qemu"), QemuDiskRehoster)
+    assert isinstance(get_rehoster(name="firmae"), FirmAERehoster)
+    assert get_rehoster(firmware_path=_write(tmp_path, "d.qcow2", b"QFI\xfb")).name == "qemu"
+    with pytest.raises(ValueError):
+        get_rehoster(name="bogus")
 
 
 class _FakeRehoster:

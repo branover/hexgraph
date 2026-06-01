@@ -115,7 +115,7 @@ class FirmAERehoster(Rehoster):
         if run.returncode != 0:
             raise RehostError(f"failed to start FirmAE container: {run.stderr.strip()[:400]}")
         try:
-            info = self._await_marker(name, budget)
+            info = _await_marker(name, budget, label="FirmAE")
         except Exception:
             self.stop(name)
             raise
@@ -132,37 +132,144 @@ class FirmAERehoster(Rehoster):
         return RehostResult(ip=ip, base_url=base, handle=name,
                             detail=info.get("detail", f"FirmAE emulated the firmware at {ip}"))
 
-    def _await_marker(self, name: str, budget: int) -> dict:
-        """Follow the container logs until the entrypoint prints the HEXGRAPH_REHOST line
-        (bounded by `budget`)."""
-        proc = subprocess.Popen(["docker", "logs", "-f", name], stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, text=True)
-        import time
-        deadline = time.monotonic() + budget
+    def stop(self, handle: str) -> None:
+        _stop_container(handle)
+
+
+class QemuDiskRehoster(Rehoster):
+    """Boot a FULL-OS disk image (a bootable VM disk: .vmdk/.qcow2/.vdi or a
+    partitioned .img — e.g. an x86 OpenWrt/IoTGoat image) under qemu-system + KVM. Unlike
+    FirmAE, this runs the image's OWN kernel + init as-is, so a normal OS (procd/ubus/
+    uhttpd on OpenWrt) comes up — the right tool for full disk images, where FirmAE (built
+    for vendor squashfs blobs with a provided kernel) can't bring the network up.
+
+    The guest's web port is hostfwd'd to 127.0.0.1:<port> inside the container; HexGraph's
+    probe joins that netns to reach it. KVM via --device /dev/kvm; no privilege needed."""
+
+    name = "qemu"
+
+    def __init__(self) -> None:
+        from hexgraph import settings
+
+        self.image = settings.get("features.rehost.qemu_image", "hexgraph-qemu:latest")
+        self.timeout = int(settings.get("features.rehost.timeout", 600) or 600)
+
+    def rehost(self, firmware_path: str, *, brand: str | None = None,
+               timeout: int | None = None) -> RehostResult:
+        if not _docker_available():
+            raise RehostUnavailable("Docker is not running — rehosting needs it.")
+        if not _image_present(self.image):
+            raise RehostUnavailable(
+                f"qemu rehoster image {self.image!r} not found — build it (make qemu-build) "
+                "or set features.rehost.qemu_image.")
+        if not os.path.isfile(firmware_path):
+            raise RehostError(f"firmware not found: {firmware_path}")
+        if not os.path.exists("/dev/kvm"):
+            raise RehostUnavailable("/dev/kvm is not available — KVM acceleration is required.")
+
+        name = f"hexgraph-qemu-{uuid.uuid4().hex[:10]}"
+        budget = int(timeout or self.timeout)
+        cmd = [
+            "docker", "run", "-d", "--name", name, "--device", "/dev/kvm",
+            "-v", f"{os.path.abspath(firmware_path)}:/firmware/image.bin:ro",
+            self.image,
+        ]
+        run = subprocess.run(cmd, capture_output=True, text=True)
+        if run.returncode != 0:
+            raise RehostError(f"failed to start qemu container: {run.stderr.strip()[:400]}")
         try:
-            for line in proc.stdout:  # type: ignore[union-attr]
-                if _MARKER in line:
-                    m = re.search(_MARKER + r"\s+(\{.*\})", line)
-                    if m:
-                        return json.loads(m.group(1))
-                if time.monotonic() > deadline:
-                    raise RehostError(f"firmware did not boot within {budget}s")
-            raise RehostError("FirmAE exited before the device came up (boot failed)")
-        finally:
-            proc.kill()
+            info = _await_marker(name, budget, label="qemu")
+        except Exception:
+            self.stop(name)
+            raise
+        if not info.get("web"):
+            self.stop(name)
+            raise RehostError(info.get("detail") or "qemu booted but no web service answered")
+        ip = info.get("ip") or "127.0.0.1"
+        port = info.get("port") or 80
+        base = f"http://{ip}" if port == 80 else f"http://{ip}:{port}"
+        return RehostResult(ip=ip, base_url=base, handle=name,
+                            detail=info.get("detail", "qemu disk-image emulation"))
 
     def stop(self, handle: str) -> None:
-        # `docker stop` sends SIGTERM first, so the entry script's trap detaches the loop
-        # devices it created (they're a global kernel resource — a hard `rm -f`/SIGKILL
-        # would leak them and poison the next run). Then remove the container.
-        subprocess.run(["docker", "stop", "-t", "15", handle], capture_output=True)
-        subprocess.run(["docker", "rm", "-f", handle], capture_output=True)
+        _stop_container(handle)
 
 
-def get_rehoster() -> Rehoster:
-    """The rehosting seam. `HEXGRAPH_REHOSTER` overrides (e.g. 'firmae')."""
-    name = os.environ.get("HEXGRAPH_REHOSTER", "firmae").lower()
-    if name == "firmae":
+def _await_marker(name: str, budget: int, *, label: str = "rehoster") -> dict:
+    """Follow a rehost container's logs until the entrypoint prints the HEXGRAPH_REHOST
+    line (bounded by `budget`). Shared by all rehosters."""
+    import time
+
+    proc = subprocess.Popen(["docker", "logs", "-f", name], stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True)
+    deadline = time.monotonic() + budget
+    try:
+        for line in proc.stdout:  # type: ignore[union-attr]
+            if _MARKER in line:
+                m = re.search(_MARKER + r"\s+(\{.*\})", line)
+                if m:
+                    return json.loads(m.group(1))
+            if time.monotonic() > deadline:
+                raise RehostError(f"firmware did not boot within {budget}s ({label})")
+        raise RehostError(f"{label} exited before the device came up (boot failed)")
+    finally:
+        proc.kill()
+
+
+def _stop_container(handle: str) -> None:
+    # `docker stop` sends SIGTERM first, so an entry script's trap can clean up (FirmAE
+    # detaches its loop devices — a global kernel resource a hard SIGKILL would leak).
+    subprocess.run(["docker", "stop", "-t", "15", handle], capture_output=True)
+    subprocess.run(["docker", "rm", "-f", handle], capture_output=True)
+
+
+# Bootable VM-disk container magics → these are full-OS disk images (qemu), not vendor blobs.
+_DISK_EXTS = (".vmdk", ".qcow2", ".qcow", ".vdi", ".vhd", ".vhdx")
+
+
+def _looks_like_disk_image(path: str) -> bool:
+    """True if `path` is a full-OS *disk image* (VM disk container, or a partitioned
+    MBR/GPT disk) — boot it with qemu. False for a vendor firmware blob (squashfs/cramfs/
+    trx/uImage/raw), which needs FirmAE to extract + supply a kernel."""
+    if os.path.splitext(path)[1].lower() in _DISK_EXTS:
+        return True
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(2048)
+    except OSError:
+        return False
+    if head[:4] in (b"QFI\xfb", b"KDMV") or head[:21] == b"# Disk DescriptorFile" \
+       or b"VirtualBox Disk Image" in head[:512]:
+        return True
+    if head[512:520] == b"EFI PART":                     # GPT
+        return True
+    if head[510:512] == b"\x55\xaa":                     # MBR boot signature...
+        for i in range(4):                               # ...with a non-empty partition entry
+            entry = head[446 + i * 16: 446 + i * 16 + 16]
+            if len(entry) == 16 and entry[4] != 0:       # partition type byte
+                return True
+    return False
+
+
+def select_rehoster(firmware_path: str) -> Rehoster:
+    """Pick the rehoster most likely to succeed for this image: a full-OS disk image
+    (bootable VM disk / partitioned image) boots as-is under qemu; a vendor firmware blob
+    goes to FirmAE (extract rootfs + provide a kernel). `HEXGRAPH_REHOSTER` forces a choice."""
+    forced = os.environ.get("HEXGRAPH_REHOSTER")
+    if forced:
+        return get_rehoster(name=forced.lower())
+    return QemuDiskRehoster() if _looks_like_disk_image(firmware_path) else FirmAERehoster()
+
+
+def get_rehoster(*, name: str | None = None, firmware_path: str | None = None) -> Rehoster:
+    """The rehosting seam. With `firmware_path` and no explicit `name`/env, auto-selects
+    (qemu for disk images, FirmAE for vendor blobs); `name`/`HEXGRAPH_REHOSTER` forces one."""
+    name = (name or os.environ.get("HEXGRAPH_REHOSTER") or "").lower()
+    if not name and firmware_path:
+        return select_rehoster(firmware_path)
+    if name == "qemu":
+        return QemuDiskRehoster()
+    if name in ("firmae", ""):
         return FirmAERehoster()
     raise ValueError(f"unknown rehoster {name!r}")
 
@@ -180,7 +287,8 @@ def rehost_firmware(session: Session, project: Project, firmware: Target,
     if not firmware.path or not os.path.isfile(firmware.path):
         raise RehostError("firmware target has no byte image on disk to emulate")
 
-    rehoster = rehoster or get_rehoster()
+    # Auto-select qemu (full-OS disk images) vs FirmAE (vendor blobs) by the image itself.
+    rehoster = rehoster or get_rehoster(firmware_path=firmware.path)
     result = rehoster.rehost(firmware.path, brand=brand)
 
     surface = register_web_surface(

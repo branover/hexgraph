@@ -72,10 +72,11 @@ that haven't been analyzed yet.
 Many firmware bugs live in a web app, not just the binary. If you're given a base
 URL (or a `web_app` target already exists), assess it dynamically:
 - **Rehosted firmware**: if you have a firmware target and want its *live* web UI,
-  **`rehost(firmware_target_id)`** boots it under full-system emulation (FirmAE) and
-  registers its web server as a `web_app` surface child — then assess that surface with the
-  tools below. Needs features.rehost (to boot) + features.network (to talk to it);
-  best-effort, since not every image boots cleanly.
+  **`rehost(firmware_target_id)`** boots it under emulation (auto-selecting qemu+KVM for a
+  full-OS disk image, or FirmAE for a vendor firmware blob) and registers its web server as a
+  `web_app` surface child — then assess that surface with the tools below. Needs
+  features.rehost (to boot) + features.network (to talk to it); best-effort, since not every
+  image boots cleanly.
 - **`register_surface(project_id, base_url, endpoints?)`** registers the surface as a
   `web_app` target (a Channel, no bytes). `run_task(id, "surface_recon")` maps the
   routes you supply into `endpoint`/`param` nodes and `routes_to` edges to the handler

@@ -23,15 +23,30 @@ class Rehoster(ABC):
 
 @dataclass RehostResult: ip: str; base_url: str; handle: str; detail: str
 
-class FirmAERehoster(Rehoster):   # default
-    # drives FirmAE inside its own privileged Docker container (FirmAE bundles
-    # qemu-system + kernels). run.sh -r <brand> <firmware> boots it; we read the
-    # assigned IP, confirm the web port answers, and return base_url=http://<ip>.
+class FirmAERehoster(Rehoster):   # vendor firmware blobs (squashfs/cramfs/trx/uImage)
+    # drives FirmAE in a privileged Docker container: extracts the rootfs, supplies a
+    # kernel + libnvram, boots it, infers the network. run.sh -r <brand> <firmware>.
+
+class QemuDiskRehoster(Rehoster): # full-OS disk images (.vmdk/.qcow2/.vdi, partitioned .img)
+    # boots the image's OWN kernel + init under qemu-system-x86_64 + KVM, as-is, in a
+    # container (--device /dev/kvm). user-net hostfwd exposes the guest web port at
+    # 127.0.0.1:<port> inside the container netns; the probe joins that netns to reach it.
 ```
 
-`get_rehoster()` returns `FirmAERehoster` unless `HEXGRAPH_REHOSTER` overrides. Degrades
-gracefully: if Docker or the FirmAE image is absent it raises `RehostUnavailable` (caught
-by callers, like `BridgeUnavailable`/decompile fallbacks) — analysis never hard-crashes.
+**Two rehosters, auto-selected by image type** (`select_rehoster`): a *full-OS disk image*
+(a bootable VM disk, or a partitioned MBR/GPT image — detected by magic/extension) boots
+as-is under **qemu+KVM**; a *vendor firmware blob* (no kernel/partition table) goes to
+**FirmAE** to extract + supply a kernel. `HEXGRAPH_REHOSTER=qemu|firmae` forces a choice;
+`get_rehoster(firmware_path=…)` does the auto-selection. Both degrade gracefully: if Docker
+or the image is absent they raise `RehostUnavailable` (caught by callers, like
+`BridgeUnavailable`/decompile fallbacks) — analysis never hard-crashes.
+
+This split is why **IoTGoat works via qemu but not FirmAE**: it's a full OpenWrt disk image,
+so qemu boots the real OS (procd→ubus→uhttpd come up normally), whereas FirmAE's
+extract-and-reboot harness can't bring OpenWrt's service stack up. Validated end-to-end:
+HexGraph auto-selected qemu for the IoTGoat x86 image, booted it, registered the live
+`web_app` surface, and `http_request` reached its `uhttpd` (HTTP 307→HTTPS LuCI) through the
+container netns.
 
 ## Policy gating (the seam, not a scattered check)
 Rehosting **boots the whole firmware** (the strongest form of execution) and **brings up a
@@ -79,14 +94,13 @@ boot is gated + documented.
 - FirmAE runs as designed for **traditional vendor firmware** (sysvinit / `/etc/init.d/rcS`
   boot, squashfs/cramfs/jffs2 rootfs). For those, the seam takes you from a firmware blob to
   a live `web_app` surface.
-- **OpenWrt-based images (incl. OWASP IoTGoat) extract, build, and boot, but do NOT bring up
-  their network/web under FirmAE** — OpenWrt's `procd`→`ubus`→`netifd`→`uhttpd` service chain
-  fails to initialize under FirmAE's emulation harness (the boot console loops
-  "Failed to connect to ubus"). FirmAE infers the interface (e.g. `eth0`/`192.168.1.1`) and
-  the web service (`uhttpd`) but the guest never serves, so there's no surface to assess.
-  For IoTGoat specifically, run it via **direct `qemu-system-arm`** (its native rpi target)
-  or VirtualBox (the x86 image) rather than FirmAE; to demonstrate the rehosting seam live,
-  point it at a **vendor firmware from FirmAE's known-good set**.
+- **OpenWrt-based images (incl. OWASP IoTGoat) don't come up under FirmAE** — OpenWrt's
+  `procd`→`ubus`→`netifd`→`uhttpd` service chain fails to initialize under FirmAE's
+  extract-and-reboot harness (the boot console loops "Failed to connect to ubus"); FirmAE
+  infers the interface + web service but the guest never serves. **This is why auto-selection
+  routes full-OS disk images to the qemu rehoster instead** — qemu boots the image's own
+  kernel + init as-is, so OpenWrt comes up normally. (FirmAE remains the right tool for a
+  vendor squashfs blob, which has no bootable kernel of its own.)
 - **Loop devices are a global kernel resource.** A hard-killed emulator leaks a loop attached
   to FirmAE's fixed path (`/FirmAE/scratch/<iid>/image.raw`), which then shadows the next
   run's fresh loop and corrupts `makeImage` ("Bad magic number"). The entry script (root in
