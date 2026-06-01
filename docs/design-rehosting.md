@@ -115,20 +115,36 @@ boot is gated + documented.
   `docker logs` rather than left to cause a silent future hang.
 - **Partition-node creation is the OTHER silent hang (self-healed).** FirmAE's `makeImage` calls
   `add_partition`, which runs `losetup -Pf image.raw` and then **busy-waits forever (no timeout)**
-  for the partition node `/dev/loopNp1`. In a privileged container `losetup -P` does **not** reliably
-  create that node (a devtmpfs/udev quirk — observed live on this host: `losetup` shows the loop, but
-  `/dev/loop0p1` never appears), so `add_partition` spins indefinitely — a second ~12-min silent stall,
-  indistinguishable from the stale-loop one. We can't time out FirmAE's internal loop, so the entry
-  script runs a bounded **background healer** that watches for a scratch-backed loop missing its `p1`
-  node and creates it via `kpartx` (which maps the partition), mirrored to the exact `/dev/loopNp1`
-  path with group `disk` (`add_partition`'s second wait greps `ls -al` for "disk"). This turns the
-  hang into a clean boot rather than only failing fast on it.
-- **Fail fast, never hang silently.** Even with clean loops a boot can wedge (an unextractable
-  image, a kernel stall). The entry script runs a **watchdog** alongside FirmAE: while no IP
-  has appeared it tracks `makeImage`'s forward progress (the growing `image.raw` + advancing
-  `makeImage.log`); if there is **no progress for `HEXGRAPH_MAKEIMAGE_STALL` seconds**
-  (default 240) — or the FirmAE pipeline dies — it prints a clear `HEXGRAPH_REHOST {…ip:null…
-  detail:"makeImage stalled …"}` marker, **dumps the tails of `makeImage.log` +
-  `qemu.final.serial.log`** for diagnosis, tears down, and exits — instead of stalling out the
-  whole ~12-min budget. `FirmAERehoster` already surfaces an `ip:null` marker as a clean
-  `RehostError`, so callers get a fast, actionable failure.
+  for the partition node `/dev/loopNp1`. In a privileged container `losetup -P` partitions the loop
+  **in the kernel** (the partition shows up in `/proc/partitions` and `/sys/block/loopN/loopNp1/dev`)
+  but does **not** create the `/dev` node — there's no udev to do it (confirmed live on this host:
+  `losetup` shows the loop and the kernel has `loop0p1`, but `/dev/loop0p1` never appears). So
+  `add_partition` spins indefinitely — a second ~12-min silent stall, indistinguishable from the
+  stale-loop one. We can't time out FirmAE's internal loop, so the entry script runs a bounded
+  **background healer** that watches for a scratch-backed loop and, for its `p1` node, handles
+  **both** of `add_partition`'s blocking waits: if the node is **missing** it reads the partition's
+  real `major:minor` from sysfs (`/sys/block/loopN/loopNp1/dev`) and `mknod`s the exact `/dev/loopNp1`
+  path, group `disk` — mirroring the kernel partition `losetup -P` already created, so FirmAE's
+  subsequent `mkfs.ext2`/`mount` of that node work directly. (Deliberately **not** `kpartx`: a
+  device-mapper map would be a *separate* holder on the partition and FirmAE's `mkfs.ext2 /dev/loopNp1`
+  would then fail "apparently in use by the system" — and the dm map would also pin the loop so it
+  can't be detached.) If instead the node **exists but is the wrong group** (e.g. `root`, which leaves
+  `add_partition`'s second wait — `ls -al … | grep -q "disk"` — spinning forever) it `chown`s it
+  `root:disk` in place. The healer is conservative — when `losetup -P` *did* create the node on a
+  given host it sees it present+`disk` and does nothing — so it never perturbs a healthy makeImage.
+  This turns the hang into a clean boot rather than only failing fast on it.
+- **Fail fast, never hang silently — and never on a healthy boot.** Even with clean loops a boot
+  can wedge (an unextractable image, a stuck loop-mount). The entry script runs a **watchdog**
+  alongside FirmAE, but **scoped strictly to the makeImage (extraction) phase**. FirmAE's pipeline
+  is two phases — `makeImage.sh` (→ `makeImage.log`) then `makeNetwork.py` (→ `makeNetwork.log`, a
+  ~360s qemu network-inference boot that writes the `ip` file only at the end). While extraction
+  runs, the watchdog tracks **`makeImage.log` activity** as the sole live progress signal
+  (`image.raw` is fdisk-preallocated full-size, so its size is a dead signal); if the log stops
+  advancing for **`HEXGRAPH_MAKEIMAGE_STALL` seconds** (default 300) — or the FirmAE pipeline dies —
+  it prints a clear `HEXGRAPH_REHOST {…ip:null… detail:"makeImage stalled …"}` marker, **dumps the
+  tails of `makeImage.log` + `makeNetwork.log` + `qemu.final.serial.log`**, tears down, and exits.
+  Crucially it **disarms the instant makeImage completes** (detected by FirmAE's own
+  `time_image`/`makeNetwork.log` artifacts), handing the inference phase entirely to the overall
+  ~12-min `BOOT_BUDGET` — so it can never false-abort the legitimate ~360s network-inference boot,
+  during which `makeImage.log` is static. `FirmAERehoster` already surfaces an `ip:null` marker as a
+  clean `RehostError`, so callers get a fast, actionable failure.

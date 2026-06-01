@@ -36,9 +36,14 @@ their own PRs as we go.
      Confirmed by hand: `losetup` showed loop0 but `/dev/loop0p1` was absent; `kpartx -a` + an
      `mknod` of `/dev/loop0p1` (group `disk`) unblocked it immediately and the boot completed.
      Shipped a **background partition-node healer** that does exactly this automatically.
-  Plus a **progress watchdog**: if makeImage makes no forward progress for `HEXGRAPH_MAKEIMAGE_STALL`s
-  (default 240) it fails fast with a `makeImage.log` + qemu-serial tail dump instead of stalling the
-  full budget. *(this PR)*
+  Plus a **makeImage-phase progress watchdog**: while extraction runs, if `makeImage.log` stops
+  advancing for `HEXGRAPH_MAKEIMAGE_STALL`s (default 300) it fails fast with a `makeImage.log` +
+  `makeNetwork.log` + qemu-serial tail dump instead of stalling the full budget. The watchdog is
+  **scoped to the makeImage phase only** — it disarms the instant extraction completes (detected by
+  FirmAE's own `time_image`/`makeNetwork.log` artifacts), so it can never abort the legitimate ~360s
+  network-inference qemu boot that follows (during which `makeImage.log` is static and `image.raw`,
+  fdisk-preallocated full-size, never grew as a signal anyway). The overall ~12-min `BOOT_BUDGET`
+  governs the inference phase. *(this PR)*
 - **No-shell rehosted device can't host the launch→tcp-PoC loop (open, honest limit).** DVRF under
   FirmAE booted with **only port 80** open — no ssh/telnet, and its web 302-redirects to a dead
   `:52000` "unconfigured router" splash (stock Linksys pre-setup state). So the live raw-TCP exploit
@@ -49,10 +54,11 @@ their own PRs as we go.
   obtaining a shell (cred-crack, web RCE, or an auto-started service). Worth a SKILL note: when a
   rehosted device exposes only a stub web UI and no shell, the verified-live-exploit loop is blocked
   at "get initial access," not at HexGraph's tooling.
-- **Port-probe list misses high vendor ports (open, minor).** The rehost entry script probes a fixed
-  set (22/23/80/443/8080/8443/1337/9999); DVRF's real management UI lives on **:52000**, so `ports`
-  under-reports what's live. Consider a wider sweep (or an `nmap`-style top-ports scan) so the auto-
-  registered `remote`/raw-TCP intel reflects high-port vendor services.
+- **Port-probe list missed high vendor ports (FIXED, this PR).** The rehost entry script probed a
+  fixed low set (22/23/80/443/8080/8443/1337/9999); DVRF's real management UI lives on **:52000**, so
+  `ports` under-reported what's live. Widened the bounded sweep to include common high vendor/admin
+  ports (8000/8888/49152/52000, plus 81/554/5000/5555/7547/9000/37215, etc.) so the auto-registered
+  `remote`/raw-TCP intel reflects high-port services. Each probe keeps its hard timeout. *(this PR)*
 
 ## Open ideas (ranked)
 0. **Provision the analysis gates together for a rehost engagement. — MOSTLY DONE.** Rehosting a
