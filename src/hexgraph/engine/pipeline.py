@@ -19,7 +19,7 @@ from hexgraph.engine.recon import run_recon
 from hexgraph.engine.unpack import build_links_against, unpack_firmware
 from hexgraph.sandbox.executor import Executor, get_executor
 
-_FIRMWARE_FORMATS = {"squashfs", "cpio"}
+_FIRMWARE_FORMATS = {"squashfs", "cpio", "disk_image"}
 _ENRICHABLE_KINDS = {"executable", "shared_library"}
 
 

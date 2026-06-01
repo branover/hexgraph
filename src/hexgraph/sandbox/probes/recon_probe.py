@@ -153,6 +153,24 @@ def _firmware_signature(data: bytes) -> str | None:
     return None
 
 
+def _is_disk_image(data: bytes) -> bool:
+    """A partitioned full-OS disk image: GPT (\"EFI PART\" at LBA1) or an MBR with a
+    non-empty partition entry + the 0x55AA boot signature. (The bare 0x55AA signature
+    alone is too weak — many blobs end in it — so require a real partition entry.)"""
+    if len(data) < 512:
+        return False
+    if len(data) >= 520 and data[512:520] == b"EFI PART":
+        return True
+    if data[510:512] == b"\x55\xaa":
+        for i in range(4):  # 4 MBR partition entries × 16 bytes at offset 446
+            entry = data[446 + i * 16: 446 + i * 16 + 16]
+            ptype = entry[4]
+            lba_start = int.from_bytes(entry[8:12], "little")
+            if ptype not in (0x00, 0xEE) and lba_start > 0:  # 0xEE = protective MBR (GPT handled above)
+                return True
+    return False
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print(json.dumps({"error": "usage: recon_probe.py <artifact>"}))
@@ -185,6 +203,12 @@ def main() -> int:
             fmt = _firmware_signature(data)
             if fmt:
                 facts["format"] = fmt
+                facts["kind"] = "firmware_image"
+            elif _is_disk_image(data):
+                # A full-OS disk image (partitioned MBR/GPT, e.g. an x86/ARM SD card or
+                # VM disk) — the rootfs is in a partition; unpack extracts it with The
+                # Sleuth Kit. Treated as firmware so the same unpack→recon flow runs.
+                facts["format"] = "disk_image"
                 facts["kind"] = "firmware_image"
 
     print(json.dumps(facts))
