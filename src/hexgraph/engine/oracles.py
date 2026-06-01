@@ -76,7 +76,8 @@ def _collect_strings(obj, out: list[str]) -> None:
     elif isinstance(obj, bytes):
         out.append(obj.decode("utf-8", "replace"))
     elif isinstance(obj, dict):
-        for v in obj.values():
+        for k, v in obj.items():
+            _collect_strings(k, out)   # KEY NAMES are submitted too (KEY=value, Header-Name: v)
             _collect_strings(v, out)
     elif isinstance(obj, (list, tuple)):
         for v in obj:
@@ -84,15 +85,15 @@ def _collect_strings(obj, out: list[str]) -> None:
 
 
 def _request_echoes(req: dict) -> list[str]:
-    """Everything a request SUBMITTED — path, ALL params, ALL header values, and the FULL body
-    (recursively) — in raw + URL/HTML-encoded forms, so a server's reflection of our own input
-    (incl. via a reflected HEADER or a nested JSON field) is stripped from a response before the
-    oracle matches. Stripping the WHOLE request (not a hand-picked field list) closes the
-    'reflect-via-some-other-field' forgery class by construction."""
+    """Everything a request SUBMITTED — the method, path, ALL params (keys+values), ALL header
+    names+values, and the FULL body (recursively) — in raw + URL/HTML-encoded forms, so a server's
+    reflection of our own input (via ANY field, incl. a header, the verb, or a param NAME) is
+    stripped from a response before the oracle matches. Stripping the WHOLE request (not a
+    hand-picked field list) closes the 'reflect-via-some-other-field' forgery class by construction."""
     if not isinstance(req, dict):
         return []
     raw: list[str] = []
-    for key in ("path", "params", "headers", "body", "json"):
+    for key in ("method", "path", "params", "headers", "body", "json"):
         if key in req and req[key] is not None and not isinstance(req[key], bool):
             _collect_strings(req[key], raw)
     out: list[str] = []
@@ -296,20 +297,25 @@ def verify_canary_read(session, project, target, spec, runner, nonce, *, is_web,
                           "secret out-of-band, or `plant={channel:'rootfs',path}` to plant a fresh canary."}
     known = plant.get("known")
     if known:
-        # Read an EXISTING secret out-of-band → that read IS the ground truth (the agent never sees it).
+        # Ground truth must come from a NON-REFLECTIVE channel — a real file read (rootfs/remote)
+        # of an EXISTING secret. An agent-crafted HTTP request is NOT allowed here: a reflective
+        # endpoint can always echo an attacker-chosen value through SOME request field (param/header
+        # name, the verb, …), laundering it in as the "secret" — the exact forgery class. A file
+        # read returns the actual stored bytes, with no request to reflect.
+        if (known.get("channel") or "").lower() not in ("rootfs", "remote"):
+            return {"verified": False, "exit_code": None, "output": "", "nonce": nonce, "spec": spec,
+                    "detail": "canary_read: `known` must read an existing secret via a non-reflective "
+                              "file channel (rootfs|remote), NOT an agent-crafted http request — a "
+                              "reflective endpoint could launder an attacker-chosen value as the secret."}
         try:
-            raw = _read_back(session, project, target, channel=(known.get("channel")),
-                             path=known.get("path"), request=known.get("request"), runner=runner)
+            canary = _read_back(session, project, target, channel=known.get("channel"),
+                                path=known.get("path"), request=None, runner=runner).strip()
         except ValueError as exc:
             return {"verified": False, "detail": f"canary_read known-secret read error: {exc}",
                     "exit_code": None, "output": "", "nonce": nonce, "spec": spec}
-        # Strip the known-read's OWN request reflections: a value that is merely what we submitted
-        # to a reflective endpoint is NOT ground truth (it would launder an agent literal back in).
-        canary = _strip_reflections(raw, [known.get("request")] if known.get("request") else []).strip()
         if not canary:
             return {"verified": False, "exit_code": None, "output": "", "nonce": nonce, "spec": spec,
-                    "detail": "canary_read: the known-secret read yielded no out-of-band ground truth "
-                              "(empty, or only the reflected request) — nothing trustworthy to match."}
+                    "detail": "canary_read: the known-secret file read returned nothing — no ground truth."}
     else:
         canary = fresh_canary()
         try:

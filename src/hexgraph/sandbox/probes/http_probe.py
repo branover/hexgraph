@@ -140,7 +140,8 @@ def _collect_strings(obj, out: list) -> None:
     elif isinstance(obj, bytes):
         out.append(obj.decode("utf-8", "replace"))
     elif isinstance(obj, dict):
-        for v in obj.values():
+        for k, v in obj.items():
+            _collect_strings(k, out)   # key names are submitted too
             _collect_strings(v, out)
     elif isinstance(obj, (list, tuple)):
         for v in obj:
@@ -155,7 +156,7 @@ def _echoed_strings(step: dict) -> list[str]:
     PoC: a reflective page (403 re-auth form echoing the URI, a search box, an error page that
     mirrors a header) would otherwise match the {{NONCE}} we sent even though no command ran."""
     raw: list = []
-    for key in ("path", "params", "headers", "body", "json"):
+    for key in ("method", "path", "params", "headers", "body", "json"):
         if key in step and step[key] is not None and not isinstance(step[key], bool):
             _collect_strings(step[key], raw)
     out: list[str] = []

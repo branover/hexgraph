@@ -258,51 +258,59 @@ def test_canary_read_rejects_agent_known_value_literal(hg_home):
         assert out["verified"] is False and "known_value" in out["detail"]
 
 
-def test_canary_read_known_secret_read_out_of_band(hg_home):
-    """The `known` form: HexGraph reads the ground-truth secret OUT-OF-BAND (here over http), then
-    the exploit must return it. The agent never sees the value, so it can't be reflection-forged."""
+def test_canary_read_known_secret_read_out_of_band(hg_home, monkeypatch):
+    """The `known` form: HexGraph reads the ground-truth secret via a NON-REFLECTIVE file channel
+    (rootfs/remote — an actual stored secret it reads itself), then the exploit must return it. The
+    agent never sees the value and there is no request to reflect."""
     _enable_net()
+    from hexgraph.engine import oracles
     SECRET = "S3cr3t_FROM_DEVICE_ABC123"
+    # the known-read is a real file read (rootfs/remote); the exploit then returns the secret
+    monkeypatch.setattr(oracles, "_read_back",
+                        lambda session, project, target, *, channel, path, request, runner: SECRET)
 
     class ReturnsSecret:
         def run_channel_probe(self, probe, *, channel, net_container=None, secret=None):
-            if channel.get("request"):                       # the OOB known-read (run_http_request)
-                return {"response": {"status": 200, "body": SECRET}}
             return {"steps": [{"status": 200, "body": f"...{SECRET}..."}]}  # the exploit read
 
     with session_scope() as s:
         p = create_project(s, name="canary_known")
         t = _web(s, p)
-        spec = {"plant": {"known": {"channel": "http", "request": {"method": "GET", "path": "/secret"}}},
-                "steps": [{"method": "GET", "path": "/download?f=../../secret"}],
+        spec = {"plant": {"known": {"channel": "remote", "path": "/etc/device_secret"}},
+                "steps": [{"method": "GET", "path": "/download?f=../../etc/device_secret"}],
                 "oracle": {"type": "canary_read"}}
         out = verify_poc(s, p, t, spec, runner=ReturnsSecret())
         assert out["verified"] is True
 
 
-def test_canary_read_known_reflective_endpoint_not_laundered(hg_home):
-    """The `known` read-back must be reflection-stripped too: if known.request points at a
-    REFLECTIVE endpoint that just echoes a submitted value, that value is NOT ground truth — it
-    would launder an attacker-chosen string. After stripping, there's no ground truth → not verified."""
+def test_canary_read_known_http_request_rejected(hg_home):
+    """The `known` ground truth must NOT come from an agent-crafted http request — a reflective
+    endpoint could launder an attacker value through SOME request field (param/header name, the
+    verb, …). Only non-reflective file channels (rootfs/remote) are accepted; http is rejected."""
     _enable_net()
 
-    class LaunderReflect:
+    class Whatever:
         def run_channel_probe(self, probe, *, channel, net_container=None, secret=None):
-            req = channel.get("request")
-            if req:  # the known-read: echo a submitted param (attacker-chosen "secret")
-                return {"response": {"status": 200, "body": " ".join((req.get("params") or {}).values())}}
-            return {"steps": [{"status": 200, "body": "ATTACKER_CHOSEN"}]}  # exploit echoes the same
+            return {"response": {"status": 200, "body": "x"}}
 
     with session_scope() as s:
-        p = create_project(s, name="canary_launder")
+        p = create_project(s, name="canary_known_http")
         t = _web(s, p)
-        spec = {"plant": {"known": {"channel": "http",
-                                    "request": {"method": "GET", "path": "/echo",
-                                                "params": {"q": "ATTACKER_CHOSEN"}}}},
-                "steps": [{"method": "GET", "path": "/read"}],
-                "oracle": {"type": "canary_read"}}
-        out = verify_poc(s, p, t, spec, runner=LaunderReflect())
-        assert out["verified"] is False
+        spec = {"plant": {"known": {"channel": "http", "request": {"method": "GET", "path": "/echo"}}},
+                "steps": [{"method": "GET", "path": "/read"}], "oracle": {"type": "canary_read"}}
+        out = verify_poc(s, p, t, spec, runner=Whatever())
+        assert out["verified"] is False and "non-reflective" in out["detail"]
+
+
+def test_request_echoes_covers_method_and_keys():
+    """Defense-in-depth: the reflection stripper covers EVERY submitted surface — the verb, param
+    NAMES, header names — not just values (so no 'reflect via another field' remains)."""
+    from hexgraph.engine import oracles
+    echoes = oracles._request_echoes({"method": "FOOVERB", "path": "/p",
+                                      "params": {"PKEY": "pv"}, "headers": {"X-HKEY": "hv"},
+                                      "body": {"BKEY": ["bv1", {"NESTED": "bv2"}]}})
+    for token in ("FOOVERB", "/p", "PKEY", "pv", "X-HKEY", "hv", "BKEY", "bv1", "NESTED", "bv2"):
+        assert token in echoes, token
 
 
 def test_canary_read_not_forgeable_by_reflection(hg_home, monkeypatch):
