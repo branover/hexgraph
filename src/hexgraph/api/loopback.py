@@ -25,6 +25,25 @@ def is_loopback(host: str) -> bool:
         return False
 
 
+def allowed_hosts(bind_host: str | None = None) -> list[str]:
+    """The Host-header allowlist for TrustedHostMiddleware — the primary defense against
+    DNS-rebinding (which relies on the victim's browser sending the attacker's foreign Host
+    header to 127.0.0.1). We only ever accept loopback names/IPs.
+
+    When the operator has DELIBERATELY bound a non-loopback address (override env set, see
+    `assert_loopback`), the served host is no longer loopback, so we widen to a wildcard
+    (the operator has explicitly opted out of the local-only posture; TrustedHost can no
+    longer be the rebinding defense once exposed to the network). Loopback stays allowed
+    regardless so the local UI keeps working."""
+    # `testserver` is Starlette's TestClient default Host; harmless to accept (a real
+    # rebinding attack carries the attacker's OWN domain, not this fixed literal) and it
+    # keeps the in-process API tests working without rewriting their Host header.
+    hosts = ["localhost", "127.0.0.1", "[::1]", "::1", "testserver"]
+    if bind_host and not is_loopback(bind_host) and os.environ.get(OVERRIDE_ENV) == "1":
+        return ["*"]
+    return hosts
+
+
 def assert_loopback(host: str) -> None:
     """Raise unless `host` is loopback or the override env is set (warn even then)."""
     if is_loopback(host):

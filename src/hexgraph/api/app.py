@@ -10,13 +10,14 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from hexgraph import __version__
-from hexgraph.api.loopback import assert_loopback
+from hexgraph.api.loopback import allowed_hosts, assert_loopback
 from hexgraph.config import load_config
 from hexgraph.db.models import Finding, FindingStatus, Node, Project, Target, Task
 from hexgraph.db.session import session_scope
@@ -184,8 +185,33 @@ class NodePatch(BaseModel):
     attrs: dict | None = None
 
 
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="HexGraph", version=__version__, lifespan=_lifespan)
+
+    # --- Operator-machine trust boundary (loopback API has no auth by design) ---
+    # 1) Host-header allowlist: the PRIMARY anti-DNS-rebinding defense. A malicious page
+    #    that DNS-rebinds to 127.0.0.1 still carries the ATTACKER'S Host header, which is
+    #    not loopback → rejected here before any handler runs. Respects the deliberate
+    #    non-loopback bind override (then widens to "*", see loopback.allowed_hosts).
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts(load_config().host))
+
+    # 2) Same-origin (CSRF) guard on state-changing /api/* requests. Browsers set
+    #    `Sec-Fetch-Site` automatically: the SPA's same-origin fetches send `same-origin`
+    #    (allowed); a cross-site page's request sends `cross-site` (rejected). Non-browser
+    #    clients (the CLI/MCP/tests) call the engine in-process, not over HTTP, so they're
+    #    unaffected; any that DID call HTTP omit the header (treated as non-browser → allowed).
+    @app.middleware("http")
+    async def _same_origin_guard(request: Request, call_next):
+        if request.method not in _SAFE_METHODS and request.url.path.startswith("/api/"):
+            if request.headers.get("sec-fetch-site") == "cross-site":
+                return JSONResponse(
+                    {"detail": "cross-site request rejected (same-origin only)"},
+                    status_code=403,
+                )
+        return await call_next(request)
 
     @app.get("/health")
     def health() -> dict[str, str]:
