@@ -128,12 +128,51 @@ Three panes:
 
 Click a finding's **suggested follow-up** to open a pre-filled launch modal for the next task. Use
 **Confirm / Dismiss** to triage. The **Add node / Add edge** tools let you author functions, sockets,
-hypotheses, and typed edges by hand.
+hypotheses, and typed edges by hand. **Removing things is reversible by default:** archive a node or a
+whole target subtree to declutter the graph (re-adding the same entity restores it), while individual
+edges and whole projects are hard deletes.
 
 **Mock scenarios** (mock backend) on `sbin/httpd`: `static_analysis/critical_overflow` (critical
 overflow + `related_to` edge to `libupnp.so`), `/no_findings`, `/malformed_then_valid` (JSON-repair
 retry), `reverse_engineering`, `pattern_sweep` (sibling match), `error_rate_limit` / `error_timeout`
 (graceful failure), and a default always-success scenario.
+
+---
+
+## Dynamic web surfaces & firmware rehosting
+
+HexGraph models a target as any **reachable surface**, not just a file on disk. Alongside byte
+targets there are **`web_app` targets**: a running web surface reached over a Channel (a `base_url`),
+holding **no bytes** of its own. A `surface_recon` task crawls one into `endpoint` and `param` nodes,
+and — where it can identify the code behind a route — draws a **`routes_to`** edge from the endpoint
+to its handler `function`. That edge is the **bridge between the static and dynamic views**: the same
+graph holds both the binary you reversed and the live service it serves.
+
+**Live assessment is gated by `features.network`** (off by default). With it on, HexGraph can actually
+talk to the surface: an `http_request` tool (with a `session` cookie jar that persists across calls)
+and a **web-flavoured `verify_poc`** whose oracle is the same unforgeable `{{NONCE}}` token used for
+binary PoCs, plus `body_contains` / `status` checks. Egress is **bounded**: a per-target deny-all
+allowlist that permits only loopback/private hosts (never a public address), and every outbound
+request is audited to an `EgressEvent`.
+
+**Firmware rehosting** (`features.rehost`, also off by default) boots a whole firmware image under
+full-system emulation and registers the device's live web UI as a `web_app` child target — so you can
+reverse the firmware *and* drive its running web server in one graph:
+
+```bash
+hexgraph config set features.rehost.enabled true    # to boot
+hexgraph config set features.network.enabled true   # to then assess the running device
+make iotgoat                                         # fetch + rehost + register IoTGoat
+# or, by hand:
+hexgraph rehost <firmware-target> [--brand <hint>]
+```
+
+`rehost` **auto-selects the emulator** by image type: qemu+KVM for a full-OS disk image (e.g. IoTGoat's
+x86 OpenWrt `.img`), FirmAE for a vendor blob (squashfs/cramfs/…). Booting needs `features.rehost`;
+assessing the running device with `surface_recon` / `http_request` / `verify_poc` needs
+`features.network`. Build the rehosting images first with `make firmae-build` / `make qemu-build`.
+`make vulnrouter` stands up a live vulnrouter web target + project for a guided engagement; worked
+examples live in `docs/engagement-vulnrouter.md` and `docs/engagement-rehosted.md`.
 
 ---
 
@@ -152,6 +191,9 @@ hexgraph targets <project>                 List targets in a project
 hexgraph run <target> --type T             Run an analysis task (see task types below)
              [--objective TEXT] [--function F]
              [--model M] [--backend B] [--mock-scenario S]
+hexgraph rehost <target> [--brand HINT]    Boot a firmware target under full-system emulation and
+                                           register its live web UI as a web_app surface
+                                           (needs features.rehost)
 hexgraph findings <project> [--status S]   List findings (filter new|accepted|dismissed)
                  [--export FILE]           …or write findings as JSON
 hexgraph graph <project> --export FILE     Export the project graph as JSON (nodes + edges)
@@ -165,7 +207,8 @@ hexgraph serve [--host H] [--port P]       Start the loopback-only API/UI (defau
 ```
 
 Task types: `recon`, `static_analysis`, `reverse_engineering`, `pattern_sweep`, `harness_generation`
-(plus `fuzzing`, `poc`, and `agent_delegate` when enabled in Settings).
+(plus `fuzzing`, `poc`, and `agent_delegate` when enabled in Settings). For web surfaces:
+`surface_recon` / `web_recon` (live assessment needs `features.network`).
 
 ### Coding-agent integration (MCP)
 
@@ -184,8 +227,10 @@ Coding-agent tools, or `--tools`) so the agent's context stays small. The agent 
 (`list_*`, `get_node`, `get_finding`, `xrefs`, `list_sockets`), write to it (`record_finding`,
 `create_node`, `create_edge`, `create_socket`, `create_hypothesis`, `link_same_code`,
 `propagate_finding`, …), and run sandboxed work (`ingest`, `run_task`, `verify_poc`). Call
-`get_schemas` first — it advertises the Finding shape, node/edge vocab, edge-attribute schemas, and
-socket kinds.
+`get_schemas` first — it advertises the Finding shape, node/edge vocab, per-type node-attribute schemas
+(with the sink-vs-symbol rule), edge-attribute schemas, socket kinds, and the active decompiler. New
+read tools also browse a firmware's unpacked filesystem (`list_filesystem` / `read_file`) and remove
+entities (`archive_node` / `restore_node` / `delete_edge` / `archive_target` / `restore_target`).
 
 ---
 
@@ -220,6 +265,8 @@ static-only/local defaults hold unless you opt in.
 | **Ghidra** | `hexgraph config set features.ghidra.enabled true` (needs `make sandbox-build WITH_GHIDRA=1`) | Headless-Ghidra decompiler + optional recon enrichment; can also connect to a running Ghidra (`features.ghidra.mode bridge`). Degrades to radare2 when off. |
 | **Fuzzing** | `hexgraph config set features.fuzzing.enabled true` | The `fuzzing` task: compiles a generated libFuzzer+ASan harness and records a finding per crash. **Relaxes the static-only policy to allow execution** (still `--network none`, capped, timed). |
 | **PoC verification** | `hexgraph config set features.poc.enabled true` | The `poc` task + `verify_poc`: **executes the target** with an attacker input and confirms exploitation via an unforgeable `{{NONCE}}` oracle. Foreign-arch (MIPS/ARM/…) runs under qemu-user with the firmware rootfs as sysroot. Also policy-gated. |
+| **Network** | `hexgraph config set features.network.enabled true` | Bounded **local-network egress** for live web assessment (`http_request` + web `verify_poc`). Raises the policy from `--network none`; a per-target deny-all-but-loopback/private allowlist (no public hosts), every request audited to an `EgressEvent`. |
+| **Rehost** | `hexgraph config set features.rehost.enabled true` | Boots a firmware image under **full-system emulation** (qemu+KVM for full-OS disk images, FirmAE for vendor blobs) and registers its live web UI as a `web_app` surface. Separate policy gate (`assert_allows_rehost`); pair with **Network** to assess the running device. Needs `make firmae-build` / `make qemu-build`. |
 | **Coding-agent (MCP)** | `features.mcp.{read,write,run}` + `hexgraph mcp install` | Drive HexGraph from Claude Code/Codex/gemini-cli (above). |
 | **Delegate** | `hexgraph config set features.agent.enabled true` | The `agent_delegate` task: HexGraph launches your agent headless, restricted to its sandboxed tools. |
 
@@ -290,10 +337,17 @@ port = 8765
 - **Hostile-target isolation.** Every operation on target bytes runs in a fresh container with
   `--network none`, a read-only root filesystem, a tmpfs scratch, memory/CPU/PID limits, and a
   wall-clock timeout. Only HexGraph's probe scripts run there.
-- **Static by default; execution is opt-in and explicit.** The target is never executed unless you
-  enable PoC or fuzzing, which flip a single **policy seam** (`policy.current_policy()`). Even then,
-  execution stays inside the same `--network none`, capped, timed sandbox (foreign-arch via
-  qemu-user) — never on the host.
+- **Static by default; capability is opt-in and graduated.** Each tier is a separate, explicit
+  opt-in flipping the single **policy seam** (`policy.current_policy()`), and nothing relaxes anywhere
+  else:
+  - **static-only** (default) — no execution, `--network none`;
+  - **sandboxed execution** — `features.poc` / `features.fuzzing` allow running the target inside the
+    same capped, timed, `--network none` sandbox (foreign-arch via qemu-user), never on the host;
+  - **bounded local-network** — `features.network` permits egress only to loopback/private hosts via a
+    **per-target deny-all-but-this allowlist** (no public addresses), every request audited to an
+    `EgressEvent`;
+  - **rehost** — a separate gate (`assert_allows_rehost`) that boots a firmware image under
+    full-system emulation.
 - **The LLM never sees raw target bytes** — only tool output.
 - **Secrets are never persisted or logged.** Your API key lives only in env/config, read on demand.
 
@@ -310,7 +364,10 @@ tier / executor:
 - **Executor** — the single container boundary for all target-byte handling (a remote/dynamic executor
   drops in here).
 - **Decompiler** — radare2 by default; Ghidra behind the same seam.
-- **Policy** — the one place the static-only invariant is relaxed (PoC/fuzzing).
+- **Rehoster** — full-system firmware emulation; FirmAE (vendor blobs) and qemu+KVM (full-OS disk
+  images) drop in behind it, auto-selected by image type.
+- **Policy** — the one place the static-only invariant is relaxed (sandboxed execution via PoC/fuzzing,
+  bounded local-network via network, and rehosting — each its own opt-in gate).
 
 **The Finding is the heart of the product.** Every task and backend emits the same frozen schema
 (`context/schemas/finding.schema.json`); `finding_type` (DB envelope) classifies it for triage.
