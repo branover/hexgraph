@@ -40,3 +40,38 @@ def test_ingest_into_existing_project(hg_home, tmp_path):
         t2 = ingest_file(session, project, src, name="b", parent=t1)
         assert t2.parent_id == t1.id
         assert t1.project_id == t2.project_id == project.id
+
+
+def test_ingest_basename_collision_no_overwrite(hg_home, tmp_path):
+    """Two DIFFERENT files that share a basename must NOT clobber each other on
+    disk. A flat artifacts/<basename> layout silently overwrote the first with the
+    second, so recon/decompile later read the WRONG bytes for one target — undetected
+    graph corruption. Each target now lands in its own per-id artifact dir."""
+    a = tmp_path / "a" / "image.bin"
+    b = tmp_path / "b" / "image.bin"
+    a.parent.mkdir()
+    b.parent.mkdir()
+    a.write_bytes(b"\x7fELF AAAA distinct bytes for target one")
+    b.write_bytes(b"\x7fELF BB different bytes, different size, target two")
+    assert a.read_bytes() != b.read_bytes()
+
+    with session_scope() as session:
+        project = create_project(session, name="collide")
+        ta = ingest_file(session, project, a, name="image.bin")
+        tb = ingest_file(session, project, b, name="image.bin")
+        ta_id, tb_id = ta.id, tb.id
+
+    with session_scope() as session:
+        ta = session.get(Target, ta_id)
+        tb = session.get(Target, tb_id)
+        # Distinct on-disk paths despite the shared basename.
+        assert ta.path != tb.path
+        assert Path(ta.path).is_file() and Path(tb.path).is_file()
+        # Each artifact reads back its OWN original bytes (no clobber).
+        assert Path(ta.path).read_bytes() == a.read_bytes()
+        assert Path(tb.path).read_bytes() == b.read_bytes()
+        # Recon-derived facts (size + content hash) differ, as the inputs do.
+        assert ta.metadata_json["size"] != tb.metadata_json["size"]
+        assert ta.metadata_json["sha256"] != tb.metadata_json["sha256"]
+        # Both artifacts namespaced under their target id (browsable layout).
+        assert ta.id in ta.path and tb.id in tb.path

@@ -304,6 +304,20 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-01: **fix: firmware-unpack basename collision (silent graph corruption).** `ingest_file`
+  copied every artifact to a flat `artifacts/<basename>`, so two different files (or two unpacked
+  firmware children) sharing a basename — e.g. `bin/foo` and `sbin/foo`, or two firmwares both named
+  `image.bin` — OVERWROTE each other on disk, and recon/decompile/poc later read the WRONG bytes for
+  one target with no error surfaced. Now copies to `artifacts/<target_id>/<basename>` (the row is
+  flushed first to get its UUID, then the bytes land in a per-target subdir), so the basename can never
+  collide. All readers go through `target.path` (recon/decompile/poc-sysroot/fuzzing/ghidra/agent_tools)
+  and were verified unaffected; archive/restore-by-sha256 (`restore_matching`) keys on
+  `metadata_json["sha256"]` not the path, and the firmware filesystem browser already namespaces under
+  `unpacked/<firmware_id>/` — both unchanged. **NEW ingests only; no migration** — existing rows keep
+  their stored absolute `path` and still resolve (no model/column change). Regression tests:
+  `test_ingest_basename_collision_no_overwrite` (two distinct `image.bin` → distinct artifacts, each
+  reads back its own bytes, sizes+sha256 differ) and `test_unpack_children_sharing_basename_keep_own_bytes`
+  (unpack side, fake executor, two same-basename ELFs). 331 passed, 2 skipped. (PR #30.)
 - 2026-06-01: **Raw-TCP live testing + bounded service-launch (closing the live-exploit half-loop,
   part 2 of 2).** Non-HTTP analogue of the web tools so a rehosted/remote device's *socket* services
   (bind shells, vendor binary protocols, pwnable daemons) can be tested live: `sandbox/probes/
