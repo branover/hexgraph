@@ -311,6 +311,28 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-01: **Code-review #44 — full discover→test-live loop for a WEB RCE on rehosted IoTGoat
+  (validation; branch `docs/iotgoat-44`).** Drove the engine end-to-end against OWASP IoTGoat
+  (x86 OpenWrt disk image): ingest + gap-#1 disk-image extraction (344 rootfs children), qemu
+  auto-select + boot in **17 s** (LuCI/uHTTPd live on `https://127.0.0.1:8443`), surface
+  registration, and `http_request`(session cookie-jar) reaching the live login — every HexGraph
+  mechanism worked. Found the WEB command injection cleanly by static rootfs review:
+  `luci.controller.iotgoat.webcmd` pipes `http.formvalue("cmd")` straight into
+  `io.popen(cmd.." 2>&1")` as root (CWE-78), reflected to the body, at
+  `POST /cgi-bin/luci/admin/iotgoat/webcmd`. Recorded the cmdi `vulnerability` finding +
+  endpoint/param/input/sink nodes + taints edges + a credentials finding + hypothesis in the
+  engagement project (`HEXGRAPH_HOME=/tmp/hg-iotgoat-44`). **#44 NOT demonstrated as a verified
+  live RCE — blocked at credential recovery, not a tooling gap:** the cmdi route inherits LuCI
+  `sysauth="root"`, so it needs a `root` web session; `/etc/shadow`'s `iotgoatuser` cracks to
+  `7ujMko0vizxv` but the **`root` hash `$1$Jl7H1VOG$…` is not in rockyou (14.3M exhausted)**, and
+  the live device rejected both creds (403, no sysauth cookie) with no unauth route to `webcmd`.
+  Did NOT force a false positive (`verify_poc` never returned verified:true). Recommendation for a
+  clean live-web-RCE demo: **D-Link DIR-823G v1.02B03** (UNAUTH `/HNAP1` cmdi → `system()`;
+  CVE-2019-7297/7298, CVE-2018-17787) — `DIR823GA1_FW102B03.bin`, drop at
+  `/tmp/DIR-823G_FW102B03.bin`, `rehost(brand="dlink")` (FirmAE). Re-confirms vr-feedback #3 (the
+  rehosted image's shadow passwords must be in a common wordlist for the post-auth chain to be
+  reachable); added vr-feedback #6. Docs-only; no model/DB change → no migration. Cleaned up the
+  qemu container.
 - 2026-06-01: **Centralized bounded-egress allowlist enforcement (code-review #7 middle ground;
   branch `build/egress-guard`).** New stdlib-only shared chokepoint `sandbox/probes/_egress.py`
   (`dest()`/`ensure_allowed()`/`install_socket_guard()` + `EgressBlocked`): the socket guard

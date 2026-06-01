@@ -93,3 +93,32 @@ their own PRs as we go.
    handling.
 5. **SKILL guidance on web-PoC oracles** — warn that `body_contains` can match reflected input
    (now mitigated) and recommend the computed-output style for cmdi. *(SKILL §2b note added.)*
+
+## From the IoTGoat web-RCE engagement (code-review #44, 2026-06-01)
+
+Goal: prove the full discover→test-live loop for a WEB RCE on a rehosted firmware. **The engine
+worked end-to-end** — ingest+disk-image extraction (344 children), qemu auto-select + boot in
+**17 s** (LuCI/uHTTPd live on `https://127.0.0.1:8443`), surface registration, `http_request` with a
+cookie-jar session reaching the live login. The WEB cmdi was found cleanly by static rootfs review:
+`luci.controller.iotgoat.webcmd` reads `http.formvalue("cmd")` and pipes it verbatim into
+`io.popen(cmd.." 2>&1")` as root (CWE-78), reflected to the body — at
+`POST /cgi-bin/luci/admin/iotgoat/webcmd`.
+
+**Blocked at credential recovery (NOT a HexGraph gap — re-confirms #3 above).** The cmdi route
+inherits `sysauth = "root"` from the LuCI `admin` node, so it requires an authenticated **`root`**
+LuCI session. From `/etc/shadow`, `iotgoatuser` cracks offline to `7ujMko0vizxv` (md5crypt), but the
+**`root` hash `$1$Jl7H1VOG$…` is not in any common wordlist** (seclists top-10k and the full rockyou
+14.3M were exhausted — no hit). The live device correctly rejected both `root:7ujMko0vizxv` and
+`iotgoatuser:7ujMko0vizxv` (HTTP 403, no `sysauth` cookie), and there is no unauthenticated route to
+`webcmd` (unauth POST → 403 login redirect). So the post-auth web RCE could not be driven to
+`verify_poc(verified:true)` on this image. This is the IoTGoat build's own non-public root password,
+not a tooling limit. New friction note:
+6. **Recommend an UNAUTH-cmdi firmware for the live-web-RCE demo.** IoTGoat's only web cmdi is
+   root-authenticated behind an uncrackable root hash, so it cannot demonstrate a clean live web RCE.
+   For a `{{NONCE}}`-verifiable live web RCE under rehosting, use a vendor image with an
+   **unauthenticated** web cmdi — e.g. **D-Link DIR-823G v1.02B03** (`/HNAP1` command injection via
+   shell metacharacters in the Login `PrivateLogin`/`Captcha` POST fields, sent straight to `system()`
+   — CVE-2019-7297/7298, CVE-2018-17787; GoAhead). Download `DIR823GA1_FW102B03.bin` (e.g. the hac425
+   blog_data mirror), drop at `/tmp/DIR-823G_FW102B03.bin`, ingest → `rehost(fw, brand="dlink")`
+   (FirmAE, squashfs blob), then `verify_poc` HNAP1 with `;echo {{NONCE}};` (no login step needed).
+   Tenda AC15 v15.03.1.16 (CVE-2018-5767, unauth stack overflow → RCE) is a stronger-effort alternative.
