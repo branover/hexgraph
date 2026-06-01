@@ -78,11 +78,13 @@ def _remote_secret() -> dict:
 
 
 def run_remote(session: Session, project: Project, target: Target, *, op: str,
-               path: str | None = None, tool: str | None = None,
+               path: str | None = None, tool: str | None = None, args: list | None = None,
                max_bytes: int | None = None, runner=None, task_id=None) -> dict:
-    """Run ONE bounded read-only op (list_files / read_file / run_tool) against the remote
-    device in the sandbox. Gated by features.remote, egress pinned to the target's host:port
-    and audited. The op maps to a fixed command template in remote_probe (no arbitrary shell)."""
+    """Run ONE bounded op against the remote device in the sandbox: read-only
+    list_files / read_file / run_tool, or the bounded non-read-only `launch` (start a
+    not-auto-started service by binary path + args, so its socket can be tested live). Gated by
+    features.remote, egress pinned to the target's host:port and audited. Each op maps to a
+    fixed command template in remote_probe (no arbitrary shell)."""
     from hexgraph import settings
     from hexgraph.engine.audit import record_egress
     from hexgraph.policy import (PolicyViolation, assert_allows_egress, assert_allows_remote,
@@ -113,7 +115,7 @@ def run_remote(session: Session, project: Project, target: Target, *, op: str,
     channel = {"transport": ch.get("transport", "ssh"), "host": host, "port": port,
                "username": ch.get("username", "root"), "timeout": timeout,
                "allow": sorted(scope.allow), "op": op, "path": path, "tool": tool,
-               "max_bytes": cap, **_remote_secret()}
+               "args": args or [], "max_bytes": cap, **_remote_secret()}
     # net_container: a rehosted device's SSH/telnet lives in the emulator's netns (set on the
     # channel when the remote target was derived from a rehost); a physical box uses the bridge.
     net_container = ch.get("net_container")

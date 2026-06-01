@@ -153,6 +153,20 @@ def local_network_scope(base_url: str) -> NetworkScope:
     return NetworkScope(allow=frozenset({f"{host}:{port}"}), rationale=f"web surface {base_url}")
 
 
+def local_tcp_scope(host: str, port: int) -> NetworkScope:
+    """Like `local_network_scope` but for a raw host:port (a non-HTTP service on a
+    loopback/private device — e.g. a rehosted device's bind shell on some high port).
+    **Refuses any non-local destination**, the same structural containment as the web tier."""
+    if not (host or "").strip():
+        raise PolicyViolation("a TCP scope needs a host")
+    if not _host_is_local(host):
+        raise PolicyViolation(
+            f"{host!r} is not a loopback/private address — local-network egress is "
+            "restricted to local targets (external hosts need the live-remote tier)")
+    return NetworkScope(allow=frozenset({f"{host}:{int(port)}"}),
+                        rationale=f"local service {host}:{port}")
+
+
 def assert_allows_egress(dest: str | None = None, scope: NetworkScope | None = None,
                          policy: AnalysisPolicy | None = None) -> None:
     """Gate every outbound connection. Fails closed on two independent checks: the

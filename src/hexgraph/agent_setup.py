@@ -128,6 +128,26 @@ do to an extracted/rehosted rootfs, but live:
   find hardcoded secrets/creds, and feed findings into the graph (e.g. read /etc/shadow → note
   weak hashes; netstat → record listening `socket` nodes). Requires **features.remote**;
   egress is pinned to the one authorized host and audited.
+- **`remote_launch(target, path, args?)`** is the ONE non-read-only remote op: start a service
+  that didn't auto-start (so its socket comes up for live testing) by binary path + args
+  (shell-quoted, backgrounded — no arbitrary shell). Many rehosted devices don't boot their
+  vulnerable daemon; launch it (e.g. `remote_launch(dev, "/sbin/socket_cmd", ["1337"])`), then
+  test the port (below). features.remote.
+
+## 2d. Non-HTTP live services (raw TCP) — bind shells, vendor protocols, custom daemons
+A device exposes more than web: a bind shell, a binary control protocol, a pwnable daemon on
+some high port. `rehost` returns `ports` (everything that answered); a `socket` node or netstat
+shows what's listening. To assess these LIVE:
+- **`tcp_request(target, port, payload?)`** is your hands on a raw socket (the non-HTTP
+  `http_request`): connect to the device's port (through the emulator netns when rehosted),
+  optionally send `payload` bytes, read the bounded response. Omit `payload` to banner-grab and
+  fingerprint the service. (If the service isn't up, `remote_launch` it first.)
+- **Prove it** with `verify_poc(target, {transport:"tcp", port, payload:"…{{NONCE}}…",
+  oracle:{type:"response_contains", value:"{{NONCE}}"}})`. For a command-injection daemon,
+  inject something the service must COMPUTE/RUN to emit the nonce (e.g. `;echo {{NONCE}}`) —
+  the probe strips your sent bytes before matching, so a daemon that merely echoes your payload
+  can't forge it. Requires **features.network**; bounded to the device host:port, audited.
+- Record the service as a `socket` node, the verified PoC as a `poc` finding `confirms`→ the vuln.
 
 ## 3. Record AS YOU GO — write to the graph BEFORE you've confirmed things
 Capture the moment you have a lead, not after you've proven it. The graph is a

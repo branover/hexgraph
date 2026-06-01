@@ -250,6 +250,66 @@ def run_web_poc(session: Session, project: Project, target: Target, *, steps: li
                                     net_container=_rehost_container(target))
 
 
+def _device_host(target: Target) -> str | None:
+    """The loopback/private IP of a live device behind this target, for raw-TCP access:
+    a rehosted web surface records the device IP under channel.rehost.ip; a `remote` target
+    records it as channel.host; otherwise fall back to the web base_url's host."""
+    ch = _channel(target)
+    rehost = ch.get("rehost") or {}
+    if rehost.get("ip"):
+        return rehost["ip"]
+    if ch.get("host"):
+        return ch["host"]
+    base = ch.get("base_url")
+    if base:
+        from urllib.parse import urlparse
+        return urlparse(base).hostname
+    return None
+
+
+def run_tcp_probe(session: Session, project: Project, target: Target, *, port: int,
+                  payload: str | None = None, oracle: dict | None = None,
+                  read_bytes: int | None = None, runner=None, task_id=None) -> dict:
+    """Talk to a raw TCP service on a live device (the non-HTTP analogue of run_http_request /
+    run_web_poc). Reaches `<device_host>:<port>` — the device IP of a rehosted surface or a
+    `remote` target — through the emulator netns when applicable. Same bounded-egress contract
+    as the web tools: a per-target deny-all-but-this scope (loopback/private only, this port),
+    policy-gated (features.network) and audited. With an `oracle`, the probe strips the sent
+    payload (reflection) before matching, so a verified result is unforgeable."""
+    from hexgraph import settings
+    from hexgraph.engine.audit import record_egress
+    from hexgraph.policy import (PolicyViolation, assert_allows_egress, current_policy,
+                                 local_tcp_scope)
+    from hexgraph.sandbox.executor import get_executor
+
+    host = _device_host(target)
+    if not host:
+        raise ValueError("target has no live device host (rehost ip / remote host / base_url)")
+    scope = local_tcp_scope(host, int(port))  # raises if the host isn't loopback/private
+    dest = next(iter(scope.allow))
+    try:
+        assert_allows_egress(dest, scope, current_policy())
+    except PolicyViolation:
+        record_egress(session, project_id=project.id, target_id=target.id, task_id=task_id,
+                      dest=dest, allowed=False, tool="tcp_probe",
+                      detail="blocked: network egress not permitted by policy")
+        raise
+    record_egress(session, project_id=project.id, target_id=target.id, task_id=task_id,
+                  dest=dest, allowed=True, tool="tcp_probe", detail=scope.rationale)
+
+    runner = runner or get_executor()
+    timeout = int(settings.get("features.network.timeout", 30) or 30)
+    channel = {"host": host, "port": int(port), "allow": sorted(scope.allow), "timeout": timeout}
+    if payload is not None:
+        channel["payload"] = payload
+    if oracle:
+        channel["oracle"] = oracle
+    if read_bytes is not None:
+        channel["read_bytes"] = int(read_bytes)
+    return runner.run_channel_probe("tcp_probe.py", channel=channel,
+                                    net_container=_rehost_container(target))
+
+
 def run_web_recon(session: Session, project: Project, target: Target, task=None, runner=None) -> dict:
     """Phase 2: LIVE, bounded liveness-probe of a web surface's endpoints. Egress is
     gated by the policy seam (`features.network` → bounded local-network tier) and a

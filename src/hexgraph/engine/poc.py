@@ -66,6 +66,31 @@ def _is_web(target: Target) -> bool:
         (target.metadata_json or {}).get("channel", {}).get("base_url"))
 
 
+def _is_tcp(spec: dict) -> bool:
+    """A raw-TCP PoC: `{transport:"tcp", port, payload?, oracle}` (or a nested `tcp` block).
+    Reaches a live socket service on the device — the network tier, not byte execution."""
+    return (spec.get("transport") == "tcp") or bool(spec.get("tcp"))
+
+
+def _verify_tcp_poc(session, project, target, spec, runner, nonce) -> dict:
+    """Raw-TCP PoC: send the spec's payload to the device's port and evaluate the oracle on
+    the response (the probe strips the sent payload first, so a match is unforgeable).
+    {{NONCE}} is already substituted. Gated by the SAME bounded-egress policy as the web
+    tools (network on + local-only scope) and audited."""
+    from hexgraph.engine.surfaces import run_tcp_probe
+
+    tcp = spec.get("tcp") if isinstance(spec.get("tcp"), dict) else spec
+    port = tcp.get("port") or spec.get("port")
+    if not port:
+        raise ValueError("a tcp PoC spec needs a `port` (and usually `payload` + `oracle`)")
+    oracle = spec.get("oracle") or tcp.get("oracle") or {}
+    result = run_tcp_probe(session, project, target, port=int(port), payload=tcp.get("payload"),
+                           oracle=oracle, runner=runner)
+    return {"verified": bool(result.get("verified")), "detail": result.get("detail"),
+            "exit_code": None, "output": (result.get("response") or "")[:2000],
+            "nonce": nonce, "spec": spec}
+
+
 def _verify_web_poc(session, project, target, spec, runner, nonce) -> dict:
     """Web PoC: run the spec's HTTP steps and evaluate its oracle on the final response
     (cookies carry across steps). {{NONCE}} is already substituted. Gated by the SAME
@@ -88,16 +113,22 @@ def verify_poc(session: Session, project: Project, target: Target, spec: dict,
     """Run a PoC spec against `target` and report whether it worked.
 
     A `{{NONCE}}` placeholder anywhere in the spec is replaced with a fresh random
-    token before running, making the oracle unforgeable. Two flavours, by target:
-    - **binary** → run it in the sandbox (argv/env/stdin + an output/exit/crash oracle);
-      policy-gated by `assert_allows_execution` (PoC/fuzzing enabled).
+    token before running, making the oracle unforgeable. Three flavours:
+    - **raw TCP** (spec has `transport:"tcp"` or a `tcp` block) → send `payload` to the
+      device's `port` and check a `response_contains` oracle; reaches a live socket service
+      on a rehosted/remote device, gated by the bounded-egress network tier. Checked FIRST,
+      since a rehosted device is also a web surface.
     - **web surface** (a `web_app` Channel) → send the spec's HTTP `steps` and check a
       `body_contains`/`status_is`/`status_differs` oracle on the final response; gated by
-      the bounded-egress network tier instead. Returns {verified, exit_code, output,
-      detail, nonce, spec}."""
+      the bounded-egress network tier.
+    - **binary** → run it in the sandbox (argv/env/stdin + an output/exit/crash oracle);
+      policy-gated by `assert_allows_execution` (PoC/fuzzing enabled).
+    Returns {verified, exit_code, output, detail, nonce, spec}."""
     nonce = "HEXGRAPH_PWNED_" + secrets.token_hex(6)
     live = _substitute(copy.deepcopy(spec or {}), nonce)
 
+    if _is_tcp(live):
+        return _verify_tcp_poc(session, project, target, live, runner, nonce)
     if _is_web(target):
         return _verify_web_poc(session, project, target, live, runner, nonce)
 
