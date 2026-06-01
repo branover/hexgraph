@@ -304,6 +304,39 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-01: **FirmAE boot-reliability hardening + real-firmware live-loop validation (DVRF).**
+  Durable fix for the recurring makeImage **silent hang** (~12-min stall → "no device IP"), which has
+  TWO distinct causes — both now handled in `docker/firmae/rehost_entry.sh`:
+  (1) **stale/leaked loop** backing `/FirmAE/scratch/<iid>/image.raw` shadows the fresh loop — cleanup
+  now matches **`(deleted)`-backed** loops, drops any `dmsetup`/kpartx map *before* detaching (so a
+  "busy" loop releases), repeats a few passes, and **logs** anything still wedged;
+  (2) **missing partition node (the deeper root cause, found live)** — FirmAE's `add_partition` runs
+  `losetup -Pf image.raw` then busy-waits forever for `/dev/loopNp1`, but `losetup -P` doesn't reliably
+  create that node in a privileged container, so it spins indefinitely (confirmed by hand: loop0 up but
+  `/dev/loop0p1` absent; `kpartx -a` + `mknod … group disk` unblocked it). Shipped a **background
+  partition-node healer** that creates the missing `p1` node automatically — and (review fix) also
+  **`chown`s an existing wrong-group `p1` to `root:disk`**, so `add_partition`'s *second* busy-wait
+  (`ls -al … | grep disk`) can't spin forever either;
+  (3) a **makeImage-phase fail-fast watchdog**, scoped strictly to extraction. It judges progress
+  SOLELY by `makeImage.log` activity (review fix: `image.raw` is fdisk-preallocated full-size, a dead
+  signal) and **disarms the instant makeImage completes** (detected via FirmAE's `time_image`/
+  `makeNetwork.log` artifacts), so it can NEVER false-abort the legitimate ~360s network-inference
+  boot that follows (review fix: the prior size+log watchdog falsely bailed mid-inference). On no
+  `makeImage.log` progress for `HEXGRAPH_MAKEIMAGE_STALL`s (default 300) or a dead pipeline it prints a
+  clear `ip:null` marker + dumps `makeImage.log`/`makeNetwork.log`/qemu-serial tails + tears down
+  (`FirmAERehoster` maps `ip:null` → clean `RehostError`); the overall `BOOT_BUDGET` governs inference.
+  Also widened the device **port-probe** sweep to include high vendor/admin ports (8000/8888/49152/
+  **52000** etc.) so auto-`remote`/raw-TCP intel reflects high-port management UIs (DVRF's is on :52000);
+  each probe keeps a hard timeout. Docs: `docs/design-rehosting.md` "Honest limits". **Real-firmware
+  validation:** DVRF (Linksys, MIPS) booted under FirmAE via `rehost_firmware()` (brand=linksys) →
+  device **192.168.1.1**, web up on **:80**, `web_app` surface registered, makeImage completing and the
+  boot reaching an IP through network inference with NO false watchdog abort. Honest live-loop result:
+  DVRF's FirmAE boot exposes **only port 80** (no ssh/telnet, web 302→dead :52000 unconfigured-router
+  splash), so a **verified live raw-TCP PoC is BLOCKED at "get initial access"** — no shell to
+  `remote_launch` the `socket_cmd`/`socket_bof` pwnable, nothing auto-listening on a raw port. This is a
+  real-world firmware limit, not a HexGraph tooling gap (the raw-TCP machinery —
+  `tcp_probe`/`verify_poc`-tcp/`remote_launch` — remains proven against a synthetic live netns socket).
+  VR feedback in `docs/vr-feedback.md`. No model/DB change → no migration.
 - 2026-06-01: **fix: firmware-unpack basename collision (silent graph corruption).** `ingest_file`
   copied every artifact to a flat `artifacts/<basename>`, so two different files (or two unpacked
   firmware children) sharing a basename — e.g. `bin/foo` and `sbin/foo`, or two firmwares both named
