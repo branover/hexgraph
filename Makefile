@@ -9,7 +9,7 @@ PY ?= .venv/bin/python
 PIP ?= .venv/bin/pip
 export HEXGRAPH_LLM_BACKEND ?= mock
 
-.PHONY: help setup install venv ui sandbox-build test demo test-live fixtures serve vulnrouter firmae-build iotgoat clean
+.PHONY: help setup install venv ui sandbox-build test demo test-live fixtures serve vulnrouter firmae-build qemu-build iotgoat clean
 
 help: ## Show this help
 	@echo "HexGraph — get started with:  make setup  &&  make serve"
@@ -47,12 +47,15 @@ serve: ## Start the loopback-only API/UI (http://127.0.0.1:8765)
 vulnrouter: ## Stand up the live vulnrouter web target + a project pointed at it (Claude engagement)
 	$(PY) scripts/vulnrouter_engagement.py
 
-firmae-build: ## Build the FirmAE rehosting image (heavy; needs privileged Docker + /dev/net/tun to run)
+firmae-build: ## Build the FirmAE rehosting image (vendor firmware blobs; privileged + /dev/net/tun to run)
 	docker build -f docker/firmae/Dockerfile -t hexgraph-firmae:latest .
 
-# IoTGoat's ARM (Raspberry Pi 2) image — uncompressed, FirmAE-friendly. Override IOTGOAT_URL
-# for the x86 build (IoTGoat-x86.img.gz) or FW=<path> to use a local image.
-IOTGOAT_URL ?= https://github.com/OWASP/IoTGoat/releases/download/v1.0/IoTGoat-raspberry-pi2.img
+qemu-build: ## Build the qemu+KVM rehosting image (full-OS disk images; needs --device /dev/kvm to run)
+	docker build -f docker/qemu/Dockerfile -t hexgraph-qemu:latest .
+
+# IoTGoat's x86 disk image — a full bootable OS, so rehost auto-selects the qemu+KVM rehoster
+# (it boots OpenWrt as-is, unlike FirmAE). Override IOTGOAT_URL or FW=<path> for another image.
+IOTGOAT_URL ?= https://github.com/OWASP/IoTGoat/releases/download/v1.0/IoTGoat-x86.img.gz
 iotgoat: ## Fetch IoTGoat (FW=<path> to use your own), rehost it, register its live web surface
 	@if [ -n "$(FW)" ]; then \
 		$(PY) scripts/rehost_engagement.py "$(FW)" --name "IoTGoat"; \

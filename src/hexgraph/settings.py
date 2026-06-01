@@ -91,8 +91,9 @@ DEFAULTS: dict[str, Any] = {
             # booted device still needs features.network (it's a private-IP surface).
             # (docs/design-rehosting.md)
             "enabled": False,
-            "image": "hexgraph-firmae:latest",  # the FirmAE Docker image to drive
-            "timeout": 600,                       # boot wall-clock budget (s)
+            "image": "hexgraph-firmae:latest",      # FirmAE image (vendor firmware blobs)
+            "qemu_image": "hexgraph-qemu:latest",    # qemu+KVM image (full-OS disk images)
+            "timeout": 600,                           # boot wall-clock budget (s)
         },
     },
 }
@@ -128,6 +129,7 @@ ALLOWED: dict[str, tuple[Any, set | None]] = {
     "features.network.timeout": (int, None),
     "features.rehost.enabled": (bool, None),
     "features.rehost.image": (str, None),
+    "features.rehost.qemu_image": (str, None),
     "features.rehost.timeout": (int, None),
 }
 
