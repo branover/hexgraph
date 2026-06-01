@@ -129,6 +129,15 @@ def _host_is_local(host: str) -> bool:
         ip = ipaddress.ip_address(host)
     except ValueError:
         return False
+    # Defense-in-depth: an IPv4-mapped/transitional IPv6 literal (e.g.
+    # `::ffff:169.254.169.254`, 6to4, Teredo) parses as IPv6 with is_link_local
+    # False, so the embedded IPv4 (which CAN be link-local cloud-metadata) would
+    # otherwise slip past. Reject these mixed forms outright at this tier — a real
+    # local target is always expressed as a plain v4 or native v6 literal.
+    if isinstance(ip, ipaddress.IPv6Address) and (
+        ip.ipv4_mapped is not None or ip.sixtofour is not None or ip.teredo is not None
+    ):
+        return False
     # Loopback + RFC1918 private only. Link-local is deliberately EXCLUDED so the
     # cloud-metadata endpoint (169.254.169.254) is never reachable — an SSRF vector
     # unrelated to a local web/rehost target. (Python's is_private INCLUDES

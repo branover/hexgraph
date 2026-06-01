@@ -38,7 +38,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # disposable image, not a shared host.
 RUN pip3 install --no-cache-dir --break-system-packages \
         pyelftools \
-        lief \
         python-magic \
         r2pipe \
         paramiko

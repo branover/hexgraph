@@ -132,3 +132,73 @@ def test_worker_marks_task_failed_on_exception(hg_home):
     status = run_task_sync(tid)
     assert status == "failed"
     assert os.path.isfile(os.path.join(log_path, "error.txt"))
+
+
+def test_host_is_local_rejects_ipv4_mapped_metadata():
+    """Review #14: an IPv4-mapped/transitional IPv6 literal must not smuggle a
+    link-local cloud-metadata IP past the loopback/private gate (it parses as IPv6
+    with is_link_local False). Plain loopback/private/native-v6 forms still pass;
+    the bare metadata v4 is still rejected."""
+    from hexgraph.policy import _host_is_local
+
+    # Accepted: real local destinations.
+    assert _host_is_local("127.0.0.1")
+    assert _host_is_local("::1")
+    assert _host_is_local("10.0.0.5")
+    assert _host_is_local("192.168.1.1")
+    assert _host_is_local("172.16.0.9")
+
+    # Rejected: the cloud-metadata endpoint and its IPv4-mapped/transitional disguises.
+    assert not _host_is_local("169.254.169.254")
+    assert not _host_is_local("::ffff:169.254.169.254")
+    assert not _host_is_local("::ffff:a9fe:a9fe")          # same address, hextet form
+    # Mapped/transitional forms are refused outright at this tier, even when the
+    # embedded v4 would itself be private — a real local target is a plain literal.
+    assert not _host_is_local("::ffff:127.0.0.1")
+    assert not _host_is_local("::ffff:192.168.1.1")
+    assert not _host_is_local("2002:7f00:0001::")          # 6to4 wrapping 127.0.0.1
+
+
+def test_remote_probe_run_tool_allowlist_rejects_ls():
+    """Review #15: `ls` is NOT in TOOLS, so an op=run_tool with tool=ls hits the
+    allowlist boundary and yields an empty command (the real `ls` is op=='ls')."""
+    from hexgraph.sandbox.probes.remote_probe import _build_command
+
+    assert _build_command({"op": "run_tool", "tool": "ls", "path": "/etc"}) == ""
+    assert _build_command({"op": "run_tool", "tool": "not_a_tool"}) == ""
+    # A genuine allowlisted tool still resolves to its fixed template (no path appended).
+    assert _build_command({"op": "run_tool", "tool": "id"}) == "id"
+    assert _build_command({"op": "run_tool", "tool": "uname", "path": "/ignored"}) == "uname -a"
+    # The real `ls` op is the separate op=='ls' block (path shell-quoted).
+    assert _build_command({"op": "ls", "path": "/etc"}) == "ls -la /etc"
+
+
+def test_ghidra_bridge_rejects_unsafe_function_name():
+    """Review #17: a caller-supplied function name is validated against the strict
+    symbol-name allowlist before any remote_eval, and the safe path passes the name
+    as a BOUND variable (never interpolated into the eval'd code)."""
+    import pytest
+
+    from hexgraph.engine.ghidra_bridge import BridgeUnavailable, _RemoteOps
+
+    class _FakeBridge:
+        def __init__(self):
+            self.calls = []
+
+        def remote_eval(self, code, **kwargs):
+            self.calls.append((code, kwargs))
+            return "decompiled"
+
+    ops = _RemoteOps(_FakeBridge())
+
+    # Breakout attempts are refused before touching the bridge.
+    for bad in ("'); __import__('os').system('id'); ('", "foo bar", "a\nb", "f()", ""):
+        with pytest.raises(BridgeUnavailable):
+            ops._decompile_one(bad)
+
+    # A valid symbol name is passed as a bound `fn` kwarg, not interpolated.
+    out = ops._decompile_one("sym.process_request")
+    assert out == "decompiled"
+    code, kwargs = ops.b.calls[-1]
+    assert kwargs == {"fn": "sym.process_request"}
+    assert "sym.process_request" not in code  # name never spliced into the eval string

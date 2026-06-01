@@ -80,12 +80,9 @@ def _build_command(ch: dict) -> str:
         return f"head -c {n} -- {path}"
     if op == "run_tool":
         tool = ch.get("tool")
-        if tool not in TOOLS:
+        if tool not in TOOLS:  # allowlist boundary: anything not in TOOLS (incl. `ls`) is rejected
             return ""
-        cmd = TOOLS[tool]
-        if ch.get("path") and tool in ("ls",):  # (none take a path today besides explicit ls below)
-            cmd = f"{cmd} {shlex.quote(ch['path'])}"
-        return cmd
+        return TOOLS[tool]
     if op == "ls":
         return f"ls -la {shlex.quote(ch.get('path') or '/')}"
     if op == "launch":

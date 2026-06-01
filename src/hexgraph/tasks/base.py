@@ -1,10 +1,13 @@
-"""The task registry seam (SPEC §5).
+"""`TaskContext` — the per-run carrier passed to each task's `execute_*` function.
 
-Every task type (`recon`, `static_analysis`, `reverse_engineering`,
-`harness_generation`, `pattern_sweep`) implements the same `TaskHandler`
-protocol: `plan() -> run() -> suggest_followups()`. General flow: gather
-deterministic facts with sandboxed tools → ask the LLM to reason over those
-facts → emit findings.
+Task dispatch is a plain if/elif over `execute_<type>(...)` functions in
+`engine/worker.py` (`execute_recon`, `execute_static_analysis`,
+`execute_harness_generation`, `execute_fuzzing`, `execute_poc`, …), one per task
+type — there is no handler registry or `TaskHandler` protocol. Each `execute_*`
+follows the same shape: gather deterministic facts with sandboxed tools → ask
+the LLM to reason over those facts (via the agent loop) → emit findings.
+`TaskContext` is the shared bundle those functions consume; it carries tool
+output and prompt hints, **never raw target bytes**.
 
 **The LLM never sees raw target bytes** — only tool output (decompilation,
 strings, imports) carried in `TaskContext`.
@@ -13,24 +16,14 @@ strings, imports) carried in `TaskContext`.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any
 
 from hexgraph.llm.base import LLMBackend, LLMRequest
-from hexgraph.models.finding import Finding, FollowupSuggestion
-
-
-@dataclass
-class ToolStep:
-    """One sandboxed tool invocation the handler plans to run."""
-
-    tool: str
-    args: list[str] = field(default_factory=list)
-    description: str = ""
 
 
 @dataclass
 class TaskContext:
-    """Everything a handler needs for one run. Carries tool output, never raw bytes."""
+    """Everything an `execute_*` task needs for one run. Carries tool output, never raw bytes."""
 
     task_id: str
     task_type: str
@@ -86,19 +79,3 @@ class TaskContext:
             mock_scenario=self.mock_scenario,
             template_vars=self.template_vars(),
         )
-
-
-class TaskHandler(Protocol):
-    type: str
-
-    def plan(self, ctx: TaskContext) -> list[ToolStep]:
-        """Decide which sandboxed tool steps to run for this target/objective."""
-        ...
-
-    def run(self, ctx: TaskContext) -> list[Finding]:
-        """Execute the task and emit findings."""
-        ...
-
-    def suggest_followups(self, finding: Finding) -> list[FollowupSuggestion]:
-        """Propose next tasks the user can launch in one click."""
-        ...
