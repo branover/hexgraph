@@ -108,6 +108,21 @@ URL (or a `web_app` target already exists), assess it dynamically:
   (or `input`) node, and `taints` the param → the handler/sink; the verified PoC is a
   `poc` finding `confirms`→ the vulnerability, same rhythm as below.
 
+## 2c. Live remote devices (SSH/telnet) — a box you don't have firmware for
+If the operator has a physical device on the bench (or a rehosted device) reachable over
+SSH/telnet, you can do VR on whatever you can read from it — the same KINDS of things you'd
+do to an extracted/rehosted rootfs, but live:
+- the operator registers it (a `remote` target) and supplies credentials out-of-band; you get
+  the target id.
+- **`remote_list_files(target, path)`** enumerates the filesystem, **`remote_read_file(target,
+  path)`** reads a file (configs, scripts, keys, /etc/passwd, /etc/shadow), and
+  **`remote_run(target, tool)`** runs an allowlisted READ-ONLY recon tool
+  (uname/id/ps/netstat/mount/ifconfig/df/env/passwd/release/ls). These are read-only by
+  construction — there is no arbitrary-shell tool. Use them to map the device, pull configs,
+  find hardcoded secrets/creds, and feed findings into the graph (e.g. read /etc/shadow → note
+  weak hashes; netstat → record listening `socket` nodes). Requires **features.remote**;
+  egress is pinned to the one authorized host and audited.
+
 ## 3. Record AS YOU GO — write to the graph BEFORE you've confirmed things
 Capture the moment you have a lead, not after you've proven it. The graph is a
 live worklog: a suspicion recorded early is visible to the analyst and other

@@ -729,6 +729,68 @@ def rehost(target_id: str, brand: str | None = None) -> dict:
                 "rehost": ch.get("rehost")}
 
 
+def register_remote(project_id: str, host: str, port: int | None = None, username: str = "root",
+                    transport: str = "ssh", name: str | None = None) -> dict:
+    """Register a LIVE remote device (a physical box on the bench, or a rehosted device) as a
+    `remote` target reached over SSH/telnet — then run read-only analysis on it with
+    remote_list_files / remote_read_file / remote_run. Credentials are NOT passed here: the
+    operator sets them via env (HEXGRAPH_REMOTE_PASSWORD/KEY) or config.toml [remote], read
+    only at connect (never stored). Requires features.remote."""
+    from hexgraph.engine.remote import register_remote_target
+
+    with session_scope() as s:
+        project = s.get(Project, project_id)
+        if project is None:
+            return {"error": "project not found"}
+        try:
+            t = register_remote_target(s, project, host, port=port, username=username,
+                                       transport=transport, name=name)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        return {"id": t.id, "name": t.name, "kind": t.kind.value,
+                "channel": (t.metadata_json or {}).get("channel")}
+
+
+def _remote_op(target_id: str, **kw) -> dict:
+    from hexgraph.engine.remote import run_remote
+    from hexgraph.policy import PolicyViolation
+
+    with session_scope() as s:
+        t = s.get(Target, target_id)
+        if t is None:
+            return {"error": "target not found"}
+        try:
+            return run_remote(s, s.get(Project, t.project_id), t, **kw)
+        except PolicyViolation:
+            return {"error": "remote access not permitted — enable features.remote in Settings"}
+        except ValueError as exc:
+            return {"error": str(exc)}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"remote op failed: {exc}"}
+
+
+def remote_list_files(target_id: str, path: str = "/", max_depth: int = 3,
+                      max_entries: int = 2000) -> dict:
+    """Enumerate files on a live remote target (SSH/telnet) under `path` (bounded depth/count)
+    — like list_filesystem for a box you don't have firmware for. Read-only. features.remote."""
+    return _remote_op(target_id, op="list_files", path=path)
+
+
+def remote_read_file(target_id: str, path: str, max_bytes: int | None = None) -> dict:
+    """Read ONE file from a live remote target (bounded; text as-is, binary as hex) — configs,
+    scripts, keys, /etc/passwd. Read-only, the device's own bytes. features.remote."""
+    return _remote_op(target_id, op="read_file", path=path, max_bytes=max_bytes)
+
+
+def remote_run(target_id: str, tool: str, path: str | None = None) -> dict:
+    """Run ONE allowlisted READ-ONLY recon tool on a live remote target — `tool` in
+    {uname,id,ps,netstat,mount,ifconfig,df,env,passwd,release,ls}. No arbitrary shell; a `path`
+    (for ls) is shell-quoted. The same kinds of recon we'd run on a rehosted rootfs. features.remote."""
+    if tool == "ls":
+        return _remote_op(target_id, op="ls", path=path or "/")
+    return _remote_op(target_id, op="run_tool", tool=tool, path=path)
+
+
 def http_request(target_id: str, method: str, path: str, params: dict | None = None,
                  headers: dict | None = None, body=None, json_body: bool = False,
                  session: str | None = None) -> dict:
@@ -1002,6 +1064,14 @@ _CATALOG = [
      {"type": "object", "properties": {"target_id": {"type": "string"}, "type": {"type": "string"}, "objective": {"type": "string"}, "params": {"type": "object"}}, "required": ["target_id", "type"]}),
     ("run", "rehost", rehost, "Boot a FIRMWARE target under full-system emulation — auto-selects qemu+KVM for a full-OS disk image (.vmdk/.qcow2/partitioned .img) or FirmAE for a vendor blob (squashfs/cramfs/…) — and register its live web server as a web_app surface child, then assess the running device with surface_recon/web_recon/http_request/verify_poc, fused to the firmware's static graph. Requires features.rehost (boot) + features.network (assess). Heavy + best-effort.",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "brand": {"type": "string"}}, "required": ["target_id"]}),
+    ("run", "register_remote", register_remote, "Register a LIVE remote device (physical box or rehosted device) as a `remote` target reached over SSH/telnet — then analyze it read-only with remote_list_files/remote_read_file/remote_run. Creds come from operator env/config (HEXGRAPH_REMOTE_PASSWORD/KEY or config.toml [remote]), never stored. Requires features.remote.",
+     {"type": "object", "properties": {"project_id": {"type": "string"}, "host": {"type": "string"}, "port": {"type": "integer"}, "username": {"type": "string"}, "transport": {"type": "string"}, "name": {"type": "string"}}, "required": ["project_id", "host"]}),
+    ("run", "remote_list_files", remote_list_files, "Enumerate files on a live remote target (SSH/telnet) under `path` (bounded depth/count) — list_filesystem for a box you don't have firmware for. Read-only. Requires features.remote.",
+     {"type": "object", "properties": {"target_id": {"type": "string"}, "path": {"type": "string"}, "max_depth": {"type": "integer"}, "max_entries": {"type": "integer"}}, "required": ["target_id"]}),
+    ("run", "remote_read_file", remote_read_file, "Read ONE file from a live remote target (bounded; text as-is, binary as hex) — configs/scripts/keys//etc/passwd. The device's own bytes, read-only. Requires features.remote.",
+     {"type": "object", "properties": {"target_id": {"type": "string"}, "path": {"type": "string"}, "max_bytes": {"type": "integer"}}, "required": ["target_id", "path"]}),
+    ("run", "remote_run", remote_run, "Run ONE allowlisted READ-ONLY recon tool on a live remote target — tool in {uname,id,ps,netstat,mount,ifconfig,df,env,passwd,release,ls}. No arbitrary shell (a path for ls is shell-quoted). Same recon we'd run on a rehosted rootfs. Requires features.remote.",
+     {"type": "object", "properties": {"target_id": {"type": "string"}, "tool": {"type": "string"}, "path": {"type": "string"}}, "required": ["target_id", "tool"]}),
     ("run", "register_surface", register_surface, "Register a WEB attack surface (web_app target via an HTTP Channel, no bytes); pass an optional offline route spec, then run_task(surface_recon) to map endpoints/params + routes_to→handler edges. Offline (no egress).",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "base_url": {"type": "string"}, "name": {"type": "string"}, "endpoints": {"type": "array"}}, "required": ["project_id", "base_url"]}),
 ]

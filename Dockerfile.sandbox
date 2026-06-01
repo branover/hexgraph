@@ -40,7 +40,8 @@ RUN pip3 install --no-cache-dir --break-system-packages \
         pyelftools \
         lief \
         python-magic \
-        r2pipe
+        r2pipe \
+        paramiko
 
 # Ghidra is opt-in (large; pulls a headless JDK + the Ghidra distribution). The
 # R2Decompiler stays the always-available default; GhidraDecompiler is selected

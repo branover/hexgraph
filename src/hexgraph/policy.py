@@ -32,6 +32,7 @@ class NetworkScope:
 TIER_STATIC_ONLY = 0       # no exec, no network (default)
 TIER_SANDBOXED_EXEC = 1    # exec (PoC/fuzzing), still --network none
 TIER_LOCAL_NETWORK = 2     # bounded egress to loopback/private targets (features.network)
+TIER_LIVE_REMOTE = 3       # bounded egress to ONE operator-authorized remote host (features.remote)
 
 # Hostnames treated as local (the Docker bridge gateway / loopback aliases). Any
 # other hostname that doesn't resolve to a literal private/loopback IP is refused
@@ -45,6 +46,7 @@ class AnalysisPolicy:
     allow_execution: bool = False  # never run the target (v1)
     allow_network: bool = False    # sandboxes run --network none unless this is on
     allow_rehost: bool = False     # full-system emulation of the firmware (features.rehost)
+    allow_remote: bool = False     # connect to ONE live remote device (features.remote)
     tier: int = TIER_STATIC_ONLY
     # The bounded egress scope, when one applies. None == --network none. The scope is
     # built per-target (local_network_scope); the policy only authorizes "network at all".
@@ -62,10 +64,15 @@ def current_policy() -> AnalysisPolicy:
         exec_on = bool(settings.get("features.fuzzing.enabled") or settings.get("features.poc.enabled"))
         net_on = bool(settings.get("features.network.enabled"))
         rehost_on = bool(settings.get("features.rehost.enabled"))
-        if exec_on or net_on or rehost_on:
-            tier = TIER_LOCAL_NETWORK if net_on else TIER_SANDBOXED_EXEC
+        remote_on = bool(settings.get("features.remote.enabled"))
+        if exec_on or net_on or rehost_on or remote_on:
+            # features.remote raises the live-remote tier and inherently permits egress (to the
+            # one operator-authorized host — enforced by remote_scope, not by allow_network alone).
+            tier = (TIER_LIVE_REMOTE if remote_on else
+                    TIER_LOCAL_NETWORK if net_on else TIER_SANDBOXED_EXEC)
             return AnalysisPolicy(static_only=False, allow_execution=exec_on,
-                                  allow_network=net_on, allow_rehost=rehost_on, tier=tier)
+                                  allow_network=net_on or remote_on, allow_rehost=rehost_on,
+                                  allow_remote=remote_on, tier=tier)
     except Exception:  # noqa: BLE001 — a settings problem must never widen the policy
         pass
     return AnalysisPolicy()
@@ -85,6 +92,27 @@ def assert_allows_rehost(policy: AnalysisPolicy | None = None) -> None:
         raise PolicyViolation(
             "firmware rehosting is not permitted (enable features.rehost to boot the firmware "
             "under full-system emulation)")
+
+
+def assert_allows_remote(policy: AnalysisPolicy | None = None) -> None:
+    """Gate connecting to a LIVE remote device (SSH/telnet). Opt-in via features.remote —
+    the live-remote tier, where the operator authorizes a specific physical/networked target."""
+    policy = policy or current_policy()
+    if not policy.allow_remote:
+        raise PolicyViolation(
+            "remote-device access is not permitted (enable features.remote to connect to an "
+            "operator-authorized SSH/telnet target)")
+
+
+def remote_scope(host: str, port: int) -> NetworkScope:
+    """A deny-all-but-this egress scope for ONE operator-authorized remote device. Unlike
+    local_network_scope this does NOT restrict to loopback/private — the operator has named a
+    specific host they're authorized to test (the live-remote tier) — but it still pins egress
+    to that single host:port and refuses everything else."""
+    if not (host or "").strip():
+        raise PolicyViolation("remote target needs a host")
+    return NetworkScope(allow=frozenset({f"{host}:{int(port)}"}),
+                        rationale=f"operator-authorized remote device {host}:{port}")
 
 
 def egress_scope(policy: AnalysisPolicy | None = None) -> NetworkScope | None:
