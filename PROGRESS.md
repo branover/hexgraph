@@ -311,6 +311,29 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-01: **Verification oracles Phase 2 — the DoS `liveness`/`unavailable` oracle**
+  ([`docs/design-verification-oracles.md`](docs/design-verification-oracles.md) §4, branch
+  `build/dos-liveness`). New `verify_liveness` in `engine/oracles.py` (dispatched from
+  `poc.verify_poc` when `spec.oracle.type` ∈ {`liveness`,`unavailable`}). Proves denial-of-service
+  by an **unforgeable LIVENESS TRANSITION** HexGraph observes ITSELF: **baseline UP** (a benign
+  `GET /` / `oracle.probe`, or a raw-TCP connect, succeeds) → **send the DoS input** through the
+  same live web/tcp boundary (response discarded) → **re-probe DOWN with hysteresis** (default 3
+  re-probes, `delay`s between; EVERY one must read DOWN — a single recovered/UP re-probe means only
+  a transient blip → NOT verified). Already-down-at-baseline ⇒ **INCONCLUSIVE** (honest, not
+  verified). The verdict comes solely from HexGraph's own out-of-band re-probe, never the exploit's
+  response. **Policy-seam + audit:** every probe is benign egress via `run_http_request` /
+  `run_tcp_probe`, so it's `features.network`-gated (fails closed when off) and audited to
+  `EgressEvent`. **Binary degradation:** a binary target's liveness oracle is rewritten to the
+  sandbox `crash` oracle (process death already covers it) — no network probe, no reimplementation.
+  **Assurance:** live surface ⇒ `input_reachable/dynamic`, binary-degraded ⇒ `code_present/dynamic`,
+  inconclusive/transient ⇒ `unconfirmed` (via `derive_poc_assurance`, unchanged); re-verify
+  (`POST /api/findings/{id}/verify`) preserves it. Envelope-only — no frozen-schema change, no
+  migration. Also advertised to agents: `get_schemas['verify_poc_oracles'].liveness`, the
+  `verify_poc` docstring + `_CATALOG` entry. Tests: `tests/test_oracles_liveness.py` (10 — verified
+  sustained outage web+tcp, **transient blip does NOT verify** [the unforgeability test],
+  inconclusive-when-already-down, 5xx-counts-as-down, every-probe-audited, binary→crash degradation,
+  network-tier gating, reprobes/delay clamped to a sane range). Full suite: 431 passed, 2 skipped
+  (Docker-gated).
 - 2026-06-01: **PoC presentation — a verified PoC is now actionable** (branch `build/poc-presentation`,
   PR #46). **Regression fix:** `api_verify_finding` (one-click Re-verify) was DROPPING
   `evidence.extra.assurance` — it now refreshes the engine-computed assurance triple at BOTH the canonical

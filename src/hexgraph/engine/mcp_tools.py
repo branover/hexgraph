@@ -631,7 +631,7 @@ def get_schemas() -> dict:
         "annotation_note": "Annotations from an agent land status='proposed' (pending analyst approval).",
         "verify_poc_oracles": {
             "note": "verify_poc's oracle vocabulary. The classic in-band oracles prove a "
-                    "REFLECTED side effect (best for reflected cmdi / auth-bypass); the Phase-1 "
+                    "REFLECTED side effect (best for reflected cmdi / auth-bypass); the extended "
                     "oracles below prove BROADER vuln classes by observing a side effect on a "
                     "channel INDEPENDENT of the exploit's request, so the model can't forge them "
                     "(docs/design-verification-oracles.md). All carry {{NONCE}} substitution.",
@@ -664,6 +664,21 @@ def get_schemas() -> dict:
                         "The exploit writes {{NONCE}}; HexGraph then INDEPENDENTLY reads that "
                         "location (rootfs read_file / remote read_file / a follow-up GET) and checks "
                         "the nonce landed. Reuses existing channels.",
+            },
+            "liveness": {
+                "use_for": "denial of service / crash of a LIVE web or raw-TCP service (a rehosted "
+                           "device, web_app, custom daemon). For a one-shot binary use the in-band "
+                           "'crash' oracle instead (process death already covers it).",
+                "spec": "{steps:[...the DoS request...]|transport+port+payload, oracle:{type:'liveness'"
+                        "|'unavailable', probe?:{method,path}, port?:N, reprobes?:int=3 (1..20), "
+                        "delay?:secs=0.5 (0..10)}}. "
+                        "HexGraph probes the service is UP on its own channel (baseline), sends the "
+                        "DoS input, then RE-PROBES it is DOWN and STAYS down across `reprobes` probes "
+                        "(hysteresis) — a single transient blip does NOT verify. The verdict is "
+                        "HexGraph's own out-of-band re-probe, never the exploit's response, so it's "
+                        "unforgeable; if the service was already down at baseline the result is "
+                        "INCONCLUSIVE (not verified). `probe` is the benign liveness GET (default "
+                        "'GET /'); `port` is the raw-TCP port to connect-probe.",
             },
         },
         "assurance": {
@@ -974,7 +989,7 @@ def verify_poc(target_id: str, poc: dict, finding_id: str | None = None) -> dict
     token, so a match proves the injected behaviour actually happened (not something the
     model could fabricate).
 
-    Beyond reflected output, THREE oracles prove broader vuln classes by observing a side
+    Beyond reflected output, extra oracles prove broader vuln classes by observing a side
     effect on a channel INDEPENDENT of the exploit's request (see get_schemas['verify_poc_oracles']):
     - blind cmdi / SSRF / blind RCE → oracle {type:'callback'} + a {{CALLBACK}} token in the
       payload (the target dials a bounded local listener HexGraph stands up; receiving the
@@ -982,7 +997,10 @@ def verify_poc(target_id: str, poc: dict, finding_id: str | None = None) -> dict
     - arbitrary READ / traversal / disclosure → {plant:{channel,path}|{known_value}} + oracle
       {type:'canary_read'} (HexGraph plants a random canary out-of-band, the read must return it);
     - arbitrary WRITE / persistence → write {{NONCE}}, oracle {type:'oob_write', channel, path?}
-      (HexGraph reads the written location back out-of-band and checks the nonce landed).
+      (HexGraph reads the written location back out-of-band and checks the nonce landed);
+    - denial of service of a LIVE web/TCP service → oracle {type:'liveness', reprobes?, delay?,
+      port?} (HexGraph probes UP, sends the DoS input, then re-probes DOWN and STAYS down across
+      N probes — a transient blip does NOT verify; a binary degrades to the 'crash' oracle).
 
     A verified run records the strongest assurance — input_reachable / dynamic (see
     get_schemas['assurance']) — which an agent CANNOT fake (it requires the oracle to fire).
