@@ -128,24 +128,38 @@ def _resp(method, url, dest, status, headers, raw: bytes) -> dict:
             "headers": hdrs, "set_cookie": set_cookie or [], "body": body, "body_truncated": truncated}
 
 
+def _collect_strings(obj, out: list) -> None:
+    """Recursively gather every string/scalar value from a request component (params/headers/
+    body/json may be nested). Everything a request carries is attacker-controlled."""
+    if isinstance(obj, str):
+        out.append(obj)
+    elif isinstance(obj, bool):
+        pass
+    elif isinstance(obj, (int, float)):
+        out.append(str(obj))
+    elif isinstance(obj, bytes):
+        out.append(obj.decode("utf-8", "replace"))
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            _collect_strings(v, out)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            _collect_strings(v, out)
+
+
 def _echoed_strings(step: dict) -> list[str]:
-    """Everything the request SUBMITTED (path, query/body param values, raw body), in raw +
-    URL-encoded forms — so we can strip a server's reflection of our own payload from the
-    response before a body_contains check. A reflective page (a 403 re-auth form echoing the
-    request URI, a search box, an error page) would otherwise match the {{NONCE}} we sent and
-    forge a 'verified' PoC even though no command ran."""
-    vals: list[str] = []
-    if step.get("path"):
-        vals.append(str(step["path"]))
-    body = step.get("body")
-    if isinstance(body, dict):
-        vals += [str(v) for v in body.values()]
-    elif isinstance(body, (str, bytes)):
-        vals.append(body.decode() if isinstance(body, bytes) else body)
-    for v in (step.get("params") or {}).values():
-        vals.append(str(v))
+    """Everything the request SUBMITTED — path, ALL params, ALL header values, and the FULL body
+    (recursively) — in raw + URL/HTML-encoded forms, so we strip a server's reflection of our own
+    payload from the response before a body_contains check. Stripping the WHOLE request (not a
+    hand-picked field list) means a reflected HEADER or nested JSON field can't forge a 'verified'
+    PoC: a reflective page (403 re-auth form echoing the URI, a search box, an error page that
+    mirrors a header) would otherwise match the {{NONCE}} we sent even though no command ran."""
+    raw: list = []
+    for key in ("path", "params", "headers", "body", "json"):
+        if key in step and step[key] is not None and not isinstance(step[key], bool):
+            _collect_strings(step[key], raw)
     out: list[str] = []
-    for v in vals:
+    for v in raw:
         if not v:
             continue
         out += [v, urllib.parse.quote(v), urllib.parse.quote_plus(v),

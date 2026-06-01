@@ -156,6 +156,29 @@ def test_oob_write_http_not_forgeable_by_reflection(hg_home):
         assert out["verified"] is False
 
 
+def test_oob_write_http_header_reflection_not_forgeable(hg_home):
+    """Forgery via a reflected HEADER (not just params): a read-back endpoint that echoes a
+    request HEADER carrying {{NONCE}} must NOT verify — the full request (headers incl.) is
+    stripped from the response before matching."""
+    _enable_net()
+
+    class HeaderReflect:
+        def run_channel_probe(self, probe, *, channel, net_container=None, secret=None):
+            req = channel.get("request")
+            if req:  # echo a request header back in the body (the forgery)
+                return {"response": {"status": 200, "body": " ".join((req.get("headers") or {}).values())}}
+            return {"steps": [{"status": 200, "body": "written"}]}
+
+    with session_scope() as s:
+        p = create_project(s, name="oob_hdr")
+        t = _web(s, p)
+        spec = {"steps": [{"method": "POST", "path": "/noop", "body": {"x": "{{NONCE}}"}}],
+                "oracle": {"type": "oob_write", "channel": "http",
+                           "request": {"method": "GET", "path": "/echo", "headers": {"X-Probe": "{{NONCE}}"}}}}
+        out = verify_poc(s, p, t, spec, runner=HeaderReflect())
+        assert out["verified"] is False
+
+
 # ── canary_read ────────────────────────────────────────────────────────────────────────
 
 class ReadRunner:
@@ -255,6 +278,31 @@ def test_canary_read_known_secret_read_out_of_band(hg_home):
                 "oracle": {"type": "canary_read"}}
         out = verify_poc(s, p, t, spec, runner=ReturnsSecret())
         assert out["verified"] is True
+
+
+def test_canary_read_known_reflective_endpoint_not_laundered(hg_home):
+    """The `known` read-back must be reflection-stripped too: if known.request points at a
+    REFLECTIVE endpoint that just echoes a submitted value, that value is NOT ground truth — it
+    would launder an attacker-chosen string. After stripping, there's no ground truth → not verified."""
+    _enable_net()
+
+    class LaunderReflect:
+        def run_channel_probe(self, probe, *, channel, net_container=None, secret=None):
+            req = channel.get("request")
+            if req:  # the known-read: echo a submitted param (attacker-chosen "secret")
+                return {"response": {"status": 200, "body": " ".join((req.get("params") or {}).values())}}
+            return {"steps": [{"status": 200, "body": "ATTACKER_CHOSEN"}]}  # exploit echoes the same
+
+    with session_scope() as s:
+        p = create_project(s, name="canary_launder")
+        t = _web(s, p)
+        spec = {"plant": {"known": {"channel": "http",
+                                    "request": {"method": "GET", "path": "/echo",
+                                                "params": {"q": "ATTACKER_CHOSEN"}}}},
+                "steps": [{"method": "GET", "path": "/read"}],
+                "oracle": {"type": "canary_read"}}
+        out = verify_poc(s, p, t, spec, runner=LaunderReflect())
+        assert out["verified"] is False
 
 
 def test_canary_read_not_forgeable_by_reflection(hg_home, monkeypatch):

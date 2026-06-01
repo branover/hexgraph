@@ -64,24 +64,39 @@ def _steps_of(spec: dict) -> list:
     return (spec or {}).get("steps") or ([spec["request"]] if (spec or {}).get("request") else [])
 
 
+def _collect_strings(obj, out: list[str]) -> None:
+    """Recursively gather every string/scalar value from a request component (params/headers/
+    body/json may be nested dicts/lists). EVERYTHING the request carries is attacker-controlled."""
+    if isinstance(obj, str):
+        out.append(obj)
+    elif isinstance(obj, bool):
+        pass
+    elif isinstance(obj, (int, float)):
+        out.append(str(obj))
+    elif isinstance(obj, bytes):
+        out.append(obj.decode("utf-8", "replace"))
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            _collect_strings(v, out)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            _collect_strings(v, out)
+
+
 def _request_echoes(req: dict) -> list[str]:
-    """Everything a request SUBMITTED (path, query/body values), raw + URL/HTML-encoded — so a
-    server's reflection of our own input can be stripped from a response before matching. Mirrors
-    http_probe._echoed_strings; the shared principle that keeps these oracles unforgeable."""
+    """Everything a request SUBMITTED — path, ALL params, ALL header values, and the FULL body
+    (recursively) — in raw + URL/HTML-encoded forms, so a server's reflection of our own input
+    (incl. via a reflected HEADER or a nested JSON field) is stripped from a response before the
+    oracle matches. Stripping the WHOLE request (not a hand-picked field list) closes the
+    'reflect-via-some-other-field' forgery class by construction."""
     if not isinstance(req, dict):
         return []
-    vals: list[str] = []
-    if req.get("path"):
-        vals.append(str(req["path"]))
-    body = req.get("body")
-    if isinstance(body, dict):
-        vals += [str(v) for v in body.values()]
-    elif isinstance(body, (str, bytes)):
-        vals.append(body.decode() if isinstance(body, bytes) else body)
-    for v in (req.get("params") or {}).values():
-        vals.append(str(v))
+    raw: list[str] = []
+    for key in ("path", "params", "headers", "body", "json"):
+        if key in req and req[key] is not None and not isinstance(req[key], bool):
+            _collect_strings(req[key], raw)
     out: list[str] = []
-    for v in vals:
+    for v in raw:
         if not v:
             continue
         out += [v, urllib.parse.quote(v), urllib.parse.quote_plus(v),
@@ -283,14 +298,18 @@ def verify_canary_read(session, project, target, spec, runner, nonce, *, is_web,
     if known:
         # Read an EXISTING secret out-of-band → that read IS the ground truth (the agent never sees it).
         try:
-            canary = _read_back(session, project, target, channel=(known.get("channel")),
-                                path=known.get("path"), request=known.get("request"), runner=runner).strip()
+            raw = _read_back(session, project, target, channel=(known.get("channel")),
+                             path=known.get("path"), request=known.get("request"), runner=runner)
         except ValueError as exc:
             return {"verified": False, "detail": f"canary_read known-secret read error: {exc}",
                     "exit_code": None, "output": "", "nonce": nonce, "spec": spec}
+        # Strip the known-read's OWN request reflections: a value that is merely what we submitted
+        # to a reflective endpoint is NOT ground truth (it would launder an agent literal back in).
+        canary = _strip_reflections(raw, [known.get("request")] if known.get("request") else []).strip()
         if not canary:
             return {"verified": False, "exit_code": None, "output": "", "nonce": nonce, "spec": spec,
-                    "detail": "canary_read: the known-secret read returned nothing — no ground truth to match."}
+                    "detail": "canary_read: the known-secret read yielded no out-of-band ground truth "
+                              "(empty, or only the reflected request) — nothing trustworthy to match."}
     else:
         canary = fresh_canary()
         try:
