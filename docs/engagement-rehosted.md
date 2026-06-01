@@ -28,8 +28,10 @@ reproduce them from the graph.
    blob) and returns a `web_app` **surface** (`surface_id` + `base_url`) registered as a child
    of the firmware. That surface is your live target. (Rehosting is heavy — it can take a
    couple of minutes; if it reports no web service, say so.)
-2. **Map the surface.** `run_task(surface_id, "surface_recon")` to materialize known routes,
-   then `run_task(surface_id, "web_recon")` for liveness. Probe interactively with
+2. **Map the surface.** `run_task(surface_id, "web_discover")` crawls the live device and
+   materializes the routes/params it finds (links + forms + common paths) — the right tool
+   for a rehosted surface you didn't hand-spec. (`surface_recon` only materializes a route
+   spec you supply.) Then probe interactively with
    **`http_request(surface_id, method, path, …, session="admin")`** — pass a `session` label
    so cookies persist across calls (log in once, then explore protected routes). Read the
    response bodies; map the login, the admin pages, any CGI/diagnostic endpoints.

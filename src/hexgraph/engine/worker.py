@@ -51,6 +51,11 @@ def _dispatch(session: Session, project: Project, target: Target, task: Task) ->
 
         run_web_recon(session, project, target, task)
         return
+    if task.type == "web_discover":
+        from hexgraph.engine.surfaces import run_web_discover
+
+        run_web_discover(session, project, target, task)
+        return
     if task.type in LLM_TASK_TYPES:
         execute_llm_task(session, project, target, task)
         return
