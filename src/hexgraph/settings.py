@@ -93,7 +93,11 @@ DEFAULTS: dict[str, Any] = {
             "enabled": False,
             "image": "hexgraph-firmae:latest",      # FirmAE image (vendor firmware blobs)
             "qemu_image": "hexgraph-qemu:latest",    # qemu+KVM image (full-OS disk images)
-            "timeout": 600,                           # boot wall-clock budget (s)
+            # Boot wall-clock budget. FirmAE on a MIPS/ARM vendor image needs an extract +
+            # an initial boot + a 360s network-inference pass; ~525s observed on real DVRF,
+            # so the marginal 600s default is bumped to 900s. (qemu disk images boot in ~60s
+            # and return as soon as the web port answers, so this never penalizes them.)
+            "timeout": 900,
         },
         "remote": {
             # OFF by default. The LIVE-REMOTE tier: connect to ONE operator-authorized device
