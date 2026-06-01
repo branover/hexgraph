@@ -21,7 +21,7 @@ ENV USER=root
 RUN apt-get update && apt-get install -y --no-install-recommends \
         apt-utils wget tar bc psmisc ruby telnet ca-certificates git sudo \
         socat net-tools iputils-ping iptables iproute2 curl \
-        python3 python3-pip libpq-dev \
+        build-essential python3 python3-dev python3-pip libpq-dev \
         busybox-static bash-static fakeroot kpartx netcat-openbsd nmap \
         snmp uml-utilities util-linux vlan \
         postgresql postgresql-client \
