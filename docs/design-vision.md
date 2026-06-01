@@ -63,7 +63,7 @@ gets smarter as the researcher works. HexGraph is an **instrument panel, not an 
   backend emits exactly that shape. The schema has top-level `additionalProperties: false`,
   a closed `suggested_followups.items.task_type` enum, and `confidence` as a `low|medium|high`
   enum (all verified in code, mirrored by `extra="forbid"` Pydantic models).
-- **Zero token spend by default.** `make demo` runs the full loop offline at $0.
+- **Zero token spend by default.** `just demo` runs the full loop offline at $0.
 - **Out of scope:** auth/multi-user/cloud, live fuzzing, dynamic/emulated execution, exploit
   generation, Kubernetes.
 
@@ -203,7 +203,7 @@ At each step below, **M** = the manual (human) move, **A** = the agentic move.
 
 **Always-on guardrails the workflow honors:** a projected-cost confirmation gate before any
 real-backend batch; recon and the triage board stay **100% LLM-free** (any enrichment is an
-explicit opt-in task through the seam so `make demo` stays $0); the system surfaces low-confidence
+explicit opt-in task through the seam so `just demo` stays $0); the system surfaces low-confidence
 findings as `triaging` ("ask the human exactly when uncertain"); HexGraph proves *reachability
 and pattern*, never *exploitation* — it does not overclaim.
 
@@ -521,7 +521,7 @@ budgets sane on 300-ELF firmware.
 - **Determinism:** canonicalized item hashing (sorted keys, normalized whitespace), timestamps/
   UUIDs excluded from the hash basis, tie-breaks seeded from `task_id`, an explicit
   `assembler_version` that *intentionally* invalidates the bundle cache on logic changes.
-  Given a `bundle_sha`, `make demo` (mock) reproduces byte-identical bundles and, via the
+  Given a `bundle_sha`, `just demo` (mock) reproduces byte-identical bundles and, via the
   cassette, byte-identical responses — offline, $0.
 - **Comparison (issue #14, completeness #1):** an **`analysis_run`** entity groups the `(task,
   context_bundle, backend, model, params)` tuple and the findings it produced. Run-to-run
@@ -694,7 +694,7 @@ the agent to stop. This block is highest-priority context (always included) and 
   check + a node-delete cascade sweep.
 - **Caching, cost, reproducibility.** One CAS; three cache tiers (artifact, bundle, response);
   one token estimator; `analysis_run` grouping + run diff; staleness flagging (human decides);
-  always-on spend gate reading `usage.cost_usd`. `make demo` reproduces byte-identical bundles
+  always-on spend gate reading `usage.cost_usd`. `just demo` reproduces byte-identical bundles
   and responses offline at $0.
 - **Migrations & data durability.** Alembic (or equivalent) is sequenced **before** any
   schema-extending feature; `schema_version` + backup-on-migrate; **the project DB is durable

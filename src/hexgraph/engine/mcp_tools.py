@@ -543,7 +543,7 @@ def _decompiler_info() -> dict:
         "note": "decompile_function / disassemble use the OPERATOR-configured decompiler "
                 "automatically — you don't select it. radare2 is the always-available default; "
                 "Ghidra is used when the operator enables features.ghidra in Settings AND the "
-                "sandbox image was built with Ghidra (`make sandbox-build WITH_GHIDRA=1`). There "
+                "sandbox image was built with Ghidra (`just sandbox-build with_ghidra=1`). There "
                 "is intentionally no MCP tool to toggle this (it's an operator setting). If you "
                 "want Ghidra and `active` here is 'radare2', ask the operator to enable it.",
     }

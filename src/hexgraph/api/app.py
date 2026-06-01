@@ -1,7 +1,7 @@
 """FastAPI app on loopback (SPEC §3, §8): JSON API + the React SPA (P4).
 
 Endpoints: health, projects/targets/findings reads, graph JSON, capabilities,
-suggestions, runs, task launch + status. The built SPA (frontend/, `make ui`) is
+suggestions, runs, task launch + status. The built SPA (frontend/, `just ui`) is
 served at / with a client-side-routing fallback; all assets are local (offline).
 """
 

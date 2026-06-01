@@ -1,4 +1,4 @@
-"""`make demo` — the full offline loop on bundled fixtures (SPEC §10).
+"""`just demo` — the full offline loop on bundled fixtures (SPEC §10).
 
 Ingest a lone ELF and a firmware image with the MOCK backend, no API key, no
 network (the sandbox runs --network none). Proves: ingest → recon task →

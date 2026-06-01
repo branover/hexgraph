@@ -3,7 +3,7 @@
 # Boots a FULL-OS disk image (a bootable VM disk: .vmdk/.qcow2/.vdi or a partitioned x86
 # .img — e.g. IoTGoat x86 / OpenWrt) under qemu-system-x86_64 + KVM, as-is (the image's own
 # kernel + init), behind the stable rehost_entry contract HexGraph's QemuDiskRehoster drives.
-# Build:  make qemu-build  ·  run needs --device /dev/kvm (no privilege required).
+# Build:  just qemu-build  ·  run needs --device /dev/kvm (no privilege required).
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive

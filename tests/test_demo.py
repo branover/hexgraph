@@ -1,4 +1,4 @@
-"""`make demo` runs the offline loop and exits 0 (SPEC §10 acceptance)."""
+"""`just demo` runs the offline loop and exits 0 (SPEC §10 acceptance)."""
 
 import os
 

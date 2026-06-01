@@ -120,7 +120,7 @@ def vulnrouter():
     Skips unless Docker + the sandbox image are present. (The http_probe is mounted
     from the package into the sandbox automatically, so no image rebuild is needed.)"""
     if not SANDBOX_READY:
-        pytest.skip("requires Docker + the hexgraph-sandbox image (make sandbox-build)")
+        pytest.skip("requires Docker + the hexgraph-sandbox image (just sandbox-build)")
     img, name, flag = "hexgraph-vulnrouter:latest", "hexgraph-vr-pytest", "ROUTER-FLAG-PYTEST"
     subprocess.run(["docker", "build", "-q", "-t", img, fixture_path("vulnrouter")], check=True,
                    capture_output=True)

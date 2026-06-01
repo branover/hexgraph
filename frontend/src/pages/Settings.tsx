@@ -101,7 +101,7 @@ export default function Settings() {
                              onBlur={(e) => patch({ "features.ghidra.timeout": parseInt(e.target.value) || 600 })} />
                     </div>
                     <p className="hint">Headless Ghidra runs inside the <code>--network none</code> sandbox image.
-                      Build it with <code>make sandbox-build WITH_GHIDRA=1</code>. Falls back to radare2 if unavailable.</p>
+                      Build it with <code>just sandbox-build with_ghidra=1</code>. Falls back to radare2 if unavailable.</p>
                   </>
                 )}
                 {g.mode === "bridge" && (

@@ -28,7 +28,7 @@ services:
       # hardened/shared deployment put a restricted socket-proxy (e.g.
       # tecnativa/docker-socket-proxy, allowing only container create/run/kill)
       # in front of it, or use a rootless-Docker socket. The venv run path
-      # (make serve) avoids the socket entirely.
+      # (just serve) avoids the socket entirely.
       - /var/run/docker.sock:/var/run/docker.sock
     command: ["hexgraph", "serve"]
 

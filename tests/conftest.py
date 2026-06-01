@@ -30,7 +30,7 @@ SANDBOX_READY = _sandbox_ready()
 def sandbox():
     """A SandboxRunner; skips the test if the sandbox isn't available."""
     if not SANDBOX_READY:
-        pytest.skip("requires Docker + the hexgraph-sandbox image (make sandbox-build)")
+        pytest.skip("requires Docker + the hexgraph-sandbox image (just sandbox-build)")
     from hexgraph.sandbox.runner import SandboxRunner
 
     return SandboxRunner()

@@ -10,7 +10,7 @@ What it does (idempotent):
 
 Run it with the venv's python so HexGraph is importable, e.g.:
     .venv/bin/python scripts/vulnrouter_engagement.py
-or via:  make vulnrouter
+or via:  just vulnrouter
 
 Tear down with:  docker rm -f hexgraph-vulnrouter
 """
@@ -83,7 +83,7 @@ def main() -> int:
     print("       hexgraph mcp install --write-skill .claude/skills")
     print("  2. Start Claude Code and give it docs/engagement-vulnrouter.md as the brief,")
     print(f"     telling it the project_id ({pid}) and base_url ({base_url}).")
-    print("  3. Watch the graph fill in at  http://127.0.0.1:8765  (run `make serve`).")
+    print("  3. Watch the graph fill in at  http://127.0.0.1:8765  (run `just serve`).")
     print("\nTear down when done:  docker rm -f", NAME)
     return 0
 

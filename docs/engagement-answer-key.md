@@ -42,7 +42,7 @@ is a squashfs rootfs with one genuinely exploitable bug planted in a CGI binary.
 ## Setup before the run (operator)
 
 - Build the sandbox image once so it has the toolchain (radare2/clang/etc.):
-  `make sandbox-build`. (Probe scripts like `poc_probe.py` are mounted from the
+  `just sandbox-build`. (Probe scripts like `poc_probe.py` are mounted from the
   install at run time, so adding/updating a probe does NOT need a rebuild — only
   toolchain changes do. Set `HEXGRAPH_SANDBOX_NO_MOUNT=1` to force the baked copy.)
 - Enable **Settings → PoC verification** (or `hexgraph config set features.poc.enabled true`)

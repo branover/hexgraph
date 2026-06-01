@@ -9,7 +9,7 @@ A self-hosted, **local-only** agentic vulnerability-research workbench. Point it
 ## ▶ Start every session here
 
 1. Read **`PROGRESS.md`** — its `▶ RESUME HERE` block is the source of truth for current state, next task, and how to re-verify.
-2. Re-verify with `make test` (full suite, mock backend, offline) and `make demo` (full loop; needs Docker + sandbox image).
+2. Re-verify with `just test` (full suite, mock backend, offline) and `just demo` (full loop; needs Docker + sandbox image).
 3. **Update `PROGRESS.md` as work lands** (checklist + `▶ RESUME HERE` + session log) and commit it with the code. Keep this file current only when a *durable rule or fact* changes — never add feature history here.
 
 ## How we work: git worktrees, PRs, and concurrency
@@ -24,31 +24,32 @@ Post-MVP, **every new feature or major atomic change happens on its own branch i
 - Open the PR with `gh pr create --base main`; write a real description (what/why, verification).
 
 **The merge gate — a PR-review subagent, every time.** Before a worktree branch merges:
-1. Run `make test` (and `make demo` if the loop is touched) green in the worktree.
+1. Run `just test` (and `just demo` if the loop is touched) green in the worktree.
 2. **Dispatch a subagent (Agent tool) to review the PR diff** — correctness, the security invariants (loopback / sandbox / secret-never-logged / the opt-in execution policy), test quality, and that docs/PROGRESS/migrations were updated.
 3. **Every requested change or piece of commentary the reviewer raises MUST be posted on the PR itself** — as a review with line-level comments / suggested changes (`gh pr review --comment` or `--request-changes`; `gh api .../pulls/{n}/comments` for inline suggestions), not only returned to the dispatching agent. This is a durable, public log for posterity. A verbose summary back to the dispatching agent is welcome **in addition**, never instead. The reviewer then **fixes the issues** (commit referencing the comment) or hands them back; re-verify after fixes.
-4. Only after the review passes (its PR comments addressed): merge with **`gh pr merge --merge --delete-branch`** (the `--delete-branch` deletes the branch **both locally and on the remote**). There is **no CI yet**, so this review + local `make test` *is* the gate.
+4. Only after the review passes (its PR comments addressed): merge with **`gh pr merge --merge --delete-branch`** (the `--delete-branch` deletes the branch **both locally and on the remote**). There is **no CI yet**, so this review + local `just test` *is* the gate.
 5. **Clean up completely:** `git worktree remove <path>`, and ensure the merged branch is gone **locally and remotely** (`git branch -d <branch>` + `git push origin --delete <branch>` if `--delete-branch` didn't, then `git fetch -p`). Then fast-forward the primary `main` checkout. **Standing invariant: the only worktrees and branches that should ever exist (local or remote) are ones actively being worked on** — `git worktree list`, `git branch`, and `git branch -r` should show just `main` plus the live work. Prune anything stale on sight.
 
 **Creating a worktree (with its own isolated runtime):**
 ```bash
 git worktree add ../hexgraph-wt/<topic> -b build/<topic> main
 cd ../hexgraph-wt/<topic>
-python3 -m venv .venv && .venv/bin/pip install -e ".[server,dev]"   # OWN venv — required
+just install                                                        # OWN venv — required (= python3 -m venv .venv && pip install -e ".[server,dev]")
 export HEXGRAPH_HOME="$PWD/.hghome"                                  # OWN data/DB/settings
 ```
+(`just` is the task runner — install once with `curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to ~/.local/bin` or `snap install just`; `~/.local/bin` on `PATH`.)
 
 **Running code from worktrees concurrently — deconflict ALL shared state.** Nothing is worktree-aware by default; isolation comes entirely from per-worktree env + venv:
-- **Own venv (required).** The editable install pins an *absolute* `src` path, so reusing another worktree's `.venv` silently imports the *wrong* worktree's code. Each worktree gets its own `.venv` (`make install`). `make ui` already builds the SPA into the worktree's own `src/hexgraph/web/dist` (gitignored) — no sharing.
+- **Own venv (required).** The editable install pins an *absolute* `src` path, so reusing another worktree's `.venv` silently imports the *wrong* worktree's code. Each worktree gets its own `.venv` (`just install`). `just ui` already builds the SPA into the worktree's own `src/hexgraph/web/dist` (gitignored) — no sharing.
 - **Own `HEXGRAPH_HOME`.** All runtime state (the SQLite DB, `projects/`, `settings.json`, `config.toml`) roots at `HEXGRAPH_HOME` (default `~/.hexgraph`), which is otherwise **shared across every worktree**. Without a per-worktree home, two agents mutate the same graph and a newer-migration worktree silently upgrades the shared DB schema. (WAL keeps it lock-*safe*, but that is not isolation.) Copy `~/.hexgraph/config.toml` into the worktree home if you need the BYOK key.
 - **Own `HEXGRAPH_PORT` when serving.** Two `hexgraph serve` on the default `8765` collide. Use `HEXGRAPH_PORT=876N hexgraph serve`; keep `HEXGRAPH_HOST=127.0.0.1` (the loopback assertion is a product invariant — never `0.0.0.0` to "spread out").
-- **Sandbox image (`hexgraph-sandbox:latest`) is host-global.** Probe `.py` edits need no rebuild — they're **mounted from your worktree's package** at run time (set `HEXGRAPH_SANDBOX_NO_MOUNT=1` only to force the baked copy), so probe changes are already per-worktree. But a **Dockerfile/toolchain change (or `WITH_GHIDRA=1`) must NOT run `make sandbox-build`** — that clobbers the shared tag. Build a private tag and point only your processes at it: `docker build -f Dockerfile.sandbox -t hexgraph-sandbox:wt-<topic> .` then `export HEXGRAPH_SANDBOX_IMAGE=hexgraph-sandbox:wt-<topic>`. (Containers are uuid-named + `--rm`; they never collide.)
+- **Sandbox image (`hexgraph-sandbox:latest`) is host-global.** Probe `.py` edits need no rebuild — they're **mounted from your worktree's package** at run time (set `HEXGRAPH_SANDBOX_NO_MOUNT=1` only to force the baked copy), so probe changes are already per-worktree. But a **Dockerfile/toolchain change (or `with_ghidra=1`) must NOT run `just sandbox-build`** — that clobbers the shared tag. Build a private tag and point only your processes at it: `docker build -f Dockerfile.sandbox -t hexgraph-sandbox:wt-<topic> .` then `export HEXGRAPH_SANDBOX_IMAGE=hexgraph-sandbox:wt-<topic>`. (Containers are uuid-named + `--rm`; they never collide.)
 - **MCP + Claude Code (the subtle one).** The MCP server is **stdio** (spawns per session, no port) and a registration **bakes an absolute interpreter/script path with no env**, while the server name is hardcoded `"hexgraph"`. So **`cd`-ing between worktrees does NOT change which code or DB the agent's MCP tools use** — it's frozen to the registered command + the spawning agent's ambient env (which falls back to `~/.hexgraph`). To test MCP changes that live only in your worktree, editable-install it, then register a **uniquely-named** server pinned to that worktree's python + home:
   ```bash
   claude mcp add hexgraph-<topic> --env HEXGRAPH_HOME=$PWD/.hghome -- $PWD/.venv/bin/python -m hexgraph.cli mcp
   ```
   Verify the command resolves to your code with `.venv/bin/python -m hexgraph.cli mcp --check`. Two agents must use **distinct MCP server names and distinct `HEXGRAPH_HOME`** — never share the default `hexgraph` registration across worktrees (it runs stale code and shares the DB).
-- **Already safe, no action:** `make test` (the `hg_home` fixture isolates each test in a tmp home, mock backend, Docker/decompile disabled) and `make demo` (its own tmp home) are self-isolating across worktrees — only Docker throughput competes for the sandbox-gated subset.
+- **Already safe, no action:** `just test` (the `hg_home` fixture isolates each test in a tmp home, mock backend, Docker/decompile disabled) and `just demo` (its own tmp home) are self-isolating across worktrees — only Docker throughput competes for the sandbox-gated subset.
 
 ## Non-negotiable constraints (these define the product)
 
@@ -56,7 +57,7 @@ export HEXGRAPH_HOME="$PWD/.hghome"                                  # OWN data/
 - **Loopback only.** API/UI bind `127.0.0.1`; a startup assertion refuses a non-loopback bind unless `HEXGRAPH_I_KNOW_WHAT_IM_DOING=1`.
 - **BYOK / Claude Code / mock only.** No bundled keys, no proxying. Read `ANTHROPIC_API_KEY` from env or `~/.hexgraph/config.toml`; **never log, store, or return it.** `HEXGRAPH_API_KEY` is reserved for future paid features — same rule.
 - **Targets are hostile.** All parsing/unpacking/analysis of target bytes runs only inside the disposable Docker sandbox (`--network none`, read-only rootfs, mem/cpu/pids caps, tmpfs, hard timeout). **Executing the target is opt-in, gated solely by the policy seam** (`policy.current_policy()` / `assert_allows_execution()`): static-only is the **default**, and it **must be enforced whenever the user hasn't opted into a dynamic/execution analysis** — with neither `features.poc` nor `features.fuzzing` enabled, any attempt to run the target raises. Enabling PoC/fuzzing flips the policy to permit execution, still *inside the same locked-down sandbox* (foreign-arch via qemu-user). **Network egress is the same story**: `--network none` is the default and the *only* place it relaxes is the policy seam — opt-in `features.network` raises the bounded local-network tier (`assert_allows_egress(dest, scope)` + a per-target `NetworkScope` that refuses any non-loopback/private host; every outbound action is audited to `EgressEvent`). **Rehosting is its own separately opt-in gate** (`features.rehost` / `policy.assert_allows_rehost()`): full-system emulation of a firmware image boots inside the sandbox boundary, alongside the exec (poc/fuzzing) and network gates. So static-only/no-network is an **enforced default, not an absolute ban** — but **never relax a gate anywhere except the policy seam**. **The LLM never sees raw target bytes** — only tool output carried in `TaskContext`.
-- **Zero token spend by default.** Mock backend is the dev/CI default; `make demo` runs the full loop offline with no key and exits 0.
+- **Zero token spend by default.** Mock backend is the dev/CI default; `just demo` runs the full loop offline with no key and exits 0.
 - **The Finding schema is frozen** (`src/hexgraph/schemas/finding.schema.json`, shipped in-package). Every task and backend (mock included) emits exactly this shape; a contract test enforces it. New structure goes in the DB envelope, not the schema.
 - **Migrations are mandatory.** The project DB is durable researcher knowledge, never silently reset. Any schema change ships an `alembic revision --autogenerate` committed with the model change.
 
@@ -93,9 +94,9 @@ src/hexgraph/
   api/app.py                   # FastAPI: all REST endpoints + serves the SPA at / (loopback)
   cli.py                       # hexgraph init|db upgrade|ingest|targets|run|findings|graph|prune|rehost|config|serve
 docker/                        # rehosting images: firmae/ (FirmAE) + qemu/ (QEMU+KVM); the sandbox image is Dockerfile.sandbox at repo root
-frontend/                      # React+Vite+TS SPA → built to src/hexgraph/web/dist by `make ui` (gitignored)
+frontend/                      # React+Vite+TS SPA → built to src/hexgraph/web/dist by `just ui` (gitignored)
 migrations/                    # Alembic; baseline bbdb1d98bf54. prepare_database() in db/migrate.py
-tests/                         # pytest; fixtures under tests/fixtures (built by build.sh / `make fixtures`)
+tests/                         # pytest; fixtures under tests/fixtures (built by build.sh / `just fixtures`)
 docs/                          # design-vision.md, implementation-plan.md, ui-backlog.md, mock-llm-provider.md
 ```
 The frozen Finding schema and the mock-LLM fixtures ship **inside the package**:
@@ -104,12 +105,12 @@ The frozen Finding schema and the mock-LLM fixtures ship **inside the package**:
 `context/` build bundle has been retired — its live assets moved in-package, its spec
 and notes superseded by this file + README + `docs/`.
 
-Key disciplines: **probes are mounted from the install at run time** (`sandbox/runner.py` overlays `sandbox/probes/` read-only over the image's baked copy), so **editing or adding a probe needs no rebuild** — including `http_probe` (live web assessment) — only a toolchain change does (`make sandbox-build`, which forwards `--build-arg WITH_GHIDRA`; `WITH_GHIDRA=1` adds Ghidra + the enhanced unpack toolchain; set `HEXGRAPH_SANDBOX_NO_MOUNT=1` to force the baked-in copy). Tests use `init_db()` (create_all) on throwaway DBs and never migrate; persistent DBs migrate. Decompilation/harness-compile are best-effort and env-gated (`HEXGRAPH_DISABLE_DECOMPILE`, `HEXGRAPH_DISABLE_SANDBOX_BUILD`) — never gated on backend identity.
+Key disciplines: **probes are mounted from the install at run time** (`sandbox/runner.py` overlays `sandbox/probes/` read-only over the image's baked copy), so **editing or adding a probe needs no rebuild** — including `http_probe` (live web assessment) — only a toolchain change does (`just sandbox-build`, which forwards `--build-arg WITH_GHIDRA`; `with_ghidra=1` adds Ghidra + the enhanced unpack toolchain; set `HEXGRAPH_SANDBOX_NO_MOUNT=1` to force the baked-in copy). Tests use `init_db()` (create_all) on throwaway DBs and never migrate; persistent DBs migrate. Decompilation/harness-compile are best-effort and env-gated (`HEXGRAPH_DISABLE_DECOMPILE`, `HEXGRAPH_DISABLE_SANDBOX_BUILD`) — never gated on backend identity.
 
 ## Optional features & settings
 
 `settings.json` (managed, written via `PATCH /api/settings` or `hexgraph config set`) holds non-secret prefs and optional-feature toggles, layered as **env > settings.json > config.toml > defaults**. Secrets are never written there and reported as presence-only. Optional features:
-- **Ghidra** (`features.ghidra`): `headless` (analyzeHeadless in the sandbox, needs `make sandbox-build WITH_GHIDRA=1`), `bridge` (connect to a running Ghidra via `ghidra_bridge`), `enrich_recon` (materialize functions/call-graph/structs). Degrades to radare2 when off.
+- **Ghidra** (`features.ghidra`): `headless` (analyzeHeadless in the sandbox, needs `just sandbox-build with_ghidra=1`), `bridge` (connect to a running Ghidra via `ghidra_bridge`), `enrich_recon` (materialize functions/call-graph/structs). Degrades to radare2 when off.
 - **Fuzzing** (`features.fuzzing`, default off): the `fuzzing` task type. Enabling it (or PoC, below) makes `policy.current_policy()` return a dynamic profile (`allow_execution=True`) — the policy seam is **the only place the static-only invariant is relaxed**; the sandbox stays `--network none`, capped, timed. Compiles a `harness_generation` harness with libFuzzer+ASan and auto-creates a finding per crash. `engine/fuzzing.py`, `sandbox/probes/fuzz_probe.py`.
 - **PoC verification** (`features.poc`, default off): the `poc` task + `verify_poc` MCP tool **execute the target** in the sandbox with an attacker input and confirm exploitation via an unforgeable `{{NONCE}}` oracle (engine substitutes a random token; "verified" = the injected behaviour really happened). `engine/poc.py`, `sandbox/probes/poc_probe.py`. Also policy-gated. **Foreign-arch targets run under qemu-user** — `poc_probe` picks `qemu-<arch>` from the ELF header and `verify_poc` mounts the parent firmware's extracted rootfs as the qemu sysroot (`-L`) so a dynamically-linked MIPS/ARM/… binary finds its libs (verified end-to-end on real MIPS firmware).
 
@@ -130,10 +131,11 @@ LLM tasks themselves use a tool-use **agent loop** (above) over a plain BYOK key
 
 ## Commands
 
-- **`make setup`** — one-shot: venv + deps + SPA + sandbox image + db init. Then **`make serve`** → http://127.0.0.1:8765.
-- `make test` (= `pytest -q`, mock, offline; Docker-gated tests skip if the sandbox image is absent) · `make demo` (full loop, needs Docker) · `make test-live` (real-key scored eval, needs `ANTHROPIC_API_KEY`, cassette-backed).
-- `make ui` (rebuild SPA) · `make sandbox-build [WITH_GHIDRA=1]` · `make fixtures`.
-- Rehosting: `make firmae-build` (FirmAE image; privileged + /dev/net/tun) · `make qemu-build` (QEMU+KVM image; needs `--device /dev/kvm`) · `make iotgoat` (fetch+rehost+register IoTGoat) · `make vulnrouter` (live vulnrouter web target + project).
+- The repo's task runner is **`just`** (install: `curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to ~/.local/bin`, or `snap install just`; ensure `~/.local/bin` is on `PATH`). Run bare **`just`** for the grouped recipe menu (setup · run · build · test · demo · rehosting · maintenance). Recipe doc-comments state **when to rebuild** (e.g. `ui` after any `frontend/` change; `sandbox-build` only after a Dockerfile/toolchain change — probes are mounted at runtime, no rebuild).
+- **`just setup`** — one-shot: venv + deps + SPA + sandbox image + db init. Then **`just serve`** → http://127.0.0.1:8765.
+- `just test` (= `pytest -q`, mock, offline; Docker-gated tests skip if the sandbox image is absent) · `just demo` (full loop, needs Docker) · `just test-live` (real-key scored eval, needs `ANTHROPIC_API_KEY`, cassette-backed).
+- `just ui` (rebuild SPA) · `just sandbox-build [with_ghidra=1]` · `just fixtures`.
+- Rehosting: `just firmae-build` (FirmAE image; privileged + /dev/net/tun) · `just qemu-build` (QEMU+KVM image; needs `--device /dev/kvm`) · `just iotgoat` (fetch+rehost+register IoTGoat) · `just vulnrouter` (live vulnrouter web target + project).
 - CLI: `hexgraph init | db upgrade | ingest <path> [--name --project --backend --no-recon] | targets <p> | run <target> --type T [--objective --model --backend --function --mock-scenario] | rehost <target> [--brand] | findings <p> | graph <p> --export f.json | prune <p> | config list|get|set | serve`.
 - Runtime data under `~/.hexgraph/` (override with `HEXGRAPH_HOME`, db with `HEXGRAPH_DB_PATH`).
 
