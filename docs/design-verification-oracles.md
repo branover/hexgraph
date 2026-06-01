@@ -1,7 +1,9 @@
 # Design — Verification oracles beyond command-injection
 
-**Status:** proposed (this doc) → Phase 1 to implement. Captures how HexGraph proves a
-*broad* class of vulnerabilities — not just command-injection — with **unforgeable** oracles.
+**Status:** Phase 0/0b done (the assurance triple); **Phase 1 IMPLEMENTED** (the `callback`,
+`canary_read`, and `oob_write` oracles + the bounded callback listener — see "Phase 1 — status"
+below). Phases 2–4 remain proposed. Captures how HexGraph proves a *broad* class of
+vulnerabilities — not just command-injection — with **unforgeable** oracles.
 
 ## The problem
 
@@ -140,9 +142,9 @@ Verification is unforgeable when it uses a channel *different from* the exploit'
 | Vuln class | Unforgeable oracle | Channel | Status |
 |---|---|---|---|
 | Command injection (reflected) | computed/`{{NONCE}}` in output (reflection-stripped) | HTTP/TCP response | **have** |
-| Blind cmdi / SSRF / blind RCE / OOB exfil | **callback**: target connects/requests back to a HexGraph canary carrying the nonce | bounded canary listener (new) | new |
-| Read primitive (traversal, file/mem disclosure) | **planted canary**: HexGraph writes a random secret out-of-band; the exploit must read it back verbatim | rootfs/remote write → response compare | new (reuses channels) |
-| Write primitive (file/config/NVRAM/persistence) | **OOB side-effect read**: exploit writes `{{NONCE}}`; HexGraph reads that location independently | `remote_read_file`/`read_file`/follow-up GET | new (reuses channels) |
+| Blind cmdi / SSRF / blind RCE / OOB exfil | **callback**: target connects/requests back to a HexGraph canary carrying the nonce | bounded canary listener | **have** (Phase 1) |
+| Read primitive (traversal, file/mem disclosure) | **planted canary**: HexGraph writes a random secret out-of-band; the exploit must read it back verbatim | rootfs/remote write → response compare | **have** (Phase 1) |
+| Write primitive (file/config/NVRAM/persistence) | **OOB side-effect read**: exploit writes `{{NONCE}}`; HexGraph reads that location independently | `remote_read_file`/`read_file`/follow-up GET | **have** (Phase 1) |
 | Denial of service | **liveness transition**: service UP (baseline) → DOWN, re-probed with hysteresis | independent re-probe | new |
 | Memory-corruption RCE | **spectrum** (below) | sandbox/qemu + callback | partial |
 | Auth bypass / privesc | **differential**: perform a privileged action, observe its privileged effect | response / state read-back | partial (`status_differs`) |
@@ -224,10 +226,11 @@ setting then read it back changed). Largely have; document as a first-class orac
   precondition}` on every finding (`evidence.extra.assurance`) and surface it in the UI/report,
   so the two standards are differentiated from day one and no finding overstates its claim. Done
   alongside Phase 1.
-- **Phase 1 (small, biggest reach):** the **callback/canary listener** + the `callback`,
+- **Phase 1 (small, biggest reach) — DONE:** the **callback/canary listener** + the `callback`,
   `canary_read`, and `oob_write` oracles. Unlocks blind cmdi, SSRF, read primitives, and write
   primitives — a large fraction of real bugs — with modest new code (the read/write oracles
-  reuse existing channels). These produce **Standard B, dynamic** results.
+  reuse existing channels). These produce **Standard B, dynamic** results (on a live surface).
+  Shipped as `engine/oracles.py` + `engine/callback_listener.py`; see "Phase 1 — status".
 - **Phase 2:** the **DoS liveness** oracle (baseline-up → sustained-down, hysteresis).
 - **Phase 3:** **ASan/sanitizer builds + crash-state capture** for the memory-corruption rungs.
 - **Phase 4:** **Standard B, static** — explicit **source→sink reachability** over the typed
@@ -241,5 +244,52 @@ setting then read it back changed). Largely have; document as a first-class orac
   target's loopback/private/rehost-netns scope.
 - Full weaponized memory-corruption exploitation (ASLR/NX/stack-cookie bypass) is out of scope;
   the verified rungs (crash → controlled-crash → exec-callback) are the goal.
-- Open: the cleanest place to host the canary listener for the rehost-netns case (a sidecar in
-  the emulator netns vs. a host-side bound socket the device can reach) — decided in Phase 1.
+- ~~Open: the cleanest place to host the canary listener for the rehost-netns case~~ — **decided
+  in Phase 1** (see "Phase 1 — status"): a host-side bounded loopback/private listener for local
+  targets (implemented + integration-tested), and a SIDECAR joining the emulator container's netns
+  on the device-facing gateway IP for the rehost case (mechanism shipped via `bind_host`; live
+  rehost-netns validation deferred — needs a cooperative firmware that dials back).
+
+## Phase 1 — status (IMPLEMENTED)
+
+The three Phase-1 oracles ship as `engine/oracles.py`, dispatched from `engine/poc.py::verify_poc`
+when `spec.oracle.type` is one of `oob_write` / `canary_read` / `callback`. They live in the PoC
+spec + `evidence.extra` (the DB envelope) — the frozen `finding.schema.json` is untouched.
+
+- **`oob_write`** — runs the write exploit, then INDEPENDENTLY reads the side-effect location back
+  over an existing channel (`rootfs` via `engine.filesystem`, `remote` via `engine.remote.run_remote`
+  read_file, or `http` via a follow-up `run_http_request` GET) and checks the run nonce landed.
+  Read-back paths are traversal-checked against the firmware rootfs. Mostly wiring, as designed.
+- **`canary_read`** — PLANTS a fresh random canary out-of-band BEFORE the exploit (`plant.channel`
+  = `rootfs`, or a verifier-supplied `plant.known_value` for live targets HexGraph can't write to),
+  substitutes `{{CANARY}}` into the spec, runs the read exploit, and checks the response contains
+  the planted value. Unforgeable because the value is established out-of-band.
+- **`callback`** — stands up `engine/callback_listener.py::CallbackListener`, mints a `{{CALLBACK}}`
+  token (host:port + per-run nonce path), substitutes it into the spec, runs the exploit, and waits
+  a bounded time for a hit carrying the nonce. A stray connection without the nonce does NOT verify.
+
+**Assurance:** these are DYNAMIC oracles and flow through `derive_poc_assurance` unchanged — a live
+web/tcp/remote surface ⇒ `input_reachable / dynamic`; an isolated binary/harness ⇒ `code_present /
+dynamic`. No frozen-schema change.
+
+**Listener-placement decision (the doc's open question).** The callback listener is the AUDITED
+INGRESS MIRROR of the bounded-egress tier:
+- it binds ONLY to a loopback/private address (`policy._host_is_local`, fail-closed) — never
+  `0.0.0.0`/public, the same structural containment as `local_network_scope`;
+- it is gated by the bounded-network tier: `verify_callback` asserts `assert_allows_egress` over
+  the listener's own `host:port` BEFORE binding (so it's unreachable in the static-only default),
+  and the denial PROPAGATES like every other live-target gate — no gate is relaxed outside the
+  policy seam;
+- every event is audited to `EgressEvent`: `callback_listener` (the listener stood up, allowed or
+  denied) and `callback_hit` (a received hit carrying the nonce) — a complete ingress log.
+
+For the **local case** (a local web/tcp/remote surface, or the integration test's fake target) the
+host-side loopback listener is directly reachable — implemented and proven by a REAL local-loopback
+integration test (`tests/test_oracles.py::test_callback_listener_real_loopback_roundtrip`: a live
+listener + a fake client that dials the minted token → assert verified + the audit fired). For the
+**rehost-netns case** the emulated device is inside the FirmAE/qemu container's netns, so a
+host-loopback bind is not on the device's network; the decided placement is a SIDECAR bound inside
+that netns on the device-facing gateway IP (the ingress analogue of `run_channel_probe(net_container
+=...)`), exposed via `CallbackListener(host=<gateway_ip>)`. **Deferred:** a fully end-to-end
+rehost-netns callback validation needs a cooperative firmware whose exploit can dial back; the
+mechanism ships now, live validation is a follow-up (does not block the local must-haves).

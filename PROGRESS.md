@@ -311,6 +311,31 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-01: **Verification oracles Phase 1 — `callback` / `canary_read` / `oob_write` (unforgeable
+  oracles beyond reflected cmdi)** ([`docs/design-verification-oracles.md`](docs/design-verification-oracles.md),
+  branch `build/oracles-phase1`). New `engine/oracles.py` (dispatched from `poc.verify_poc` when
+  `spec.oracle.type` ∈ {`oob_write`,`canary_read`,`callback`}) + `engine/callback_listener.py`. Each
+  observes the vuln's side effect on a channel INDEPENDENT of the exploit's request: **oob_write**
+  runs the write, then reads the location back out-of-band (`rootfs`/`remote`/`http`, traversal-checked)
+  and checks the run nonce landed; **canary_read** PLANTS a fresh random canary out-of-band (or a
+  supplied `known_value`) before the exploit and checks the read primitive returned it (`{{CANARY}}`
+  substitution); **callback** stands up a bounded LOCAL listener, mints a `{{CALLBACK}}` token
+  (host:port + per-run nonce path), runs the exploit, and waits a bounded time for a hit carrying the
+  nonce (proves blind cmdi/SSRF/RCE with zero reflected output; a stray hit without the nonce never
+  verifies). All DYNAMIC → flow through `derive_poc_assurance` unchanged (live web/tcp/remote ⇒
+  `input_reachable/dynamic`, isolated binary/harness ⇒ `code_present/dynamic`). **Listener placement
+  decision:** the audited INGRESS MIRROR of the bounded-egress tier — binds loopback/private ONLY
+  (fail-closed), gated by `assert_allows_egress` over its own host:port BEFORE binding (denial
+  propagates like every other live gate), every event audited to `EgressEvent` (`callback_listener`
+  + `callback_hit`). Local case implemented + REAL local-loopback integration-tested; rehost-netns
+  case = a sidecar joining the emulator netns on the gateway IP (mechanism shipped via `bind_host`;
+  live rehost validation deferred — needs a cooperative firmware). Oracle results live in
+  `evidence.extra` (DB envelope) — frozen `finding.schema.json` UNCHANGED, no migration. Updated
+  `get_schemas['verify_poc_oracles']`, the `verify_poc` docstring + `_CATALOG` entry (+ MCP verify_poc
+  now attaches the engine assurance to the finding), and SKILL §2e. Tests: `tests/test_oracles.py`
+  (15: each oracle's verify/fail/forgery-resistance via fake channels+runner, the REAL loopback
+  callback round-trip asserting the hit + audit, non-local-bind refusal, network-tier gating). Full
+  suite **394 passed, 2 skipped**.
 - 2026-06-01: **DIR-823G real-firmware engagement (closing #44's real-firmware half) + FirmAE
   boot-budget fix.** Ingested the real D-Link DIR-823G v1.0.2B05 vendor blob → sasquatch extraction
   (137 children); statically found + recorded the **unauth HNAP cmdi (Standard A)** in `/bin/goahead`:
