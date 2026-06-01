@@ -55,6 +55,26 @@ def test_oracle_only_inspects_final_step():
     assert not http_probe._check_oracle({"type": "body_contains", "value": "NONCE"}, steps)[0]
 
 
+def test_oracle_rejects_reflected_payload():
+    """A reflective page (e.g. a 403 re-auth form echoing the request URI) that contains the
+    {{NONCE}} only because WE sent it must NOT verify — that was a real false-positive on
+    IoTGoat's LuCI. Genuine command output (nonce produced by the target) still verifies."""
+    nonce = "HEXGRAPH_PWNED_abc123"
+    step = {"method": "POST", "path": "/cgi-bin/luci/admin/iotgoat/webcmd",
+            "body": {"cmd": f"echo {nonce}"}}
+    # 403 login page reflects the url-encoded payload in the form action → REFLECTION ONLY
+    reflected = (f'<form action="/cgi-bin/luci/admin/iotgoat/webcmd?cmd=echo+{nonce}">'
+                 '<input name="luci_password"></form>')
+    ok, detail = http_probe._check_oracle({"type": "body_contains", "value": nonce},
+                                          [{"ok": True, "status": 403, "body": reflected}], step)
+    assert ok is False and "reflected request input" in detail
+    # genuine output: the nonce appears on its own (produced by the command), not echoed
+    genuine = f"PING 127.0.0.1 (127.0.0.1): 56 data bytes\n{nonce}\n"
+    ok2, _ = http_probe._check_oracle({"type": "body_contains", "value": nonce},
+                                      [{"ok": True, "status": 200, "body": genuine}], step)
+    assert ok2 is True
+
+
 def test_dest_refuses_off_allowlist_via_crafted_path():
     """A crafted `path` must not let a request escape the host allowlist, and a malformed
     netloc must be refused cleanly (not crash the probe). The in-sandbox allowlist is the

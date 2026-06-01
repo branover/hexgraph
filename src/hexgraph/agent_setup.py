@@ -96,8 +96,13 @@ URL (or a `web_app` target already exists), assess it dynamically:
     `oracle:{type:"body_contains","value":"<a secret only an authed user sees>"}` — seeing
     the secret is unforgeable proof. (Or `status_differs` from the unauth baseline.)
   - **Command/SQL injection (RCE)**: inject `; echo {{NONCE}}` (or equivalent) in a param;
-    `oracle:{type:"body_contains","value":"{{NONCE}}"}`. HexGraph substitutes a fresh token,
-    so the echoed nonce proves your command really ran.
+    `oracle:{type:"body_contains","value":"{{NONCE}}"}`. HexGraph substitutes a fresh token
+    and strips your request's own reflection from the response before matching, so the nonce
+    counts only if the command actually PRODUCED it. (A page that merely echoes your input —
+    a 403 re-auth form, a search box — won't verify, and a match on a 401/403 is flagged. For
+    the strongest proof on cmdi, inject something the target must COMPUTE, e.g. `expr` a product,
+    and oracle on the result — a literal reflection can never satisfy it. Confirm you actually
+    have a session before trusting a post-auth PoC.)
   Requires **features.network** enabled in Settings (bounded to the target's loopback/
   private host). Record the route as an `endpoint` node, the injectable field as a `param`
   (or `input`) node, and `taints` the param → the handler/sink; the verified PoC is a
