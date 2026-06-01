@@ -117,7 +117,32 @@ def _resp(method, url, dest, status, headers, raw: bytes) -> dict:
             "headers": hdrs, "set_cookie": set_cookie or [], "body": body, "body_truncated": truncated}
 
 
-def _check_oracle(oracle: dict, responses: list) -> tuple[bool, str]:
+def _echoed_strings(step: dict) -> list[str]:
+    """Everything the request SUBMITTED (path, query/body param values, raw body), in raw +
+    URL-encoded forms — so we can strip a server's reflection of our own payload from the
+    response before a body_contains check. A reflective page (a 403 re-auth form echoing the
+    request URI, a search box, an error page) would otherwise match the {{NONCE}} we sent and
+    forge a 'verified' PoC even though no command ran."""
+    vals: list[str] = []
+    if step.get("path"):
+        vals.append(str(step["path"]))
+    body = step.get("body")
+    if isinstance(body, dict):
+        vals += [str(v) for v in body.values()]
+    elif isinstance(body, (str, bytes)):
+        vals.append(body.decode() if isinstance(body, bytes) else body)
+    for v in (step.get("params") or {}).values():
+        vals.append(str(v))
+    out: list[str] = []
+    for v in vals:
+        if not v:
+            continue
+        out += [v, urllib.parse.quote(v), urllib.parse.quote_plus(v),
+                v.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")]
+    return out
+
+
+def _check_oracle(oracle: dict, responses: list, last_step: dict | None = None) -> tuple[bool, str]:
     if not oracle or not responses:
         return False, "no oracle or no response"
     last = responses[-1]
@@ -125,9 +150,21 @@ def _check_oracle(oracle: dict, responses: list) -> tuple[bool, str]:
         return False, f"last request failed: {last.get('error')}"
     typ = oracle.get("type") or "body_contains"
     val = oracle.get("value")
+    status = last.get("status")
     if typ == "body_contains":
-        ok = isinstance(val, str) and val in (last.get("body") or "")
-        return ok, f"body {'contains' if ok else 'does not contain'} {val!r}"
+        # Strip the request's own reflected payload first, so a match means the value was
+        # PRODUCED by the target (e.g. command output), not just echoed back.
+        body = last.get("body") or ""
+        for echo in _echoed_strings(last_step or {}):
+            body = body.replace(echo, "")
+        ok = isinstance(val, str) and val in body
+        note = ""
+        if not ok and isinstance(val, str) and val in (last.get("body") or ""):
+            note = " [present only as reflected request input — not proof of execution]"
+        if ok and status in (401, 403):
+            # Genuine post-auth output behind a 401/403 is contradictory; flag it.
+            note = f" [warning: matched on a {status} response — verify this isn't an auth wall]"
+        return ok, f"status {status}: body {'contains' if ok else 'does not contain'} {val!r}{note}"
     if typ == "status_is":
         ok = int(last.get("status", 0)) == int(val)
         return ok, f"status {last.get('status')} {'==' if ok else '!='} {val}"
@@ -165,8 +202,10 @@ def main() -> int:
         print(json.dumps({"tool": "http_probe", "base_url": base, "response": r}))
         return 0
 
-    responses = [_do(opener, base, step, allow, timeout) for step in (channel.get("steps") or [])]
-    verified, detail = _check_oracle(channel.get("oracle") or {}, responses)
+    steps = channel.get("steps") or []
+    responses = [_do(opener, base, step, allow, timeout) for step in steps]
+    verified, detail = _check_oracle(channel.get("oracle") or {}, responses,
+                                     last_step=steps[-1] if steps else None)
     print(json.dumps({"tool": "http_probe", "base_url": base, "steps": responses,
                       "verified": verified, "detail": detail}))
     return 0
