@@ -75,6 +75,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN apt-get update && apt-get install -y --no-install-recommends \
         p7zip-full \
         cramfsswap \
+        sleuthkit \
+        e2tools \
         python3-dev zlib1g-dev liblzma-dev liblzo2-dev liblz4-dev libzstd-dev \
         git build-essential autoconf \
     && pip3 install --no-cache-dir --break-system-packages jefferson ubi_reader \
