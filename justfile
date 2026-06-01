@@ -14,8 +14,8 @@
 # ---------------------------------------------------------------------------
 py             := ".venv/bin/python"          # venv interpreter
 pip            := ".venv/bin/pip"             # venv pip
-host           := "127.0.0.1"                 # loopback only — do not change (product invariant)
-port           := "8765"                      # API/UI port
+host           := env_var_or_default("HEXGRAPH_HOST", "127.0.0.1")  # loopback only — do not change (product invariant)
+port           := env_var_or_default("HEXGRAPH_PORT", "8765")       # API/UI port (ambient HEXGRAPH_PORT or `just port=… serve` wins)
 sandbox_image  := "hexgraph-sandbox:latest"   # analysis sandbox image tag
 firmae_image   := "hexgraph-firmae:latest"    # FirmAE rehosting image tag
 qemu_image     := "hexgraph-qemu:latest"      # qemu+KVM rehosting image tag
