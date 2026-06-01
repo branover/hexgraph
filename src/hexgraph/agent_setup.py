@@ -78,10 +78,12 @@ URL (or a `web_app` target already exists), assess it dynamically:
   features.rehost (to boot) + features.network (to talk to it); best-effort, since not every
   image boots cleanly.
 - **`register_surface(project_id, base_url, endpoints?)`** registers the surface as a
-  `web_app` target (a Channel, no bytes). `run_task(id, "surface_recon")` maps the
-  routes you supply into `endpoint`/`param` nodes and `routes_to` edges to the handler
-  function in the firmware (the static↔dynamic bridge). `run_task(id, "web_recon")`
-  does a bounded liveness probe.
+  `web_app` target (a Channel, no bytes). `run_task(id, "surface_recon")` maps a route spec
+  YOU supply into `endpoint`/`param` nodes + `routes_to` edges to the handler function (the
+  static↔dynamic bridge). To DISCOVER routes on a live surface you didn't hand-spec (e.g. a
+  freshly rehosted device), `run_task(id, "web_discover")` crawls it (links + forms + common
+  paths, bounded) and materialises what it finds. `run_task(id, "web_recon")` is a bounded
+  liveness probe. (web_discover/web_recon need `features.network`.)
 - **`http_request(target_id, method, path, params?, headers?, body?, json_body?)`** is
   your hands on the live target: send a login, probe an auth check, fire an injection
   payload, and READ the response body. (Bounded, sandboxed, local-only egress, audited.)

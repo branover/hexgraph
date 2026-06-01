@@ -66,6 +66,45 @@ def _find_handler(session: Session, project_id: str, handler: str | None) -> Nod
             .first())
 
 
+def _materialize_endpoints(session, project: Project, target: Target, spec: list,
+                           created_by: str) -> tuple[int, int]:
+    """Materialise a route spec [{method,path,params?,handler?,auth?,status?}] into
+    endpoint/param nodes + references edges + routes_to→handler edges. Returns
+    (routes, handlers_linked). Shared by surface_recon (offline spec) and web_discover
+    (live crawl)."""
+    routes = linked = 0
+    for ep in spec:
+        method = (ep.get("method") or "GET").upper()
+        path = ep.get("path") or "/"
+        label = f"{method} {path}"
+        attrs = {"method": method, "path": path, "auth": ep.get("auth", "unknown")}
+        if ep.get("status") is not None:
+            attrs["status"] = ep["status"]
+        enode = get_or_create_node(
+            session, project_id=project.id, node_type=NodeType.endpoint, name=label,
+            target_id=target.id, fq_name=label, created_by=created_by, attrs=attrs,
+        )
+        routes += 1
+        for p in ep.get("params", []) or []:
+            pname = p if isinstance(p, str) else (p.get("name") or "")
+            if not pname:
+                continue
+            pnode = get_or_create_node(
+                session, project_id=project.id, node_type=NodeType.param, name=pname,
+                target_id=target.id, fq_name=f"{label}#{pname}", created_by=created_by,
+                attrs={"endpoint": label, **({} if isinstance(p, str) else p)},
+            )
+            add_edge(session, project_id=project.id, src=("node", enode.id), dst=("node", pnode.id),
+                     type=EdgeType.references, origin="tool", confidence=1.0, created_by_tool=created_by)
+        handler = _find_handler(session, project.id, ep.get("handler"))
+        if handler is not None:
+            add_edge(session, project_id=project.id, src=("node", enode.id), dst=("node", handler.id),
+                     type=EdgeType.routes_to, origin="tool", confidence=1.0,
+                     created_by_tool=created_by, attrs={"handler": ep.get("handler")})
+            linked += 1
+    return routes, linked
+
+
 def run_surface_recon(session: Session, project: Project, target: Target, task=None) -> dict:
     """Materialise the surface's route spec into endpoint/param nodes + routes_to→handler
     edges, and (when run as a task) emit a recon finding. Deterministic, offline. The spec
@@ -76,36 +115,7 @@ def run_surface_recon(session: Session, project: Project, target: Target, task=N
     if spec is None:
         spec = (target.metadata_json or {}).get("endpoints") or []
 
-    routes = 0
-    linked = 0
-    for ep in spec:
-        method = (ep.get("method") or "GET").upper()
-        path = ep.get("path") or "/"
-        label = f"{method} {path}"
-        enode = get_or_create_node(
-            session, project_id=project.id, node_type=NodeType.endpoint, name=label,
-            target_id=target.id, fq_name=label, created_by="surface_recon",
-            attrs={"method": method, "path": path, "auth": ep.get("auth", "unknown")},
-        )
-        routes += 1
-        for p in ep.get("params", []) or []:
-            pname = p if isinstance(p, str) else (p.get("name") or "")
-            if not pname:
-                continue
-            pnode = get_or_create_node(
-                session, project_id=project.id, node_type=NodeType.param, name=pname,
-                target_id=target.id, fq_name=f"{label}#{pname}", created_by="surface_recon",
-                attrs={"endpoint": label, **({} if isinstance(p, str) else p)},
-            )
-            add_edge(session, project_id=project.id, src=("node", enode.id), dst=("node", pnode.id),
-                     type=EdgeType.references, origin="tool", confidence=1.0,
-                     created_by_tool="surface_recon")
-        handler = _find_handler(session, project.id, ep.get("handler"))
-        if handler is not None:
-            add_edge(session, project_id=project.id, src=("node", enode.id), dst=("node", handler.id),
-                     type=EdgeType.routes_to, origin="tool", confidence=1.0,
-                     created_by_tool="surface_recon", attrs={"handler": ep.get("handler")})
-            linked += 1
+    routes, linked = _materialize_endpoints(session, project, target, spec, "surface_recon")
 
     if task is not None:
         from hexgraph.engine.findings import persist_finding
@@ -309,3 +319,47 @@ def run_web_recon(session: Session, project: Project, target: Target, task=None,
             finding_type="recon",
         )
     return {"dest": dest, "alive": alive, "probed": len(endpoints)}
+
+
+def run_web_discover(session: Session, project: Project, target: Target, task=None, runner=None) -> dict:
+    """LIVE, bounded route DISCOVERY of a web surface: crawl from `/` + a builtin common-path
+    list, follow same-host links/forms, and materialise the discovered endpoint/param nodes
+    (so surface_recon isn't limited to a caller-supplied spec). Same bounded-egress gate +
+    audit as web_recon (`features.network`, loopback/private only); the probe joins a rehosted
+    surface's emulator netns. Emits a recon finding listing what it found."""
+    from hexgraph import settings
+    from hexgraph.sandbox.executor import get_executor
+
+    base_url, scope, dest = _egress_gate(session, project, target, tool="web_discover",
+                                         task_id=task.id if task is not None else None)
+    runner = runner or get_executor()
+    timeout = int(settings.get("features.network.timeout", 30) or 30)
+    max_pages = int((task.params_json or {}).get("max_pages", 40)) if task is not None else 40
+    channel = {"base_url": base_url, "allow": sorted(scope.allow), "timeout": timeout,
+               "max_pages": max_pages}
+    result = runner.run_channel_probe("web_discover_probe.py", channel=channel,
+                                      net_container=_rehost_container(target))
+    discovered = result.get("endpoints") or []
+    routes, linked = _materialize_endpoints(session, project, target, discovered, "web_discover")
+
+    if task is not None:
+        from hexgraph.engine.findings import persist_finding
+        from hexgraph.models.finding import Evidence, Finding
+
+        live = sum(1 for e in discovered if isinstance(e.get("status"), int) and e["status"] < 400)
+        persist_finding(
+            session, project_id=project.id, target_id=target.id, task_id=task.id,
+            finding=Finding(
+                title=f"Web surface crawled: {routes} route(s) discovered at {base_url}",
+                severity="info", confidence="high", category="recon",
+                summary=f"Bounded crawl of {result.get('pages_fetched', 0)} page(s) found {routes} "
+                        f"route(s) ({live} responded <400); {linked} linked to a static handler.",
+                reasoning="Live route discovery (bounded egress, audited) mapped the surface's "
+                          "endpoints/params from links + forms + a common-path probe.",
+                evidence=Evidence(extra={"base_url": base_url, "dest": dest, "endpoints": routes,
+                                         "pages_fetched": result.get("pages_fetched", 0)}),
+            ),
+            finding_type="recon",
+        )
+    return {"dest": dest, "endpoints": routes, "handlers_linked": linked,
+            "pages_fetched": result.get("pages_fetched", 0)}
