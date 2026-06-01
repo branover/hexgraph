@@ -2,8 +2,10 @@
 
 **Status:** Phase 0/0b done (the assurance triple); **Phase 1 IMPLEMENTED** (the `callback`,
 `canary_read`, and `oob_write` oracles + the bounded callback listener — see "Phase 1 — status"
-below). Phases 2–4 remain proposed. Captures how HexGraph proves a *broad* class of
-vulnerabilities — not just command-injection — with **unforgeable** oracles.
+below); **Phase 4 IMPLEMENTED** (Standard B, static — the source→sink reachability ARGUMENT over
+the typed graph; see "Phase 4 — status"). Phases 2–3 remain proposed. Captures how HexGraph
+proves a *broad* class of vulnerabilities — not just command-injection — with **unforgeable**
+oracles.
 
 ## The problem
 
@@ -233,10 +235,11 @@ setting then read it back changed). Largely have; document as a first-class orac
   Shipped as `engine/oracles.py` + `engine/callback_listener.py`; see "Phase 1 — status".
 - **Phase 2:** the **DoS liveness** oracle (baseline-up → sustained-down, hysteresis).
 - **Phase 3:** **ASan/sanitizer builds + crash-state capture** for the memory-corruption rungs.
-- **Phase 4:** **Standard B, static** — explicit **source→sink reachability** over the typed
-  graph (mark input-source nodes; record the `taints`/`calls`/`routes_to` path + the gating
+- **Phase 4 — DONE:** **Standard B, static** — explicit **source→sink reachability** over the
+  typed graph (mark input-source nodes; record the `taints`/`calls`/`routes_to` path + the gating
   precondition), so a finding can argue reachability even when a dynamic trigger isn't available,
-  and so a code-present-but-unreached flaw is labeled honestly.
+  and so a code-present-but-unreached flaw is labeled honestly. Shipped as `engine/reachability.py`
+  + the `reachability` MCP tool + auto-stamping in the static_analysis flow; see "Phase 4 — status".
 
 ## Non-goals / open questions
 
@@ -293,3 +296,54 @@ that netns on the device-facing gateway IP (the ingress analogue of `run_channel
 =...)`), exposed via `CallbackListener(host=<gateway_ip>)`. **Deferred:** a fully end-to-end
 rehost-netns callback validation needs a cooperative firmware whose exploit can dial back; the
 mechanism ships now, live validation is a follow-up (does not block the local must-haves).
+
+## Phase 4 — status (IMPLEMENTED)
+
+**Standard B, static** ships as `engine/reachability.py`: a source→sink reachability ARGUMENT over
+the existing typed graph, for the case where a service can't be booted to trigger a real flaw live
+(the DIR-823G case — a genuine cmdi sink, but FirmAE couldn't boot goahead). It records
+`input_reachable / static` + the gating precondition; it is honestly an *argument*, never a
+*demonstration*, so it is strictly weaker than a live trigger and never overstates.
+
+**Traversal semantics (decided).** Multi-source BFS, **forward** (each edge in its semantic
+direction — we never reverse an edge, which would invent reachability):
+
+- **Sources** = the untrusted boundary: node types `input` / `param` / `endpoint` / `socket`. A
+  `function`/`symbol` is a source ONLY if explicitly marked `attrs.entry` / `attrs.is_entry` — an
+  arbitrary internal function is **not** a source (the main false-reachability trap).
+- **Sinks** = a `sink`-type node, OR any node with `attrs.is_sink == True` (a dangerous
+  `symbol`/`function`). A finding resolves its sink from its `about`→node edge(s), falling back to
+  a sink-ish node matching `evidence.sink`/`evidence.function`.
+- **Edges traversed src→dst:** `taints` (the strongest — direct dataflow), `dataflow_hint`
+  (weaker dataflow), `calls`, `routes_to`, `writes`, `reads`, `references`, and `bypasses` (an
+  attacker defeating a control en route). A path using ≥1 taint edge is flagged `via_taint=True`
+  (the stronger argument that the attacker controls the operand); a pure control path argues only
+  *reach*. The structural `contains` (target→node) edge is **excluded** — every node is
+  contains-reachable from its target, which would make the argument vacuous.
+- **Bounded + cycle-safe:** BFS with a visited set and a `max_depth` hop cap (default 12), so it
+  terminates on large/cyclic graphs; the shortest source→sink path is recorded.
+
+**Precondition (derived from the path).** `requires_credentials` if the path crosses an auth
+boundary — an `endpoint`/`param`/`socket` whose `attrs.auth` is set to something other than
+none/unknown, a node flagged `attrs.auth_check`/`attrs.is_auth`, or a `bypasses` edge.
+`unauthenticated` if the path STARTS at an explicitly-unauth boundary (`attrs.auth` in
+none/unauthenticated/anon/public/preauth) and crosses no auth gate. Otherwise `unspecified` (the
+honest default — never an unauth guess).
+
+**Precedence (never downgrade).** Recording goes through `assurance.upgrade_if_stronger`, which
+encodes the ladder as a PARTIAL order: `code_present/static` (0) `<` {`code_present/dynamic`,
+`input_reachable/static`} (tier 1, mutually **incomparable**) `<` `input_reachable/dynamic` (2). So
+`input_reachable/static` UPGRADES only the `code_present/static` floor and NEVER displaces a
+dynamic claim (`code_present/dynamic` lab-confirmation OR `input_reachable/dynamic` live trigger) —
+the static argument complements but never weakens a real trigger.
+
+**Exposed three ways:**
+- the `reachability(finding_id|sink_node_id, max_depth?)` MCP `run` tool — runs the analysis,
+  records the path (`evidence.extra.reachability`) + upgraded assurance on the finding, and returns
+  the path;
+- **auto-stamped** in the static_analysis (LLM-task) flow: after findings persist and duplicate
+  nodes are folded, each finding's cited sink is checked for a source→sink path and stamped
+  best-effort (advisory — a failure never fails the task);
+- documented for agents in `get_schemas['assurance'].static_reachability` and SKILL §3 ("if you
+  can't trigger it live, ARGUE reachability — a source→sink path upgrades code_present →
+  input_reachable/static; state the precondition").

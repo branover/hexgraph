@@ -169,3 +169,58 @@ def derive_fuzz_assurance() -> dict:
     but bypasses the production input path, so it is NOT input_reachable on its own."""
     return assurance(CODE_PRESENT, DYNAMIC, UNSPECIFIED,
                      detail="lab-confirmed by a fuzzing harness; production input path not established")
+
+
+# ── Precedence on the ladder, so a weaker rung NEVER overwrites a stronger one ──────────────
+#
+# The ladder (weakest → strongest), per LADDER above. The middle two are NOT strictly
+# comparable (one proves the bug FIRES but not that it's REACHED; the other argues REACH but not
+# that it fires) — so neither may displace the other. We model that with a partial order:
+#
+#       code_present/static  <  code_present/dynamic   <  input_reachable/dynamic
+#       code_present/static  <  input_reachable/static  <  input_reachable/dynamic
+#       code_present/dynamic  ‖  input_reachable/static   (incomparable — keep what's there)
+#
+# Phase 4 (input_reachable/static) must therefore upgrade ONLY a code_present/static floor; it
+# must NEVER downgrade a dynamic claim (code_present/dynamic OR input_reachable/dynamic) — the
+# whole point is to ARGUE reach when we couldn't trigger it, not to weaken a real trigger.
+_RANK = {
+    (CODE_PRESENT, STATIC): 0,
+    (CODE_PRESENT, DYNAMIC): 1,
+    (INPUT_REACHABLE, STATIC): 1,   # same TIER as code_present/dynamic, but incomparable to it
+    (INPUT_REACHABLE, DYNAMIC): 2,
+}
+
+
+def rank(a: dict | None) -> int:
+    """Numeric tier of an assurance triple on the ladder (higher = stronger). UNCONFIRMED and
+    any unknown standard/method combination rank below the floor (-1). Used for the coarse
+    'is this clearly weaker' test; the incomparable middle rungs are disambiguated by
+    `_strictly_stronger`."""
+    if not a:
+        return -1
+    return _RANK.get((a.get("standard"), a.get("method")), -1)
+
+
+def _strictly_stronger(candidate: dict, current: dict) -> bool:
+    """True iff `candidate` is strictly above `current` in the PARTIAL order — a real upgrade,
+    not a sideways move between the two incomparable middle rungs. A candidate at the same
+    numeric tier as the current claim is NOT an upgrade (so input_reachable/static does not
+    displace an equal-tier code_present/dynamic, and vice-versa). Because a tier-1 candidate can
+    only out-rank a tier-0 current, and a tier-2 candidate out-ranks everything below it, a strict
+    numeric increase is both necessary and sufficient — the incomparable pair shares a tier."""
+    return rank(candidate) > rank(current)
+
+
+def upgrade_if_stronger(evidence: dict | None, candidate: dict) -> dict:
+    """Record `candidate` as the finding's assurance ONLY if it is strictly stronger than what's
+    already there (per the partial order). Mutates and returns `evidence` (creating
+    `evidence.extra.assurance`). NEVER downgrades — a dynamic claim (code_present/dynamic or
+    input_reachable/dynamic) is preserved against an incoming input_reachable/static. Returns the
+    evidence dict so callers can chain. This is the single guard Phase 4 (and any future
+    static-rung writer) goes through to stamp a finding."""
+    evidence = evidence if isinstance(evidence, dict) else {}
+    current = assurance_of(evidence)
+    if current is None or _strictly_stronger(candidate, current):
+        evidence.setdefault("extra", {})["assurance"] = candidate
+    return evidence

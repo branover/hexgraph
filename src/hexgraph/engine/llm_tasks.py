@@ -252,6 +252,7 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
     task.backend = backend.name
 
     low_confidence = False
+    persisted_ids: list[str] = []
     for finding in findings:
         resolved_refs = [
             r for r in (resolve_target_ref(session, project.id, ref) for ref in finding.related_target_refs or [])
@@ -267,6 +268,7 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
             task_id=task.id,
             finding=finding,
         )
+        persisted_ids.append(row.id)
         if finding.confidence == "low":
             low_confidence = True
         edge_type = EdgeType.instance_of_pattern if task.type == "pattern_sweep" else EdgeType.related_to
@@ -294,6 +296,21 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
     from hexgraph.engine.nodemerge import merge_duplicate_nodes
 
     merge_duplicate_nodes(session, project.id)
+
+    # Standard B, static (docs/design-verification-oracles.md Phase 4): now that the agent has
+    # built the graph (input/sink nodes + taints/calls dataflow) and dupes are folded, try to
+    # ARGUE static input-reachability for each finding whose cited sink has a source→sink path.
+    # Best-effort + envelope-only: it only UPGRADES a code_present/static floor (never downgrades a
+    # dynamic claim), so a stronger assurance the agent recorded is untouched. A failure here must
+    # not fail the task (the findings are already persisted).
+    if persisted_ids:
+        from hexgraph.engine.reachability import argue_reachability_for_finding
+
+        for fid in persisted_ids:
+            try:
+                argue_reachability_for_finding(session, fid)
+            except Exception:  # noqa: BLE001 — reachability is advisory, never fatal
+                pass
 
     # Group this execution as an analysis_run for run-to-run comparison.
     from hexgraph.engine.runs import record_run

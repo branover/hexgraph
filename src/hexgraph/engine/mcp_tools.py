@@ -680,6 +680,15 @@ def get_schemas() -> dict:
                     "spec.precondition to verify_poc, or evidence.extra.assurance to record_finding, to "
                     "declare the precondition / an argued input_reachable-static — but state "
                     "requires_credentials honestly; never claim unauth you didn't achieve).",
+            "static_reachability": "When you CAN'T trigger it live (the service won't boot, no "
+                    "exec tier), ARGUE reachability instead: build the input→sink path in the graph "
+                    "(create_node the input/param/endpoint/sink, create_edge the taints/calls/"
+                    "routes_to path), then call reachability(finding_id=…). If a source→sink path "
+                    "exists it UPGRADES code_present/static → input_reachable/static and records the "
+                    "path + derived precondition (auth boundary on the path ⇒ requires_credentials; "
+                    "an unauth boundary ⇒ unauthenticated). It NEVER downgrades a dynamic claim — a "
+                    "live trigger always wins. taints is the strongest edge; a pure calls/routes_to "
+                    "path argues reach but not operand-control, so prefer a taint path.",
         },
     }
 
@@ -1016,6 +1025,44 @@ def verify_poc(target_id: str, poc: dict, finding_id: str | None = None) -> dict
         return {"verified": bool(r.get("verified")), "detail": r.get("detail"),
                 "exit_code": r.get("exit_code"), "output": (r.get("output") or "")[:4000],
                 "attached_to": finding_id if finding_id else None}
+
+
+def reachability(finding_id: str | None = None, sink_node_id: str | None = None,
+                 max_depth: int = 12) -> dict:
+    """Argue STATIC input-reachability (Standard B, static) — search the typed graph for a
+    directed source→sink path so a finding can claim `input_reachable/static` even when you can't
+    trigger it live (the DIR-823G case: a real sink, but the service won't boot). Pass `finding_id`
+    (resolves the sink it cites + RECORDS the path & upgraded assurance on the finding) and/or
+    `sink_node_id` (just reports a path to that sink).
+
+    Sources = the untrusted boundary (input/param/endpoint/socket nodes, or a function/symbol you
+    marked attrs.entry); the search follows taints/calls/routes_to/reads/writes/references FORWARD
+    (taints is the strongest dataflow signal) and is depth-bounded + cycle-safe. The precondition
+    is derived from the path: crossing an auth boundary (an endpoint/param with attrs.auth set, or
+    a `bypasses` edge) ⇒ requires_credentials; starting at an explicitly-unauth boundary ⇒
+    unauthenticated; else unspecified. It is an ARGUMENT, not a trigger: it only UPGRADES a
+    code_present/static floor and NEVER downgrades a dynamic claim. Build the graph first
+    (create_node the input/sink + create_edge the taints/calls path), then call this."""
+    from hexgraph.engine.reachability import (ReachabilityError,
+                                              argue_reachability_for_finding,
+                                              find_source_to_sink_path)
+
+    if not finding_id and not sink_node_id:
+        return {"error": "pass finding_id and/or sink_node_id"}
+    with session_scope() as s:
+        try:
+            if finding_id:
+                return argue_reachability_for_finding(s, finding_id, max_depth=max_depth)
+            n = s.get(Node, sink_node_id)
+            if n is None:
+                return {"error": "sink node not found"}
+            res = find_source_to_sink_path(s, n.project_id, sink_node_id, max_depth=max_depth)
+            if res is None:
+                return {"found": False, "sink_node_id": sink_node_id,
+                        "detail": f"no source→sink path within {max_depth} hops to {n.name!r}"}
+            return {"found": True, "sink_node_id": sink_node_id, **res}
+        except ReachabilityError as exc:
+            return {"error": str(exc)}
 
 
 def merge_duplicates(project_id: str) -> dict:
