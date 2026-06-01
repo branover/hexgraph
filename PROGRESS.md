@@ -145,7 +145,38 @@ then run the resume verifier, then continue at the next unchecked task.
   unvalidated function names (decompile_probe); sha256 at ingest (archive/restore without recon);
   dedupe edge-cascade; misc leaks/idempotency; added `findings.is_verified` helper; new tests
   (secret-never-logged, loopback startup, unpack manifest, regression guards). Merged to `main` (PR #1).
-- **Last verified:** `.venv/bin/python -m pytest -q` → 246 passed, 2 skipped (live test skips without a
+- **Live-device + rehosting-engagement track (2026-05-31/06-01, autonomous) — DELIVERED + VR-vetted:**
+  - **Gap #1 — disk-image rootfs extraction:** a full-OS disk image used to ingest with no FS, so the
+    agent had zero pre-auth intel. `recon`/`unpack` now detect a partition table (`_looks_like_disk_image`:
+    MBR/GPT) and extract the ext rootfs unprivileged via **The Sleuth Kit** (`mmls`+`tsk_recover`, binwalk
+    fallback for squashfs-on-partition). (PR #20.) `tests/test_disk_image.py`.
+  - **Gap #2 — live route/content discovery:** `surface_recon` only materialised a *supplied* spec, so a
+    rehosted surface had no endpoints. Added the **`web_discover`** task/MCP tool — a bounded, same-host
+    read-only crawl (`web_discover_probe.py`, `<a>`/`<form>` parse) that materialises `endpoint` nodes.
+    (PR #21.) `tests/test_web_discover.py`.
+  - **`verify_poc` web oracle hardened:** `body_contains` could match a `{{NONCE}}` *reflected* in a
+    403 re-auth page (no command ran → forged `verified:true`). The probe now strips the request's own
+    echoed payload (raw + URL/HTML-encoded) before matching and flags a 401/403 match. (PR #22.)
+  - **Live-remote target (SSH/telnet), Tier 3:** a `remote` target for a box we don't have firmware for —
+    `register_remote_target` + `remote_run`/`remote_list_files`/`remote_read_file` MCP tools run the SAME
+    read-only tool kinds (paramiko SSH / telnetlib, fixed `TOOLS` allowlist, `shlex.quote` paths) as on a
+    static/rehosted image. New `policy.TIER_LIVE_REMOTE` + `features.remote` gate pins exactly one
+    operator-authorised host (`remote_scope`); creds come from env/`config.toml [remote]` only — **never
+    stored/logged/returned**; every op audited to `EgressEvent`. Validated against a live sshd container.
+    (PR #23.) `engine/remote.py`, `sandbox/probes/remote_probe.py`, `tests/test_remote.py`.
+  - **FirmAE branch validated on REAL vendor firmware (DVRF, Linksys E1550 MIPS):** the FirmAE image now
+    builds **sasquatch** (vendor/LZMA squashfs — extraction died without it); rehost timeout 600→900s
+    (MIPS boot+network-inference ≈525s); FirmAE network inference is **vendor-brand-keyed** so `rehost`
+    auto-infers the brand from firmware strings and a no-network error tells you to retry with
+    `brand=<vendor>`. A VR agent (MCP only) rehosted DVRF via `rehost(fw, brand="linksys")` → boots
+    mipsel → `192.168.1.1` → web up, then read the extracted rootfs and surfaced the planted MIPS
+    pwnables. `select_rehoster` correctly routed the squashfs blob to FirmAE (vs qemu for IoTGoat's disk
+    image) — both auto-selection branches now proven on real firmware. (PR #24.) `tests/test_rehost.py`.
+  - **VR feedback backlog:** captured in [`docs/vr-feedback.md`](docs/vr-feedback.md) — auto-brand limit
+    (boot-and-retry loop is ~9 min/boot, left manual), provisioning poc/remote/network together for a
+    rehost engagement, starting non-auto-started device services, a computed-output cmdi oracle,
+    non-HTTP live services, a credential-cracking seam.
+- **Last verified:** `.venv/bin/python -m pytest -q` → **319 passed, 2 skipped** (live test skips without a
   key; one Docker-gated when the sandbox image is absent); SPA builds clean. Sandbox image
   (`WITH_GHIDRA=1`) includes Ghidra + qemu + firmware extractors and works end-to-end.
 - **UI quickstart (updated):** `make ui` once → `make sandbox-build` once →
@@ -273,6 +304,17 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-01: **Live-device + rehosting-engagement track (autonomous overnight).** Shipped, each
+  PR-reviewed + merged + VR-vetted: gap #1 disk-image rootfs extraction (Sleuth Kit, PR #20), gap #2
+  `web_discover` bounded crawl (PR #21), `verify_poc` web-oracle reflection-stripping (PR #22), the
+  **live-remote SSH/telnet target** (Tier 3 `features.remote`, one authorised host, creds env-only,
+  EgressEvent-audited; PR #23), and the **FirmAE branch validated end-to-end on real DVRF** (Linksys
+  MIPS): sasquatch built into the FirmAE image, rehost timeout 600→900, vendor-brand auto-inference +
+  a no-network error that tells you to pass `brand=` (PR #24). A VR agent rehosted DVRF over MCP only
+  (`rehost(fw, brand="linksys")` → 192.168.1.1, web up) and found the planted pwnables; IoTGoat's disk
+  image still auto-routes to qemu — both `select_rehoster` branches proven on real firmware. VR feedback
+  → `docs/vr-feedback.md`. `cookie jar` `session` handle on `http_request` for cross-call auth. Full
+  suite 319 passed, 2 skipped; cleaned up to `main`-only.
 - 2026-05-31: **Duplicate-node/target merge + name normalization + MCP usability.** Function/symbol
   identity now normalizes decompiler prefixes (`sym.get_param`==`get_param`) at creation
   (`engine.nodes.normalize_symbol_name`); `engine/nodemerge.py` folds existing duplicates by per-type
