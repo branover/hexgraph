@@ -30,22 +30,24 @@ qemu-system-x86_64 -enable-kvm -m "$MEM" -smp 2 \
     -nographic -display none -serial file:/tmp/qemu-serial.log &
 QPID=$!
 
-WEB=false; PORT=$HOSTPORT
+WEB=false; PORT=$HOSTPORT; SCHEME=http
 for _ in $(seq 1 90); do                       # ~7.5 min for the OS to boot + start its web server
     if ! kill -0 "$QPID" 2>/dev/null; then
         echo "HEXGRAPH_REHOST {\"ip\":\"127.0.0.1\",\"web\":false,\"detail\":\"qemu exited during boot\"}"
         tail -n 30 /tmp/qemu-serial.log 2>/dev/null; sleep infinity
     fi
+    # Prefer plain HTTP on :80 (hostfwd 8080); fall back to an HTTPS-only guest on :443
+    # (hostfwd 8443), carrying the scheme so HexGraph builds https:// (not cleartext-on-TLS).
     if curl -ksS -m 4 -o /dev/null "http://127.0.0.1:${HOSTPORT}/" 2>/dev/null; then
-        WEB=true; PORT=$HOSTPORT; break
+        WEB=true; PORT=$HOSTPORT; SCHEME=http; break
     elif curl -ksS -m 4 -o /dev/null "https://127.0.0.1:8443/" 2>/dev/null; then
-        WEB=true; PORT=8443; break
+        WEB=true; PORT=8443; SCHEME=https; break
     fi
     sleep 5
 done
 
 if $WEB; then
-    echo "HEXGRAPH_REHOST {\"ip\":\"127.0.0.1\",\"web\":true,\"port\":${PORT},\"detail\":\"qemu disk-image emulation\"}"
+    echo "HEXGRAPH_REHOST {\"ip\":\"127.0.0.1\",\"web\":true,\"port\":${PORT},\"scheme\":\"${SCHEME}\",\"detail\":\"qemu disk-image emulation\"}"
 else
     echo "HEXGRAPH_REHOST {\"ip\":\"127.0.0.1\",\"web\":false,\"detail\":\"qemu booted but no web on :80/:443\"}"
 fi

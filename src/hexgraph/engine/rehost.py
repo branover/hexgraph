@@ -187,7 +187,9 @@ class QemuDiskRehoster(Rehoster):
             raise RehostError(info.get("detail") or "qemu booted but no web service answered")
         ip = info.get("ip") or "127.0.0.1"
         port = info.get("port") or 80
-        base = f"http://{ip}" if port == 80 else f"http://{ip}:{port}"
+        scheme = info.get("scheme") or "http"
+        default_port = 443 if scheme == "https" else 80
+        base = f"{scheme}://{ip}" if port == default_port else f"{scheme}://{ip}:{port}"
         return RehostResult(ip=ip, base_url=base, handle=name,
                             detail=info.get("detail", "qemu disk-image emulation"))
 
