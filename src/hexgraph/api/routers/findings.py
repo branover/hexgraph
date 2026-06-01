@@ -113,9 +113,23 @@ def api_verify_finding(finding_id: str):
         # Preserve the original spec (with {{NONCE}} intact) so re-verify stays
         # repeatable; r.get("spec") is the nonce-substituted copy.
         extra["poc"] = spec
+        # Refresh the engine-computed assurance triple at BOTH the canonical
+        # evidence.extra.assurance and inside the verification record (matching
+        # _poc_finding) — otherwise re-verify would DROP the assurance added by the
+        # PoC-assurance work. The triple is derived by verify_poc, not the caller.
+        assurance = r.get("assurance")
+        extra["assurance"] = assurance
         extra["verification"] = {"verified": bool(r.get("verified")), "detail": r.get("detail"),
                                  "exit_code": r.get("exit_code"), "nonce": r.get("nonce"),
-                                 "output": (r.get("output") or "")[:2000]}
+                                 "output": (r.get("output") or "")[:2000],
+                                 "assurance": assurance}
+        # Refresh the human-facing reproduction command (the structured spec stays the
+        # re-verify source of truth; this is a display rendering only).
+        from hexgraph.engine.poc_repro import repro_command
+        try:
+            extra["repro_command"] = repro_command(spec, t)
+        except Exception:  # noqa: BLE001
+            pass
         ev["extra"] = extra
         f.evidence_json = ev
         return {**finding_dict(f), "verified": bool(r.get("verified")), "detail": r.get("detail")}

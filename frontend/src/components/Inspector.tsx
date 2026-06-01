@@ -21,6 +21,76 @@ function Lifecycle({ status }: { status: string }) {
   );
 }
 
+// "input_reachable" → "input reachable"; keep enum-ish tokens human-readable.
+const human = (s: any) => String(s ?? "").replace(/_/g, " ");
+
+// The assurance triple as a one-line "standard · method · precondition", with the
+// lab-confirmed (code_present/dynamic) vs reachable (input_reachable) distinction made
+// legible — this is the crux the assurance work exists to keep honest.
+function AssuranceLine({ a }: { a: any }) {
+  if (!a) return null;
+  const isReachable = a.standard === "input_reachable";
+  const isDynamic = a.method === "dynamic";
+  const lab = a.standard === "code_present" && isDynamic; // lab-confirmed in isolation
+  const color = isReachable && isDynamic ? "#2ea043" : lab ? "#d29922" : "var(--muted)";
+  const note = isReachable
+    ? "reachable through the live deployed input boundary"
+    : lab ? "lab-confirmed in isolation — production input path not established"
+    : "static / suspected";
+  return (
+    <>
+      <span className="k">assurance</span>
+      <span style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
+        <code style={{ color, borderColor: color }}>
+          {human(a.standard)} · {human(a.method)} · {human(a.precondition)}
+          {a.precondition_inferred ? " (inferred)" : ""}
+        </code>
+        <span className="muted" style={{ fontSize: 10.5 }}>{note}</span>
+      </span>
+    </>
+  );
+}
+
+// Render a PoC spec's steps in plain language (web steps / a tcp send / a binary run),
+// so the analyst reads what the PoC DOES without parsing the raw JSON (still available
+// in the collapsible below).
+function PocSteps({ poc }: { poc: any }) {
+  if (!poc) return null;
+  const lines: string[] = [];
+  const oracle = poc.oracle;
+  const steps = poc.steps || (poc.request ? [poc.request] : []);
+  if (steps.length) {
+    steps.forEach((s: any, i: number) => {
+      const method = (s.method || "GET").toUpperCase();
+      const path = s.path || "/";
+      const bits = [`${i + 1}. ${method} ${path}`];
+      if (s.params && Object.keys(s.params).length) bits.push(`params ${JSON.stringify(s.params)}`);
+      if (s.body) bits.push(`body ${typeof s.body === "string" ? s.body : JSON.stringify(s.body)}`);
+      if (s.json) bits.push(`json ${JSON.stringify(s.json)}`);
+      if (s.headers && Object.keys(s.headers).length) bits.push(`headers ${Object.keys(s.headers).join(", ")}`);
+      lines.push(bits.join("  ·  "));
+    });
+  } else if (poc.transport === "tcp" || poc.tcp || poc.port) {
+    const tcp = (poc.tcp && typeof poc.tcp === "object") ? poc.tcp : poc;
+    lines.push(`Send to TCP port ${tcp.port || poc.port}: ${JSON.stringify(tcp.payload ?? poc.payload ?? "")}`);
+  } else {
+    if (poc.env && Object.keys(poc.env).length) lines.push(`env: ${Object.entries(poc.env).map(([k, v]) => `${k}=${v}`).join(" ")}`);
+    lines.push(`run target ${(poc.argv || []).join(" ")}`.trim());
+    if (poc.stdin) lines.push(`stdin: ${poc.stdin}`);
+  }
+  return (
+    <div className="kvs" style={{ marginTop: 4 }}>
+      <span className="k">steps</span>
+      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        {lines.map((l, i) => <code key={i} style={{ whiteSpace: "pre-wrap", fontSize: 11 }}>{l}</code>)}
+        {oracle && <span className="muted" style={{ fontSize: 10.5 }}>
+          oracle: {oracle.type || "output_contains"}{oracle.value !== undefined ? ` = ${JSON.stringify(oracle.value)}` : ""}
+        </span>}
+      </div>
+    </div>
+  );
+}
+
 // Detail + triage + follow-on launch + provenance for a selected finding.
 export default function Inspector({ finding, projectId, hypotheses = [], onChanged, onLaunch, onOpenLaunch, onViewTask, onHighlight, fuzzingEnabled }: {
   finding: Finding | null; projectId?: string; hypotheses?: { id: string; statement: string }[];
@@ -38,9 +108,10 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
   const [verifying, setVerifying] = useState(false);
   const [verifyMsg, setVerifyMsg] = useState<string>();
   const [pocOpen, setPocOpen] = useState(false);
+  const [reproCopied, setReproCopied] = useState(false);
   useEffect(() => {
     setSugg([]); setCopied(false); setHypId("");
-    setEditing(false); setEditErr(undefined); setVerifyMsg(undefined); setPocOpen(false);
+    setEditing(false); setEditErr(undefined); setVerifyMsg(undefined); setPocOpen(false); setReproCopied(false);
     if (finding) api.suggestions(finding.id).then(setSugg).catch(() => setSugg([]));
   }, [finding?.id]);
 
@@ -48,6 +119,10 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
   const ev = finding.evidence || {};
   const poc = ev.extra?.poc;
   const verification = ev.extra?.verification;
+  // Canonical assurance is evidence.extra.assurance; a PoC also nests it under verification.
+  const assurance = ev.extra?.assurance || verification?.assurance;
+  const reproCommand = ev.extra?.repro_command;
+  const reproStr = Array.isArray(reproCommand) ? reproCommand.join(" ") : reproCommand;
 
   const setStatus = async (s: string) => { await api.setStatus(finding.id, s); onChanged(); };
 
@@ -91,6 +166,7 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
     else { const { task_id } = await api.launch({ target_id: finding.target_id, type: s.task_type, params: s.params || {} }); onLaunch(task_id); }
   };
   const copy = () => { navigator.clipboard?.writeText(ev.decompiled_snippet || ""); setCopied(true); setTimeout(() => setCopied(false), 1200); };
+  const copyRepro = () => { navigator.clipboard?.writeText(reproStr || ""); setReproCopied(true); setTimeout(() => setReproCopied(false), 1200); };
   const newHypothesis = async () => {
     if (!projectId) return;
     const statement = window.prompt("New hypothesis (this finding becomes supporting evidence):", finding.title);
@@ -185,25 +261,46 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
       {(poc || verification) && (
         <>
           <div className="sec">Proof of Concept</div>
-          {verification && (
+          {(verification || assurance) && (
             <div className="kvs">
-              <span className="k">status</span>
-              <span>
-                {verification.verified
-                  ? <span className="tag" style={{ color: "#2ea043", borderColor: "#2ea043" }}>✓ verified</span>
-                  : <span className="tag" style={{ color: "#ff5d6c", borderColor: "#ff5d6c" }}>✗ not verified</span>}
-              </span>
-              {verification.detail && <><span className="k">detail</span><span>{verification.detail}</span></>}
-              {verification.exit_code !== undefined && verification.exit_code !== null && <><span className="k">exit code</span><code>{String(verification.exit_code)}</code></>}
-              {verification.nonce && <><span className="k">nonce</span><code>{verification.nonce}</code></>}
+              {verification && <>
+                <span className="k">status</span>
+                <span>
+                  {verification.verified
+                    ? <span className="tag" style={{ color: "#2ea043", borderColor: "#2ea043" }}>✓ verified</span>
+                    : <span className="tag" style={{ color: "#ff5d6c", borderColor: "#ff5d6c" }}>✗ not verified</span>}
+                </span>
+              </>}
+              <AssuranceLine a={assurance} />
+              {verification?.detail && <><span className="k">detail</span><span>{verification.detail}</span></>}
+              {verification && verification.exit_code !== undefined && verification.exit_code !== null && <><span className="k">exit code</span><code>{String(verification.exit_code)}</code></>}
+              {verification?.nonce && <><span className="k">nonce</span><code>{verification.nonce}</code></>}
             </div>
           )}
+          {assurance?.detail && <p className="muted" style={{ fontSize: 11, margin: "2px 0 0" }}>{assurance.detail}</p>}
+
+          {/* Plain-language steps so the analyst reads what the PoC does (raw JSON below). */}
+          <PocSteps poc={poc} />
+
+          {/* Copy-paste reproduction command derived from the spec (display only). */}
+          {reproStr && (
+            <>
+              <div className="kvs" style={{ marginTop: 6 }}><span className="k">reproduce</span><span /></div>
+              <div className="codewrap">
+                <button className="btn sm icon copy" title="Copy reproduction command" onClick={copyRepro}>
+                  <Icon name={reproCopied ? "check" : "copy"} size={12} />
+                </button>
+                <pre style={{ whiteSpace: "pre-wrap", fontSize: 11 }}>{reproStr}</pre>
+              </div>
+            </>
+          )}
+
           {verification?.output && (
             <pre className="codewrap" style={{ whiteSpace: "pre-wrap", maxHeight: 240, overflow: "auto", fontSize: 11 }}>{String(verification.output).slice(0, 1000)}</pre>
           )}
           {poc && (
             <details open={pocOpen} onToggle={(e) => setPocOpen((e.target as HTMLDetailsElement).open)} style={{ marginTop: 6 }}>
-              <summary style={{ cursor: "pointer", fontSize: 12 }} className="muted">PoC spec</summary>
+              <summary style={{ cursor: "pointer", fontSize: 12 }} className="muted">PoC spec (JSON)</summary>
               <pre className="codewrap" style={{ whiteSpace: "pre-wrap", maxHeight: 280, overflow: "auto", fontSize: 11 }}>{JSON.stringify(poc, null, 2)}</pre>
             </details>
           )}

@@ -208,8 +208,26 @@ def _assurance_str(a: dict | None) -> str:
     return s + " (inferred precondition)" if a.get("precondition_inferred") else s
 
 
-def _poc_finding(spec: dict, verification: dict, function: str | None, target_name: str, category: str) -> Finding:
+def _repro(spec: dict, target: Target | None):
+    """The human-facing reproduction command; never let rendering break a finding."""
+    try:
+        from hexgraph.engine.poc_repro import repro_command
+        return repro_command(spec, target)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _repro_str(repro) -> str | None:
+    if not repro:
+        return None
+    return repro if isinstance(repro, str) else " ".join(str(p) for p in repro)
+
+
+def _poc_finding(spec: dict, verification: dict, function: str | None, target_name: str,
+                 category: str, target: Target | None = None) -> Finding:
     verified = bool(verification.get("verified"))
+    repro = _repro(spec, target)
+    repro_str = _repro_str(repro)
     return Finding(
         title=("Verified PoC" if verified else "PoC (unverified)")
         + f": {category} in {function or target_name}",
@@ -222,11 +240,16 @@ def _poc_finding(spec: dict, verification: dict, function: str | None, target_na
         reasoning="Oracle: " + (verification.get("detail") or "—")
         + (f"\nExit: {verification.get('exit_code')}" if verification.get("exit_code") is not None else "")
         + (f"\nAssurance: {_assurance_str(verification.get('assurance'))}"
-           if verification.get("assurance") else ""),
+           if verification.get("assurance") else "")
+        + (f"\nReproduce: {repro_str}" if repro_str else ""),
         evidence=Evidence(
             function=function,
-            reproducer=json.dumps(spec),
-            extra={"poc": spec, "verification": {
+            # A human-readable reproduction command, NOT the raw JSON; the structured
+            # spec (the re-verify source of truth) stays in extra.poc.
+            reproducer=repro_str or json.dumps(spec),
+            extra={"poc": spec, "repro_command": repro,
+                   "assurance": verification.get("assurance"),
+                   "verification": {
                 "verified": verified, "detail": verification.get("detail"),
                 "exit_code": verification.get("exit_code"),
                 "output": (verification.get("output") or "")[:2000],
@@ -263,7 +286,7 @@ def execute_poc(session: Session, project: Project, target: Target, task: Task,
 
     row = persist_finding(
         session, project_id=project.id, target_id=target.id, task_id=task.id,
-        finding=_poc_finding(spec, verification, function, target.name, category),
+        finding=_poc_finding(spec, verification, function, target.name, category, target),
         finding_type="poc",
     )
     if not verification.get("verified"):
