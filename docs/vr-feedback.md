@@ -122,3 +122,47 @@ not a tooling limit. New friction note:
    blog_data mirror), drop at `/tmp/DIR-823G_FW102B03.bin`, ingest → `rehost(fw, brand="dlink")`
    (FirmAE, squashfs blob), then `verify_poc` HNAP1 with `;echo {{NONCE}};` (no login step needed).
    Tenda AC15 v15.03.1.16 (CVE-2018-5767, unauth stack overflow → RCE) is a stronger-effort alternative.
+
+## From the DIR-823G (real D-Link, Realtek-SDK MIPS) FirmAE engagement (closing #44's real-firmware half, 2026-06-01)
+
+Goal: prove a LIVE, unauthenticated web RCE on the **real shipping** D-Link DIR-823G v1.0.2B05 vendor
+firmware (`DIR823G_V1.0.2B05_20181207.bin`) under FirmAE — the first real-firmware Standard-B-dynamic
+attempt. **Static analysis (Standard A) landed cleanly; the live trigger (Standard B, dynamic) was
+blocked at the EMULATION layer, not by HexGraph or by the sink.**
+
+- **Ingest + extraction worked** (sasquatch → 137 children, browsable rootfs). The web server is
+  `/bin/goahead` (a GoAhead/Realtek-SDK HNAP server, MIPS32).
+- **Static sink found + recorded (Standard A satisfied).** `goahead` imports `system`/`popen` and has
+  a `doSystem` wrapper. The HNAP SOAP action **`SetNetworkTomographySettings`** (POST `/HNAP1/`, body
+  `<Address>/<Number>/<Size>`, namespace `http://purenetworks.com/HNAP1/`) builds, from string
+  fragments, the command **`ping <Address> -c <Number> -s <Size> > /tmp/ping.txt 2>>/tmp/ping.txt`**
+  and runs it via `system()`. The `<Address>` operand is unsanitized → classic CVE-2019-7298-family
+  cmdi. Recorded as a `vulnerability` finding + endpoint(`/HNAP1`)/param/input/sink nodes + a `taints`
+  chain, assurance **{code_present (A), static, unauthenticated-ARGUED}**. (Honest: unauth-reachability
+  is *argued* from the HNAP family's documented no-auth surface, not triggered.)
+- **FirmAE boot: network UP, web service DOWN (crash-loop).** FirmAE inferred the device network
+  (**192.168.0.1**, ICMP-reachable, `service=/bin/goahead`), but **goahead crash-loops on startup**:
+  `libapmib.so` reads the hardware/MIB settings from **`/dev/mtdblock0`** (the Realtek flash MIB
+  region) and validates a signature; FirmAE does not emulate that flash content, so it fails with
+  `Invalid hw setting signature [sig=  ]!`, goahead exits, init respawns it (~27×), and the HTTP port
+  **never binds** (`curl` to 80/443/8080/8181/81 = `000`). So **no live `web_app` surface registered →
+  `verify_poc` had nothing to drive**. This is a **FirmAE/Realtek-SDK rehosting-fidelity limitation**
+  (the firmware needs its real flash/NVRAM apmib partition to bring up the web stack), not a flaw in
+  the sink and not a HexGraph tooling gap.
+- **A real tooling friction WAS hit and fixed (this PR).** The first boot **timed out mid-inference**:
+  the entry script's ip-poll ceiling was a hardcoded `BOOT_BUDGET=144` (×5s = ~12 min), but this slow
+  MIPS image's FirmAE network inference (a ~360s qemu boot followed by a 360s web-wait window) needs
+  *well* past 12 min — it was killed before `makeNetwork.py` even wrote the `ip` file, so we got a
+  misleading "couldn't bring up the device network" when the device actually does come up. Fixed:
+  `BOOT_BUDGET` is now env-configurable (`HEXGRAPH_BOOT_BUDGET`), and the rehoster **forwards it as
+  `budget // 5`** so the container's internal ceiling stays in lockstep with the rehoster's own marker
+  budget (`features.rehost.timeout`) instead of diverging. With `features.rehost.timeout=1800` the
+  inference completed and the IP/`ping:true`/service were assigned — *that* is what turned a premature,
+  misleading timeout into the definitive, well-evidenced answer above. New friction note:
+  7. **Realtek-SDK (RTL819x/`libapmib`+`goahead`) firmwares don't bring up their web stack under
+     FirmAE** without the real flash MIB partition (`/dev/mtdblock0`). For the live-web-RCE demo, prefer
+     a **firmadyne-friendly** target whose web server doesn't gate startup on emulated flash — or one
+     for which a known-good FirmAE config/NVRAM seed exists. DIR-823G satisfies Standard A (code-present
+     cmdi, cited to the sink) but is a poor Standard-B-dynamic target under plain FirmAE. Worth trying:
+     a DIR-823G FirmAE run with a pre-seeded apmib/NVRAM image, or a non-Realtek unauth-cmdi router
+     (e.g. a Tenda/TOTOLINK httpd that reads config from a flat file rather than flash MIB).

@@ -311,6 +311,23 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-01: **DIR-823G real-firmware engagement (closing #44's real-firmware half) + FirmAE
+  boot-budget fix.** Ingested the real D-Link DIR-823G v1.0.2B05 vendor blob → sasquatch extraction
+  (137 children); statically found + recorded the **unauth HNAP cmdi (Standard A)** in `/bin/goahead`:
+  SOAP action `SetNetworkTomographySettings` builds `ping <Address> -c <N> -s <Size> > /tmp/ping.txt`
+  via `system()`, `<Address>` unsanitized (CVE-2019-7298 family) — finding + endpoint/param/input/sink
+  nodes + `taints` chain, assurance `{code_present, static, unauthenticated-argued}`. FirmAE booted the
+  image and **brought the network up** (192.168.0.1, ICMP-reachable, service=/bin/goahead) but the web
+  daemon **crash-loops** — `libapmib.so` fails the `/dev/mtdblock0` Realtek-flash "hw setting signature"
+  check FirmAE can't emulate, so goahead never binds; **no live surface ⇒ `verify_poc` couldn't run**
+  (Standard B dynamic NOT achieved — a FirmAE/Realtek-SDK fidelity limit, not a HexGraph/sink flaw).
+  **Fix shipped (`fix/firmae-boot-budget`):** the entry script's hardcoded 12-min ip-poll ceiling
+  (`BOOT_BUDGET=144`) timed out this slow MIPS image mid-inference (before `ip` was even written),
+  giving a misleading "no device network". Made `BOOT_BUDGET` env-configurable (`HEXGRAPH_BOOT_BUDGET`)
+  and had the rehoster forward `budget // 5` so the container ceiling tracks `features.rehost.timeout`.
+  With timeout=1800 inference completed and the IP/service were assigned — turning a premature timeout
+  into the definitive answer. Captured in `docs/vr-feedback.md` (friction note #7: Realtek-SDK web
+  servers need real flash to boot under FirmAE). `make test` green; rehost tests pass.
 - 2026-06-01: **Verification oracles Phase 0 — the two standards of "verified", built into the
   engine** (`engine/assurance.py`). The engine now COMPUTES a per-PoC **assurance triple**
   `{standard, method, precondition}` and records it on the finding (`evidence.extra.verification.

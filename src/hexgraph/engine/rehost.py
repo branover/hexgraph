@@ -136,9 +136,15 @@ class FirmAERehoster(Rehoster):
         # Privileged + /dev/net/tun: FirmAE creates a tap and runs qemu-system. The
         # firmware is hostile but contained to this emulation container; HexGraph reaches
         # the device only over the bounded, audited egress path (a probe joining this netns).
+        # Keep the entry script's internal ip-poll ceiling in lockstep with OUR marker
+        # budget — otherwise the container's hardcoded 12-min loop can give up (or, if
+        # raised, overrun us) independently. The loop sleeps 5s/iteration, so iterations =
+        # budget/5. Slow MIPS images (e.g. DIR-823G) need a budget well above the old 12 min:
+        # raise features.rehost.timeout and both ceilings move together.
         cmd = [
             "docker", "run", "-d", "--name", name, "--privileged",
             "--device", "/dev/net/tun",
+            "-e", f"HEXGRAPH_BOOT_BUDGET={max(1, budget // 5)}",
             "-v", f"{os.path.abspath(firmware_path)}:/firmware/image.bin:ro",
             self.image,
         ]
