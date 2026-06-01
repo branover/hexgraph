@@ -57,7 +57,7 @@ export HEXGRAPH_HOME="$PWD/.hghome"                                  # OWN data/
 - **BYOK / Claude Code / mock only.** No bundled keys, no proxying. Read `ANTHROPIC_API_KEY` from env or `~/.hexgraph/config.toml`; **never log, store, or return it.** `HEXGRAPH_API_KEY` is reserved for future paid features — same rule.
 - **Targets are hostile.** All parsing/unpacking/analysis of target bytes runs only inside the disposable Docker sandbox (`--network none`, read-only rootfs, mem/cpu/pids caps, tmpfs, hard timeout). **Executing the target is opt-in, gated solely by the policy seam** (`policy.current_policy()` / `assert_allows_execution()`): static-only is the **default**, and it **must be enforced whenever the user hasn't opted into a dynamic/execution analysis** — with neither `features.poc` nor `features.fuzzing` enabled, any attempt to run the target raises. Enabling PoC/fuzzing flips the policy to permit execution, still *inside the same locked-down sandbox* (foreign-arch via qemu-user). **Network egress is the same story**: `--network none` is the default and the *only* place it relaxes is the policy seam — opt-in `features.network` raises the bounded local-network tier (`assert_allows_egress(dest, scope)` + a per-target `NetworkScope` that refuses any non-loopback/private host; every outbound action is audited to `EgressEvent`). **Rehosting is its own separately opt-in gate** (`features.rehost` / `policy.assert_allows_rehost()`): full-system emulation of a firmware image boots inside the sandbox boundary, alongside the exec (poc/fuzzing) and network gates. So static-only/no-network is an **enforced default, not an absolute ban** — but **never relax a gate anywhere except the policy seam**. **The LLM never sees raw target bytes** — only tool output carried in `TaskContext`.
 - **Zero token spend by default.** Mock backend is the dev/CI default; `make demo` runs the full loop offline with no key and exits 0.
-- **The Finding schema is frozen** (`context/schemas/finding.schema.json`). Every task and backend (mock included) emits exactly this shape; a contract test enforces it. New structure goes in the DB envelope, not the schema.
+- **The Finding schema is frozen** (`src/hexgraph/schemas/finding.schema.json`, shipped in-package). Every task and backend (mock included) emits exactly this shape; a contract test enforces it. New structure goes in the DB envelope, not the schema.
 - **Migrations are mandatory.** The project DB is durable researcher knowledge, never silently reset. Any schema change ships an `alembic revision --autogenerate` committed with the model change.
 
 ## Architecture & the seam rule
@@ -96,9 +96,13 @@ docker/                        # rehosting images: firmae/ (FirmAE) + qemu/ (QEM
 frontend/                      # React+Vite+TS SPA → built to src/hexgraph/web/dist by `make ui` (gitignored)
 migrations/                    # Alembic; baseline bbdb1d98bf54. prepare_database() in db/migrate.py
 tests/                         # pytest; fixtures under tests/fixtures (built by build.sh / `make fixtures`)
-context/                       # the build spec: SPEC.md, schemas/finding.schema.json, fixtures/, docs/
-docs/                          # design-vision.md, implementation-plan.md, ui-backlog.md
+docs/                          # design-vision.md, implementation-plan.md, ui-backlog.md, mock-llm-provider.md
 ```
+The frozen Finding schema and the mock-LLM fixtures ship **inside the package**:
+`src/hexgraph/schemas/finding.schema.json` and `src/hexgraph/llm/fixtures/mock_llm/`
+(resolved by `paths.py` relative to the package, packaged into the wheel). The MVP
+`context/` build bundle has been retired — its live assets moved in-package, its spec
+and notes superseded by this file + README + `docs/`.
 
 Key disciplines: **probes are mounted from the install at run time** (`sandbox/runner.py` overlays `sandbox/probes/` read-only over the image's baked copy), so **editing or adding a probe needs no rebuild** — including `http_probe` (live web assessment) — only a toolchain change does (`make sandbox-build`, which forwards `--build-arg WITH_GHIDRA`; `WITH_GHIDRA=1` adds Ghidra + the enhanced unpack toolchain; set `HEXGRAPH_SANDBOX_NO_MOUNT=1` to force the baked-in copy). Tests use `init_db()` (create_all) on throwaway DBs and never migrate; persistent DBs migrate. Decompilation/harness-compile are best-effort and env-gated (`HEXGRAPH_DISABLE_DECOMPILE`, `HEXGRAPH_DISABLE_SANDBOX_BUILD`) — never gated on backend identity.
 
@@ -133,11 +137,15 @@ LLM tasks themselves use a tool-use **agent loop** (above) over a plain BYOK key
 - CLI: `hexgraph init | db upgrade | ingest <path> [--name --project --backend --no-recon] | targets <p> | run <target> --type T [--objective --model --backend --function --mock-scenario] | rehost <target> [--brand] | findings <p> | graph <p> --export f.json | prune <p> | config list|get|set | serve`.
 - Runtime data under `~/.hexgraph/` (override with `HEXGRAPH_HOME`, db with `HEXGRAPH_DB_PATH`).
 
+## Environment gotchas
+
+- **`grep` is aliased to ripgrep (`rg`) on this system.** So GNU-grep flags don't apply: there's no `--include` (use `--glob`/`-g`), recursion and smart-case are on by default, and PCRE differs. Prefer the dedicated Grep tool; when you must shell out, use ripgrep syntax.
+
 ## Read before writing code
 
-1. `context/SPEC.md` — source of truth (constraints, data model, task types, acceptance criteria).
-2. `context/docs/mock-llm-provider.md` — the mock backend design.
-3. `context/schemas/finding.schema.json` — the canonical Finding schema.
+1. **This file (`CLAUDE.md`) + `README.md`** — the source of truth for constraints, data model, the seam rule, and the graduated opt-in policy model. (The MVP `context/SPEC.md` is retired; its constraints live here, evolved past the original static-only framing.)
+2. `docs/mock-llm-provider.md` — the mock backend design (three fidelity layers, scenarios, contract test).
+3. `src/hexgraph/schemas/finding.schema.json` — the canonical, frozen Finding schema (shipped in-package).
 4. `docs/design-vision.md` + `docs/implementation-plan.md` — the v2 target shape and sequenced plan.
 5. `docs/design-dynamic-surfaces.md` + `docs/design-rehosting.md` — dynamic web surfaces and firmware rehosting.
 

@@ -1,10 +1,13 @@
 # Design — Dynamic & networked attack surfaces
 
-> **Status:** design proposal (approved direction; not yet implemented).
-> Extends HexGraph from *static binary/firmware analysis* to **web/service surfaces,
-> live remote devices, and rehosted firmware** — without breaking the
-> hostile-isolation invariants. Synthesised from a 5-way design panel, grounded in
-> the real seams. Implementation is phased; see [Phasing](#phasing).
+> **Status: IMPLEMENTED.** This design has shipped. HexGraph extends from *static
+> binary/firmware analysis* to **web/service surfaces, live remote devices, and rehosted
+> firmware** without breaking the hostile-isolation invariants. The graduated policy
+> tiers, the Target-as-surface model, firmware rehosting (`features.rehost`), bounded
+> network egress (`features.network`), and live-remote SSH/telnet collection
+> (`features.remote`) are all live — see `CLAUDE.md`/`README.md` for the current,
+> authoritative behaviour. This document is retained for the design rationale; where it
+> describes a future "phase," read that as already delivered.
 
 ## Why
 
@@ -83,12 +86,18 @@ from a `features.*` toggle — there is no settable "tier" knob an agent could c
 **enabling a capability is the sole way to raise the tier**, and a settings error
 **fails closed** (deny), never open.
 
-| Tier | Enabled by | Permits |
-|---|---|---|
-| **0 — static-only** (default) | — | no exec, no network |
-| **1 — sandboxed-exec** (today's dynamic) | `features.poc.enabled` / `features.fuzzing.enabled` | exec; still `--network none` |
-| **2 — rehosted-network** | `features.rehost.enabled` | exec + network **to the emulated subnet HexGraph itself minted** — the scope is *computed*, so a routable public destination is structurally inexpressible |
-| **3 — live-remote-target** | `features.live.enabled` | **no local exec**; egress only to a user-registered device `host:port` allowlist; mandatory egress **audit log** + explicit confirmation |
+The tiers, constants, and flags below are **as shipped** in `policy.py`/`settings.py`:
+
+| Tier | Constant | Enabled by | Permits |
+|---|---|---|---|
+| **0 — static-only** (default) | `TIER_STATIC_ONLY` | — | no exec, no network |
+| **1 — sandboxed-exec** | `TIER_SANDBOXED_EXEC` | `features.poc.enabled` / `features.fuzzing.enabled` | exec; still `--network none` |
+| **2 — local-network** | `TIER_LOCAL_NETWORK` | `features.network.enabled` | bounded egress to a **computed** per-target scope of loopback/private hosts only (`assert_allows_egress` + `NetworkScope` refuse any non-loopback/private host); every outbound action audited to `EgressEvent` |
+| **3 — live-remote** | `TIER_LIVE_REMOTE` | `features.remote.enabled` | egress pinned to **one** operator-authorized remote `host:port` (`remote_scope`, `assert_allows_remote`); mandatory egress **audit log**; read-only tool allowlist on the device |
+
+(`features.rehost.enabled` is a **separate, orthogonal gate** — `assert_allows_rehost()` — that
+permits full-system emulation of a firmware image inside the sandbox; assessing the booted
+device's web surface then needs `features.network`. It is not itself a network tier.)
 
 **Invariants that never relax, at any tier** (enforced *below* the policy so no tier can opt
 out):
@@ -138,26 +147,21 @@ A **rehosted instance is a live device** with HTTP + SSH, so these reuse one ano
   (NVRAM, peripherals, watchdogs) — treat it as **best-effort, env-gated**, degrading cleanly
   to static analysis when boot fails.
 
-## Phasing
+## Phasing (delivered)
 
-All five panel agents converged on this order; the smallest useful slice first.
+The build followed the smallest-useful-slice-first order the design panel converged on; all
+phases have shipped:
 
-1. **Backbone — `$0`, offline, zero new risk.** The Target-as-surface vocabulary + the
-   `policy.py` tier refactor (Tiers 0/1 behave **byte-identically** to today; `assert_allows_egress`
-   exists but always denies) + a **mock-backed** `surface_recon` that materialises
-   route/endpoint/param nodes and the `serves`→handler cross-link. Proves the static↔dynamic
-   fusion in the graph with **no egress at all**. The full suite + `make demo` stay green.
-2. **Network relaxation.** `NetworkExecutor` + the egress allowlist/audit + `features.web` →
-   dynamic web recon goes live, bounded to the target.
-3. **Dynamic PoC.** A `web_poc` task using the generalised `{{NONCE}}` channel oracle → verified
-   web findings (auth bypass / RCE), `serves`-linked to the handler binary.
-4. **The other entry points.** Firmware **rehosting** (gives a live target to point web + SSH
-   analysis at) and **live-device SSH collection** (reuses all existing static VR), both
-   composing with the web track via the shared dynamic-target model.
-
-**First live capability after the backbone: the web-app surface** (router login / management
-app — the auth-bypass & RCE cases), since it's most useful against a rehosted or live target
-and exercises the `serves` cross-link that differentiates HexGraph.
+1. **Backbone** — the Target-as-surface vocabulary + the `policy.py` graduated-tier refactor +
+   mock-backed surface recon materialising route/endpoint/param nodes and the `serves`→handler
+   cross-link. Done.
+2. **Network relaxation** — bounded egress + allowlist/audit behind `features.network`
+   (Tier 2), live web recon bounded to the target. Done.
+3. **Dynamic PoC** — web findings verified via the generalised `{{NONCE}}` channel oracle,
+   `serves`-linked to the handler binary. Done.
+4. **Other entry points** — firmware **rehosting** (`features.rehost`) and **live-device
+   SSH/telnet collection** (`features.remote`, Tier 3), composing with the web track via the
+   shared dynamic-target model. Done.
 
 ## Risks & open questions
 

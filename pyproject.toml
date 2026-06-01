@@ -56,6 +56,11 @@ hexgraph = [
     "web/dist/index.html",
     "web/dist/assets/*",
     "sandbox/probes/*.py",
+    # Canonical Finding schema + mock-LLM fixtures ship inside the package
+    # (resolved by paths.py relative to the package, not a repo-root folder).
+    "schemas/*.json",
+    "llm/fixtures/mock_llm/*.yaml",
+    "llm/fixtures/mock_llm/**/*.json",
 ]
 
 [tool.pytest.ini_options]
