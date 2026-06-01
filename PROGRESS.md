@@ -311,6 +311,21 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-01: **Centralized bounded-egress allowlist enforcement (code-review #7 middle ground;
+  branch `build/egress-guard`).** New stdlib-only shared chokepoint `sandbox/probes/_egress.py`
+  (`dest()`/`ensure_allowed()`/`install_socket_guard()` + `EgressBlocked`): the socket guard
+  monkeypatches `socket.create_connection`/`socket.socket.connect{,_ex}` so EVERY outbound TCP
+  (AF_INET/6, SOCK_STREAM) connect is checked against the run's allowlist — the can't-forget
+  backstop — while deliberately leaving DNS/UDP/AF_UNIX untouched (no `getaddrinfo` interference).
+  All five egress probes (`http`/`tcp`/`surface`/`web_discover`/`remote`) now install the guard at
+  startup and route their explicit pre-connect check through the shared helper (behavior unchanged:
+  same `destination not in allowlist` shape, no-redirects, oracles, secret handling). Contract test
+  statically asserts every egress probe adopts the guard (a new probe that forgets it fails CI) +
+  unit tests for allow/deny, off-list block, on-list allow (real localhost listener), DNS/UDP
+  pass-through. Kernel-level confinement (Option B: per-container nftables DROP-default) documented
+  as deferred future hardening in `docs/design-dynamic-surfaces.md`. No DB change → no migration.
+  Verified: `just test` green offline + the Docker-gated live probe tests
+  (`test_web_assessment`/`test_remote`/`test_tcp`/`test_web_discover`) pass through the real sandbox.
 - 2026-06-01: **Declutter + defense-in-depth hardening (code-review backlog #10/#14/#15/#17/#18/#19 +
   router-split note; branch `build/declutter-hardening`).** Dead code: deleted the unused `TaskHandler`
   Protocol + `ToolStep` dataclass from `tasks/base.py` (nothing implemented them — dispatch is the

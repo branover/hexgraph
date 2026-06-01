@@ -26,6 +26,30 @@ def _sandbox_ready() -> bool:
 SANDBOX_READY = _sandbox_ready()
 
 
+@pytest.fixture(autouse=True)
+def _restore_socket_guard():
+    """The egress probes' `_egress.install_socket_guard` monkeypatches global stdlib socket
+    state. In the sandbox each probe is a fresh process, but in-process tests share the
+    interpreter — so restore the original connect path after every test so a probe test can't
+    leak its allowlist into an unrelated test's network connect."""
+    yield
+    import sys
+
+    # Reuse the SAME _egress module object the probes imported (cached in sys.modules via the
+    # probes-dir sys.path insert) so we restore the state THEY mutated, not a fresh copy.
+    mod = sys.modules.get("_egress")
+    if mod is None:
+        import importlib.util
+
+        path = os.path.join(os.path.dirname(__file__), "..", "src", "hexgraph",
+                            "sandbox", "probes", "_egress.py")
+        spec = importlib.util.spec_from_file_location("_egress", path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["_egress"] = mod
+        spec.loader.exec_module(mod)
+    mod.uninstall_socket_guard()
+
+
 @pytest.fixture
 def sandbox():
     """A SandboxRunner; skips the test if the sandbox isn't available."""

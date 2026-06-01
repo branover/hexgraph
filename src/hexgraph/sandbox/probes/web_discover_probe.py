@@ -25,8 +25,14 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+import os
 from collections import deque
 from html.parser import HTMLParser
+
+# Shared bounded-egress chokepoint, a sibling module. As a sandbox script the probes dir is
+# already sys.path[0]; when loaded by file path (tests) it isn't, so add it explicitly.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _egress  # noqa: E402
 
 # Common paths worth probing on an embedded/admin web surface even if nothing links to them.
 SEEDS = [
@@ -84,6 +90,7 @@ def main() -> int:
         return 2
     base = (channel.get("base_url") or "").rstrip("/")
     allow = set(channel.get("allow") or [])
+    _egress.install_socket_guard(allow)  # can't-forget backstop on every TCP connect
     timeout = int(channel.get("timeout", 15))
     max_pages = int(channel.get("max_pages", 40))
     base_host = _dest(base)
@@ -116,7 +123,10 @@ def main() -> int:
             continue
         seen.add(path)
         url = base + path
-        if _dest(url) not in allow:        # same-host only (deny-all-but-this)
+        try:
+            if _dest(url) not in allow:    # same-host only (deny-all-but-this)
+                raise _egress.EgressBlocked(_dest(url))
+        except _egress.EgressBlocked:      # explicit check; socket guard is the backstop
             continue
         fetched += 1
         try:
