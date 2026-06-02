@@ -1,4 +1,4 @@
-"""Phase 1 of dynamic surfaces (docs/design-dynamic-surfaces.md): the web-surface
+"""Phase 1 of dynamic surfaces (docs/design/design-dynamic-surfaces.md): the web-surface
 abstraction + mock/offline surface_recon + the static↔dynamic `routes_to` cross-link,
 and the additive policy-tier scaffolding (no egress is permitted yet)."""
 

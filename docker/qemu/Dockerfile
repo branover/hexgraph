@@ -1,4 +1,4 @@
-# HexGraph qemu disk-image rehosting image (docs/design-rehosting.md).
+# HexGraph qemu disk-image rehosting image (docs/design/design-rehosting.md).
 #
 # Boots a FULL-OS disk image (a bootable VM disk: .vmdk/.qcow2/.vdi or a partitioned x86
 # .img — e.g. IoTGoat x86 / OpenWrt) under qemu-system-x86_64 + KVM, as-is (the image's own

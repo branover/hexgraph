@@ -1,7 +1,7 @@
 """egress_event — audit log for outbound actions against live targets
 
 The bounded-egress (local-network) tier records every outbound action; this table
-is its durable home (docs/design-dynamic-surfaces.md).
+is its durable home (docs/design/design-dynamic-surfaces.md).
 
 Revision ID: 0010_egress_event
 Revises: 0009_edge_endpoint_indexes

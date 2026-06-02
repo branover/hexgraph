@@ -1,4 +1,4 @@
-"""The two standards of "verified" (docs/design-verification-oracles.md): the engine computes a
+"""The two standards of "verified" (docs/design/design-verification-oracles.md): the engine computes a
 per-PoC assurance triple {standard, method, precondition} and records it on the finding — so
 code-present (A) vs input-reachable (B) is differentiated by CODE, not by prose handed to an
 agent. Pure-logic tests plus a verify_poc end-to-end with a fake runner (no Docker)."""

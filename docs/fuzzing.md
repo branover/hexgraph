@@ -1,119 +1,127 @@
 # Fuzzing
 
-`features.fuzzing` adds coverage-guided, surface-aware, campaign-driven fuzzing. Enable it
-(`hexgraph config set features.fuzzing.enabled true`, then `just fuzz-build`) and a **Campaigns** tab
-plus a per-target **Fuzz** button appear. The design rationale and internals live in
-[design-fuzzing-and-source.md](design-fuzzing-and-source.md).
+The `features.fuzzing` flag adds coverage-guided, surface-aware, campaign-driven fuzzing. Turn it on
+with `hexgraph config set features.fuzzing.enabled true` and then `just fuzz-build`, and a
+**Campaigns** tab plus a per-target **Fuzz** button appear in the UI. The rationale and the internals
+are written up in [design/design-fuzzing-and-source.md](design/design-fuzzing-and-source.md).
 
 ![A finished campaign's crash inbox — triage view](images/artifacts-triage.png)
 
-## Engine by attack surface (the Fuzzer seam)
+## Picking an engine by attack surface
 
-The `Fuzzer` seam picks the engine by **attack surface** (never branched on in task code):
+The `Fuzzer` seam chooses the engine by attack surface, and task code never branches on which one it
+got:
 
-- **`source_lib`** (an instrumented derived target, *with* source) → **AFL++** (`afl-clang-lto` +
-  CmpLog + persistent mode) — real coverage.
-- **`binary_only`** (a stripped ELF, *no* source) → **AFL++ qemu-mode** (`-Q`, full edge coverage via
-  QEMU TCG; frida-mode the opt-in alt). A foreign-arch MIPS/ARM firmware binary runs under qemu-user
-  with the parent firmware rootfs as the `-L` sysroot — the proven PoC path.
-- **`network`** (a live / rehosted service) → **boofuzz** (generational, over a real socket) — or
-  **desock + AFL++** to coverage-fuzz a *local* server binary with `--network none` (LD_PRELOAD turns
-  its socket into stdin).
-- **`file_format`** → AFL++ / libFuzzer + an auto-derived dictionary.
+- A **`source_lib`** target (an instrumented derived target you have source for) goes to **AFL++**,
+  with `afl-clang-lto`, CmpLog, and persistent mode, for real coverage.
+- A **`binary_only`** target (a stripped ELF with no source) goes to **AFL++ in qemu-mode** (`-Q`,
+  full edge coverage through QEMU's TCG), with frida-mode as an opt-in alternative. A foreign-arch
+  MIPS or ARM firmware binary runs under qemu-user, with the parent firmware's rootfs supplied as the
+  `-L` sysroot. This is the path the verified PoCs run through.
+- A **`network`** target (a live or rehosted service) goes to **boofuzz** over a real socket, with
+  generational fuzzing. Alternatively, **desock plus AFL++** can coverage-fuzz a *local* server binary
+  with `--network none`, using an `LD_PRELOAD` shim that turns its socket into stdin.
+- A **`file_format`** target goes to AFL++ or libFuzzer with an auto-derived dictionary.
 
-The UI never hardcodes the engine list — the Fuzz modal shows the engines the **server advertises**
-for the target's surface (`GET /api/fuzz/engines`).
+The UI never hardcodes the engine list. The Fuzz modal shows whatever engines the server advertises
+for the target's surface, fetched from `GET /api/fuzz/engines`.
 
 ![The Fuzz modal — source/binary surface](images/fuzz-modal.png)
 
 ## Launching a campaign
 
-The Fuzz modal is surface-aware: pick the target to fuzz (a launch from the Campaigns tab defaults to
-the best surface — an instrumented or live target, not the raw ingested root) and the surface-relevant
-inputs appear: **network** host/port/protocol + an optional binary-protocol `proto_spec`, optional
-**seeds** (corpus paths) and a **dictionary** (auto-derived when omitted), a **focus function**, and
-the per-campaign **`ResourceSpec`** (mem/cpus/pids + an *unconstrained* toggle), defaulting from
-Settings.
+The Fuzz modal is surface-aware. You pick the target to fuzz (launching from the Campaigns tab
+defaults to the best surface, which is an instrumented or live target rather than the raw ingested
+root), and the inputs that matter for that surface appear: a network host, port, and protocol with an
+optional binary-protocol `proto_spec`; optional seeds (corpus paths); a dictionary (auto-derived when
+you leave it blank); a focus function; and the per-campaign `ResourceSpec` (memory, CPUs, PIDs, and an
+*unconstrained* toggle), which defaults from your Settings.
 
 ![The Fuzz modal — network surface (boofuzz)](images/fuzz-modal-network.png)
 
-Campaigns are **detached + crash-safe**: each launches a hardened `docker run -d` container owned by a
-durable `fuzz_campaign` row; a periodic reaper streams crashes → `fuzz_crash` findings as they happen,
-dedups by a normalized stack-hash, minimizes the reproducer, classifies exploitability, and **survives
-a `serve` restart**. Start/stop/resume preserves the corpus in CAS.
+Campaigns are detached and crash-safe. Each one launches a hardened `docker run -d` container owned by
+a durable `fuzz_campaign` row, and a periodic reaper streams crashes into `fuzz_crash` findings as
+they happen, dedups them by a normalized stack hash, minimizes the reproducer, classifies
+exploitability, and survives a `serve` restart. Starting, stopping, and resuming a campaign all
+preserve the corpus in content-addressed storage.
 
 ![The Campaigns tab — live/finished campaign list](images/campaigns.png)
 
-The Campaigns tab shows a **live row** per campaign (status, execs/s, edges covered, crash count,
-coverage %) over a Server-Sent Events stream with polling fallback, plus Stop/Resume. A campaign that
-did **0 work** (service unreachable / 0 executions) or hit **engine instability** finalizes in a
-distinct **`degraded`** state with an amber warning badge explaining why — never a silent zero-crash
-"completed".
+The Campaigns tab shows a live row per campaign (status, execs per second, edges covered, crash count,
+and coverage percentage) over a Server-Sent Events stream, with polling as a fallback, plus Stop and
+Resume controls. A campaign that did no work at all (an unreachable service, or zero executions) or
+that hit engine instability finalizes in a distinct **`degraded`** state, with an amber warning badge
+that explains why. It is never reported as a silent, zero-crash "completed".
 
-## Crash triage
+## Triaging crashes
 
-Selecting a campaign opens the **Artifacts / triage** view: crashes **grouped by dedup bucket** (one
-representative + a dupe count), each with an **assurance chip** (the ladder — see
-[verification-assurance.md](verification-assurance.md)), the deterministic exploitability rating, and a
-**source-mapped stack** (symbolized frames → jump to the IDE line; ASan frames are symbolized at
-runtime via `llvm-symbolizer`, a binary-only `abort` is addr2line'd to its sink). Per crash:
+Selecting a campaign opens the **Artifacts / triage** view. Crashes are grouped by dedup bucket (one
+representative plus a dupe count), and each carries an assurance chip (the ladder, explained in
+[verification-assurance.md](verification-assurance.md)), the deterministic exploitability rating, and
+a source-mapped stack. The stack frames are symbolized so you can jump to the IDE line: ASan frames
+are symbolized at runtime with `llvm-symbolizer`, and a binary-only `abort` is addr2line'd back to its
+sink. For each crash you can:
 
-- **Reproduce** / **Minimize** re-run the stored reproducer **byte-faithfully** against the
-  instrumented harness binary (LLM-free, the unforgeable `crash` oracle — the MCP verb is
+- **Reproduce** or **Minimize**, which re-run the stored reproducer byte-for-byte against the
+  instrumented harness binary. This is LLM-free, using the unforgeable `crash` oracle (the MCP verb is
   `verify_fuzz_artifact`).
-- **Promote** confirms it as a tracked finding; **Promote → PoC** seeds a reproducer-backed PoC the
-  one-click **Re-verify** path re-proves.
+- **Promote** it to a tracked finding, or **Promote → PoC**, which seeds a reproducer-backed PoC that
+  the one-click **Re-verify** path can re-prove on demand.
 
-A binary-only crash climbs to `code_present/dynamic` (lab-confirmed in isolation); a network
-service-death reaches `input_reachable/dynamic` (reached + triggered end-to-end through the live input
-boundary; its crashing message replays over the socket). Every entity is deep-linkable by URL
-(`?tab=campaigns&campaign=…`), so a triage view is shareable and restored on reload.
+A binary-only crash climbs to `code_present/dynamic`, meaning it was lab-confirmed in isolation; a
+network service-death reaches `input_reachable/dynamic`, meaning it was reached and triggered end to
+end through the live input boundary, with its crashing message replaying over the socket. Every entity
+is deep-linkable by URL (`?tab=campaigns&campaign=…`), so a triage view is shareable and is restored on
+reload.
 
-## Fuzzing a local network service — launch-and-join
+## Fuzzing a local network service with launch-and-join
 
-A fuzz container runs on `--network bridge`, whose loopback is the *container's own* — so it cannot
-reach a service bound to the host's bare `127.0.0.1`. For a service HexGraph can **start itself** (a
+A fuzz container runs on `--network bridge`, and its loopback is the container's own, so it cannot
+reach a service bound to the host's bare `127.0.0.1`. For a service HexGraph can start itself (a
 launchable server binary), it uses **launch-and-join**: it boots the service in its own hardened
-sandbox container and joins the fuzzer to that container's network namespace, so `127.0.0.1:port` is
-reachable **without `--network host`** — the isolation is preserved (both containers keep
-`--cap-drop ALL` / `--no-new-privileges` / `--read-only` / non-root; the service runs `--network
-none`, the fuzzer reaches it over the shared netns, every send audited).
+sandbox container and joins the fuzzer to that container's network namespace, so `127.0.0.1:port`
+becomes reachable without ever resorting to `--network host`. The isolation holds throughout. Both
+containers keep `--cap-drop ALL`, `--no-new-privileges`, `--read-only`, and a non-root user; the
+service itself runs `--network none`; the fuzzer reaches it over the shared netns; and every send is
+audited.
 
-The service launch rides the **PoC/fuzzing** exec tier; the fuzz egress rides **`features.network`** +
-the bounded local-network tier. To fuzz a service **already running** on your host, bind it to a
-reachable private address (`192.168.x.x` / `10.x.x.x`, or a container HexGraph can bridge to) and point
-the campaign at that host. (`--network host` is deliberately not offered — it would dissolve the
-isolation.)
+The service launch rides the PoC/fuzzing exec tier, and the fuzz egress rides `features.network` plus
+the bounded local-network tier. To fuzz a service that is *already* running on your host, bind it to a
+reachable private address (`192.168.x.x` or `10.x.x.x`, or a container HexGraph can bridge to) and
+point the campaign at that host. `--network host` is deliberately never offered, because it would
+dissolve the isolation.
 
-## Network fuzzing rides the existing tier
+## Network fuzzing rides the tier you already have
 
-Binary/source/desock fuzzing rides the **exec** tier (`features.fuzzing`). **Network** fuzzing rides
-the **existing** local-network tier (`features.network` — bounded to loopback/private, every send
-audited to an `EgressEvent`, joining a rehosted device's emulator netns) — **not a new gate**.
-Composes with **rehost** (fuzz a rehosted device's service via its netns) and **remote**
-(`features.remote` — blind network-fuzz of a physical device is off by default + loud-warned,
-destructive; prefer replay/PoC).
+Binary, source, and desock fuzzing all ride the exec tier (`features.fuzzing`). Network fuzzing rides
+the existing local-network tier (`features.network`, bounded to loopback and private addresses, with
+every send audited to an `EgressEvent`, and able to join a rehosted device's emulator netns). It is
+not a new gate. It composes with rehosting (you can fuzz a rehosted device's service through its
+netns) and with remote devices (`features.remote`), though blind network-fuzzing of a physical device
+is off by default, loudly warned about, and destructive, so replay or a PoC is usually the better
+choice.
 
 ## Remote fuzz environments (`features.fuzz_remote`)
 
-Fuzzing is the one genuinely resource-hungry workload, so a campaign can run on a **Docker host you
-own** instead of your laptop. A **fuzz environment** is a registered place a campaign's container runs:
-`local` (the default) plus N remote Docker endpoints. Because the Builder and Fuzzer call HexGraph's
-**Executor seam**, building and fuzzing run on the remote with **no analysis change** — the
-`RemoteDockerExecutor` stages the build context + seed corpus to the remote over `DOCKER_HOST`
-(CAS-content-addressed, via a named volume) and streams crashes/coverage/stats back into your **local
-graph**.
+Fuzzing is the one genuinely resource-hungry workload here, so a campaign can run on a Docker host you
+own instead of on your laptop. A **fuzz environment** is a registered place a campaign's container
+runs: `local` (the default) plus however many remote Docker endpoints you add. Because the Builder and
+the Fuzzer both call HexGraph's Executor seam, building and fuzzing run on the remote with no change to
+the analysis. The `RemoteDockerExecutor` stages the build context and seed corpus to the remote over
+`DOCKER_HOST` (content-addressed, through a named volume) and streams crashes, coverage, and stats
+back into your local graph.
 
-**Trust model — the control plane stays loopback.** The API/UI never leave `127.0.0.1`; the remote is
-purely a compute backend you own and explicitly authorize. The **same sandbox boundary applies on the
-remote** — every container there still runs `--network none` (except the gated net-fuzz tier),
-`--cap-drop ALL`, `--no-new-privileges`, `--read-only`, `--user 1000`, and the resource caps. Each
-remote launch is **audited**. Running on a remote is gated *only* by `features.fuzz_remote` (off by
-default, fail-closed).
+The trust model keeps the control plane on loopback. The API and UI never leave `127.0.0.1`; the
+remote is purely a compute backend you own and explicitly authorize. The same sandbox boundary applies
+there: every container on the remote still runs `--network none` (except for the gated net-fuzz tier),
+`--cap-drop ALL`, `--no-new-privileges`, `--read-only`, `--user 1000`, and the resource caps, and each
+remote launch is audited. Running on a remote is gated only by `features.fuzz_remote`, which is off by
+default and fail-closed.
 
-**Register one** in Settings → *Remote fuzz environments* (or `POST /api/fuzz/environments`): give it a
-name, a transport (`ssh`/`tcp`), and a non-secret descriptor. The **connection details are a secret** —
-read at connect time from env or `config.toml`, never stored in the DB or logged, shown presence-only:
+To register one, go to Settings → *Remote fuzz environments* (or `POST /api/fuzz/environments`) and
+give it a name, a transport (`ssh` or `tcp`), and a non-secret descriptor. The connection details
+themselves are a secret: read at connect time from the environment or `config.toml`, never stored in
+the database or logged, and shown only as present or absent.
 
 ```bash
 # env (preferred) — keyed by the environment id (e.g. id "fuzzbox"):
@@ -129,7 +137,7 @@ hexgraph config set features.fuzz_remote.enabled true
 docker_host = "ssh://you@beefybox"
 ```
 
-A one-click **Health-check** verifies the endpoint is reachable + authorized and has the
-`hexgraph-fuzz` image present. Then pick the environment in the Fuzz modal (defaults to `local`), or
-pass `environment` to `start_fuzz_campaign` (MCP) / the campaign API. Each environment carries a
-per-environment `ResourceSpec` ceiling the campaign inherits.
+A one-click **Health-check** confirms the endpoint is reachable and authorized and has the
+`hexgraph-fuzz` image present. After that, pick the environment in the Fuzz modal (it defaults to
+`local`), or pass `environment` to `start_fuzz_campaign` over MCP or to the campaign API. Each
+environment carries its own `ResourceSpec` ceiling, which the campaign inherits.

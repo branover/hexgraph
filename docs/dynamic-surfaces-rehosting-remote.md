@@ -1,47 +1,47 @@
 # Dynamic surfaces, firmware rehosting & remote devices
 
-HexGraph models a target as any **reachable surface**, not just a file on disk — so the same graph
-holds the binary you reversed *and* the live service it serves. The design is in
-[design-dynamic-surfaces.md](design-dynamic-surfaces.md) and [design-rehosting.md](design-rehosting.md);
-worked examples in [engagement-vulnrouter.md](engagement-vulnrouter.md) and
-[engagement-rehosted.md](engagement-rehosted.md).
+HexGraph treats a target as any reachable surface, not just a file on disk, so a single graph can hold
+both the binary you reversed and the live service it serves. The design is written up in
+[design/design-dynamic-surfaces.md](design/design-dynamic-surfaces.md) and
+[design/design-rehosting.md](design/design-rehosting.md).
 
 ![A firmware's extracted rootfs — the static side of a surface](images/filesystem-browser.png)
 
-## Dynamic web & service surfaces
+## Dynamic web and service surfaces
 
-Alongside byte targets there are surfaces that hold **no bytes** of their own:
+Alongside byte targets, there are surfaces that hold no bytes of their own.
 
-- **`web_app` targets** — a running web surface reached over a Channel (a `base_url`). A
-  `surface_recon` task crawls one into `endpoint` and `param` nodes and — where it can identify the
-  code behind a route — draws a **`routes_to`** edge from the endpoint to its handler `function`. That
-  edge is the **bridge between the static and dynamic views**.
-- **`service` targets** — a bare non-HTTP network service (a bind shell, a vendor binary control
-  protocol, a custom daemon) reached over a raw TCP/UDP Channel `{kind, host, port}`, with **no bytes
-  and no credentials**. Register one with `register_socket(project_id, host, port, transport="tcp")`
-  (MCP) or `POST /api/projects/{id}/targets/socket`; it links to the shared `socket` graph node via a
-  `listens_on` edge, and HexGraph infers the **`network` surface** — so `start_fuzz_campaign` points
-  boofuzz straight at `host:port` and `tcp_request`/`verify_poc` probe and prove it. (Use this instead
-  of a `remote`/telnet target for a bare protocol — `remote` carries SSH/telnet **shell** semantics a
-  socket service doesn't have.)
+A **`web_app` target** is a running web surface reached over a Channel (a `base_url`). A
+`surface_recon` task crawls it into `endpoint` and `param` nodes, and where it can identify the code
+behind a route, it draws a `routes_to` edge from the endpoint to its handler `function`. That edge is
+the bridge between the static and dynamic views.
+
+A **`service` target** is a bare, non-HTTP network service: a bind shell, a vendor binary's control
+protocol, a custom daemon, anything reached over a raw TCP or UDP Channel `{kind, host, port}`, with no
+bytes and no credentials. You register one with `register_socket(project_id, host, port,
+transport="tcp")` over MCP, or with `POST /api/projects/{id}/targets/socket`. It links to the shared
+`socket` graph node through a `listens_on` edge, and HexGraph infers the `network` surface from there,
+so `start_fuzz_campaign` can point boofuzz straight at `host:port` and `tcp_request`/`verify_poc` can
+probe and prove it. Reach for this rather than a `remote`/telnet target when all you have is a bare
+protocol, since `remote` carries SSH/telnet shell semantics that a socket service simply does not have.
 
 ## Bounded, audited live assessment (`features.network`)
 
-Live assessment is gated by `features.network` (off by default). With it on, HexGraph can talk to the
-surface: an `http_request` tool (with a `session` cookie jar that persists across calls) and a
-web-flavoured `verify_poc` whose oracle is the same unforgeable `{{NONCE}}` token used for binary
-PoCs, plus `body_contains` / `status` checks.
+Live assessment is gated by `features.network`, which is off by default. With it on, HexGraph can talk
+to the surface through an `http_request` tool (with a `session` cookie jar that persists across calls)
+and a web-flavored `verify_poc`, whose oracle is the same unforgeable `{{NONCE}}` token used for binary
+PoCs, plus `body_contains` and `status` checks.
 
 ![The egress audit log — public hosts refused](images/egress-audit.png)
 
-Egress is **bounded**: a per-target deny-all allowlist that permits only loopback/private hosts (never
-a public address), and every outbound request is audited to an `EgressEvent` — viewable from the
-**Audit** toolbar button (allowed/denied · destination · tool · reason).
+Egress is bounded. A per-target, deny-by-default allowlist permits only loopback and private hosts,
+never a public address, and every outbound request is audited to an `EgressEvent` that you can review
+from the **Audit** toolbar button (allowed or denied, the destination, the tool, and the reason).
 
 ## Firmware rehosting (`features.rehost`)
 
 Rehosting boots a whole firmware image under full-system emulation and registers the device's live web
-UI as a `web_app` child target — so you can reverse the firmware *and* drive its running web server in
+UI as a `web_app` child target, so you can reverse the firmware and drive its running web server in
 one graph:
 
 ```bash
@@ -52,23 +52,25 @@ just iotgoat                                         # fetch + rehost + register
 hexgraph rehost <firmware-target> [--brand <hint>]
 ```
 
-`rehost` **auto-selects the emulator** by image type (`select_rehoster`): qemu+KVM for a full-OS disk
-image (e.g. IoTGoat's x86 OpenWrt `.img`), FirmAE for a vendor blob (squashfs/cramfs/…). Booting needs
-`features.rehost`; assessing the running device with `surface_recon` / `http_request` / `verify_poc`
-needs `features.network`. The probe joins the emulator container's netns to reach the device's private
-IP. Build the rehosting images first with `just firmae-build` (privileged + `/dev/net/tun`) /
-`just qemu-build` (needs `--device /dev/kvm`).
+`rehost` auto-selects the emulator by image type (`select_rehoster`): qemu+KVM for a full-OS disk image
+(IoTGoat's x86 OpenWrt `.img`, say), or FirmAE for a vendor blob (squashfs, cramfs, and the like).
+Booting needs `features.rehost`; assessing the running device with `surface_recon`, `http_request`, or
+`verify_poc` needs `features.network`. The probe joins the emulator container's netns so it can reach
+the device's private IP. Build the rehosting images first with `just firmae-build` (privileged, with
+`/dev/net/tun`) or `just qemu-build` (which needs `--device /dev/kvm`).
 
-`just vulnrouter` stands up a live vulnrouter web target + project for a guided engagement.
+For a quick guided run, `just vulnrouter` stands up a live vulnrouter web target and a project pointed
+at it.
 
 ## Remote live devices (`features.remote`)
 
-The **live-remote tier** (`TIER_LIVE_REMOTE`, `policy.assert_allows_remote()` + `remote_scope(host,
-port)`) covers a physical box on the bench with no firmware in hand. A `remote` target reached over
-**SSH/telnet** lets the agent run the **same read-only analysis** as on a rootfs:
-`remote_list_files` / `remote_read_file` / `remote_run` — a fixed read-only tool allowlist, **no
-arbitrary shell**.
+The live-remote tier (`TIER_LIVE_REMOTE`, with `policy.assert_allows_remote()` and
+`remote_scope(host, port)`) covers a physical box on the bench when you have no firmware in hand. A
+`remote` target reached over SSH or telnet lets the agent run the same read-only analysis it would on a
+rootfs: `remote_list_files`, `remote_read_file`, and `remote_run`, all from a fixed read-only tool
+allowlist, with no arbitrary shell.
 
-Egress is pinned to the one operator-authorized host (any host — the operator's responsibility, unlike
-the loopback/private web tier) and audited. **Credentials are secrets** — read at connect from env
-(`HEXGRAPH_REMOTE_PASSWORD` / `_KEY`) or `config.toml [remote]`, **never stored in the DB**.
+Egress is pinned to the single operator-authorized host (and it can be any host, since that is the
+operator's responsibility here, unlike the loopback-and-private web tier) and is audited. Credentials
+are secrets: read at connect time from the environment (`HEXGRAPH_REMOTE_PASSWORD` or `_KEY`) or from
+`config.toml [remote]`, and never stored in the database.

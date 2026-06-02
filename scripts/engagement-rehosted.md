@@ -1,3 +1,7 @@
+<!-- Internal VR-test scenario, not user documentation. The blind brief driven by
+rehost_engagement.py in this directory (`just iotgoat`), which ingests a real
+firmware, boots it under emulation, and registers the live surface this runs against. -->
+
 # Engagement brief — rehosted firmware admin console (live)
 
 You are a vulnerability researcher. A **real firmware image** has been ingested into HexGraph.

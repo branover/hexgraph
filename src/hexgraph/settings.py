@@ -151,7 +151,7 @@ DEFAULTS: dict[str, Any] = {
             # web-surface target, but ONLY a loopback/private destination on a
             # per-target deny-all-but-this allowlist, and every outbound action is
             # audited (EgressEvent). External/public hosts require the deferred,
-            # separately-gated live-remote tier. (docs/design-dynamic-surfaces.md)
+            # separately-gated live-remote tier. (docs/design/design-dynamic-surfaces.md)
             "enabled": False,
             "timeout": 30,
         },
@@ -161,7 +161,7 @@ DEFAULTS: dict[str, Any] = {
             # qemu-system via FirmAE) so its live web surface can be assessed. The
             # strongest execution capability, so it has its own gate. Assessing the
             # booted device still needs features.network (it's a private-IP surface).
-            # (docs/design-rehosting.md)
+            # (docs/design/design-rehosting.md)
             "enabled": False,
             "image": "hexgraph-firmae:latest",      # FirmAE image (vendor firmware blobs)
             "qemu_image": "hexgraph-qemu:latest",    # qemu+KVM image (full-OS disk images)
@@ -178,7 +178,7 @@ DEFAULTS: dict[str, Any] = {
             # filesystem, read files, run a fixed allowlist of recon tools. Egress is pinned
             # to that host (remote_scope) + audited. Credentials are SECRETS: never stored in
             # the DB — read at connect from env (HEXGRAPH_REMOTE_PASSWORD / HEXGRAPH_REMOTE_KEY)
-            # or config.toml [remote]. (docs/design-rehosting.md / vr-feedback.md)
+            # or config.toml [remote]. (docs/design/design-rehosting.md)
             "enabled": False,
             "timeout": 30,
             "max_file_bytes": 262144,   # cap on a remote read_file (256 KiB)

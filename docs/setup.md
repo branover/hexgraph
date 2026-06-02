@@ -9,27 +9,26 @@ just serve          # → http://127.0.0.1:8765
 
 ## The setup wizard
 
-`just setup` runs the bootstrap and then launches an **interactive setup wizard**
-(`hexgraph setup`). It walks you through:
+`just setup` runs the bootstrap and then launches an interactive setup wizard (`hexgraph setup`). The
+wizard covers two things. First, which optional features you want to enable: for each one that relaxes
+the security posture (executing the target, network egress, rehosting, reaching a remote device, and
+so on) it shows you the security implication and asks you to confirm before turning it on. Second, the
+non-secret configuration: the loopback-only bind address, the LLM backend, and the Ghidra mode.
 
-- **Which optional features to enable.** Each policy-relaxing one (executing the target, network
-  egress, rehosting, remote devices, …) is shown with its **security implication** and an explicit
-  confirmation.
-- **Non-secret config** — the loopback-only bind, the LLM backend, the Ghidra mode.
+Once you have answered, it writes your settings and builds the images you chose. The wizard never
+prompts for a secret and never stores one. API keys, SSH credentials, and remote-Docker credentials
+live only in your environment or in `~/.hexgraph/config.toml`, and the wizard only tells you whether
+one is present. Accept the defaults and you stay in the static-only posture; everything beyond that is
+something you opt into, informed.
 
-It then writes your settings and builds the images you chose. **HexGraph never prompts for or stores
-a secret:** API keys / SSH / remote-Docker credentials live only in your environment or
-`~/.hexgraph/config.toml` (the wizard only shows whether one is present). The default leaves the
-**static-only** posture intact — you opt in to everything else, informed.
+You can re-run `hexgraph setup` any time you want to change which features are on, and `hexgraph config
+list` shows the current settings.
 
-Re-run `hexgraph setup` any time to change features; `hexgraph config list` shows the current
-settings.
+> **Non-interactive and CI.** When there is no TTY, or when you pass `just setup yes=1` (or `hexgraph
+> setup --non-interactive`), the wizard applies the static-only baseline plus the sandbox image
+> without prompting, so an unattended `just setup` never hangs.
 
-> **Non-interactive / CI:** with no TTY, or `just setup yes=1` (or `hexgraph setup
-> --non-interactive`), the wizard applies the static-only baseline + the sandbox image **without
-> prompting**, so an unattended `just setup` never hangs.
-
-## Manual install (or to add Ghidra)
+## Manual install (or adding Ghidra)
 
 ```bash
 just install                     # create .venv and install the hexgraph CLI + dev extras
@@ -38,27 +37,28 @@ just sandbox-build               # build the analysis sandbox image (hexgraph-sa
 .venv/bin/hexgraph serve
 ```
 
-The sandbox image bundles **firmware extractors** (sasquatch / jefferson / ubi_reader / binwalk /
-The Sleuth Kit) and **qemu-user** (MIPS/ARM/PPC/…), so real vendor firmware extracts and foreign-arch
-PoCs run with no extra setup.
+The sandbox image bundles the firmware extractors (sasquatch, jefferson, ubi_reader, binwalk, and The
+Sleuth Kit) and qemu-user (MIPS, ARM, PPC, and friends), so real vendor firmware extracts and
+foreign-arch PoCs both run with no extra setup.
 
-**Ghidra (optional, larger image).** The default sandbox uses radare2. To also bundle headless Ghidra
-(adds a JDK + ~400 MB):
+Ghidra is optional and makes for a larger image. The default sandbox uses radare2; to also bundle
+headless Ghidra (which adds a JDK and roughly 400 MB):
 
 ```bash
 just sandbox-build with_ghidra=1
 hexgraph config set features.ghidra.enabled true     # then re-run a decompile/recon task
 ```
 
-Ghidra modes (`features.ghidra.mode`): `headless` (analyzeHeadless in the sandbox), `bridge` (connect
-to a running Ghidra via `ghidra_bridge`), `enrich_recon` (materialize functions/call-graph/structs).
-Degrades to radare2 when off.
+There are three Ghidra modes, set with `features.ghidra.mode`: `headless` runs analyzeHeadless in the
+sandbox, `bridge` connects to a running Ghidra over `ghidra_bridge`, and `enrich_recon` materializes
+functions, the call graph, and structs. With Ghidra off, HexGraph degrades to radare2.
 
 ## Configuration
 
-Settings layer as **env > `settings.json` (managed) > `config.toml` (hand-authored, BYOK secret) >
-defaults**. Secrets live only in env or `config.toml` and are **never** written to `settings.json` or
-returned by the API.
+Settings layer from most to least specific: environment variables override `settings.json` (the
+managed file), which overrides `config.toml` (the hand-authored file that holds your BYOK secret),
+which overrides the built-in defaults. Secrets live only in the environment or in `config.toml`, and
+they are never written to `settings.json` and never returned by the API.
 
 ```toml
 # ~/.hexgraph/config.toml   (HexGraph never rewrites this file)
@@ -78,34 +78,36 @@ port = 8765
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `HEXGRAPH_LLM_BACKEND` | `mock` | Backend selection. |
-| `HEXGRAPH_MODEL` | — | Default model. |
-| `HEXGRAPH_HOST` / `HEXGRAPH_PORT` | `127.0.0.1` / `8765` | API/UI bind address. |
-| `HEXGRAPH_HOME` | `~/.hexgraph` | Root for the DB and per-project artifacts. |
-| `HEXGRAPH_DB_PATH` | `$HEXGRAPH_HOME/hexgraph.db` | SQLite database path. |
-| `HEXGRAPH_MOCK_SCENARIO` | — | Force a mock scenario for all tasks. |
-| `HEXGRAPH_SANDBOX_IMAGE` | `hexgraph-sandbox:latest` | Analysis sandbox image. |
-| `HEXGRAPH_BUILD_IMAGE` | `hexgraph-build:latest` | Build-from-source image (`features.build`). |
-| `HEXGRAPH_BUILDER` | `sandbox` | Override the Builder seam (`sandbox` \| `mock`). |
-| `HEXGRAPH_FUZZ_IMAGE` | `hexgraph-fuzz:latest` | Coverage-guided fuzz image (`features.fuzzing`). Point at a private tag in a worktree. |
-| `HEXGRAPH_FUZZER` | _(by surface)_ | Force the Fuzzer seam to the offline `mock` engine; otherwise picked by attack surface. |
-| `HEXGRAPH_EXECUTOR` | `local_docker` | The Executor seam (`local_docker` \| `remote_docker`). |
-| `HEXGRAPH_FUZZ_REMOTE_<ID>_DOCKER_HOST` | — | **Secret.** A remote fuzz environment's Docker endpoint (`ssh://…` or `tcp://…`). Read on demand; never logged/stored. `…_<ID>_TLS_VERIFY` / `…_<ID>_CERT_PATH` add TLS for `tcp://`. |
-| `HEXGRAPH_SANDBOX_NO_MOUNT` | — | `1` to use the image's baked-in probes instead of mounting the local copies. |
-| `HEXGRAPH_DECOMPILER` | `r2` | Override the decompiler seam (`r2` \| `ghidra`). |
-| `HEXGRAPH_DISABLE_DECOMPILE` | — | `1` to skip decompilation in LLM tasks (offline/no-Docker dev + tests). |
-| `HEXGRAPH_DISABLE_SANDBOX_BUILD` | — | `1` to skip the harness-compile sandbox step (dev/tests). |
-| `HEXGRAPH_I_KNOW_WHAT_IM_DOING` | — | `1` to allow a non-loopback bind (warns loudly; not recommended). |
-| `ANTHROPIC_API_KEY` | — | Your key for the `anthropic` backend. Read on demand; never logged or stored. |
+| `HEXGRAPH_LLM_BACKEND` | `mock` | Which backend to use. |
+| `HEXGRAPH_MODEL` | — | The default model. |
+| `HEXGRAPH_HOST` / `HEXGRAPH_PORT` | `127.0.0.1` / `8765` | The API/UI bind address. |
+| `HEXGRAPH_HOME` | `~/.hexgraph` | Root for the database and per-project artifacts. |
+| `HEXGRAPH_DB_PATH` | `$HEXGRAPH_HOME/hexgraph.db` | The SQLite database path. |
+| `HEXGRAPH_MOCK_SCENARIO` | — | Force a mock scenario for every task. |
+| `HEXGRAPH_SANDBOX_IMAGE` | `hexgraph-sandbox:latest` | The analysis sandbox image. |
+| `HEXGRAPH_BUILD_IMAGE` | `hexgraph-build:latest` | The build-from-source image (`features.build`). |
+| `HEXGRAPH_BUILDER` | `sandbox` | Override the Builder seam (`sandbox` or `mock`). |
+| `HEXGRAPH_FUZZ_IMAGE` | `hexgraph-fuzz:latest` | The coverage-guided fuzz image (`features.fuzzing`); point at a private tag in a worktree. |
+| `HEXGRAPH_FUZZER` | _(by surface)_ | Force the Fuzzer seam to the offline `mock` engine; otherwise the engine is picked by attack surface. |
+| `HEXGRAPH_EXECUTOR` | `local_docker` | The Executor seam (`local_docker` or `remote_docker`). |
+| `HEXGRAPH_FUZZ_REMOTE_<ID>_DOCKER_HOST` | — | **Secret.** A remote fuzz environment's Docker endpoint (`ssh://…` or `tcp://…`), read on demand and never logged or stored. `…_<ID>_TLS_VERIFY` and `…_<ID>_CERT_PATH` add TLS for `tcp://`. |
+| `HEXGRAPH_SANDBOX_NO_MOUNT` | — | Set to `1` to use the image's baked-in probes instead of mounting the local copies. |
+| `HEXGRAPH_DECOMPILER` | `r2` | Override the decompiler seam (`r2` or `ghidra`). |
+| `HEXGRAPH_DISABLE_DECOMPILE` | — | Set to `1` to skip decompilation in LLM tasks (offline or no-Docker dev, plus tests). |
+| `HEXGRAPH_DISABLE_SANDBOX_BUILD` | — | Set to `1` to skip the harness-compile sandbox step (dev and tests). |
+| `HEXGRAPH_I_KNOW_WHAT_IM_DOING` | — | Set to `1` to allow a non-loopback bind. It warns loudly and is not recommended. |
+| `ANTHROPIC_API_KEY` | — | Your key for the `anthropic` backend, read on demand and never logged or stored. |
 
-Runtime data lives under `~/.hexgraph/` (override with `HEXGRAPH_HOME`). The project DB is durable
-researcher knowledge — schema changes ship Alembic migrations and the DB is never silently reset.
+Runtime data lives under `~/.hexgraph/` (override it with `HEXGRAPH_HOME`). The project database is
+durable researcher knowledge, so schema changes always ship an Alembic migration and the database is
+never silently reset.
 
 ## Model backends
 
-Selected by `HEXGRAPH_LLM_BACKEND` (default `mock`) or per-task with `--backend`. Task code is
-identical across backends — only the backend boundary changes. LLM tasks run a **tool-use agent
-loop** over whichever backend you pick (the model directs, HexGraph runs the tools in the sandbox).
+The backend is chosen by `HEXGRAPH_LLM_BACKEND` (default `mock`), or per task with `--backend`. Task
+code is identical across all of them; only the backend boundary changes. Whichever you pick, an LLM
+task runs a tool-use agent loop: the model directs the work and HexGraph runs the tools in the
+sandbox.
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...

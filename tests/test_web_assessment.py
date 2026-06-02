@@ -1,4 +1,4 @@
-"""Dynamic web assessment (docs/design-dynamic-surfaces.md, Phase 3): the crafted-HTTP
+"""Dynamic web assessment (docs/design/design-dynamic-surfaces.md, Phase 3): the crafted-HTTP
 `http_request` tool and the multi-step web `verify_poc` over a live surface.
 
 Two layers:

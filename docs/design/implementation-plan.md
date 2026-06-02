@@ -1,6 +1,6 @@
 # HexGraph Implementation Plan (v2)
 
-This turns [`docs/design-vision.md`](design-vision.md) into sequenced, trackable work. The vision
+This turns [`design-vision.md`](design-vision.md) into sequenced, trackable work. The vision
 defines the *what/why*; this defines the *order, the seams, and the acceptance bar*. The MVP
 (M0–M5, branch `build/hexgraph-mvp`) proved the loop; v2 makes it a tool a researcher *wants* to use.
 

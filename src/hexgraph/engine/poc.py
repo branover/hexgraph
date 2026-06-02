@@ -134,7 +134,7 @@ def verify_poc(session: Session, project: Project, target: Target, spec: dict,
       policy-gated by `assert_allows_execution` (PoC/fuzzing enabled).
     Beyond the in-band `{{NONCE}}`-in-output oracle (best for reflected cmdi), extra oracles
     prove broader vuln classes by observing a side effect on an INDEPENDENT channel
-    (engine.oracles, docs/design-verification-oracles.md): **oob_write** (the exploit writes
+    (engine.oracles, docs/design/design-verification-oracles.md): **oob_write** (the exploit writes
     `{{NONCE}}`, HexGraph reads it back out-of-band), **canary_read** (HexGraph plants a random
     canary out-of-band, the exploit must read it back), **callback** (a bounded local
     listener the target dials back, substituted as `{{CALLBACK}}` — proves blind cmdi/SSRF/RCE),
@@ -142,7 +142,7 @@ def verify_poc(session: Session, project: Project, target: Target, spec: dict,
     input, then re-probes that it is DOWN and STAYS down across N probes — a transient blip does
     not count; for a binary this degrades to the sandbox `crash` oracle).
     Every result also carries an **`assurance`** triple ({standard, method, precondition},
-    docs/design-verification-oracles.md) the engine computes — so the two standards of "verified"
+    docs/design/design-verification-oracles.md) the engine computes — so the two standards of "verified"
     (code-present vs input-reachable) are differentiated by code, not prose."""
     from hexgraph.engine import oracles
 
@@ -162,7 +162,7 @@ def verify_poc(session: Session, project: Project, target: Target, spec: dict,
         # request (a read-back, a planted canary, a bounded callback listener, or — for liveness —
         # HexGraph's own out-of-band re-probe of the service) — not just the in-band response.
         # Each runs the SAME exploit flow (web/tcp/binary) but evaluates its own unforgeable
-        # oracle. docs/design-verification-oracles.md.
+        # oracle. docs/design/design-verification-oracles.md.
         result = oracles.verify(session, project, target, live, runner, nonce,
                                 is_web=is_web, is_tcp=is_tcp)
     elif is_tcp:
@@ -175,7 +175,7 @@ def verify_poc(session: Session, project: Project, target: Target, spec: dict,
     # Label what was actually proven (the engine decides this, not the caller): a PoC is a
     # DYNAMIC method, but the SCOPE decides the standard — a verified live web/tcp surface PoC
     # establishes `input_reachable`, while a verified isolated binary exec is `code_present`
-    # (lab-confirmed); see derive_poc_assurance / docs/design-verification-oracles.md.
+    # (lab-confirmed); see derive_poc_assurance / docs/design/design-verification-oracles.md.
     from hexgraph.engine.assurance import derive_poc_assurance
     result["assurance"] = derive_poc_assurance(result, live, is_web=is_web, is_tcp=is_tcp)
     return result

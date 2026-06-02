@@ -1,5 +1,5 @@
 """Standard B, static — a source→sink reachability ARGUMENT over the typed graph
-(docs/design-verification-oracles.md, Phase 4).
+(docs/design/design-verification-oracles.md, Phase 4).
 
 When a service can't be booted to trigger a flaw live (the DIR-823G case: a real cmdi sink, but
 FirmAE couldn't boot goahead), HexGraph can still argue the flaw is *input-reachable* by finding a

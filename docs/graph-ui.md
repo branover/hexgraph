@@ -1,88 +1,98 @@
 # The typed graph & web UI
 
-HexGraph records every analysis result in a SQLite-backed **typed graph** and browses it through a
-loopback-only three-pane web UI (`hexgraph serve` → http://127.0.0.1:8765).
+HexGraph records every analysis result in a typed graph backed by SQLite, and you browse that graph
+through a loopback-only, three-pane web UI (`hexgraph serve`, then open http://127.0.0.1:8765).
 
 ![The typed knowledge graph of a firmware engagement](images/graph.png)
 
 ## The three panes
 
-- **Left — target tree.** The ingested target and any firmware children. Each row has a launcher:
-  pick a **task type** and (for the mock) a **scenario**, then **Run**. Firmware targets show a
-  browsable unpacked filesystem; any file can be added as a child target.
-- **Center — graph ⇆ source.** A segmented control switches between the **Graph** (targets,
-  functions, sockets, hypotheses, harnesses, and findings as typed nodes, joined by typed edges —
-  `contains` / `calls` / `taints` / `listens_on` / `built_from` / `located_in` / `harnesses` / … ;
-  rendered offline with Cytoscape.js) and a **Source** view (the in-browser IDE — see
-  [build-from-source.md](build-from-source.md)). Click an edge to see its attributes (call sites,
-  ports, addresses).
-- **Right — findings.** Every finding, typed (vulnerability / poc / recon / harness / fuzz_crash / …)
-  and filterable; click one for its evidence, reasoning, verification, and suggested follow-ups.
+On the left is the **target tree**: the target you ingested and any firmware children it produced.
+Each row has a launcher, where you pick a task type and, on the mock backend, a scenario, and then hit
+**Run**. Firmware targets also show a browsable unpacked filesystem, and any file in it can be promoted
+to a child target.
+
+The center pane switches between two views with a segmented control. The **Graph** view renders the
+targets, functions, sockets, hypotheses, harnesses, and findings as typed nodes joined by typed edges
+(`contains`, `calls`, `taints`, `listens_on`, `built_from`, `located_in`, `harnesses`, and more),
+drawn offline with Cytoscape.js. Click an edge and you see its attributes: call sites, ports,
+addresses. The **Source** view is the in-browser IDE, covered in [build-from-source.md](build-from-source.md).
+
+On the right is the **findings** panel. Every finding is typed (vulnerability, poc, recon, harness,
+fuzz_crash, and so on) and filterable; click one to see its evidence, its reasoning, any verification,
+and the follow-ups it suggests.
 
 ![A function node selected — connected edges light up, inspector opens](images/graph-selected.png)
 
-Selecting a node lights its connected edges and opens the inspector (decompile / annotate / run a
-task). Click a finding's **suggested follow-up** to open a pre-filled launch modal for the next task;
-use **Confirm / Dismiss** to triage. The **Add node / Add edge** tools author functions, sockets,
-hypotheses, and typed edges by hand.
+Selecting a node lights up its connected edges and opens the inspector, where you can decompile,
+annotate, or run a task. When a finding suggests a follow-up, clicking it opens a pre-filled launch
+modal for the next task, and **Confirm** or **Dismiss** lets you triage. The **Add node** and **Add
+edge** tools let you author functions, sockets, hypotheses, and typed edges by hand.
 
 ![The findings panel, grouped by target with severity + type chips](images/findings-list.png)
 
-**Removing things is reversible by default.** Archive a node or a whole target subtree to declutter
-the graph (re-adding the same entity restores it); individual edges and whole projects are hard
-deletes. **Merge dupes** folds duplicate functions/strings/targets into one keeper (also run
-automatically after LLM tasks).
+Removing things is reversible by default. Archiving a node or a whole target subtree declutters the
+graph, and re-adding the same entity brings it back. Individual edges and whole projects, by contrast,
+are hard deletes. **Merge dupes** folds duplicate functions, strings, and targets into a single
+keeper, and it also runs automatically after every LLM task.
 
-## Firmware unpacked filesystem
+## The firmware's unpacked filesystem
 
-Firmware targets persist their extracted rootfs (`metadata_json["filesystem"]`, files on disk under
-the project data dir). The detail panel browses it; any file can be promoted to a child target.
+Firmware targets keep their extracted rootfs around (in `metadata_json["filesystem"]`, with the files
+on disk under the project's data dir). The detail panel lets you browse it, and any file can be
+promoted to a child target.
 
 ![Browsing a firmware's extracted rootfs](images/filesystem-browser.png)
 
-Extraction (in the sandbox) handles bare squashfs (sasquatch / unsquashfs), cpio, partitioned full-OS
-disk images (The Sleuth Kit), and wrapped vendor firmware (binwalk recursive → jefferson / ubi_reader
-/ sasquatch for nested JFFS2 / UBIFS / cramfs).
+Extraction happens in the sandbox and covers the usual cases: bare squashfs (via sasquatch or
+unsquashfs), cpio, partitioned full-OS disk images (via The Sleuth Kit), and wrapped vendor firmware
+(via recursive binwalk, which in turn drives jefferson, ubi_reader, or sasquatch for nested JFFS2,
+UBIFS, or cramfs).
 
-## Data model
+## The data model
 
-SQLite via SQLAlchemy, UUID ids, **WAL mode** so the UI and an agent's MCP server (separate
-processes) share the DB concurrently. Foreign-key enforcement is deliberately off — edges/annotations
-are polymorphic string refs, not FKs.
+The store is SQLite through SQLAlchemy, with UUID ids and WAL mode so the UI and an agent's MCP server
+can share the database from separate processes at the same time. Foreign-key enforcement is
+deliberately off, because edges and annotations are polymorphic string references rather than FKs.
 
-- **`project`**, **`target`** — a self-referential `parent_id` tree. A target is a *reachable surface*:
-  a byte target with a `path`, or a dynamic `web_app` / `service` surface reached via a Channel in
-  `metadata_json` (see [dynamic-surfaces-rehosting-remote.md](dynamic-surfaces-rehosting-remote.md)).
-- **`node`** — typed sub-file / conceptual entities: `function`, `symbol`, `string`, `struct`,
-  `hypothesis`, `pattern`, `input`, `sink`, **`socket`** (a network/IPC endpoint shared across
-  binaries — identity is `(project, kind, port|name)`, so a server `listens_on` it and a client
-  `connects_to` it resolve to one node), `endpoint`, `param`, `source_file`. `NodeType` is a String
-  column, so new vocab is zero-migration.
-- **`edge`** — one polymorphic, **typed, attributed** relationship between any two entities
-  (target | node | finding | task): `contains`, `links_against`, `calls`, `reads`/`writes`, `taints`,
-  `bypasses`, `listens_on`/`connects_to`, `routes_to` (route→handler), `similar_to`, `derived_from`,
-  `about`, … Edges carry type-specific attributes (`engine/edge_schemas.py` is the registry of what's
-  meaningful per type — a `calls` edge's `call_sites`/`arg_constraints`, a `listens_on` edge's
-  `address`/`backlog`). It's guidance, not a hard schema: unknown keys pass, but **list attributes
-  merge as sets** so repeated edges accumulate `call_sites` rather than clobber.
-- **`task`**, **`finding`** — `task.status` is an Enum; `finding.status` is a plain String.
+- A **`project`** owns a **`target`** tree linked by `parent_id`. A target is a *reachable surface*:
+  either a byte target with a `path`, or a dynamic `web_app` or `service` surface reached through a
+  Channel stored in `metadata_json` (see
+  [dynamic-surfaces-rehosting-remote.md](dynamic-surfaces-rehosting-remote.md)).
+- A **`node`** is a typed sub-file or conceptual entity: a `function`, `symbol`, `string`, `struct`,
+  `hypothesis`, `pattern`, `input`, `sink`, `endpoint`, `param`, or `source_file`. A `socket` node is
+  special: it is a network or IPC endpoint shared across binaries, identified by `(project, kind,
+  port|name)`, so that a server that `listens_on` it and a client that `connects_to` it resolve to the
+  same node. `NodeType` is a String column, which makes new vocabulary zero-migration.
+- An **`edge`** is one polymorphic, typed, attributed relationship between any two entities (target,
+  node, finding, or task): `contains`, `links_against`, `calls`, `reads` and `writes`, `taints`,
+  `bypasses`, `listens_on` and `connects_to`, `routes_to` (route to handler), `similar_to`,
+  `derived_from`, `about`, and so on. Edges carry type-specific attributes, and
+  `engine/edge_schemas.py` is the registry of what is meaningful for each type (the `call_sites` and
+  `arg_constraints` on a `calls` edge, say, or the `address` and `backlog` on a `listens_on` edge).
+  That registry is guidance rather than a hard schema: unknown keys pass through, but list attributes
+  merge as sets, so repeated edges accumulate `call_sites` instead of clobbering them.
+- A **`task`** and a **`finding`** round it out. `task.status` is an Enum; `finding.status` is a plain
+  String.
 
-The graph is relational — **Neo4j is out of scope.** Node identity for functions/symbols/structs is
-the *normalized* name within a target (decompiler prefixes stripped, so `sym.get_param` == `get_param`).
+The graph is relational, and Neo4j is out of scope. Node identity for functions, symbols, and structs
+is the *normalized* name within a target, with decompiler prefixes stripped, so `sym.get_param` and
+`get_param` are the same node.
 
 ## The Finding schema is frozen
 
-Every task and backend (mock included) emits exactly the shape in
-`src/hexgraph/schemas/finding.schema.json` (shipped in-package); a contract test enforces it. New
-structure goes in the DB envelope (e.g. `finding_type`, `evidence.extra`), never in the frozen schema.
-`finding_type` (`vulnerability | recon | harness | fuzz_crash | poc | annotation | other`, classified
-from the producing task) drives sort/filter in the findings panel.
+Every task and every backend, the mock included, emits exactly the shape defined in
+`src/hexgraph/schemas/finding.schema.json` (shipped inside the package), and a contract test enforces
+it. New structure goes in the DB envelope (`finding_type`, `evidence.extra`, and the like), never in
+the frozen schema itself. The `finding_type` (one of `vulnerability`, `recon`, `harness`,
+`fuzz_crash`, `poc`, `annotation`, or `other`, classified from the task that produced it) drives the
+sort and filter controls in the findings panel.
 
 ## Mock scenarios
 
-On the mock backend, the launcher offers scenarios on `sbin/httpd`:
-`static_analysis/critical_overflow` (critical overflow + `related_to` edge to `libupnp.so`),
-`/no_findings`, `/malformed_then_valid` (JSON-repair retry), `reverse_engineering`, `pattern_sweep`
-(sibling match), `error_rate_limit` / `error_timeout` (graceful failure), and a default
-always-success scenario. See [mock-llm-provider.md](mock-llm-provider.md) for the three fidelity
-layers and the contract test.
+On the mock backend, the launcher offers a set of scenarios on `sbin/httpd`:
+`static_analysis/critical_overflow` (a critical overflow plus a `related_to` edge to `libupnp.so`),
+`/no_findings`, `/malformed_then_valid` (which exercises the JSON-repair retry), `reverse_engineering`,
+`pattern_sweep` (a sibling match), `error_rate_limit` and `error_timeout` (graceful failure), and a
+default scenario that always succeeds. For the three fidelity layers and the contract test, see
+[design/mock-llm-provider.md](design/mock-llm-provider.md).

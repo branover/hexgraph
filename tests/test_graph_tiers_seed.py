@@ -2,7 +2,7 @@
 
 `scripts/seed_graph_tiers.py` builds the four A/B fixture projects (SMALL/MEDIUM/
 LARGE/PATHOLOGICAL) the graph redesign's before/after Playwright captures run against
-(docs/design-graph-presentation.md §9). It must keep seeding cleanly on the mock
+(docs/design/design-graph-presentation.md §9). It must keep seeding cleanly on the mock
 backend, offline ($0, no Docker), producing graphs in the size bands each tier targets.
 Fast offline test — it does NOT capture screenshots.
 """

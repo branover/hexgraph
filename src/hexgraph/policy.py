@@ -21,12 +21,12 @@ class PolicyViolation(RuntimeError):
 class NetworkScope:
     """The ONLY destinations (`host:port`) egress is permitted to — a deny-all-but-this
     allowlist. Empty == deny-all. Built per-target from its Channel; see
-    docs/design-dynamic-surfaces.md."""
+    docs/design/design-dynamic-surfaces.md."""
     allow: frozenset[str] = frozenset()
     rationale: str = ""
 
 
-# Graduated, opt-in tiers (docs/design-dynamic-surfaces.md). Each is derived ONLY
+# Graduated, opt-in tiers (docs/design/design-dynamic-surfaces.md). Each is derived ONLY
 # from features.* — there is no settable "tier" knob — so enabling a capability is
 # the sole way to raise it, and any settings error fails closed at tier 0.
 TIER_STATIC_ONLY = 0       # no exec, no network (default)

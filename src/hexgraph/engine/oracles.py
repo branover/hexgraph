@@ -1,5 +1,5 @@
 """Unforgeable verification oracles beyond reflected command-injection
-(docs/design-verification-oracles.md, Phase 1).
+(docs/design/design-verification-oracles.md, Phase 1).
 
 The principle: an unforgeable oracle observes the vuln's side effect on a channel
 INDEPENDENT of the exploit's own request. `verify_poc` already covers reflected cmdi

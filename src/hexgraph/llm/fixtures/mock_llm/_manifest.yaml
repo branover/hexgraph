@@ -1,6 +1,6 @@
 # Mock LLM fixture manifest.
 # Maps each task type to its default scenario and the scenarios available.
-# The mock backend resolves a scenario per docs/mock-llm-provider.md §3:
+# The mock backend resolves a scenario per docs/design/mock-llm-provider.md §3:
 #   1) explicit per-task arg (--mock-scenario / mock_scenario=)
 #   2) env HEXGRAPH_MOCK_SCENARIO
 #   3) deterministic hash(task_id) % len(scenarios) for a realistic demo mix

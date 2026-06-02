@@ -1154,7 +1154,7 @@ def get_schemas() -> dict:
                     "REFLECTED side effect (best for reflected cmdi / auth-bypass); the extended "
                     "oracles below prove BROADER vuln classes by observing a side effect on a "
                     "channel INDEPENDENT of the exploit's request, so the model can't forge them "
-                    "(docs/design-verification-oracles.md). All carry {{NONCE}} substitution.",
+                    "(docs/design/design-verification-oracles.md). All carry {{NONCE}} substitution.",
             "in_band": {
                 "binary": ["output_contains", "exit_code", "exit_nonzero", "crash"],
                 "web": ["body_contains", "status_is", "status_differs"],

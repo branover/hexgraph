@@ -1,4 +1,4 @@
-"""Firmware rehosting seam (docs/design-rehosting.md): the policy gate, surface wiring,
+"""Firmware rehosting seam (docs/design/design-rehosting.md): the policy gate, surface wiring,
 and the netns plumbing that lets a probe reach the emulated device — all offline, with a
 fake rehoster (FirmAE itself is Docker/privileged-gated and exercised separately)."""
 

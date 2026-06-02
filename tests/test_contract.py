@@ -1,4 +1,4 @@
-"""Contract test — prevents mock drift (CLAUDE.md, docs/mock-llm-provider §7).
+"""Contract test — prevents mock drift (CLAUDE.md, docs/design/mock-llm-provider §7).
 
 Every finding in every mock fixture (and, later, every recorded cassette) must
 validate against hexgraph/schemas/finding.schema.json. Changing the schema forces
