@@ -204,8 +204,32 @@ are hostile bytes) — browse them, don't fear them.
 - **Link a finding/node to its source location** so the analyst can jump from the finding to the
   exact line: **`link_finding_to_source(finding_id, tree_id, rel, line?)`** records a `located_in`
   edge + `evidence.extra.source_ref` (the UI's "Open in source" button). Do this whenever a vuln
-  corresponds to known source — it's the source↔graph link the workbench is built on. (Building
-  and fuzzing from source are later phases; for now source is read-only.)
+  corresponds to known source — it's the source↔graph link the workbench is built on.
+
+## 2g. Build from source — instrumented, recorded, reproducible (build-as-API)
+You can turn a managed source tree into an INSTRUMENTED artifact — but you NEVER run a compiler.
+You author/approve a **BuildSpec** (itself recorded source) and REQUEST a build; HexGraph runs the
+recorded recipe in the sandbox. This is the analogue of "you direct, HexGraph runs the probes".
+- **`build_target(project_id, source_tree_id, system?, phases?, instrumentation?, artifacts?, env?)`**
+  — the run-tool. `system` (make|cmake|autotools|meson|cargo|go|custom — auto-detected if omitted),
+  `phases` (ordered explicit-argv steps, recorded verbatim; defaults derived from the system),
+  `instrumentation` ({sanitizers:[address,undefined,…], coverage:[sancov|afl_pcguard],
+  engine:libfuzzer|afl}), `artifacts` (rel paths to capture — the fuzz target/.so/binary). The
+  instrumentation env (CC/CXX/CFLAGS/SANITIZER/FUZZING_ENGINE) is INJECTED by HexGraph (the
+  base-image contract) — you do NOT set it; the SAME phases yield an ASan/SanCov/AFL++ build by
+  swapping only the profile. `env` is NON-secret by contract (credentials are rejected).
+- **Reproducibility is the contract:** `recipe_sha = hash{phases, env, base_image, instrumentation,
+  arch}`; same recipe_sha + same source content_hash + same toolchain_digest ⇒ the same build,
+  recorded. **`list_builds(project_id)`** shows the build ledger (status, the reproducibility triple,
+  artifacts as CAS shas, and the instrumented derived_target_id each registered).
+- **Rebuild-with-instrumentation is the headline move:** if the source tree is linked (`built_from`)
+  to a target, the rebuild registers a DERIVED target wired `instrumented_build_of`→ the original —
+  the fuzzable, coverage-instrumented twin of the shipped binary. That unlocks **coverage-guided
+  fuzzing next** (the target's own objects carry SanCov+ASan, not just the harness).
+- **VENDORED/OFFLINE ONLY:** the build runs `--network none`. A recipe that needs to fetch deps
+  fails honestly — vendor the deps (a `--recurse-submodules` clone at a pinned commit, or a
+  deps-bundled tarball) and retry. Building needs **`features.build`** enabled in Settings (its own
+  gate, separate from executing the target).
 
 ## 3. Record AS YOU GO — write to the graph BEFORE you've confirmed things
 Capture the moment you have a lead, not after you've proven it. The graph is a

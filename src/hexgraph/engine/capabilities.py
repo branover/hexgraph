@@ -61,6 +61,10 @@ def _poc_enabled() -> bool:
     return _flag("features.poc.enabled")
 
 
+def _build_enabled() -> bool:
+    return _flag("features.build.enabled")
+
+
 def capabilities_for(anchor_kind: str, subtype: str | None = None) -> list[str]:
     if anchor_kind == "target":
         caps = list(_TARGET.get(subtype or "unknown", ["recon"]))
@@ -102,4 +106,8 @@ def capability_table() -> dict:
 
     targets = {k: extra(k, v) for k, v in _TARGET.items()}
     nodes = {k: extra(k, v) for k, v in _NODE.items()}
-    return {"target": targets, "node": nodes, "edge": _EDGE}
+    # `features` carries non-anchor affordance flags the SPA reads to show/hide UI
+    # that isn't keyed to a target/node/edge — e.g. the Source-tab Build button
+    # (build is anchored on a source_tree, gated by features.build).
+    return {"target": targets, "node": nodes, "edge": _EDGE,
+            "features": {"build": _build_enabled()}}

@@ -290,6 +290,7 @@ static-only/local defaults hold unless you opt in.
 | **Ghidra** | `hexgraph config set features.ghidra.enabled true` (needs `just sandbox-build with_ghidra=1`) | Headless-Ghidra decompiler + optional recon enrichment; can also connect to a running Ghidra (`features.ghidra.mode bridge`). Degrades to radare2 when off. |
 | **Fuzzing** | `hexgraph config set features.fuzzing.enabled true` | The `fuzzing` task: compiles a generated libFuzzer+ASan harness and **coverage-guided fuzzes the target** — when the target's own source is provided (task param `target_sources` / `metadata.fuzz_target_sources`) it is compiled WITH the harness under SanitizerCoverage+ASan so libFuzzer gets real coverage feedback from the code under test; with only an uninstrumented `.so` it still runs but coverage-blind (recorded honestly as `coverage_instrumented=false`). Crashes are deduped by a normalized stack-hash (one finding per root cause), the reproducer is minimized (libFuzzer `-minimize_crash`), and each carries a deterministic exploitability rating — all on `evidence.extra.fuzz`. **Relaxes the static-only policy to allow execution** (still `--network none`, capped, timed). |
 | **PoC verification** | `hexgraph config set features.poc.enabled true` | The `poc` task + `verify_poc`: **executes the target** with an attacker input and confirms exploitation via an unforgeable `{{NONCE}}` oracle. Foreign-arch (MIPS/ARM/…) runs under qemu-user with the firmware rootfs as sysroot. Also policy-gated. |
+| **Build from source** | `hexgraph config set features.build.enabled true` (needs `just build-image`) | **Build-as-API:** compile a managed source tree into an **instrumented artifact** via a *recorded, reproducible recipe* HexGraph runs in the sandbox (the `Builder` seam — you/the agent author a `BuildSpec`, never run a compiler). Instrumentation (SanCov+ASan/UBSan, libFuzzer/AFL++) is injected as CC/CXX/CFLAGS per the base-image contract, so the same recipe yields different profiles. A build of a source tree linked (`built_from`) to a target registers an **instrumented derived target** (`instrumented_build_of`→ the original) — the fuzzable twin, unlocking coverage-guided fuzzing. Reproducible: `recipe_sha = hash{phases,env,base_image,instrumentation,arch}`. **Its own policy gate** (`assert_allows_build`, separate from executing the target — you can build-and-inspect without running). **Vendored/offline only** (the build runs `--network none`; the audited fetch tier is a later phase). Uses the dedicated `hexgraph-build` image (`just build-image`). |
 | **Network** | `hexgraph config set features.network.enabled true` | Bounded **local-network egress** for live web assessment (`http_request` + web `verify_poc`). Raises the policy from `--network none`; a per-target deny-all-but-loopback/private allowlist (no public hosts), every request audited to an `EgressEvent`. |
 | **Rehost** | `hexgraph config set features.rehost.enabled true` | Boots a firmware image under **full-system emulation** (qemu+KVM for full-OS disk images, FirmAE for vendor blobs) and registers its live web UI as a `web_app` surface. Separate policy gate (`assert_allows_rehost`); pair with **Network** to assess the running device. Needs `just firmae-build` / `just qemu-build`. |
 | **Coding-agent (MCP)** | `features.mcp.{read,write,run}` + `hexgraph mcp install` | Drive HexGraph from Claude Code/Codex/gemini-cli (above). |
@@ -346,6 +347,8 @@ port = 8765
 | `HEXGRAPH_DB_PATH` | `$HEXGRAPH_HOME/hexgraph.db` | SQLite database path. |
 | `HEXGRAPH_MOCK_SCENARIO` | — | Force a mock scenario for all tasks. |
 | `HEXGRAPH_SANDBOX_IMAGE` | `hexgraph-sandbox:latest` | Analysis sandbox image. |
+| `HEXGRAPH_BUILD_IMAGE` | `hexgraph-build:latest` | Build-from-source image (`features.build`). The recorded `base_image` of a BuildSpec; point at a private tag in a worktree. |
+| `HEXGRAPH_BUILDER` | `sandbox` | Override the Builder seam (`sandbox` \| `mock`). |
 | `HEXGRAPH_SANDBOX_NO_MOUNT` | — | `1` to use the image's baked-in probes instead of mounting the local copies (probes mount by default, so editing one needs no rebuild). |
 | `HEXGRAPH_DECOMPILER` | `r2` | Override the decompiler seam (`r2` \| `ghidra`). |
 | `HEXGRAPH_DISABLE_DECOMPILE` | — | `1` to skip decompilation in LLM tasks (offline/no-Docker dev + tests). |
@@ -366,6 +369,10 @@ port = 8765
   opt-in flipping the single **policy seam** (`policy.current_policy()`), and nothing relaxes anywhere
   else:
   - **static-only** (default) — no execution, `--network none`;
+  - **build from source** — `features.build` permits compiling a source tree into an instrumented
+    artifact in the same `--network none`, capped, RO-source, non-root sandbox (`assert_allows_build`);
+    a sub-capability of sandboxed-exec but its own gate, so you can build-and-inspect *without*
+    permitting the target to run (running the built artifact still needs the exec gate);
   - **sandboxed execution** — `features.poc` / `features.fuzzing` allow running the target inside the
     same capped, timed, `--network none` sandbox (foreign-arch via qemu-user), never on the host;
   - **bounded local-network** — `features.network` permits egress only to loopback/private hosts via a
@@ -432,6 +439,7 @@ just test            # full suite (mock backend; sandbox/Docker tests auto-skip 
 just demo            # the full offline loop, exits 0 — doubles as a smoke test
 just fixtures        # rebuild the bundled test targets
 just sandbox-build [with_ghidra=1]   # rebuild the analysis sandbox image (only after a Dockerfile/toolchain change)
+just build-image [with_cross=1]      # build the dedicated build-from-source image (features.build; with_cross is a Phase-7 stub)
 just ui              # rebuild the SPA (after any frontend/ change)
 just serve           # start the server from the venv
 ```

@@ -17,6 +17,7 @@ pip            := ".venv/bin/pip"             # venv pip
 host           := env_var_or_default("HEXGRAPH_HOST", "127.0.0.1")  # loopback only — do not change (product invariant)
 port           := env_var_or_default("HEXGRAPH_PORT", "8765")       # API/UI port (ambient HEXGRAPH_PORT or `just port=… serve` wins)
 sandbox_image  := "hexgraph-sandbox:latest"   # analysis sandbox image tag
+build_image    := env_var_or_default("HEXGRAPH_BUILD_IMAGE", "hexgraph-build:latest")  # build-from-source image tag
 firmae_image   := "hexgraph-firmae:latest"    # FirmAE rehosting image tag
 qemu_image     := "hexgraph-qemu:latest"      # qemu+KVM rehosting image tag
 iotgoat_url    := "https://github.com/OWASP/IoTGoat/releases/download/v1.0/IoTGoat-x86.img.gz"
@@ -82,6 +83,17 @@ ui:
 [group('build')]
 sandbox-build with_ghidra="0":
     docker build -f Dockerfile.sandbox --build-arg WITH_GHIDRA={{with_ghidra}} -t {{sandbox_image}} .
+
+# OPT-IN, gated by features.build. REBUILD WHEN you change Dockerfile.build or the build
+# toolchain — NOT when you edit build_probe.py (probes are mounted from the install at
+# runtime). This DEDICATED image (clang/LLVM + sanitizers + SanCov + AFL++ compilers) is
+# the recorded base_image a BuildSpec compiles in; it is NOT the shared sandbox image.
+# WORKTREE DISCIPLINE: build a PRIVATE tag and point HEXGRAPH_BUILD_IMAGE at it — never
+# clobber a shared tag: `HEXGRAPH_BUILD_IMAGE=hexgraph-build:wt-<topic> just build-image`.
+# Build the build-from-source image (needs Docker; with_cross=1 adds cross gcc/sysroots — Phase 7 stub).
+[group('build')]
+build-image with_cross="0":
+    docker build -f Dockerfile.build --build-arg WITH_CROSS={{with_cross}} -t {{build_image}} .
 
 # ===========================================================================
 # test — the offline suites (mock backend, $0)

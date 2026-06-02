@@ -20,7 +20,7 @@ export default function Workspace() {
   const { projectId } = useParams();
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [graph, setGraph] = useState<Graph | null>(null);
-  const [caps, setCaps] = useState<Record<string, Record<string, string[]>>>({});
+  const [caps, setCaps] = useState<{ target?: Record<string, string[]>; node?: Record<string, string[]>; edge?: Record<string, string[]>; features?: { build?: boolean } }>({});
   const [selFinding, setSelFinding] = useState<Finding | null>(null);
   const [selNode, setSelNode] = useState<GraphNode | null>(null);
   const [selEdge, setSelEdge] = useState<any | null>(null);
@@ -346,7 +346,7 @@ export default function Workspace() {
           )}
           {view === "source" ? (
             <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-              <SourceBrowser projectId={projectId!} open={openSource} />
+              <SourceBrowser projectId={projectId!} open={openSource} buildEnabled={!!caps.features?.build} onChanged={() => load()} />
             </div>
           ) : (
           <>

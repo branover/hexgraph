@@ -65,6 +65,50 @@ def test_legacy_mvp_schema_db_upgrades_forward(tmp_path, monkeypatch):
     reset_engine_for_tests()
 
 
+def test_0013_build_applies_on_0012_and_round_trips(tmp_path, monkeypatch):
+    """0013 (build_spec + build) applies cleanly on 0012 (source_tree) and the
+    downgrade removes exactly those two tables — the migration is reversible."""
+    monkeypatch.setenv("HEXGRAPH_DB_PATH", str(tmp_path / "phase2.db"))
+    from alembic import command
+    from sqlalchemy import create_engine, inspect
+
+    from hexgraph.db.migrate import _alembic_config
+    from hexgraph.db.session import db_url, reset_engine_for_tests
+
+    reset_engine_for_tests()
+    cfg = _alembic_config()
+    command.upgrade(cfg, "0012_source_tree")
+    before = set(inspect(create_engine(db_url())).get_table_names())
+    assert "source_tree" in before and "build" not in before and "build_spec" not in before
+
+    command.upgrade(cfg, "0013_build")
+    after = set(inspect(create_engine(db_url())).get_table_names())
+    assert {"build", "build_spec"} <= after
+    # the build ledger has the reproducibility-triple columns
+    bcols = {c["name"] for c in inspect(create_engine(db_url())).get_columns("build")}
+    assert {"recipe_sha", "source_content_hash", "toolchain_digest", "log_cas",
+            "derived_target_id"} <= bcols
+
+    command.downgrade(cfg, "0012_source_tree")
+    rolled = set(inspect(create_engine(db_url())).get_table_names())
+    assert "build" not in rolled and "build_spec" not in rolled and "source_tree" in rolled
+    reset_engine_for_tests()
+
+
+def test_fresh_init_db_has_build_tables(tmp_path, monkeypatch):
+    """A fresh create_all (the test path) materializes the new tables too."""
+    monkeypatch.setenv("HEXGRAPH_DB_PATH", str(tmp_path / "fresh.db"))
+    from sqlalchemy import create_engine, inspect
+
+    from hexgraph.db.session import db_url, init_db, reset_engine_for_tests
+
+    reset_engine_for_tests()
+    init_db()
+    names = set(inspect(create_engine(db_url())).get_table_names())
+    assert {"build", "build_spec", "source_tree"} <= names
+    reset_engine_for_tests()
+
+
 def test_backup_written_on_upgrade(tmp_path, monkeypatch):
     db = tmp_path / "hg.db"
     monkeypatch.setenv("HEXGRAPH_DB_PATH", str(db))

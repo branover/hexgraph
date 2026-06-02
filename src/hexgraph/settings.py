@@ -53,6 +53,20 @@ DEFAULTS: dict[str, Any] = {
             "enabled": False,
             "timeout": 20,
         },
+        "build": {
+            # OFF by default. Enabling this turns on the build gate (D5): HexGraph
+            # may compile a managed SOURCE tree into an instrumented artifact inside
+            # the sandbox (the Builder seam) via a recorded, reproducible recipe.
+            # Building runs untrusted third-party code (configure/make), so it has its
+            # OWN policy gate — separate from executing the TARGET (which still needs
+            # features.fuzzing/poc). VENDORED/OFFLINE ONLY this phase: the build phase
+            # runs --network none (the audited fetch tier is a later phase). The
+            # dedicated `hexgraph-build` image carries clang/LLVM + sanitizers + SanCov
+            # + AFL++ compilers; set HEXGRAPH_BUILD_IMAGE to override the tag.
+            "enabled": False,
+            "image": "hexgraph-build:latest",
+            "timeout": 1800,            # build wall-clock budget (s)
+        },
         "mcp": {
             # Which `hexgraph mcp` tool groups are exposed to a connected coding
             # agent. Trim these so the agent's tool list (its context) stays small
@@ -134,6 +148,9 @@ ALLOWED: dict[str, tuple[Any, set | None]] = {
     "features.fuzzing.timeout": (int, None),
     "features.poc.enabled": (bool, None),
     "features.poc.timeout": (int, None),
+    "features.build.enabled": (bool, None),
+    "features.build.image": (str, None),
+    "features.build.timeout": (int, None),
     "features.mcp.read": (bool, None),
     "features.mcp.write": (bool, None),
     "features.mcp.run": (bool, None),

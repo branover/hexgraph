@@ -100,15 +100,17 @@ class EdgeType(str, enum.Enum):
     built_from = "built_from"  # a target is built from a source_tree (target → source_tree)
     located_in = "located_in"  # a finding/node is located in a source_file (finding|node → node[source_file], attrs={line,col})
     harnesses = "harnesses"    # a harness exercises a target/function (node[harness] → target|node)
+    instrumented_build_of = "instrumented_build_of"  # a derived (instrumented) target → the original target it was rebuilt from
+    builds = "builds"          # a build_spec produces a target/artifact (build_spec → target, attrs={build_id})
     related_to = "related_to"  # generic fallback (kept for back-compat)
 
 
 # Edge endpoint kinds + provenance origins (plain strings in the DB).
-# `source_tree` is a polymorphic endpoint kind for the `built_from` / `depends_on`
-# edges (source trees are SQL entities, not nodes — design §4.1/§4.5 D1). Source
-# FILES are `node`s (node_type=source_file), so a finding→source_file `located_in`
-# edge uses the existing `node` kind, not this.
-EDGE_KINDS = ("target", "node", "finding", "task", "source_tree")
+# `source_tree`/`build_spec` are polymorphic endpoint kinds for SQL entities that
+# are NOT graph nodes (design §4.1/§4.5 D1): `built_from` (target → source_tree),
+# `builds` (build_spec → target). Source FILES are `node`s (node_type=source_file),
+# so a finding→source_file `located_in` edge uses the existing `node` kind, not these.
+EDGE_KINDS = ("target", "node", "finding", "task", "source_tree", "build_spec")
 EDGE_ORIGINS = ("tool", "llm", "human", "derived")
 
 
@@ -198,6 +200,75 @@ class SourceTree(Base):
     manifest_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     # Soft removal, mirrors target.archived / node.archived.
     archived: Mapped[bool] = mapped_column(default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class BuildSpec(Base):
+    """A recorded, reproducible build recipe (design §2.1/§4.5 D-build, Phase 2).
+
+    A `BuildSpec` turns a `source_tree` into an instrumented artifact via an
+    explicit, recorded recipe the API/tool layer executes in the sandbox — the
+    `Builder` seam never runs a human-typed shell. Reproducibility is the contract:
+    `recipe_sha` = sha256 over {phases, env, base_image, instrumentation, arch}; the
+    same recipe_sha + same source `content_hash` + same `toolchain_digest` ⇒ the
+    same build. The recipe lives here (durable, editable, auditable); each execution
+    is a `Build` row (the ledger). All vendored/offline this phase: the build phase
+    runs `--network none` (the audited fetch tier is Phase 7)."""
+
+    __tablename__ = "build_spec"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("project.id"), index=True)
+    source_tree_id: Mapped[str] = mapped_column(String(36), index=True)
+    name: Mapped[str] = mapped_column(String(300), default="build")
+    # make | cmake | autotools | meson | cargo | go | custom
+    system: Mapped[str] = mapped_column(String(20), default="make")
+    # The recorded recipe: ordered explicit-argv phases, the instrumentation
+    # profile, captured-artifact rel paths, NON-secret env, arch, base image,
+    # network ("none" this phase), timeout. All in the envelope (no schema churn).
+    recipe_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    instrumentation_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    artifacts_json: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    base_image: Mapped[str] = mapped_column(String(120), default="hexgraph-build:latest")
+    arch: Mapped[str] = mapped_column(String(32), default="x86_64")
+    network: Mapped[str] = mapped_column(String(8), default="none")
+    # sha256 over {phases, env, base_image, instrumentation, arch} — the recipe identity.
+    recipe_sha: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    archived: Mapped[bool] = mapped_column(default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Build(Base):
+    """One execution of a `BuildSpec` — the durable build ledger (design §4.5).
+
+    Records status, the reproducibility triple (recipe_sha / source_content_hash /
+    toolchain_digest), the produced artifacts as CAS shas, the full build log in CAS,
+    timing, and any error. A build is durable + reproducible + auditable: nothing is
+    re-run silently, and a malicious `configure` that burns CPU and exits leaves only
+    this row + its log, never persistence or exfiltration (`--network none`, RO
+    source, ephemeral container)."""
+
+    __tablename__ = "build"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("project.id"), index=True)
+    build_spec_id: Mapped[str] = mapped_column(String(36), index=True)
+    source_tree_id: Mapped[str] = mapped_column(String(36), index=True)
+    # queued | building | succeeded | failed
+    status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
+    recipe_sha: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    source_content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    toolchain_digest: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # rel path → CAS sha of the captured artifact bytes.
+    artifacts_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # The full build log (stdout+stderr of every phase), stored in CAS.
+    log_cas: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    instrumentation_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    returncode: Mapped[int | None] = mapped_column(nullable=True)
+    duration: Mapped[float] = mapped_column(Float, default=0.0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The derived target this build registered (the instrumented rebuild), if any.
+    derived_target_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
