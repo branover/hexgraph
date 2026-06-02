@@ -493,8 +493,10 @@ port = 8765
 - **Loopback only.** The server refuses a non-loopback bind unless `HEXGRAPH_I_KNOW_WHAT_IM_DOING=1`
   (which still warns).
 - **Hostile-target isolation.** Every operation on target bytes runs in a fresh container with
-  `--network none`, a read-only root filesystem, a tmpfs scratch, memory/CPU/PID limits, and a
-  wall-clock timeout. Only HexGraph's probe scripts run there.
+  `--network none`, a read-only root filesystem, a tmpfs scratch (incl. a sized, `noexec` tmpfs at
+  `/dev/shm` for POSIX shared memory — AFL++'s coverage bitmap needs more than docker's default
+  64 MiB, but it stays data-only), memory/CPU/PID limits, and a wall-clock timeout. Only HexGraph's
+  probe scripts run there.
 - **Static by default; capability is opt-in and graduated.** Each tier is a separate, explicit
   opt-in flipping the single **policy seam** (`policy.current_policy()`), and nothing relaxes anywhere
   else:

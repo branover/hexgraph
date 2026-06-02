@@ -119,6 +119,17 @@ class SandboxRunner:
             # files; exec so a compiled fuzzer/PoC can run.
             "--tmpfs", f"/scratch:rw,exec,mode=1777,size={tmpfs}",
             "--tmpfs", f"/tmp:rw,exec,mode=1777,size={tmpfs}",
+            # /dev/shm — POSIX shared memory. Docker's default is a fixed 64 MiB, which is
+            # too small for AFL++: an instrumented target maps its coverage bitmap + the
+            # SHM testcase region in /dev/shm, and a too-small (or, under some runtimes,
+            # absent) /dev/shm makes afl-fuzz's forkserver child segfault before the
+            # handshake completes ("Fork server crashed with signal 11"). Sizing it to the
+            # scratch ceiling fixes that. This is NOT a security relaxation: the container
+            # already has a writable /dev/shm; we only resize it AND add `noexec,nosuid,
+            # nodev` (data-only — stricter than docker's default), so it cannot host code.
+            # The read-only rootfs, dropped caps, no-new-privileges and --user are all
+            # untouched. Other fuzzers (libFuzzer/qemu/desock) are unaffected.
+            "--tmpfs", f"/dev/shm:rw,noexec,nosuid,nodev,mode=1777,size={tmpfs}",
             "--workdir", "/scratch",
             "-e", "HOME=/scratch",
             "-e", "TMPDIR=/scratch",
