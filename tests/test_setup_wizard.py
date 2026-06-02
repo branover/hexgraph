@@ -1,0 +1,350 @@
+"""Tests for the interactive setup wizard's headless core (`setup_catalog` +
+`setup_wizard`).
+
+The interactive prompts (questionary) are NOT exercised here — the wizard is factored
+so all decisions flow through pure functions (`build_plan` / `apply_settings` /
+`default_plan`) that need no TTY. These tests cover:
+
+- the feature/gate REGISTRY: every `features.*` `enabled`/`edit` toggle in
+  settings.ALLOWED has a catalog entry; every policy-changing feature has a non-empty
+  security implication string; build-step → justfile recipe mapping is sane,
+- the apply layer: writes the right settings, disables de-selected features, and NEVER
+  writes a secret,
+- the loopback invariant: a non-loopback bind is refused without the override env,
+- the non-interactive / default path: applies the static-only baseline, never prompts,
+- the build-step mapping per feature.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from hexgraph import policy, settings
+from hexgraph import setup_catalog as cat
+from hexgraph import setup_wizard as wiz
+
+
+# ---------------------------------------------------------------------------
+# Registry coverage / accuracy
+# ---------------------------------------------------------------------------
+
+
+def _toggle_keys_in_allowed() -> set[str]:
+    """The user-facing on/off toggles among settings.ALLOWED: the bool `enabled` keys
+    plus `features.source.edit` and the three `features.mcp.*` flags."""
+    keys = set()
+    for path, (typ, _choices) in settings.ALLOWED.items():
+        if not path.startswith("features."):
+            continue
+        is_bool = typ is bool or (isinstance(typ, tuple) and bool in typ)
+        if not is_bool:
+            continue
+        leaf = path.rsplit(".", 1)[-1]
+        if leaf in ("enabled", "edit", "read", "write", "run"):
+            keys.add(path)
+    return keys
+
+
+def test_registry_covers_every_feature_toggle():
+    catalog_keys = set(cat.features_by_key())
+    allowed_toggles = _toggle_keys_in_allowed()
+    missing = allowed_toggles - catalog_keys
+    assert not missing, f"catalog is missing entries for toggles: {sorted(missing)}"
+    # And no catalog entry points at a key the settings layer would reject.
+    for key in catalog_keys:
+        assert key in settings.ALLOWED, f"catalog key {key!r} is not a writable setting"
+
+
+def test_every_feature_has_label_and_unlocks():
+    for f in cat.FEATURES:
+        assert f.label.strip()
+        assert f.unlocks.strip()
+
+
+def test_policy_changing_features_have_security_implication():
+    for f in cat.FEATURES:
+        if f.policy_changing:
+            assert f.security.strip(), f"{f.key} is policy-changing but has no implication"
+
+
+def test_non_policy_changing_features_dont_claim_a_tier():
+    # A feature that doesn't relax a gate must not advertise a policy tier.
+    for f in cat.FEATURES:
+        if not f.policy_changing:
+            assert f.tier is None, f"{f.key} is non-policy yet claims tier {f.tier}"
+
+
+def test_exec_features_map_to_sandboxed_exec_tier():
+    by_key = cat.features_by_key()
+    assert by_key["features.poc.enabled"].tier == policy.TIER_SANDBOXED_EXEC
+    assert by_key["features.fuzzing.enabled"].tier == policy.TIER_SANDBOXED_EXEC
+    assert by_key["features.network.enabled"].tier == policy.TIER_LOCAL_NETWORK
+    assert by_key["features.remote.enabled"].tier == policy.TIER_LIVE_REMOTE
+
+
+def test_security_text_does_not_understate_exec_gate():
+    by_key = cat.features_by_key()
+    for k in ("features.poc.enabled", "features.fuzzing.enabled"):
+        s = by_key[k].security.lower()
+        assert "execut" in s  # mentions executing the target
+        assert "sandbox" in s
+        assert "--network none" in s  # still no egress
+    # network tier must say loopback/private only + audited
+    net = by_key["features.network.enabled"].security.lower()
+    assert "private" in net and ("loopback" in net) and "audit" in net
+    # remote tier must flag external host + secret creds
+    rem = by_key["features.remote.enabled"].security.lower()
+    assert "external" in rem and "secret" in rem
+
+
+def test_secret_bearing_features_warn_creds_are_secrets():
+    by_key = cat.features_by_key()
+    for k in ("features.remote.enabled", "features.fuzz_remote.enabled"):
+        assert "secret" in by_key[k].security.lower()
+
+
+# ---------------------------------------------------------------------------
+# Build-step mapping
+# ---------------------------------------------------------------------------
+
+
+def test_build_steps_reference_real_recipes():
+    # Every BUILD_STEPS recipe name should appear in the justfile.
+    import pathlib
+
+    jf = pathlib.Path(__file__).resolve().parents[1] / "justfile"
+    text = jf.read_text()
+    for step in cat.BUILD_STEPS.values():
+        recipe = step.recipe.split()[0]
+        assert f"\n{recipe}" in text or f"\n{recipe}:" in text or recipe in text, \
+            f"recipe {recipe!r} for build step {step.key!r} not found in justfile"
+
+
+def test_feature_build_mapping():
+    assert "fuzz" in cat.build_steps_for({"features.fuzzing.enabled"})
+    assert "build" in cat.build_steps_for({"features.build.enabled"})
+    assert "build" in cat.build_steps_for({"features.build_fetch.enabled"})
+    assert set(cat.build_steps_for({"features.rehost.enabled"})) == {"firmae", "qemu"}
+    # poc/network/remote/source/mcp need no dedicated image build
+    assert cat.build_steps_for({"features.poc.enabled"}) == []
+    assert cat.build_steps_for({"features.network.enabled"}) == []
+    assert cat.build_steps_for({"features.source.edit"}) == []
+
+
+# ---------------------------------------------------------------------------
+# Plan building + apply (the testable headless core)
+# ---------------------------------------------------------------------------
+
+
+def _state(**over):
+    base = dict(
+        enable_keys=set(),
+        host="127.0.0.1",
+        port=8765,
+        llm_backend="mock",
+        llm_model=None,
+        ghidra_mode="headless",
+        current_enabled=set(),
+        docker=True,
+        built_images={},
+    )
+    base.update(over)
+    return base
+
+
+def test_build_plan_enables_selected_features():
+    plan = wiz.build_plan(**_state(enable_keys={"features.poc.enabled"}))
+    assert plan.settings_patch["features.poc.enabled"] is True
+
+
+def test_build_plan_disables_deselected_features():
+    plan = wiz.build_plan(**_state(
+        enable_keys=set(), current_enabled={"features.poc.enabled"}))
+    assert plan.settings_patch["features.poc.enabled"] is False
+
+
+def test_build_plan_never_emits_a_secret_key():
+    plan = wiz.build_plan(**_state(enable_keys=set(cat.features_by_key())))
+    for key in plan.settings_patch:
+        assert not wiz._is_secret_path(key), key
+        assert key.startswith(("features.", "server.", "llm."))
+
+
+def test_build_plan_refuses_non_loopback_without_override():
+    plan = wiz.build_plan(**_state(host="0.0.0.0", i_know=False))
+    assert plan.settings_patch["server.host"] == "127.0.0.1"
+    assert any("REFUSED" in n for n in plan.notes)
+
+
+def test_build_plan_allows_non_loopback_with_override():
+    plan = wiz.build_plan(**_state(host="0.0.0.0", i_know=True))
+    assert plan.settings_patch["server.host"] == "0.0.0.0"
+    assert any("WARNING" in n for n in plan.notes)
+
+
+def test_build_plan_ghidra_headless_uses_ghidra_image():
+    plan = wiz.build_plan(**_state(
+        enable_keys={"features.ghidra.enabled"}, ghidra_mode="headless"))
+    assert "sandbox_ghidra" in plan.build_keys
+    assert "sandbox" not in plan.build_keys  # superseded
+    assert plan.settings_patch["features.ghidra.mode"] == "headless"
+
+
+def test_build_plan_ghidra_headless_rebuilds_even_if_plain_sandbox_tag_exists():
+    # The plain sandbox + ghidra image SHARE a tag, so a pre-existing radare2-only image
+    # reports built_images['sandbox_ghidra']=True. Newly enabling headless Ghidra must
+    # NOT be silently skipped — it must (re)build the Ghidra image.
+    plan = wiz.build_plan(**_state(
+        enable_keys={"features.ghidra.enabled"}, ghidra_mode="headless",
+        current_enabled=set(), built_images={"sandbox": True, "sandbox_ghidra": True}))
+    assert "sandbox_ghidra" in plan.build_keys
+
+
+def test_build_plan_ghidra_already_headless_can_skip_existing():
+    # If Ghidra-headless was ALREADY enabled, the existing image is trusted (no forced rebuild).
+    plan = wiz.build_plan(**_state(
+        enable_keys={"features.ghidra.enabled"}, ghidra_mode="headless",
+        current_enabled={"features.ghidra.enabled"},
+        built_images={"sandbox_ghidra": True}))
+    assert "sandbox_ghidra" not in plan.build_keys
+
+
+def test_build_plan_ghidra_bridge_does_not_force_ghidra_image():
+    plan = wiz.build_plan(**_state(
+        enable_keys={"features.ghidra.enabled"}, ghidra_mode="bridge"))
+    assert "sandbox_ghidra" not in plan.build_keys
+    assert "sandbox" in plan.build_keys
+
+
+def test_build_plan_skips_existing_images():
+    plan = wiz.build_plan(**_state(built_images={"sandbox": True}))
+    assert "sandbox" not in plan.build_keys
+    assert any("already present" in n for n in plan.notes)
+
+
+def test_build_plan_rebuild_forces_existing():
+    plan = wiz.build_plan(**_state(built_images={"sandbox": True}, rebuild_existing=True))
+    assert "sandbox" in plan.build_keys
+
+
+def test_build_plan_skips_docker_builds_without_docker():
+    plan = wiz.build_plan(**_state(docker=False))
+    assert plan.build_keys == []
+    assert any("Docker not available" in n for n in plan.notes)
+
+
+def test_apply_settings_writes_features(hg_home):
+    plan = wiz.build_plan(**_state(enable_keys={"features.poc.enabled"}))
+    wiz.apply_settings(plan)
+    assert settings.get("features.poc.enabled") is True
+    # And it round-trips through the resolved policy.
+    assert policy.current_policy().allow_execution is True
+
+
+def test_apply_settings_never_writes_a_secret_to_disk(hg_home):
+    plan = wiz.build_plan(**_state(enable_keys=set(cat.features_by_key()),
+                                   host="127.0.0.1"))
+    wiz.apply_settings(plan)
+    raw = json.loads(settings.settings_path().read_text())
+    flat = settings._flatten(raw)
+    for key in flat:
+        assert not wiz._is_secret_path(key), f"secret-shaped key persisted: {key}"
+    # No value in the file looks like an api key etc.
+    blob = settings.settings_path().read_text().lower()
+    assert "api_key" not in blob and "password" not in blob and "secret" not in blob
+
+
+def test_apply_settings_rejects_smuggled_secret(hg_home):
+    bad = wiz.SetupPlan(settings_patch={"anthropic.api_key": "sk-zzz"})
+    with pytest.raises(AssertionError):
+        wiz.apply_settings(bad)
+
+
+# ---------------------------------------------------------------------------
+# The non-interactive / default path (CI-safe, never prompts)
+# ---------------------------------------------------------------------------
+
+
+def test_default_plan_enables_nothing_new(hg_home):
+    state = wiz.DetectedState(
+        settings_exists=False, enabled_feature_keys=set(), server_host="127.0.0.1",
+        server_port=8765, llm_backend="mock", llm_model=None, ghidra_mode="headless",
+        docker=True, built_images={}, secrets={})
+    plan = wiz.default_plan(state)
+    # No feature toggles flipped on.
+    assert all(v is False for k, v in plan.settings_patch.items() if k.startswith("features.")) \
+        or not any(k.startswith("features.") for k in plan.settings_patch)
+    assert plan.settings_patch["server.host"] == "127.0.0.1"
+
+
+def test_default_plan_preserves_already_enabled(hg_home):
+    state = wiz.DetectedState(
+        settings_exists=True, enabled_feature_keys={"features.poc.enabled"},
+        server_host="127.0.0.1", server_port=8765, llm_backend="mock", llm_model=None,
+        ghidra_mode="headless", docker=True, built_images={}, secrets={})
+    plan = wiz.default_plan(state)
+    # poc was already on → not disabled by the baseline.
+    assert plan.settings_patch.get("features.poc.enabled") is not False
+
+
+def test_run_setup_non_interactive_does_not_prompt(hg_home, monkeypatch):
+    # Force the headless branch and make sure no questionary call is attempted.
+    import hexgraph.setup_wizard as w
+
+    def _boom(*a, **k):  # pragma: no cover
+        raise AssertionError("interactive prompt invoked in non-interactive mode")
+
+    monkeypatch.setattr(w, "_run_interactive", _boom)
+    # Avoid actually running docker/just builds.
+    monkeypatch.setattr(w, "run_build_step", lambda *a, **k: 0)
+    monkeypatch.setattr(w, "_docker_image_exists", lambda tag: True)
+    rc = w.run_setup(non_interactive=True)
+    assert rc == 0
+
+
+def test_run_setup_non_interactive_fails_on_core_build_failure(hg_home, monkeypatch):
+    import hexgraph.setup_wizard as w
+
+    # Force a plan that builds the core sandbox, and make that build fail.
+    monkeypatch.setattr(w, "_interactive_available", lambda: False)
+    monkeypatch.setattr(w, "_docker_image_exists", lambda tag: False)
+    monkeypatch.setattr(w, "docker_available", lambda: True)
+    monkeypatch.setattr(w, "run_build_step", lambda *a, **k: 7)  # non-zero core build
+    rc = w.run_setup(non_interactive=True)
+    assert rc == 7  # a broken CORE install surfaces as a non-zero exit
+
+
+def test_run_setup_non_interactive_tolerates_optional_build_failure(hg_home, monkeypatch):
+    import hexgraph.setup_wizard as w
+
+    # Pre-enable fuzzing so the optional fuzz image is in the plan; sandbox already built.
+    settings.update_settings({"features.fuzzing.enabled": True})
+    monkeypatch.setattr(w, "_interactive_available", lambda: False)
+    monkeypatch.setattr(w, "docker_available", lambda: True)
+    monkeypatch.setattr(w, "_docker_image_exists",
+                        lambda tag: tag == "hexgraph-sandbox:latest")  # only sandbox built
+
+    def _build(key, **k):
+        return 0 if key in w._CORE_BUILDS else 9  # optional fuzz build fails
+
+    monkeypatch.setattr(w, "run_build_step", _build)
+    rc = w.run_setup(non_interactive=True)
+    assert rc == 0  # optional image failure must NOT fail the bootstrap
+
+
+def test_run_setup_falls_back_when_no_tty(hg_home, monkeypatch):
+    import hexgraph.setup_wizard as w
+
+    monkeypatch.setattr(w, "_interactive_available", lambda: False)
+    called = {}
+
+    def _ni(state, *, reason, rebuild):
+        called["reason"] = reason
+        return 0
+
+    monkeypatch.setattr(w, "_run_non_interactive", _ni)
+    rc = w.run_setup(non_interactive=False)
+    assert rc == 0
+    assert "TTY" in called["reason"] or "TUI" in called["reason"]

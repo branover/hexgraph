@@ -69,11 +69,25 @@ No API key is required — the default mock backend is fully offline.
 
 ```bash
 git clone <your-fork-or-path> hexgraph && cd hexgraph
-just setup          # one-shot: venv + deps + SPA build + sandbox image + DB init
+just setup          # bootstrap (venv + deps + SPA), then the interactive setup wizard
 just serve          # → http://127.0.0.1:8765
 ```
 
-`just setup` is the whole install. If you prefer the individual steps (or want Ghidra — see below):
+`just setup` runs the bootstrap and then launches an **interactive setup wizard** (`hexgraph setup`):
+it walks you through which optional features to enable — each policy-relaxing one (executing the
+target, network egress, rehosting, remote devices, …) shown with its **security implication** and an
+explicit confirmation — plus non-secret config (the loopback-only bind, LLM backend, Ghidra mode),
+then writes your settings and builds the images you chose. **HexGraph never prompts for or stores a
+secret:** API keys / SSH / remote-Docker credentials live only in your environment or
+`~/.hexgraph/config.toml` (the wizard only shows whether one is present). The default leaves the
+**static-only** posture intact — you opt in to everything else, informed.
+
+> **Non-interactive / CI:** with no TTY, or `just setup yes=1` (or `hexgraph setup --non-interactive`),
+> the wizard applies the static-only baseline + the sandbox image **without prompting**, so an
+> unattended `just setup` never hangs. Re-run `hexgraph setup` any time to change features;
+> `hexgraph config list` shows the current settings.
+
+If you prefer the individual steps (or want Ghidra — see below):
 
 ```bash
 just install                     # create .venv and install the hexgraph CLI + dev extras

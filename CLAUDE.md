@@ -82,6 +82,9 @@ export HEXGRAPH_HOME="$PWD/.hghome"                                  # OWN data/
 ```
 src/hexgraph/
   config.py settings.py        # config.toml (user/secrets, never rewritten) + settings.json (managed, writable)
+  setup_wizard.py setup_catalog.py  # `hexgraph setup` interactive wizard + its feature/gate registry
+                               #   (each features.* entry: label, what it unlocks, its SECURITY IMPLICATION,
+                               #    policy tier, required build steps — read by the wizard, never policy logic)
   models/finding.py            # the frozen Finding/Evidence/FollowupSuggestion Pydantic models
   llm/                         # backend seam: base, mock, anthropic_api, claude_code, registry, cassette
   sandbox/                     # runner (docker boundary), executor, decompiler; probes/ mounted from the install
@@ -92,7 +95,7 @@ src/hexgraph/
                                #   removal, surfaces, rehost, node_schemas,
                                #   ghidra, ghidra_bridge, suggester, capabilities, cas
   api/app.py                   # FastAPI: all REST endpoints + serves the SPA at / (loopback)
-  cli.py                       # hexgraph init|db upgrade|ingest|targets|run|findings|graph|prune|rehost|config|serve
+  cli.py                       # hexgraph init|setup|db upgrade|ingest|targets|run|findings|graph|prune|rehost|config|serve
 docker/                        # rehosting images: firmae/ (FirmAE) + qemu/ (QEMU+KVM); the sandbox image is Dockerfile.sandbox at repo root
 frontend/                      # React+Vite+TS SPA → built to src/hexgraph/web/dist by `just ui` (gitignored)
 migrations/                    # Alembic; baseline bbdb1d98bf54. prepare_database() in db/migrate.py
@@ -132,7 +135,7 @@ LLM tasks themselves use a tool-use **agent loop** (above) over a plain BYOK key
 ## Commands
 
 - The repo's task runner is **`just`** (install: `curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to ~/.local/bin`, or `snap install just`; ensure `~/.local/bin` is on `PATH`). Run bare **`just`** for the grouped recipe menu (setup · run · build · test · demo · rehosting · maintenance). Recipe doc-comments state **when to rebuild** (e.g. `ui` after any `frontend/` change; `sandbox-build` only after a Dockerfile/toolchain change — probes are mounted at runtime, no rebuild).
-- **`just setup`** — one-shot: venv + deps + SPA + sandbox image + db init. Then **`just serve`** → http://127.0.0.1:8765.
+- **`just setup`** — one-shot bootstrap (venv + deps + SPA) then launches the **interactive setup wizard** (`hexgraph setup`, `setup_wizard.py` + the `setup_catalog.py` feature/gate registry; Rich panels + questionary): pick which optional `features.*` to enable — each policy-relaxing one shown with its **security implication** + an explicit confirm — plus non-secret config (loopback-default bind, backend, Ghidra mode), then it writes settings via the settings layer (**never a secret** — those stay in env/config.toml, presence-only) and runs the chosen image builds + db init. **CI-safe / non-interactive:** with no TTY (or `just setup yes=1`, or `hexgraph setup --non-interactive|--yes|--defaults`) it applies the static-only baseline + sandbox image WITHOUT prompting, so an unattended `just setup` never hangs. Then **`just serve`** → http://127.0.0.1:8765.
 - `just test` (= `pytest -q`, mock, offline; Docker-gated tests skip if the sandbox image is absent) · `just demo` (full loop, needs Docker) · `just test-live` (real-key scored eval, needs `ANTHROPIC_API_KEY`, cassette-backed).
 - `just ui` (rebuild SPA) · `just sandbox-build [with_ghidra=1]` · `just fixtures`.
 - Rehosting: `just firmae-build` (FirmAE image; privileged + /dev/net/tun) · `just qemu-build` (QEMU+KVM image; needs `--device /dev/kvm`) · `just iotgoat` (fetch+rehost+register IoTGoat) · `just vulnrouter` (live vulnrouter web target + project).

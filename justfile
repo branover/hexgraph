@@ -34,17 +34,24 @@ default:
 # setup — the core path a brand-new user needs (run these first)
 # ===========================================================================
 
-# ★ One command to get running: install deps, build the web UI + sandbox image, init the DB.
+# ★ One command to get running: install deps + build the web UI, then launch the
+# interactive setup WIZARD — choose which optional features to enable (each shown with
+# its SECURITY IMPLICATION) + non-secret config, then build the chosen images + init the
+# DB. CI-safe: with no TTY (or `just setup yes=1`) it applies the static-only baseline +
+# the sandbox image WITHOUT prompting, so an unattended `just setup` never hangs.
 [group('setup')]
-setup: install ui
-    @echo ""
-    @echo ">> Building the analysis sandbox image (needs Docker)…"
-    @docker version >/dev/null 2>&1 \
-        && just sandbox-build \
-        || echo "  (!) Docker not running — recon/decompile need it. Start Docker, then: just sandbox-build"
-    @{{py}} -m hexgraph.cli init >/dev/null 2>&1 || true
-    @echo ""
-    @echo "✓ HexGraph is ready.  Start it with:  just serve   →  http://{{host}}:{{port}}"
+setup yes="0": install ui
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo ""
+    if [ "{{yes}}" = "1" ] || [ ! -t 0 ]; then
+        # No interactive terminal (CI) or explicit yes=1 → non-interactive baseline.
+        {{py}} -m hexgraph.cli setup --non-interactive
+    else
+        {{py}} -m hexgraph.cli setup
+    fi
+    echo ""
+    echo "✓ Start HexGraph with:  just serve   →  http://{{host}}:{{port}}"
 
 # Create the virtualenv (.venv). Rerun only if you delete .venv.
 [group('setup')]
