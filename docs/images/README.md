@@ -14,7 +14,9 @@ raw-TCP service + a source tree; findings spanning the type/assurance ladder; a
 finished mock fuzz campaign with crash artifacts + coverage; egress-audit events).
 `scripts/capture_screenshots.py` drives headless Chromium through the UI.
 
-All shots are 1440×900 at 1.5× device scale, dark theme.
+All shots are 1440×900 at 1.5× device scale, dark theme. This is the **single canonical
+screenshot folder** — every README/doc embeds from here by stable name; there is no other
+images directory.
 
 ## README hero shots (pick 2–3)
 
@@ -22,7 +24,7 @@ All shots are 1440×900 at 1.5× device scale, dark theme.
 |-------|------|---------|
 | `graph.png` | **Hero 1 — the typed knowledge graph** | The whole engagement as one color-coded graph: firmware → binaries → functions/strings/sockets/endpoints, with typed edges (calls, taints, routes_to, listens_on, links_against…), a live legend, the target tree, and the findings list. The core "knowledge graph of a target" value. |
 | `finding-verified-poc.png` | **Hero 2 — a verified finding** | A critical unauthenticated command-injection finding: the assurance chip (`input_reachable · dynamic · unauthenticated`, green = reachable through the live boundary), the PoC steps, a copy-paste repro command, and the live trigger output with the unforgeable nonce. |
-| `artifacts-triage.png` | **Hero 3 — fuzzing → triage** | A finished fuzz campaign's crash inbox: a deduped heap-buffer-overflow with its assurance chip (`code_present · dynamic` — lab-confirmed in isolation), exploitability rating, a source-mapped stack, and one-click Reproduce / Minimize / Promote → PoC. |
+| `artifacts-triage.png` | **Hero 3 — fuzzing → triage** | A finished fuzz campaign's crash inbox, full-screen: several deduped crashes (heap/stack/global overflow…) each with its assurance chip (`code_present · dynamic` — lab-confirmed in isolation), exploitability rating, a source-mapped stack, dupe count, and one-click Reproduce / Minimize / Promote → PoC. |
 
 ## Per-feature shots (docs)
 
@@ -31,7 +33,8 @@ All shots are 1440×900 at 1.5× device scale, dark theme.
 | `graph-selected.png` | Graph interaction | Selecting a function node lights its connected edges and opens the node inspector (decompile / annotate / run a task). |
 | `source-coverage.png` | Source / IDE tab + coverage | Syntax-highlighted source browser with the fuzz harness, a Build button, and per-line coverage shading driven by a campaign's coverage map. |
 | `campaigns.png` | Campaigns tab | The live/finished campaign list (status, execs, edges, crashes, coverage %) with Stop/Resume. |
-| `fuzz-modal.png` | Fuzz modal | Launch a detached, hardened fuzz campaign — surface auto-inferred, engine selectable, stop conditions + resource caps. |
+| `fuzz-modal.png` | Fuzz modal (source/binary surface) | Launch a detached, hardened fuzz campaign on an instrumented target — surface auto-inferred (`source_lib` → AFL++), engine selectable, stop conditions + resource caps. |
+| `fuzz-modal-network.png` | Fuzz modal (network surface) | The same modal targeting a raw-TCP `service` surface: the surface re-infers to `network` (boofuzz) and the host/port/protocol + binary-protocol `proto_spec` inputs appear. |
 | `build-modal.png` | Build modal | A recorded, reproducible instrumented build recipe (ASan / SanCov toggles, arch, vendored/offline dependency posture). |
 | `filesystem-browser.png` | Firmware unpacked FS | Browse a firmware's extracted rootfs and add any binary/library as a child target. |
 | `egress-audit.png` | Egress audit log | Every outbound action against a live target, recorded allowed/denied — public hosts are refused (loopback/private only). |

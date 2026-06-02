@@ -96,7 +96,12 @@ def test_seed_showcase_runs_clean_and_is_rich(hg_home, _mock_fuzzer):
         camp = s.query(FuzzCampaign).filter(FuzzCampaign.project_id == pid).one()
         assert camp.status in ("completed", "degraded")  # finalized, not still running
         arts = s.query(FuzzArtifact).filter(FuzzArtifact.campaign_id == camp.id).all()
-        assert any(a.kind == "crash" and a.content_cas for a in arts)
+        crashes = [a for a in arts if a.kind == "crash" and a.content_cas]
+        # The triage HERO shot needs a POPULATED crash inbox — several distinct dedup
+        # buckets (not the lone MockFuzzer crash), with dupe counts. Lock that in so the
+        # seed can't bitrot back to a sparse one-row inbox.
+        assert len(crashes) >= 3, "the triage hero needs a populated, multi-bucket crash inbox"
+        assert any(a.dupe_count for a in crashes), "crashes should carry dupe counts for triage"
 
         from hexgraph.engine import campaigns as C
         cov = C.coverage_for(s, camp)

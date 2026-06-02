@@ -243,6 +243,16 @@ async def _capture(base: str, pid: str) -> None:
             await pg.click("text=New campaign", timeout=2500)
             await pg.wait_for_timeout(900)
             await _shoot(pg, "fuzz-modal.png")
+            # Same modal, NETWORK surface: pick the raw-TCP service target in the surface
+            # dropdown → the surface re-infers to `network` (boofuzz) and the host/port/
+            # proto_spec inputs appear. A distinct, useful variant (live-service fuzzing).
+            try:
+                sel = pg.locator(".modal select").first
+                await sel.select_option(label="upnpd control (tcp/5000) · service", timeout=2000)
+                await pg.wait_for_timeout(900)
+                await _shoot(pg, "fuzz-modal-network.png")
+            except Exception as e:
+                print(f"  ! fuzz-modal-network: {e}")
             await pg.keyboard.press("Escape")
         except Exception as e:
             print(f"  ! fuzz-modal: {e}")

@@ -1,5 +1,25 @@
 # UI improvement backlog
 
+## README + docs overhaul — single-folder screenshots (2026-06-02)
+
+**Shipped in `docs/readme-overhaul`.** Docs/tooling only (no behavior change beyond the two
+showcase scripts). Slimmed `README.md` to a lean overview (hero shots + install + a feature
+matrix linking out + the core loop) and moved the reference detail into focused per-feature docs
+under `docs/` (`setup.md`, `graph-ui.md`, `verification-assurance.md`, `fuzzing.md`,
+`build-from-source.md`, `dynamic-surfaces-rehosting-remote.md`, `mcp.md`), each embedding its
+screenshot from `docs/images/` by stable name.
+
+- **`docs/ui-shots/` retired.** Its one still-useful shot (the **network** fuzz modal) was folded
+  into `scripts/capture_screenshots.py` and now regenerates as `docs/images/fuzz-modal-network.png`;
+  the rest (superseded by `source-coverage.png` / `graph-selected.png` / a generic toolbar strip)
+  were deleted with the folder. **Single canonical screenshot folder is now `docs/images/`.**
+- **Hero-3 (`artifacts-triage.png`) fix.** The triage shot composed sparsely (one campaign + one
+  crash → a big empty void). The showcase seed now writes a populated, multi-bucket crash inbox
+  (4 distinct dedup buckets, varied kind/function/exploitability + dupe counts, ASan reports that
+  symbolize to source frames) onto the SAME single campaign before reaping — so the crash-triage
+  detail pane reads dense + inviting, and the campaign stats (1.89M execs / 318 edges / 4 crashes)
+  look real. Guard test (`test_showcase_seed.py`) updated to require ≥3 crash buckets + dupe counts.
+
 ## Screenshot showcase + capture mechanism (2026-06-02)
 
 **Shipped in `build/showcase`.** A reproducible way to (re)generate the README hero shots and
@@ -12,7 +32,7 @@ per-feature doc images as the UI evolves — so they never bit-rot against the l
   socket/endpoint/param nodes; a finished mock fuzz campaign (crash artifacts + coverage map); and
   egress-audit events.
 - `just capture` → `scripts/capture_screenshots.py` serves it on a spare port and drives headless
-  Chromium (Playwright, dev-only) to shoot **12 PNGs into `docs/images/`** at 1440×900, dark theme,
+  Chromium (Playwright, dev-only) to shoot **13 PNGs into `docs/images/`** at 1440×900, dark theme,
   1.5× scale. Manifest + per-image captions/slots in `docs/images/README.md`.
 - Guard test `tests/test_showcase_seed.py` (offline) keeps the seed rich (asserts the target kinds,
   edge-type variety, node types, the assurance-ladder rungs, the verified PoC, and the finished

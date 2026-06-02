@@ -509,7 +509,68 @@ def seed(session, *, reset: bool) -> dict:
                             function="cgi_handler", target_sources=["/src/httpd.c"],
                             max_total_time=120)
     row = C.start_campaign(session, project, httpd_instr, spec=spec)
-    # Drive the full lifecycle to completion (the mock launcher already wrote /out).
+
+    # The offline MockFuzzer writes a SINGLE crash to status.json — fine for a lifecycle
+    # test, but a one-row crash inbox makes the triage HERO shot look empty. We overwrite
+    # status.json with a small, deterministic SET of distinct crashes (separate dedup
+    # buckets, varied kind/function/exploitability + dupe counts, real ASan reports so the
+    # frames symbolize to source) BEFORE reaping, so the Artifacts/triage view is populated
+    # and inviting. Each crash's reproducer is reproducible (a fn of its bucket key). This
+    # is the same `status.json` shape the real probes stream — the reaper ingests it
+    # unchanged, so no engine code changes. (The campaign is still ONE row — the showcase
+    # guard's `.one()` holds.)
+    import base64 as _b64
+    import hashlib as _hl
+    import json as _json
+    from pathlib import Path
+
+    def _crash(*, kind, function, file, line, rating, access, signals, dupes):
+        payload = f"crash::{kind}::{function}".encode()[:64]
+        sha = _hl.sha256(payload).hexdigest()
+        report = (f"==1==ERROR: AddressSanitizer: {kind}\n"
+                  f"    #0 0x401a in {function} /src/{file}:{line}\n"
+                  f"    #1 0x4020 in diagnostics /src/httpd.c:37\n"
+                  f"    #2 0x4030 in LLVMFuzzerTestOneInput /fuzz/fuzz_cgi.c:9\n"
+                  f"SUMMARY: AddressSanitizer: {kind} /src/{file}:{line} in {function}\n")
+        return {
+            "kind": kind, "function": function,
+            "summary": f"SUMMARY: AddressSanitizer: {kind}",
+            "reproducer_sha256": sha, "reproducer_size": len(payload),
+            "reproducer_b64": _b64.b64encode(payload).decode(),
+            "dedup_key": _hl.sha256(f"{kind}|{function}".encode()).hexdigest(),
+            "dupe_count": dupes,
+            "exploitability": {"rating": rating, "access": access, "signals": signals},
+            "minimized_reproducer_sha256": sha, "minimized_reproducer_size": len(payload),
+            "minimized_reproducer_b64": _b64.b64encode(payload).decode(),
+            "coverage_instrumented": True,
+            "_report": report,
+        }
+
+    crashes = [
+        _crash(kind="heap-buffer-overflow", function="cgi_handler", file="httpd.c", line=27,
+               rating="likely_exploitable", access="WRITE",
+               signals=["out-of-bounds WRITE can corrupt adjacent heap metadata"], dupes=4),
+        _crash(kind="stack-buffer-overflow", function="diagnostics", file="httpd.c", line=37,
+               rating="likely_exploitable", access="WRITE",
+               signals=["return address overwrite reachable via unbounded strcpy"], dupes=11),
+        _crash(kind="global-buffer-overflow", function="get_param", file="httpd.c", line=18,
+               rating="possibly_exploitable", access="READ",
+               signals=["out-of-bounds READ of a static buffer past its bound"], dupes=2),
+        _crash(kind="SEGV on unknown address", function="ssdp_dispatch", file="upnp.c", line=9,
+               rating="possibly_exploitable", access="READ",
+               signals=["null/wild pointer dereference under a crafted length field"], dupes=1),
+    ]
+    outdir = Path(row.outdir)
+    status = _json.loads((outdir / "status.json").read_text())
+    status["crashes"] = crashes
+    status["crash_count"] = len(crashes)
+    status["executions"] = 1_842_500
+    status["edges_covered"] = 318
+    (outdir / "status.json").write_text(_json.dumps(status))
+
+    # Drive the full lifecycle to completion — the reaper ingests every crash above into a
+    # fuzz_artifact + a fuzz_crash finding (the first bucket is the canonical fuzz_crash the
+    # assurance ladder relies on).
     C.reap_campaign(session, session.get(FuzzCampaign, row.id))
     session.flush()
 
