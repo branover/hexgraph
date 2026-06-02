@@ -423,6 +423,17 @@ def resume_campaign(session: Session, row: FuzzCampaign, *, executor=None) -> Fu
     row.status = "running"
     row.finished_at = None
     row.stats_json = {**(row.stats_json or {}), "last_run_at": _now_iso()}
+    # Clean up everything start_campaign created for the throwaway row so resuming
+    # doesn't leak a dangling fuzzed_by edge (→ a now-deleted campaign) or an orphan
+    # backing task on every resume.
+    from hexgraph.db.models import Edge
+    (session.query(Edge)
+     .filter(Edge.project_id == project.id, Edge.dst_kind == "fuzz_campaign",
+             Edge.dst_id == new.id).delete(synchronize_session=False))
+    if new.task_id and new.task_id != row.task_id:
+        orphan = session.get(Task, new.task_id)
+        if orphan is not None:
+            session.delete(orphan)
     session.delete(new)
     session.flush()
     return row

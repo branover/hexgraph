@@ -228,8 +228,12 @@ def test_stop_preserves_corpus_then_resume(hg_home, monkeypatch):
         resumed = C.resume_campaign(s, s.get(FuzzCampaign, cid), executor=ex)
         assert resumed.id == cid
         assert resumed.status == "running"
-        # Only one campaign row exists (resume folds back, no throwaway row leaks).
+        # Only one campaign row exists (resume folds back, no throwaway row leaks)…
         assert s.query(FuzzCampaign).count() == 1
+        # …and NO dangling fuzzed_by edge points at a deleted campaign (every such
+        # edge's dst must be the surviving row).
+        for e in s.query(Edge).filter(Edge.type == EdgeType.fuzzed_by.value).all():
+            assert e.dst_id == cid
 
 
 # ── Policy: a campaign needs the EXISTING exec gate (no new gate) ─────────────────
