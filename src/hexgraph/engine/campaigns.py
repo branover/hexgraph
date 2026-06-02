@@ -72,6 +72,84 @@ def infer_surface(target: Target) -> str:
     return "binary_only"
 
 
+def resolve_surface_inputs(session, project, target, spec) -> None:
+    """Populate the surface-specific spec fields the engine needs when they weren't set
+    explicitly (so the API/MCP/UI don't each re-derive them):
+
+      • binary_only (qemu/frida) — `target_binary` (the target ELF, default target.path)
+        and, for a foreign-arch firmware child, the parent firmware's extracted rootfs as
+        the qemu `-L` `sysroot` (REUSING poc.py's _find_sysroot + filesystem.host_root —
+        the proven PoC path).
+      • network (boofuzz) — the live device `host`/`port` and the rehosted-device
+        `net_container` to join. The host is the rehosted device IP (channel.rehost.ip) /
+        a `remote` host / the web base_url host; the port is the campaign's `port` or a
+        socket node / channel hint. desock needs the local server binary (target.path)."""
+    from pathlib import Path
+
+    if spec.surface in ("binary_only", "file_format") and spec.engine in (None, "qemu", "frida"):
+        if not spec.target_binary and target.path:
+            spec.target_binary = target.path
+        if not spec.sysroot and target.parent_id:
+            try:
+                from hexgraph.engine.filesystem import host_root
+                from hexgraph.engine.poc import _find_sysroot
+                fw = session.get(Target, target.parent_id)
+                if fw is not None and (fw.metadata_json or {}).get("filesystem"):
+                    root = _find_sysroot(host_root(project, fw))
+                    if root is not None and Path(str(root)).is_dir():
+                        spec.sysroot = str(root)
+            except Exception:  # noqa: BLE001 — sysroot is best-effort (degrades to native)
+                pass
+
+    if spec.surface == "network":
+        if spec.engine == "desock":
+            if not spec.target_binary and target.path:
+                spec.target_binary = target.path
+            return
+        # boofuzz (default): resolve the live host/port + the netns to join.
+        if not spec.host:
+            spec.host = _device_host(target)
+        if not spec.net_container:
+            spec.net_container = (((target.metadata_json or {}).get("channel") or {})
+                                  .get("rehost") or {}).get("container")
+        if not spec.port:
+            spec.port = _device_port(target)
+
+
+def _device_host(target) -> str | None:
+    """The loopback/private IP of a live device behind this target (mirrors
+    surfaces._device_host): a rehosted surface records it under channel.rehost.ip, a
+    `remote` target as channel.host, else the web base_url host."""
+    ch = (target.metadata_json or {}).get("channel") or {}
+    rehost = ch.get("rehost") or {}
+    if rehost.get("ip"):
+        return rehost["ip"]
+    if ch.get("host"):
+        return ch["host"]
+    base = ch.get("base_url")
+    if base:
+        from urllib.parse import urlparse
+        return urlparse(base).hostname
+    return None
+
+
+def _device_port(target) -> int | None:
+    """A default service port for a network target: an explicit channel port, else the
+    web base_url port, else None (the caller must supply one)."""
+    ch = (target.metadata_json or {}).get("channel") or {}
+    if ch.get("port"):
+        try:
+            return int(ch["port"])
+        except (TypeError, ValueError):
+            pass
+    base = ch.get("base_url")
+    if base:
+        from urllib.parse import urlparse
+        u = urlparse(base)
+        return u.port or (443 if u.scheme == "https" else 80)
+    return None
+
+
 # ── Resource resolution (NEVER touches policy.py) ───────────────────────────────
 
 def resolve_resources(override: dict | None) -> ResourceSpec:
@@ -92,17 +170,25 @@ def start_campaign(session: Session, project: Project, target: Target, *,
                    spec: FuzzCampaignSpec, resources: dict | None = None,
                    task: Task | None = None, executor=None) -> FuzzCampaign:
     """Launch a detached fuzz campaign and return the durable row (status `running`).
-    Gated by the EXISTING exec policy (assert_allows_execution). The launch is
-    non-blocking: the container fuzzes continuously, the reaper ingests artifacts."""
+    Gated by the EXISTING policy tiers — NO new gate (design §5.6):
+      • a LIVE-SOCKET network campaign (boofuzz) talks to a service, runs no target
+        bytes locally → it rides the EXISTING local-network tier (`features.network` +
+        local_tcp_scope, audited), checked in _launch_network — NOT the exec gate;
+      • every other campaign (source/binary-only qemu/desock) EXECUTES a target binary in
+        the sandbox → the EXISTING exec gate (`features.fuzzing`/`poc`).
+    The launch is non-blocking: the container fuzzes continuously, the reaper ingests."""
     from hexgraph.policy import assert_allows_execution
     from hexgraph.sandbox.executor import get_executor
 
-    assert_allows_execution()  # the existing exec gate — NO new gate for campaigns
-    executor = executor or get_executor()
-
-    # Validate the surface×engine pair fail-closed (the seam rule).
+    # Validate the surface×engine pair fail-closed (the seam rule) FIRST, so we know which
+    # gate applies (a live-socket boofuzz campaign needs egress, not exec).
     engine = resolve_engine(spec.surface, spec.engine)
     spec.engine = None if (os.environ.get("HEXGRAPH_FUZZER") == "mock") else engine
+    is_live_network = (spec.surface == "network" and engine == "boofuzz"
+                       and os.environ.get("HEXGRAPH_FUZZER") != "mock")
+    if not is_live_network:
+        assert_allows_execution()  # the existing exec gate — NO new gate for campaigns
+    executor = executor or get_executor()
 
     res = resolve_resources(resources)
     # Host concurrency cap (resource governance). A request ABOVE the cap is refused
@@ -126,6 +212,10 @@ def start_campaign(session: Session, project: Project, target: Target, *,
     # Auto-dictionary from the target's strings (best-effort) when none was supplied.
     if not spec.dictionary:
         spec.dictionary = derive_dictionary(session, target)
+
+    # Resolve surface-specific inputs the engine needs (binary-only ELF + firmware
+    # sysroot; network host/port/netns) from the target/graph when not explicitly set.
+    resolve_surface_inputs(session, project, target, spec)
 
     fuzzer = get_fuzzer(spec.surface, spec.engine)
     prepared = fuzzer.prepare(spec, project, target)
@@ -165,7 +255,17 @@ def start_campaign(session: Session, project: Project, target: Target, *,
     try:
         if prepared.probe == MOCK_PROBE:
             _launch_mock(row, prepared, spec)
+        elif prepared.requires_egress:
+            # NETWORK-FUZZ (boofuzz): the ONLY place a campaign relaxes --network none.
+            # Build the bounded local scope, assert egress + AUDIT the EgressEvent BEFORE
+            # launch, then start the detached container on the bridge (or the rehosted
+            # device's netns). Refuses any non-loopback/private host (local_tcp_scope).
+            handle = _launch_network(session, project, target, row, prepared, spec,
+                                     executor=executor, outdir=outdir, resources=res,
+                                     container_name=container_name)
+            row.container_name = handle.name
         else:
+            # Binary-only (qemu/frida) + desock + source: --network none holds.
             handle = executor.start_detached(
                 prepared.probe, prepared.artifact, name=container_name, outdir=outdir,
                 image=prepared.image, extra_args=prepared.extra_args,
@@ -178,10 +278,53 @@ def start_campaign(session: Session, project: Project, target: Target, *,
         row.error = f"{type(exc).__name__}: {exc}"
         row.finished_at = _now()
         session.flush()
+        if isinstance(exc, CampaignError):
+            raise
         raise CampaignError(str(exc)) from exc
 
     session.flush()
     return row
+
+
+def _launch_network(session, project, target, row, prepared, spec, *, executor, outdir,
+                    resources, container_name):
+    """Launch a boofuzz network-fuzz campaign on the bounded-egress path (design §5.6).
+
+    The host:port MUST be loopback/private (local_tcp_scope refuses anything else — the
+    EXISTING local-network tier, NO new gate); assert_allows_egress checks features.network
+    + the per-run allowlist; EVERY launch is audited to EgressEvent (allow OR deny). The
+    detached container joins the rehosted device's netns when `net_container` is set."""
+    from hexgraph.engine.audit import record_egress
+    from hexgraph.policy import (PolicyViolation, assert_allows_egress, current_policy,
+                                 local_tcp_scope)
+
+    host, port = prepared.egress_host, int(prepared.egress_port or 0)
+    scope = local_tcp_scope(host, port)  # raises if the host isn't loopback/private
+    dest = next(iter(scope.allow))
+    try:
+        assert_allows_egress(dest, scope, current_policy())
+    except PolicyViolation as exc:
+        record_egress(session, project_id=project.id, target_id=target.id, task_id=row.task_id,
+                      dest=dest, allowed=False, tool="boofuzz",
+                      detail="blocked: network egress not permitted by policy")
+        raise CampaignError(str(exc)) from exc
+    record_egress(session, project_id=project.id, target_id=target.id, task_id=row.task_id,
+                  dest=dest, allowed=True, tool="boofuzz", detail=scope.rationale)
+
+    from hexgraph import settings
+    timeout = int(settings.get("features.network.timeout", 30) or 30)
+    channel = {"host": host, "port": port, "protocol": spec.protocol,
+               "allow": sorted(scope.allow), "timeout": timeout, "outdir": "/out",
+               "max_total_time": spec.max_total_time, "max_crashes": spec.max_crashes}
+    args = [*prepared.extra_args, "--channel", json.dumps(channel)]
+    # requires_execution=False: a live-socket boofuzz campaign runs NO target bytes locally
+    # (it's a network client) — it's gated by the egress assert above, not the exec gate.
+    return executor.start_detached(
+        prepared.probe, prepared.artifact, name=container_name, outdir=outdir,
+        image=prepared.image, extra_args=args, requires_execution=False,
+        extra_ro_mounts=prepared.extra_ro_mounts, resources=resources,
+        allow_network=True, net_container=prepared.net_container,
+    )
 
 
 def _launch_mock(row: FuzzCampaign, prepared, spec: FuzzCampaignSpec) -> None:
@@ -342,7 +485,7 @@ def _ingest_artifacts(session, project, target, row, status: dict) -> int:
         finding = crash_finding(crash, crash.get("function") or row.config_json.get("function"),
                                 target.name, coverage_instrumented=coverage,
                                 engine=row.engine, campaign_id=row.id,
-                                reproducer_ref=content_cas)
+                                reproducer_ref=content_cas, surface=row.surface)
         # Symbolize the ASan report into source-mapped stack frames (best-effort) so the
         # Artifacts triage UI can render a clickable stack (frame → source line). Frames
         # ride evidence.extra.fuzz.frames (frozen schema untouched).
@@ -610,15 +753,23 @@ def verify_artifact(session: Session, artifact: FuzzArtifact, *, executor=None) 
     gated by the existing exec policy. Falls back to verify_reproducer against the
     target binary if the fuzzer binary wasn't preserved.
 
-    Returns the verify result dict (incl. `assurance` — code_present/dynamic)."""
+    Returns the verify result dict (incl. `assurance` — code_present/dynamic).
+
+    A NETWORK crash (a boofuzz service-death) is replayed differently: its reproducer is
+    a crashing MESSAGE, so we re-send it over the live socket + a liveness oracle (the
+    bounded-egress tcp path) — the service dying again is `input_reachable/dynamic`."""
     from hexgraph.policy import assert_allows_execution
     from hexgraph.sandbox.executor import get_executor
 
-    assert_allows_execution()
-    executor = executor or get_executor()
     project = session.get(Project, artifact.project_id)
     campaign = session.get(FuzzCampaign, artifact.campaign_id)
     target = session.get(Target, campaign.target_id) if campaign else None
+    if campaign is not None and campaign.surface == "network":
+        return _verify_network_artifact(session, project, target, campaign, artifact,
+                                        executor=executor)
+
+    assert_allows_execution()
+    executor = executor or get_executor()
     if not artifact.content_cas:
         raise CampaignError("artifact has no stored reproducer to re-verify")
     repro = cas.get(project, artifact.content_cas)
@@ -665,6 +816,52 @@ def verify_artifact(session: Session, artifact: FuzzArtifact, *, executor=None) 
                            if result.get("verified") else
                            assurance("unconfirmed", DYNAMIC, UNSPECIFIED))
     return result
+
+
+def _verify_network_artifact(session, project, target, campaign, artifact, *, executor=None) -> dict:
+    """Replay a NETWORK crash's crashing message over the live socket + a liveness oracle
+    (design §5.6). Re-sends the recorded `net_reproducer` payload to the device's port
+    (bounded egress, audited via run_tcp_probe), then re-probes that the service went DOWN.
+    A confirmed re-kill is `input_reachable/dynamic` (reached + triggered end-to-end). The
+    SAME bounded-egress gate as the campaign launch — features.network + local_tcp_scope —
+    no new gate, no exec gate (no bytes are executed locally)."""
+    from hexgraph.db.models import Finding
+    from hexgraph.engine.assurance import (assurance, DYNAMIC, INPUT_REACHABLE, UNCONFIRMED,
+                                           UNSPECIFIED)
+    from hexgraph.engine.surfaces import run_tcp_probe
+
+    if not artifact.finding_id:
+        raise CampaignError("network artifact has no linked finding to re-verify")
+    f = session.get(Finding, artifact.finding_id)
+    nr = (((f.evidence_json or {}).get("extra") or {}).get("fuzz") or {}).get("net_reproducer") if f else None
+    if not nr or not nr.get("payload_b64"):
+        raise CampaignError("network artifact carries no re-runnable crashing message")
+    import base64
+    payload = base64.b64decode(nr["payload_b64"])
+    port = int(nr.get("port") or campaign.config_json.get("port") or 0)
+    if not port:
+        raise CampaignError("network artifact has no service port to replay against")
+    # Confirm the service is UP first, send the crashing message, then re-probe that it is
+    # DOWN (a fresh connect fails). Each run_tcp_probe handles the egress assert + audit.
+    # Replay the reproducer BYTE-EXACT via payload_hex (the str payload field is utf-8
+    # re-encoded and would corrupt any non-ASCII byte). The death across a fresh connection
+    # is the unforgeable liveness transition.
+    pre = run_tcp_probe(session, project, target, port=port, runner=executor)  # banner grab
+    if pre.get("ok") is False:
+        return {"verified": False, "detail": "service was already down before replay",
+                "assurance": assurance(UNCONFIRMED, DYNAMIC, UNSPECIFIED)}
+    run_tcp_probe(session, project, target, port=port, payload_hex=payload.hex(),
+                  runner=executor)  # the crashing message, byte-exact (audited)
+    post = run_tcp_probe(session, project, target, port=port, runner=executor)  # re-probe liveness
+    verified = post.get("ok") is False
+    return {"verified": verified,
+            "detail": ("re-sent the crashing message over the live socket; the service went DOWN"
+                       if verified else "the service survived the replay (could not re-confirm the crash)"),
+            "output": (post.get("error") or "")[:500],
+            "assurance": (assurance(INPUT_REACHABLE, DYNAMIC, UNSPECIFIED,
+                                    detail="re-sent the crashing message over the live socket; "
+                                           "the service went down again")
+                          if verified else assurance(UNCONFIRMED, DYNAMIC, UNSPECIFIED))}
 
 
 # ── Source-mapped stack frames (the Artifacts triage stack → IDE jump) ───────────

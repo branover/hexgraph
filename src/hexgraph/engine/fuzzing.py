@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Finding as FindingRow
 from hexgraph.db.models import Project, Target, TargetKind, Task, TaskStatus
-from hexgraph.engine.assurance import derive_fuzz_assurance
+from hexgraph.engine.assurance import derive_fuzz_assurance, derive_network_fuzz_assurance
 from hexgraph.engine.findings import persist_finding
 from hexgraph.engine.tasks import write_trace
 from hexgraph.models.finding import Evidence, Finding, FollowupSuggestion
@@ -155,26 +155,35 @@ def resolve_target_sources(target: Target, task: Task) -> list[str]:
 
 def crash_finding(crash: dict, function: str | None, target_name: str,
                   *, coverage_instrumented: bool, engine: str = "libfuzzer",
-                  campaign_id: str | None = None, reproducer_ref: str | None = None) -> Finding:
+                  campaign_id: str | None = None, reproducer_ref: str | None = None,
+                  surface: str = "source_lib") -> Finding:
     """Build a `fuzz_crash` finding from a probe crash dict. Shared by the single-pass
-    `fuzzing` task and the Phase-3 detached campaign reaper (so the envelope is
-    identical regardless of engine). `engine`/`campaign_id`/`reproducer_ref` thread the
-    campaign provenance + the CAS reproducer (re-runnable via verify_poc) into
-    `evidence.extra.fuzz`. The frozen Finding schema is untouched."""
+    `fuzzing` task and the Phase-3/5 detached campaign reaper (so the envelope is
+    identical regardless of engine). `engine`/`campaign_id`/`reproducer_ref`/`surface`
+    thread the campaign provenance + the CAS reproducer (re-runnable via verify_poc) into
+    `evidence.extra.fuzz`. The frozen Finding schema is untouched.
+
+    `surface="network"` (a boofuzz live-socket crash) is special: the bug was reached and
+    triggered END-TO-END through the live service's real input boundary, so the assurance
+    is `input_reachable/dynamic` (the strongest rung) and the reproducer is a re-runnable
+    crashing MESSAGE (the `net_reproducer` on the crash) the verify path replays — vs. a
+    harness crash, which is `code_present/dynamic` (lab-confirmed, production path open)."""
+    is_network = surface == "network"
     kind = crash.get("kind", "crash")
     expl = crash.get("exploitability") or {}
     sev = _severity_for(kind, expl)
-    where = function or crash.get("function") or "the harness"
+    where = function or crash.get("function") or ("the live service" if is_network else "the harness")
     dupes = int(crash.get("dupe_count") or 0)
-    engine_label = "AFL++" if engine == "afl" else "libFuzzer"
+    engine_label = {"afl": "AFL++", "qemu": "AFL++ qemu-mode", "frida": "AFL++ frida-mode",
+                    "desock": "AFL++ (desock)", "boofuzz": "boofuzz"}.get(engine, "libFuzzer")
 
     # The fuzz envelope — all new structure rides evidence.extra.fuzz (frozen schema
-    # untouched). `coverage_instrumented=false` is the honest black-box flag: with no
-    # source, the fuzzer mutated against no coverage from the code under test.
+    # untouched). `coverage_instrumented=false` is the honest black-box flag.
     # `reproducer_ref` is the CAS sha of the minimized reproducer BYTES — the
     # one-click-re-verifiable handle wired into verify_poc(reproducer_ref).
     fuzz_extra = {
         "engine": engine,
+        "surface": surface,
         "campaign_id": campaign_id,
         "crash_kind": kind,
         "dedup_key": crash.get("dedup_key"),
@@ -186,20 +195,35 @@ def crash_finding(crash: dict, function: str | None, target_name: str,
         "minimized_reproducer_sha": crash.get("minimized_reproducer_sha256"),
         "minimized_reproducer_size": crash.get("minimized_reproducer_size"),
         "reproducer_ref": reproducer_ref,
+        # The re-runnable crashing message (host/port/payload) for a network crash, so the
+        # verify path can replay it over the socket + a liveness oracle.
+        "net_reproducer": crash.get("net_reproducer"),
     }
+    asr = derive_network_fuzz_assurance() if is_network else derive_fuzz_assurance()
     rating = expl.get("rating")
-    cov_note = ("" if coverage_instrumented
+    cov_note = ("" if (coverage_instrumented or is_network)
                 else " NOTE: only an uninstrumented binary was available, so this was a "
                      "coverage-blind (black-box) run — coverage feedback was not used.")
     dupe_note = f" {dupes} additional crashing input(s) bucketed to the same root cause." if dupes else ""
+    if is_network:
+        summary = (f"{engine_label} dropped the live service {target_name} with a mutated "
+                   f"message sent over its real socket (the service died and stayed down "
+                   f"— a denial-of-service / likely memory-unsafe parsing bug).")
+        # The frozen Finding schema has no denial-of-service literal; ride `other` + the
+        # exploitability rating ("dos") + evidence.extra.fuzz for the real type.
+        category = "other"
+    else:
+        summary = (f"{engine_label} reproduced a {kind} while fuzzing {target_name} via the generated harness"
+                   f"{' (coverage-guided, instrumented target)' if coverage_instrumented else ''}.")
+        category = "memory-safety"
 
     return Finding(
-        title=f"Fuzzing crash: {kind} in {where}",
+        title=(f"Network fuzzing crash: service death on {target_name}" if is_network
+               else f"Fuzzing crash: {kind} in {where}"),
         severity=sev,
         confidence="high",  # a reproduced crash is concrete evidence
-        category="memory-safety",
-        summary=(f"{engine_label} reproduced a {kind} while fuzzing {target_name} via the generated harness"
-                 f"{' (coverage-guided, instrumented target)' if coverage_instrumented else ''}."),
+        category=category,
+        summary=summary,
         reasoning=((crash.get("summary") or f"AddressSanitizer reported {kind}.")
                    + (f" Deterministic exploitability triage: {rating}." if rating else "")
                    + dupe_note + cov_note),
@@ -207,14 +231,11 @@ def crash_finding(crash: dict, function: str | None, target_name: str,
             function=function or crash.get("function"),
             reproducer=crash.get("minimized_reproducer_sha256") or crash.get("reproducer_sha256"),
             backtrace=[crash["summary"]] if crash.get("summary") else None,
-            # LAB-CONFIRMED: the harness fired the bug in isolation (code_present/dynamic) — proven
-            # real, but the harness feeds the function directly, so the production input path is NOT
-            # established. See engine/assurance.py + docs/design-verification-oracles.md.
-            extra={"engine": engine, "crash_kind": kind,
+            extra={"engine": engine, "crash_kind": kind, "surface": surface,
                    "reproducer_size": crash.get("reproducer_size"),
                    "faulting_function": crash.get("function"),
                    "fuzz": fuzz_extra,
-                   "assurance": derive_fuzz_assurance()},
+                   "assurance": asr},
         ),
         suggested_followups=[
             FollowupSuggestion(

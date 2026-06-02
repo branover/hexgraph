@@ -14,14 +14,20 @@ from hexgraph.engine.fuzzers.aflplusplus import AflPlusPlusFuzzer
 from hexgraph.engine.fuzzers.base import (
     SURFACE_ENGINES, SURFACES, FuzzCampaignSpec, Fuzzer, FuzzerError, PreparedFuzz,
 )
+from hexgraph.engine.fuzzers.binary_only import BinaryOnlyFuzzer, FridaFuzzer
 from hexgraph.engine.fuzzers.libfuzzer import LibFuzzerFuzzer
 from hexgraph.engine.fuzzers.mock import MockFuzzer
+from hexgraph.engine.fuzzers.network import BoofuzzFuzzer, DesockAflFuzzer
 
 # Engine name → concrete Fuzzer class. The seam picks by surface; this only maps the
 # validated engine choice to its implementation (so adding an engine is one entry).
 _ENGINES: dict[str, type[Fuzzer]] = {
     "libfuzzer": LibFuzzerFuzzer,
     "afl": AflPlusPlusFuzzer,
+    "qemu": BinaryOnlyFuzzer,      # AFL++ qemu-mode (binary_only default)
+    "frida": FridaFuzzer,          # AFL++ frida-mode (binary_only alt)
+    "boofuzz": BoofuzzFuzzer,      # generational live-socket protocol fuzzer (network default)
+    "desock": DesockAflFuzzer,     # desock+AFL++ coverage-fuzz a local server (network tier 1)
     "mock": MockFuzzer,
 }
 

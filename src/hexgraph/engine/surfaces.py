@@ -268,14 +268,19 @@ def _device_host(target: Target) -> str | None:
 
 
 def run_tcp_probe(session: Session, project: Project, target: Target, *, port: int,
-                  payload: str | None = None, oracle: dict | None = None,
+                  payload: str | None = None, payload_hex: str | None = None,
+                  oracle: dict | None = None,
                   read_bytes: int | None = None, runner=None, task_id=None) -> dict:
     """Talk to a raw TCP service on a live device (the non-HTTP analogue of run_http_request /
     run_web_poc). Reaches `<device_host>:<port>` — the device IP of a rehosted surface or a
     `remote` target — through the emulator netns when applicable. Same bounded-egress contract
     as the web tools: a per-target deny-all-but-this scope (loopback/private only, this port),
     policy-gated (features.network) and audited. With an `oracle`, the probe strips the sent
-    payload (reflection) before matching, so a verified result is unforgeable."""
+    payload (reflection) before matching, so a verified result is unforgeable.
+
+    `payload_hex` sends BYTE-EXACT arbitrary bytes (the probe `bytes.fromhex`es it) — use this
+    for a binary protocol / a replayed fuzz reproducer, since the `payload` str field is
+    re-encoded as utf-8 and is NOT a byte round-trip for non-ASCII bytes."""
     from hexgraph import settings
     from hexgraph.engine.audit import record_egress
     from hexgraph.policy import (PolicyViolation, assert_allows_egress, current_policy,
@@ -300,7 +305,9 @@ def run_tcp_probe(session: Session, project: Project, target: Target, *, port: i
     runner = runner or get_executor()
     timeout = int(settings.get("features.network.timeout", 30) or 30)
     channel = {"host": host, "port": int(port), "allow": sorted(scope.allow), "timeout": timeout}
-    if payload is not None:
+    if payload_hex is not None:
+        channel["payload_hex"] = payload_hex   # byte-exact (binary protocol / fuzz reproducer)
+    elif payload is not None:
         channel["payload"] = payload
     if oracle:
         channel["oracle"] = oracle

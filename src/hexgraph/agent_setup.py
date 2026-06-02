@@ -231,17 +231,31 @@ recorded recipe in the sandbox. This is the analogue of "you direct, HexGraph ru
   deps-bundled tarball) and retry. Building needs **`features.build`** enabled in Settings (its own
   gate, separate from executing the target).
 
-## 2h. Coverage-guided fuzz CAMPAIGNS (AFL++ + libFuzzer) — you direct, HexGraph runs
+## 2h. Multi-surface fuzz CAMPAIGNS (AFL++ source / qemu-mode / boofuzz) — you direct, HexGraph runs
 A **campaign** is a long-lived, detached fuzz job — the SOTA upgrade over the single
-`fuzzing` task. You NEVER run `afl-fuzz`; you REQUEST a campaign and HexGraph spawns +
+`fuzzing` task. You NEVER run a fuzzer; you REQUEST a campaign and HexGraph spawns +
 reaps a hardened sandbox container.
-- **`start_fuzz_campaign(target_id, surface?, engine?, function?, max_total_time?, max_crashes?, instances?, resources?)`**
+- **`start_fuzz_campaign(target_id, surface?, engine?, function?, host?, port?, protocol?, proto_spec?, max_total_time?, max_crashes?, instances?, resources?)`**
   returns immediately with `{id, status:'running'}`. The `Fuzzer` seam picks the engine by
-  attack **surface**: fuzz a **Phase-2 instrumented derived target** (a `build_target` rebuild,
-  with source) → **AFL++** (`afl-clang-lto` + persistent mode) on the code under test = **real
-  coverage** (vs. coverage-blind black-box on a plain `.so`). So the high-value loop is:
-  `import_source_tree` → `build_target` (→ instrumented derived target) → `start_fuzz_campaign`
-  on THAT target. `instances` = AFL++ master + N-1 secondaries (capped per host).
+  attack **surface** (auto-inferred from the target; override `surface`/`engine` if needed):
+  - **source_lib** — a **Phase-2 instrumented derived target** (a `build_target` rebuild, with
+    source) → **AFL++** (`afl-clang-lto`) = real coverage. The high-value loop:
+    `import_source_tree` → `build_target` → `start_fuzz_campaign` on THAT target.
+  - **binary_only** — a **stripped firmware ELF, NO source** → **AFL++ qemu-mode** (full edge
+    coverage via QEMU, no instrumentation needed; **engine='frida'** the alt). A foreign-arch
+    MIPS/ARM binary runs under qemu-user with the parent firmware rootfs as the sysroot
+    (auto-resolved). Just `start_fuzz_campaign(target_id)` on a firmware binary target.
+  - **network** — a **LIVE service** (a rehosted device's port, or a local service) →
+    **boofuzz** (generational, over a real socket). Needs **`features.network`** (the bounded
+    local-network tier — loopback/private only, every send audited; NO new permission). Pass
+    `host`/`port` if not recorded on the target; `proto_spec` to define request blocks. A crash
+    here is a **service death** = `input_reachable/dynamic` (the STRONGEST assurance — reached +
+    triggered end-to-end through the live input boundary). **engine='desock'** instead
+    coverage-fuzzes a LOCAL server binary with `--network none` (no real networking).
+    **Remote blind network-fuzz of a physical bench device is OFF by default** (destructive) —
+    prefer replay/PoC of a known crash over blind mutation.
+  - **file_format** — a structured-input parser → AFL++/libFuzzer + an auto-dictionary.
+  `instances` = AFL++ master + N-1 secondaries (capped per host).
 - **Poll `fuzz_status(campaign_id)`** for live stats (execs, edges_covered, crash_count, coverage)
   and **`list_fuzz_artifacts(campaign_id)`** for the deduplicated crashes. Crashes STREAM as they
   happen — an early crash in a 6-hour run surfaces in minutes; you don't wait for the budget.
@@ -251,15 +265,19 @@ reaps a hardened sandbox container.
 - **`stop_fuzz_campaign(campaign_id)`** preserves the corpus (resumable). Campaigns are
   **crash-safe**: they survive a server restart (the reaper re-attaches).
 - **A crash is a re-runnable PoC.** `minimize_artifact(artifact_id)` replays the stored, minimized
-  reproducer against the campaign's instrumented harness binary IN THE SANDBOX and reports
-  `{verified, assurance}` via the unforgeable `crash` oracle — LLM-free, one click. So a
-  `fuzz_crash` climbs the assurance ladder the same way a hand-written PoC does (`code_present /
-  dynamic` — lab-confirmed).
+  reproducer IN THE SANDBOX and reports `{verified, assurance}` — LLM-free, one click. A binary/
+  harness crash replays the input against the instrumented binary (the unforgeable `crash` oracle,
+  `code_present/dynamic`); a **network** crash re-sends its crashing MESSAGE over the live socket +
+  a liveness oracle (`input_reachable/dynamic`). So a `fuzz_crash` climbs the assurance ladder the
+  same way a hand-written PoC does.
 - **Resource limits are a `resources` knob** (`{mem, cpus, pids, tmpfs, timeout, unconstrained}`,
   defaulted from Settings, per-campaign override). `unconstrained:true` lets a campaign use the
   whole machine — but it lifts mem/cpu/pids ONLY; it is **NOT** a security relaxation (the sandbox
-  still runs `--network none`, cap-drop, no-new-privileges, read-only, non-root). Needs
-  **`features.fuzzing`** (or `features.poc`) enabled — the same exec gate, no new permission.
+  still runs cap-drop, no-new-privileges, read-only, non-root, and `--network none` except the
+  audited boofuzz network tier). **Gating, by surface:** source/binary-only/desock fuzzing
+  EXECUTES a target → needs **`features.fuzzing`** (or `features.poc`); a LIVE-socket boofuzz
+  campaign talks to a service → needs **`features.network`** (bounded + audited) — pick the right
+  flag, neither is a NEW permission.
 - **Tell the user where to LOOK.** Everything above is browsable + triageable in the web UI: the
   **Campaigns** tab shows live campaign status (execs/s, coverage, crashes) and an **Artifacts**
   view that groups crashes by dedup bucket with assurance chips, a source-mapped stack (click a

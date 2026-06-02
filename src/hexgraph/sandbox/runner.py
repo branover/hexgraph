@@ -274,6 +274,8 @@ class SandboxRunner:
         requires_execution: bool = False,
         extra_ro_mounts: list[tuple[str, str]] | None = None,
         resources: ResourceSpec | None = None,
+        allow_network: bool = False,
+        net_container: str | None = None,
     ) -> DetachedHandle:
         """Launch a probe as a DETACHED, long-lived container (`docker run -d`), same
         hardening as run_probe. The launcher returns IMMEDIATELY with a handle whose
@@ -282,12 +284,22 @@ class SandboxRunner:
         `/out` bind-mount as it runs; nothing blocks a worker thread.
 
         Used ONLY for fuzz campaigns: `requires_execution=True` hits the exec gate (a
-        fuzz campaign runs the instrumented target), `--network none` still holds.
-        Resource ceilings come from `resources` (or the campaign's ResourceSpec)."""
+        fuzz campaign runs the instrumented target). `--network none` holds for a
+        binary-only / desock campaign. A NETWORK-FUZZ campaign (boofuzz) opts into
+        `allow_network=True` — the SINGLE place a detached campaign relaxes the network
+        flag — which is policy-checked here (`current_policy().allow_network`) and joins
+        `net_container`'s netns (a rehosted device) when given; the CALLER (the campaign
+        engine) has already asserted assert_allows_egress to the bounded local scope +
+        audited the EgressEvent. Resource ceilings come from `resources`."""
         if requires_execution:
             from hexgraph.policy import assert_allows_execution
 
             assert_allows_execution()
+        if allow_network:
+            from hexgraph.policy import PolicyViolation, current_policy
+
+            if not current_policy().allow_network:
+                raise PolicyViolation("network egress is not permitted by the active policy")
         if artifact is not None:
             artifact = Path(artifact).resolve()
             if not artifact.is_file():
@@ -300,7 +312,7 @@ class SandboxRunner:
             "docker", "run", "-d", "--name", name,
             # NOT --rm: a detached campaign container is reaped explicitly so its exit
             # status is observable. The reaper `docker rm`s it on finalize.
-            *self._hardening_args(allow_network=False, net_container=None,
+            *self._hardening_args(allow_network=allow_network, net_container=net_container,
                                   resources=resources, secret=False),
             *(["-v", f"{artifact}:/artifact:ro"] if artifact is not None else []),
             "-v", f"{outdir}:/out:rw",

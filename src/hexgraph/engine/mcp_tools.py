@@ -253,21 +253,32 @@ def build_target(project_id: str, source_tree_id: str, system: str | None = None
 def start_fuzz_campaign(target_id: str, surface: str | None = None, engine: str | None = None,
                         function: str | None = None, max_total_time: int | None = None,
                         max_crashes: int | None = None, instances: int | None = None,
+                        host: str | None = None, port: int | None = None,
+                        protocol: str | None = None, proto_spec: dict | None = None,
                         resources: dict | None = None) -> dict:
-    """Start a coverage-guided fuzz CAMPAIGN on a target; returns immediately with
-    {id, status:'running'}. HexGraph spawns a DETACHED hardened sandbox container that
-    fuzzes continuously + a reaper streams crashes → fuzz_crash findings (each with a
-    minimized, one-click-re-verifiable reproducer). The model never runs afl-fuzz."""
+    """Start a fuzz CAMPAIGN on a target; returns immediately with {id, status:'running'}.
+    HexGraph spawns a DETACHED hardened sandbox container that fuzzes continuously + a
+    reaper streams crashes → fuzz_crash findings (each one-click-re-verifiable). The model
+    never runs a fuzzer.
+
+    The `surface` is auto-inferred from the target; the engine defaults per surface
+    (override with `engine`): source_lib→afl (coverage-guided, needs features.fuzzing/poc),
+    binary_only→qemu-mode (no source; full coverage via QEMU TCG; foreign-arch MIPS/ARM via
+    qemu-user + the parent firmware rootfs as sysroot; needs features.fuzzing/poc),
+    network→boofuzz (a LIVE service over a real socket — needs features.network, bounded to
+    loopback/private + every send audited; pass host/port if not recorded on the target, or
+    engine='desock' to coverage-fuzz a LOCAL server binary with --network none), file_format
+    →afl + an auto-dictionary. A crash becomes a re-verifiable finding climbing the assurance
+    ladder: a binary-only crash is code_present/dynamic; a network service-death is
+    input_reachable/dynamic (reached + triggered end-to-end through the live input boundary).
+    NOTE: remote blind network-fuzz of a physical bench device is OFF by default (destructive
+    — prefer replay/PoC)."""
     from hexgraph.db.models import Task as _Task
     from hexgraph.engine import campaigns as C
     from hexgraph.engine.fuzzers import FuzzCampaignSpec
     from hexgraph.engine.fuzzing import resolve_harness, resolve_target_sources
-    from hexgraph.policy import PolicyViolation, assert_allows_execution
+    from hexgraph.policy import PolicyViolation
 
-    try:
-        assert_allows_execution()
-    except PolicyViolation:
-        return {"error": "fuzzing not permitted — enable features.fuzzing (or features.poc) in Settings"}
     with session_scope() as s:
         t = s.get(Target, target_id)
         if t is None:
@@ -280,14 +291,16 @@ def start_fuzz_campaign(target_id: str, surface: str | None = None, engine: str 
             target_id=t.id, surface=surface or C.infer_surface(t), engine=engine,
             harness_source=source, function=function or fn, target_sources=sources,
             max_total_time=max_total_time or 60, max_crashes=max_crashes or 10,
-            instances=instances or 1,
+            instances=instances or 1, host=host, port=port,
+            protocol=protocol or "tcp", proto_spec=proto_spec,
         )
         try:
             row = C.start_campaign(s, p, t, spec=spec, resources=resources)
         except (C.CampaignError, ValueError) as exc:
             return {"error": str(exc)}
-        except PolicyViolation:
-            return {"error": "fuzzing not permitted — enable features.fuzzing/poc"}
+        except PolicyViolation as exc:
+            return {"error": f"not permitted — {exc} (features.fuzzing/poc for binary fuzzing; "
+                             "features.network for live network fuzzing)"}
         return C.campaign_to_dict(row)
 
 
@@ -339,17 +352,15 @@ def list_fuzz_artifacts(campaign_id: str) -> dict:
 
 def minimize_artifact(artifact_id: str) -> dict:
     """Re-verify a crash artifact's reproducer by replaying its stored, CAS
-    content-addressed minimized input against the target IN THE SANDBOX — the
-    crash→verify tie-in. The unforgeable `crash` oracle confirms the bug still fires;
-    LLM-free, gated by the existing exec policy. Returns {verified, detail, assurance}."""
+    content-addressed minimized input IN THE SANDBOX — the crash→verify tie-in. A binary/
+    harness crash replays the input against the instrumented binary (the unforgeable
+    `crash` oracle); a NETWORK crash re-sends its crashing message over the live socket +
+    a liveness oracle. LLM-free; the surface-correct gate is applied inside verify_artifact.
+    Returns {verified, detail, assurance}."""
     from hexgraph.db.models import FuzzArtifact
     from hexgraph.engine import campaigns as C
-    from hexgraph.policy import PolicyViolation, assert_allows_execution
+    from hexgraph.policy import PolicyViolation
 
-    try:
-        assert_allows_execution()
-    except PolicyViolation:
-        return {"error": "execution not permitted — enable features.fuzzing/poc in Settings"}
     with session_scope() as s:
         a = s.get(FuzzArtifact, artifact_id)
         if a is None:
@@ -358,6 +369,8 @@ def minimize_artifact(artifact_id: str) -> dict:
             return {"error": "artifact has no stored reproducer to re-verify"}
         try:
             res = C.verify_artifact(s, a)
+        except PolicyViolation as exc:
+            return {"error": f"not permitted — {exc}"}
         except (C.CampaignError, ValueError) as exc:
             return {"error": str(exc)}
         return {"artifact_id": artifact_id, "verified": bool(res.get("verified")),
