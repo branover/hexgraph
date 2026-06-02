@@ -210,26 +210,42 @@ are hostile bytes) — browse them, don't fear them.
 You can turn a managed source tree into an INSTRUMENTED artifact — but you NEVER run a compiler.
 You author/approve a **BuildSpec** (itself recorded source) and REQUEST a build; HexGraph runs the
 recorded recipe in the sandbox. This is the analogue of "you direct, HexGraph runs the probes".
-- **`build_target(project_id, source_tree_id, system?, phases?, instrumentation?, artifacts?, env?)`**
-  — the run-tool. `system` (make|cmake|autotools|meson|cargo|go|custom — auto-detected if omitted),
-  `phases` (ordered explicit-argv steps, recorded verbatim; defaults derived from the system),
-  `instrumentation` ({sanitizers:[address,undefined,…], coverage:[sancov|afl_pcguard],
-  engine:libfuzzer|afl}), `artifacts` (rel paths to capture — the fuzz target/.so/binary). The
-  instrumentation env (CC/CXX/CFLAGS/SANITIZER/FUZZING_ENGINE) is INJECTED by HexGraph (the
-  base-image contract) — you do NOT set it; the SAME phases yield an ASan/SanCov/AFL++ build by
-  swapping only the profile. `env` is NON-secret by contract (credentials are rejected).
-- **Reproducibility is the contract:** `recipe_sha = hash{phases, env, base_image, instrumentation,
-  arch}`; same recipe_sha + same source content_hash + same toolchain_digest ⇒ the same build,
-  recorded. **`list_builds(project_id)`** shows the build ledger (status, the reproducibility triple,
-  artifacts as CAS shas, and the instrumented derived_target_id each registered).
+- **`build_target(project_id, source_tree_id, system?, phases?, instrumentation?, artifacts?, env?,
+  arch?, network?, fetch_phases?, source_revision_id?)`** — the run-tool. `system`
+  (make|cmake|autotools|meson|cargo|go|custom — auto-detected if omitted), `phases` (recorded
+  verbatim), `instrumentation` ({sanitizers:[address,undefined,…], coverage:[sancov|afl_pcguard],
+  engine:libfuzzer|afl}), `artifacts` (rel paths to capture). The instrumentation env (CC/CXX/CFLAGS/
+  SANITIZER/FUZZING_ENGINE) is INJECTED by HexGraph (the base-image contract) — you do NOT set it; the
+  SAME phases yield an ASan/SanCov/AFL++ build by swapping only the profile. `env` is NON-secret by
+  contract (credentials are rejected).
+- **Cross-compile for firmware:** pass `arch` (mips/mipsel/arm/armhf/aarch64) — HexGraph injects clang
+  `--target` + the parent firmware's extracted rootfs as `--sysroot`, so the instrumented binary
+  matches the device userland (a cross-build failure degrades to qemu-mode binary-only fuzzing).
+- **Dependencies — vendored by default, bounded fetch when needed:** `network` defaults `"none"`
+  (vendored/offline, fully reproducible — the recommendation; the compile ALWAYS runs `--network
+  none`). `network="fetch"` (needs **`features.build_fetch`**, its OWN gate, NEVER `features.network`)
+  runs a SEPARATE, audited, ALLOWLISTED `fetch_phases` step that hash-pins a **lockfile**, then DROPS
+  NETWORK and compiles offline — fetch-then-offline. The build records a lockfile + SBOM-lite + a
+  reproducibility BADGE; a cache HIT (same recipe_sha + source content_hash + toolchain_digest +
+  lockfile) REUSES the prior artifact.
+- **Reproducibility is the contract:** `recipe_sha = hash{phases, fetch_phases, env, base_image,
+  instrumentation, arch}`; same recipe_sha + source content_hash + toolchain_digest (+ lockfile) ⇒ the
+  same build. **`list_builds(project_id)`** shows the ledger (status, the triple, lockfile/SBOM,
+  reproducible/cache_hit, artifacts as CAS shas, the instrumented derived_target_id).
 - **Rebuild-with-instrumentation is the headline move:** if the source tree is linked (`built_from`)
   to a target, the rebuild registers a DERIVED target wired `instrumented_build_of`→ the original —
   the fuzzable, coverage-instrumented twin of the shipped binary. That unlocks **coverage-guided
   fuzzing next** (the target's own objects carry SanCov+ASan, not just the harness).
-- **VENDORED/OFFLINE ONLY:** the build runs `--network none`. A recipe that needs to fetch deps
-  fails honestly — vendor the deps (a `--recurse-submodules` clone at a pinned commit, or a
-  deps-bundled tarball) and retry. Building needs **`features.build`** enabled in Settings (its own
-  gate, separate from executing the target).
+- **Import an OSS-Fuzz `build.sh`:** **`import_oss_fuzz(project_id, source_tree_id, build_sh)`** maps an
+  OSS-Fuzz project's build.sh onto our env contract and records a build_spec — so an existing OSS-Fuzz
+  target builds with minimal hand-authoring. Then `build_target` (or POST builds with the spec id).
+- **Edit a harness/PoC + rebuild from a revision (the editable IDE):** **`save_source_revision(tree_id,
+  rel, content, role?)`** (needs **`features.source.edit`**) saves an edit to a HexGraph-authored file
+  as a NEW REVISION (never an in-place mutation; refuses an imported/extracted/vendor tree) — iterate
+  on a harness in place, then `build_target(..., source_revision_id=<rev id>)` to **rebuild from that
+  revision**.
+- Building needs **`features.build`** enabled in Settings (its own gate, separate from executing the
+  target — you can build-and-inspect without running the binary).
 
 ## 2h. Multi-surface fuzz CAMPAIGNS (AFL++ source / qemu-mode / boofuzz) — you direct, HexGraph runs
 A **campaign** is a long-lived, detached fuzz job — the SOTA upgrade over the single
@@ -270,6 +286,10 @@ reaps a hardened sandbox container.
   `code_present/dynamic`); a **network** crash re-sends its crashing MESSAGE over the live socket +
   a liveness oracle (`input_reachable/dynamic`). So a `fuzz_crash` climbs the assurance ladder the
   same way a hand-written PoC does.
+- **Did a change help? `coverage_diff(campaign_id, other_campaign_id)`** compares two campaigns'
+  per-line coverage — what NEW lines `other` reached that the base didn't (and which it lost). Use it
+  to judge whether a harness/corpus/engine tweak (or a rebuild from an edited harness revision) actually
+  expanded reach before spending more budget.
 - **Resource limits are a `resources` knob** (`{mem, cpus, pids, tmpfs, timeout, unconstrained}`,
   defaulted from Settings, per-campaign override). `unconstrained:true` lets a campaign use the
   whole machine — but it lifts mem/cpu/pids ONLY; it is **NOT** a security relaxation (the sandbox

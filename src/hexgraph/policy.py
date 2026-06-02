@@ -45,6 +45,7 @@ class AnalysisPolicy:
     static_only: bool = True
     allow_execution: bool = False  # never run the target (v1)
     allow_build: bool = False      # compile source in the sandbox (features.build) — D5
+    allow_build_fetch: bool = False  # bounded, audited, ALLOWLISTED dependency fetch BEFORE an offline compile (features.build_fetch) — D6
     allow_network: bool = False    # sandboxes run --network none unless this is on
     allow_rehost: bool = False     # full-system emulation of the firmware (features.rehost)
     allow_remote: bool = False     # connect to ONE live remote device (features.remote)
@@ -74,6 +75,14 @@ def current_policy() -> AnalysisPolicy:
         # the produced artifact still hits assert_allows_execution() — two independent,
         # fail-closed checks.
         build_on = bool(settings.get("features.build.enabled")) or exec_on
+        # features.build_fetch is its OWN opt-in gate (D6), NEVER folded into
+        # features.network (fetching a public package registry is categorically
+        # different from the loopback/private local-network tier). It is a
+        # sub-capability of building (you can't fetch deps for a build you can't run),
+        # so it is meaningless without build_on; it raises NO tier (the fetch is a
+        # SEPARATE sandbox run on a registry-allowlist egress, and the compile that
+        # follows is still --network none). Fail-closed: off ⇒ a fetch build is refused.
+        build_fetch_on = build_on and bool(settings.get("features.build_fetch.enabled"))
         net_on = bool(settings.get("features.network.enabled"))
         rehost_on = bool(settings.get("features.rehost.enabled"))
         remote_on = bool(settings.get("features.remote.enabled"))
@@ -93,6 +102,7 @@ def current_policy() -> AnalysisPolicy:
             tier = (TIER_LIVE_REMOTE if remote_on else
                     TIER_LOCAL_NETWORK if net_on else TIER_SANDBOXED_EXEC)
             return AnalysisPolicy(static_only=False, allow_execution=exec_on, allow_build=build_on,
+                                  allow_build_fetch=build_fetch_on,
                                   allow_network=net_on or remote_on, allow_rehost=rehost_on,
                                   allow_remote=remote_on, allow_fuzz_remote=fuzz_remote_on, tier=tier)
     except Exception:  # noqa: BLE001 — a settings problem must never widen the policy
@@ -118,6 +128,60 @@ def assert_allows_build(policy: AnalysisPolicy | None = None) -> None:
         raise PolicyViolation(
             "building from source is not permitted (enable features.build to compile a "
             "source tree into an instrumented artifact in the sandbox)")
+
+
+# The default package-registry allowlist for the bounded fetch tier (design §3.5/§8):
+# a deny-all-but-these set of hosts a build's FETCH phase may reach. Hosts only — the
+# scope is built with the conventional ports (443/80) per host. Operator-extendable via
+# settings (features.build_fetch.allowlist); we NEVER fall back to "any host".
+DEFAULT_FETCH_ALLOWLIST = (
+    "crates.io", "static.crates.io",          # cargo
+    "pypi.org", "files.pythonhosted.org",     # pip
+    "registry.npmjs.org",                     # npm
+    "github.com", "codeload.github.com",      # git/source archives
+    "proxy.golang.org", "sum.golang.org",     # go modules
+    "deb.debian.org", "security.debian.org",  # distro mirror
+)
+
+
+def assert_allows_build_fetch(policy: AnalysisPolicy | None = None) -> None:
+    """Gate the BOUNDED dependency-fetch build phase (design §3.5/§5.3/§8 D6) — the
+    HIGHEST residual supply-chain risk in the design, so it is fail-closed and its OWN
+    opt-in gate (features.build_fetch), never folded into features.network.
+
+    The fetch phase runs network ON but ONLY to an operator-confirmed ALLOWLIST of
+    package registries; every download is hash-pinned into a lockfile + audited
+    (EgressEvent). It is a SEPARATE sandbox run from the compile phase, which STILL runs
+    `--network none` — so a malicious dependency can be fetched (hash-pinned, recorded)
+    but can NEVER run during compile, persist, or exfiltrate. Off ⇒ a fetch build is
+    refused (vendored/offline builds are unaffected — they never call this)."""
+    policy = policy or current_policy()
+    if not policy.allow_build_fetch:
+        raise PolicyViolation(
+            "bounded dependency fetch is not permitted (enable features.build_fetch to allow a "
+            "SEPARATE, audited, allowlisted fetch phase before an offline --network none compile)")
+
+
+def build_fetch_scope(allowlist=None) -> NetworkScope:
+    """A deny-all-but-the-registry-allowlist egress scope for the fetch phase. Like
+    remote_scope this never falls back to 'any host' — only the explicit registry hosts
+    (with their conventional 443/80 ports) are allowed; everything else is refused at
+    `assert_allows_egress`. `allowlist` is a list of hosts (operator-confirmed); empty/
+    None uses DEFAULT_FETCH_ALLOWLIST. A host may be given as `host` or `host:port`."""
+    hosts = list(allowlist) if allowlist else list(DEFAULT_FETCH_ALLOWLIST)
+    allow: set[str] = set()
+    for h in hosts:
+        h = (h or "").strip()
+        if not h:
+            continue
+        if ":" in h and not h.endswith(":"):
+            allow.add(h)
+        else:
+            host = h.rstrip(":")
+            allow.add(f"{host}:443")
+            allow.add(f"{host}:80")
+    return NetworkScope(allow=frozenset(allow),
+                        rationale=f"bounded dependency fetch — {len(hosts)} allowlisted registr(ies)")
 
 
 def assert_allows_rehost(policy: AnalysisPolicy | None = None) -> None:

@@ -50,6 +50,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-pip \
         curl \
         xz-utils \
+        ccache \
     && rm -rf /var/lib/apt/lists/*
 
 # AFL++ instrumented compilers (afl-clang-fast / afl-clang-lto) — the route to
@@ -70,15 +71,23 @@ RUN apt-get update \
         || echo "WARN: cargo/go not installed; those build systems unavailable") \
     && rm -rf /var/lib/apt/lists/*
 
-# Cross toolchains are a STUB this image (Phase 7 wires firmware-rootfs-as-sysroot
-# cross-compilation). WITH_CROSS=1 pulls a couple of common cross gcc/sysroots so the
-# layer exists; the cross BUILD path itself is deferred.
+# Cross toolchains (design §3.4, Phase 7 — firmware-rootfs-as-sysroot cross-compile).
+# clang IS the cross-compiler (`--target=<triple> --sysroot=<firmware-rootfs>`), so the
+# instrumentation (SanCov/ASan) carries across arches with NO extra toolchain; these GNU
+# cross packages provide the binutils (as/ld) + the foreign-arch libc headers/CRT clang's
+# driver invokes, and qemu-user lets the cross-built (instrumented) binary RUN for fuzzing.
+# Best-effort: a missing package degrades the cross BUILD to native (which then degrades
+# to qemu-mode binary-only fuzzing of the original — §3.4 graceful-degrade).
 RUN if [ "$WITH_CROSS" = "1" ]; then \
         apt-get update && apt-get install -y --no-install-recommends \
-            gcc-mipsel-linux-gnu gcc-arm-linux-gnueabi \
+            gcc-mipsel-linux-gnu gcc-mips-linux-gnu \
+            gcc-arm-linux-gnueabi gcc-arm-linux-gnueabihf \
+            gcc-aarch64-linux-gnu \
+            binutils-mipsel-linux-gnu binutils-arm-linux-gnueabi binutils-aarch64-linux-gnu \
+            qemu-user qemu-user-static \
         && rm -rf /var/lib/apt/lists/* ; \
     else \
-        echo "Cross toolchains not included (build with --build-arg WITH_CROSS=1; cross build is Phase 7)"; \
+        echo "Cross toolchains not included (build with --build-arg WITH_CROSS=1 for firmware cross-compile)"; \
     fi
 
 # Bake the probe scripts into the image (mounted-over at run time, except in NO_MOUNT mode).

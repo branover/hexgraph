@@ -275,6 +275,53 @@ class Build(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     # The derived target this build registered (the instrumented rebuild), if any.
     derived_target_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # Phase 7 — supply-chain provenance + determinism (the DB envelope, not the frozen
+    # finding schema). `lockfile_json` is the hash-pinned dependency lockfile produced by
+    # the bounded fetch phase (or {} for a vendored/offline build); `sbom_json` is the
+    # SBOM-lite (fetched dep urls + sha256). `reproducible` is the reproducibility-badge
+    # verdict (recipe_sha + source_content_hash + toolchain_digest + a lockfile digest all
+    # recorded ⇒ replayable). `cache_hit` is True when this build REUSED a prior CAS
+    # artifact for the same reproducibility key (skipped the rebuild). `source_revision_id`
+    # records when a build was launched from a specific editable-IDE revision.
+    lockfile_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    sbom_json: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    reproducible: Mapped[bool] = mapped_column(default=False)
+    cache_hit: Mapped[bool] = mapped_column(default=False)
+    source_revision_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # The reproducibility cache key (recipe_sha|source_content_hash|toolchain_digest|
+    # lockfile_digest) — indexed so a later build can find a prior identical build to reuse.
+    cache_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SourceRevision(Base):
+    """One revision of an editable source file (design §6.2 D-edit, Phase 7).
+
+    The editable IDE never mutates a file in place: a save writes a NEW `SourceRevision`
+    (origin=`analyst-edit`, the full new content in CAS + a diff against the prior
+    revision), so the edit history is durable + reversible and a build can be launched
+    `rebuild-from-revision`. Only HexGraph-AUTHORED / role-tagged files in an EDITABLE
+    tree (harness/poc/script/build_recipe + scratch) get revisions; imported/extracted/
+    vendor source stays read-only (editing it would break the content_hash build
+    contract). The file's working-tree bytes always equal its latest revision."""
+
+    __tablename__ = "source_revision"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("project.id"), index=True)
+    source_tree_id: Mapped[str] = mapped_column(String(36), index=True)
+    rel: Mapped[str] = mapped_column(String(400), index=True)
+    # Monotonic per (tree, rel): 1, 2, 3, … (the latest is the working-tree content).
+    seq: Mapped[int] = mapped_column(default=1)
+    role: Mapped[str] = mapped_column(String(20), default="code")
+    # The full file content at this revision, content-addressed in CAS.
+    content_cas: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    size: Mapped[int] = mapped_column(default=0)
+    # A unified diff against the prior revision (display only; the content_cas is canonical).
+    diff: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # upload | import | analyst-edit | backfill (who/what produced this revision).
+    origin: Mapped[str] = mapped_column(String(16), default="analyst-edit")
+    note: Mapped[str | None] = mapped_column(String(300), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

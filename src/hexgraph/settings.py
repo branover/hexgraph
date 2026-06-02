@@ -75,13 +75,55 @@ DEFAULTS: dict[str, Any] = {
             # the sandbox (the Builder seam) via a recorded, reproducible recipe.
             # Building runs untrusted third-party code (configure/make), so it has its
             # OWN policy gate — separate from executing the TARGET (which still needs
-            # features.fuzzing/poc). VENDORED/OFFLINE ONLY this phase: the build phase
-            # runs --network none (the audited fetch tier is a later phase). The
+            # features.fuzzing/poc). The compile phase ALWAYS runs --network none; the
+            # only network a build can touch is the SEPARATE, opt-in, audited
+            # features.build_fetch phase, which drops network before compile. The
             # dedicated `hexgraph-build` image carries clang/LLVM + sanitizers + SanCov
-            # + AFL++ compilers; set HEXGRAPH_BUILD_IMAGE to override the tag.
+            # + AFL++ compilers (+ ccache for incremental builds + WITH_CROSS=1 cross
+            # toolchains); set HEXGRAPH_BUILD_IMAGE to override the tag.
             "enabled": False,
             "image": "hexgraph-build:latest",
             "timeout": 1800,            # build wall-clock budget (s)
+            # Deterministic builds (Phase 7): a fixed SOURCE_DATE_EPOCH so timestamps in
+            # artifacts don't vary run-to-run, and ccache so an incremental rebuild reuses
+            # cached object files. Both are reproducibility/speed knobs, not security.
+            "source_date_epoch": 1000000000,
+            "ccache": True,
+            # Cache-key artifact reuse (Phase 7): when a build's reproducibility key
+            # (recipe_sha + source_content_hash + toolchain_digest) has been built before,
+            # reuse the recorded CAS artifact and SKIP the rebuild. Deterministic + safe
+            # (same inputs ⇒ same output); set False to always rebuild.
+            "cache_reuse": True,
+        },
+        "build_fetch": {
+            # OFF by default — the HIGHEST residual supply-chain risk in the design
+            # (design §3.5/§8 D6), so it is its OWN fail-closed gate, NEVER folded into
+            # features.network. Enabling it permits a SEPARATE, audited build phase that
+            # fetches declared dependencies over a deny-all-but-ALLOWLIST egress (package
+            # registries only) and produces a hash-pinned LOCKFILE; HexGraph then DROPS
+            # NETWORK and runs the compile phase --network none against the snapshotted
+            # vendor dir. Fetch-then-offline, allowlisted, hash-pinned, audited: a
+            # malicious dep can be downloaded (recorded) but can never run during compile,
+            # persist, or exfiltrate. A sub-capability of building (meaningless without
+            # features.build). Vendored/offline builds NEVER touch this tier.
+            "enabled": False,
+            # The deny-all-but-these registry hosts the fetch phase may reach. Empty ⇒
+            # the built-in DEFAULT_FETCH_ALLOWLIST (crates.io/pypi.org/github.com/…);
+            # NEVER falls back to "any host". Operator-extendable; host or host:port.
+            "allowlist": [],
+            "timeout": 600,             # fetch wall-clock budget (s)
+        },
+        "source": {
+            # The editable IDE (design §6.2 D-edit, Phase 7). OFF by default — the
+            # riskiest item, so it is gated. With it on, the Source tab is EDITABLE for
+            # HexGraph-AUTHORED / role-tagged trees ONLY (harness/poc/script/build_recipe
+            # + scratch); a save creates a new REVISION (never an in-place mutation) and
+            # a build can be launched FROM a revision. Imported/extracted/vendor source
+            # (origin=git|archive|extracted|upload) stays READ-ONLY regardless — editing
+            # it would break the content_hash reproducibility contract. This flag never
+            # touches policy.py (it is a UI/capability flag; the write path itself
+            # enforces editability per-tree).
+            "edit": False,
         },
         "mcp": {
             # Which `hexgraph mcp` tool groups are exposed to a connected coding
@@ -193,6 +235,17 @@ ALLOWED: dict[str, tuple[Any, set | None]] = {
     "features.build.enabled": (bool, None),
     "features.build.image": (str, None),
     "features.build.timeout": (int, None),
+    "features.build.source_date_epoch": (int, None),
+    "features.build.ccache": (bool, None),
+    "features.build.cache_reuse": (bool, None),
+    # The bounded, audited dependency-fetch tier (design §3.5 D6). The ONLY policy gate
+    # is the toggle; `allowlist` extends the built-in registry allowlist (host or
+    # host:port), NEVER "any host".
+    "features.build_fetch.enabled": (bool, None),
+    "features.build_fetch.allowlist": (list, None),
+    "features.build_fetch.timeout": (int, None),
+    # The editable IDE (design §6.2 D-edit). A UI/capability flag — never touches policy.
+    "features.source.edit": (bool, None),
     "features.mcp.read": (bool, None),
     "features.mcp.write": (bool, None),
     "features.mcp.run": (bool, None),

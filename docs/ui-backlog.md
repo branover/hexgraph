@@ -1,5 +1,28 @@
 # UI improvement backlog
 
+## Editable IDE + build supply-chain badges — Phase 7 (fuzzing+source design §6.2, 2026-06-02)
+
+**Shipped in `build/fuzz-phase7`** (Playwright-verified, screenshots judged):
+- **Editable Source tab** (`SourceBrowser.tsx`) — with `features.source.edit` on, a HexGraph-authored
+  file (harness/PoC/script + scratch in an editable tree) shows an **Edit** button → a textarea →
+  **Save revision** (never an in-place mutation); below the viewer, a **Revisions** list (newest first,
+  per-revision **revert**, append-only). Imported/extracted/vendor files show **read-only** and have no
+  Edit affordance (the backend also refuses the write). Verified: a harness file opens with Edit; build
+  badges render.
+- **Reproducibility / supply-chain badges** in the Builds list — **reproducible** (green; the full
+  provenance recorded), **cached** (reused a prior identical artifact), **locked** (hash-pinned deps from
+  the fetch tier), **instrumented** (a derived target). Verified on a MockBuilder build.
+- **Build modal** (`BuildModal.tsx`) — added an **arch** selector (cross-compile) and a **dependency
+  posture** selector (vendored / fetch — the audited/allowlisted option enabled only under
+  `features.build_fetch`); the recorded-recipe preview shows the cross/sysroot + the fetch phase + the
+  deps posture. The compile-is-always-`--network none` note was corrected.
+- **Settings → Source & Build card** — ccache + cache-reuse toggles, a **Bounded dependency fetch** sub-
+  toggle (with the supply-chain warning), and an **Editable IDE** sub-toggle. Verified rendering.
+- **Deferred:** the code viewer is still a plain textarea/`<pre>` (no Monaco / syntax highlighting /
+  inline diff view); a dedicated coverage-diff visualization (the data is available via
+  `/api/campaigns/{id}/coverage-diff` + the `coverage_diff` MCP tool, but the UI exposes only
+  single-campaign shading today).
+
 ## Campaigns / Artifacts triage + Source coverage — Phase 4 (fuzzing+source design §6/§7, 2026-06-02)
 
 **Shipped in `build/fuzz-phase4`:** the full Source/IDE + fuzz-triage UX (the payoff of Phases 1–3).

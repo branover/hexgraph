@@ -143,7 +143,7 @@ overflow + `related_to` edge to `libupnp.so`), `/no_findings`, `/malformed_then_
 retry), `reverse_engineering`, `pattern_sweep` (sibling match), `error_rate_limit` / `error_timeout`
 (graceful failure), and a default always-success scenario.
 
-### Source trees & the Source tab (read-only)
+### Source trees & the Source tab (the editable IDE)
 
 A project holds **trusted source** separately from its (hostile) targets: one or more **source
 trees** — an imported library's source, or the harnesses/PoCs/build-scripts HexGraph itself
@@ -161,10 +161,15 @@ where the fuzzer is stuck (the single most useful harness-improvement signal). W
 enabled, a **Build (instrumented)** button compiles the tree via a recorded recipe (below).
 **Harnesses, PoCs, and scripts are all `source_file`s** (role-tagged) — a generated harness becomes
 a managed file you can read in the tab, and a **Backfill harnesses** action (API/MCP) promotes
-older transient harnesses. *In-browser editing of source is a later phase* — the viewer is
-read-only. Firmware-*extracted* files added as source are marked `extracted` (untrusted; displayed,
-never run or parsed outside the sandbox). Over MCP: `list_source_trees` / `read_source_file`
-(read), `import_source_tree` / `link_finding_to_source` (write).
+older transient harnesses. With **`features.source.edit`** enabled, the viewer becomes an **editable
+IDE** for HexGraph-authored files (harness/PoC/script + scratch): an **Edit → Save** creates a **new
+revision** (never an in-place mutation — content in CAS + a diff), the file shows its **revision
+history** (with one-click **revert**, append-only), and a build can be launched **rebuild-from-a-
+revision**. Imported / extracted / vendor source (`origin=git|archive|extracted|upload`) stays
+**read-only** regardless — editing it would break the reproducible build's content hash. Firmware-
+*extracted* files are marked `extracted` (untrusted; displayed, never run or parsed outside the
+sandbox). Over MCP: `list_source_trees` / `read_source_file` (read), `import_source_tree` /
+`link_finding_to_source` / `save_source_revision` (write).
 
 ### Fuzz campaigns & crash triage
 
@@ -231,6 +236,56 @@ the **Fuzz modal** (it appears when `features.fuzz_remote` is on; defaults to `l
 `environment` to `start_fuzz_campaign` (MCP) / the campaign API. Each environment also carries a
 per-environment **`ResourceSpec` ceiling** the campaign inherits. (A heavier dedicated fuzz-worker /
 k8s job executor remains a later drop-in behind the same seam.)
+
+### Build from source — instrumented, reproducible, build-as-API (`features.build`)
+
+With **`features.build`** enabled, HexGraph can compile a managed source tree into an **instrumented
+artifact** via a **recorded, reproducible recipe** the API runs in the sandbox — *you never run a
+compiler by hand*. You author/approve a `BuildSpec` (`system`, ordered explicit-argv `phases`, an
+`instrumentation` profile, `artifacts` to capture, NON-secret `env`) and request the build; HexGraph
+**injects the toolchain** (`CC`/`CXX`/`CFLAGS`/`SANITIZER`/`FUZZING_ENGINE` per the base-image
+contract), so the *same* phases yield an ASan+SanCov, an AFL++, or a plain build by swapping only the
+profile. Building runs **untrusted third-party code**, so it has its own fail-closed gate (separate
+from executing the target — you can build-and-inspect without permitting the binary to run). If the
+tree is `built_from` a target, the rebuild registers an **instrumented derived target** (wired
+`instrumented_build_of`→ the original) — ready for coverage-guided fuzzing. **Reproducibility is the
+contract:** `recipe_sha` + the source byte-content hash + the toolchain digest (+ a lockfile) make a
+build replayable; a **reproducibility badge** shows when all are recorded, and a **cache-key hit**
+reuses the prior artifact and skips the rebuild (`SOURCE_DATE_EPOCH` + ccache make rebuilds
+deterministic + incremental).
+
+- **The compile phase ALWAYS runs `--network none`.** Vendored / offline is the default and the
+  recommendation — fully offline-reproducible. Source is mounted read-only, output only to `/out`,
+  non-root, ephemeral; a malicious `configure` can burn CPU and exit — it cannot persist or exfiltrate.
+- **Bounded dependency fetch (`features.build_fetch`, default off, the highest residual supply-chain
+  risk).** When a build genuinely needs to fetch deps, enabling this raises a **separate, audited,
+  ALLOWLISTED** fetch phase: a distinct sandbox container with network ON but bounded to a **registry
+  allowlist** (crates.io / pypi.org / github.com / distro mirror — operator-extendable, *never* "any
+  host"; enforced by a can't-forget egress backstop that drops any off-list connect), which produces a
+  **hash-pinned lockfile** + an **SBOM-lite**. HexGraph then **drops the network** and runs the compile
+  `--network none` against the snapshotted deps — **fetch-then-offline**. The fetch and compile are
+  *different containers*, so a fetched dep can be recorded but never run during compile. Every fetch is
+  audited (`EgressEvent`, `tool="build_fetch"`). This is its **own** gate — never folded into
+  `features.network`.
+- **Cross-compile for firmware (`arch` on the recipe, `WITH_CROSS=1` image).** clang is the
+  cross-compiler: pass a firmware arch (`mips`/`mipsel`/`arm`/`armhf`/`aarch64`) and HexGraph injects
+  `--target=<triple>` + the **parent firmware's extracted rootfs as `--sysroot`**, so the instrumented
+  binary is binary-compatible with the device userland (runs under qemu-user — the proven PoC path). A
+  cross-build failure **degrades gracefully** to qemu-mode binary-only fuzzing of the original binary.
+- **OSS-Fuzz `build.sh` import.** Paste an OSS-Fuzz-style `build.sh` (`POST .../builds/import-oss-fuzz`
+  or the `import_oss_fuzz` MCP tool): it's stored as a `role=script` source file, mapped to HexGraph's
+  `$CC/$CXX/$CFLAGS/$LIB_FUZZING_ENGINE/$SRC/$OUT` contract, and runs essentially unchanged via a single
+  shell phase — so existing OSS-Fuzz targets build with minimal hand-authoring.
+
+In the UI: a capability-gated **Build modal** (Source tab) shows a **read-only recorded-recipe
+preview** (no free-text command box) with instrumentation toggles, an **arch** selector (cross), a
+**dependency posture** (vendored / fetch — the allowlisted tier shown only when `features.build_fetch`
+is on), and the injected env + `recipe_sha`; the Builds list shows **reproducible / cached / locked /
+instrumented** badges. Over MCP: `build_target` (run — with `network`/`fetch_phases`/`arch`/
+`source_revision_id`), `import_oss_fuzz` / `save_source_revision` (write), `list_builds` /
+`coverage_diff` (read). **Run-to-run coverage diff** (`coverage_diff` MCP tool /
+`/api/campaigns/{id}/coverage-diff`) compares two campaigns' per-line coverage — *what new edges did
+this run reach?* — to judge whether a harness/corpus/engine change actually improved reach.
 
 ---
 
@@ -448,6 +503,12 @@ port = 8765
     artifact in the same `--network none`, capped, RO-source, non-root sandbox (`assert_allows_build`);
     a sub-capability of sandboxed-exec but its own gate, so you can build-and-inspect *without*
     permitting the target to run (running the built artifact still needs the exec gate);
+  - **bounded dependency fetch** — `features.build_fetch` (its own fail-closed gate,
+    `assert_allows_build_fetch`; *never* `features.network`) raises a **separate, audited, ALLOWLISTED**
+    fetch phase: a distinct sandbox container reaches only a registry allowlist (never "any host",
+    enforced by an egress backstop), hash-pins a lockfile, then HexGraph **drops the network** and runs
+    the compile `--network none` — fetch-then-offline, so a fetched dep can be recorded but never run
+    during compile or exfiltrate. Every fetch is audited (`EgressEvent`);
   - **sandboxed execution** — `features.poc` / `features.fuzzing` allow running the target inside the
     same capped, timed, `--network none` sandbox (foreign-arch via qemu-user), never on the host;
   - **bounded local-network** — `features.network` permits egress only to loopback/private hosts via a
@@ -461,6 +522,11 @@ port = 8765
     control plane stays loopback, and the connection is a secret + audited. Resource ceilings (the
     `ResourceSpec`/`unconstrained` knob) are likewise **never** a policy relaxation — they only lift
     mem/cpu/pids, never a security flag.
+- **The editable IDE is confined + reversible.** `features.source.edit` makes only HexGraph-authored
+  files (harness/PoC/script + scratch) editable; an edit creates a **new revision** (never an in-place
+  mutation, content-addressed + diffed), and imported/extracted/vendor source stays **read-only** (the
+  write path enforces per-tree editability) so a reproducible build's content hash can't be silently
+  broken.
 - **The LLM never sees raw target bytes** — only tool output.
 - **Secrets are never persisted or logged.** Your API key lives only in env/config, read on demand.
 
@@ -520,7 +586,7 @@ just test            # full suite (mock backend; sandbox/Docker tests auto-skip 
 just demo            # the full offline loop, exits 0 — doubles as a smoke test
 just fixtures        # rebuild the bundled test targets
 just sandbox-build [with_ghidra=1]   # rebuild the analysis sandbox image (only after a Dockerfile/toolchain change)
-just build-image [with_cross=1]      # build the dedicated build-from-source image (features.build; with_cross is a Phase-7 stub)
+just build-image [with_cross=1]      # build the dedicated build-from-source image (features.build; with_cross=1 adds cross toolchains + qemu-user for firmware cross-compile)
 just fuzz-build                      # build the dedicated coverage-guided fuzz image (features.fuzzing campaigns; AFL++ + libFuzzer)
 just ui              # rebuild the SPA (after any frontend/ change)
 just serve           # start the server from the venv

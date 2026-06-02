@@ -49,9 +49,10 @@ export interface GhidraStatus { enabled: boolean; ok: boolean; detail: string; m
 export interface FsEntry { rel: string; size?: number; is_elf?: boolean; child_target_id?: string | null; added?: boolean; }
 export interface SourceTreeRow { id: string; name: string; origin: string; editable: boolean; vcs_rev?: string | null; content_hash?: string | null; file_count: number; archived: boolean; target_ids: string[]; }
 export interface SourceFileEntry { rel: string; size?: number; role: string; node_id?: string | null; is_harness?: boolean; }
-export interface BuildSpecBody { source_tree_id: string; system?: string; phases?: any[]; instrumentation?: { sanitizers?: string[]; coverage?: string[]; engine?: string }; artifacts?: string[]; env?: Record<string, string>; arch?: string; name?: string; }
-export interface BuildPreview { system: string; phases: { argv: string[]; shell?: boolean }[]; instrumentation: any; artifacts: string[]; recipe_sha: string; injected_env: Record<string, string>; base_image: string; arch: string; network: string; }
-export interface BuildRow { id: string; status: string; recipe_sha?: string | null; source_content_hash?: string | null; toolchain_digest?: string | null; artifacts: Record<string, string>; instrumentation: any; returncode?: number | null; duration: number; error?: string | null; derived_target_id?: string | null; source_tree_id: string; created_at?: string | null; }
+export interface BuildSpecBody { source_tree_id: string; system?: string; phases?: any[]; instrumentation?: { sanitizers?: string[]; coverage?: string[]; engine?: string }; artifacts?: string[]; env?: Record<string, string>; arch?: string; name?: string; network?: string; fetch_phases?: any[]; }
+export interface BuildPreview { system: string; phases: { argv: string[]; shell?: boolean }[]; fetch_phases?: { argv: string[] }[]; instrumentation: any; artifacts: string[]; recipe_sha: string; injected_env: Record<string, string>; base_image: string; arch: string; network: string; cross?: boolean; }
+export interface BuildRow { id: string; status: string; recipe_sha?: string | null; source_content_hash?: string | null; toolchain_digest?: string | null; artifacts: Record<string, string>; instrumentation: any; returncode?: number | null; duration: number; error?: string | null; derived_target_id?: string | null; source_tree_id: string; created_at?: string | null; lockfile?: Record<string, any>; sbom?: any[]; reproducible?: boolean; cache_hit?: boolean; cache_key?: string | null; source_revision_id?: string | null; }
+export interface SourceRevision { id: string; tree_id: string; rel: string; seq: number; role: string; size: number; origin: string; note?: string | null; has_diff?: boolean; created_at?: string | null; diff?: string | null; content?: string; }
 // ── Fuzz campaigns / artifacts (Phase 4 triage) ───────────────────────────────
 export interface Assurance { standard: string; method: string; precondition: string; precondition_inferred?: boolean; detail?: string; }
 export interface CampaignStats { execs?: number; edges_covered?: number; crash_count?: number; peak_rss?: number; coverage_percent?: number; last_run_at?: string; }
@@ -112,7 +113,7 @@ export const api = {
   project: (id: string) => getJSON<ProjectDetail>(`/api/projects/${id}`),
   graph: (id: string) => getJSON<Graph>(`/graph/${id}`),
   finding: (id: string) => getJSON<Finding>(`/api/findings/${id}`),
-  capabilities: () => getJSON<{ target: Record<string, string[]>; node: Record<string, string[]>; edge: Record<string, string[]>; features?: { build?: boolean; fuzzing?: boolean; poc?: boolean } }>("/api/capabilities"),
+  capabilities: () => getJSON<{ target: Record<string, string[]>; node: Record<string, string[]>; edge: Record<string, string[]>; features?: { build?: boolean; build_fetch?: boolean; source_edit?: boolean; fuzzing?: boolean; poc?: boolean } }>("/api/capabilities"),
   suggestions: (fid: string) => getJSON<any[]>(`/api/findings/${fid}/suggestions`),
   setStatus: (fid: string, status: string) => postJSON(`/api/findings/${fid}/status`, { status }),
   patchFinding: (fid: string, body: Partial<{ title: string; severity: string; confidence: string; category: string; summary: string; reasoning: string; status: string; human_notes: string; evidence: any }>) => patchJSON<Finding>(`/api/findings/${fid}`, body),
@@ -167,9 +168,17 @@ export const api = {
   sourceFile: (treeId: string, rel: string) => getJSON<{ rel: string; size: number; role: string; origin: string; encoding: "text" | "binary"; content: string; truncated: boolean }>(`/api/source-trees/${treeId}/file?rel=${encodeURIComponent(rel)}`),
   backfillHarnesses: (pid: string) => postJSON<{ promoted: number; scanned: number }>(`/api/projects/${pid}/backfill-harnesses`, {}),
   buildPreview: (pid: string, body: BuildSpecBody) => postJSON<BuildPreview>(`/api/projects/${pid}/build/preview`, body),
-  createBuild: (pid: string, body: { build_spec_id?: string; spec?: BuildSpecBody }) => postJSON<BuildRow>(`/api/projects/${pid}/builds`, body),
+  createBuild: (pid: string, body: { build_spec_id?: string; spec?: BuildSpecBody; source_revision_id?: string }) => postJSON<BuildRow>(`/api/projects/${pid}/builds`, body),
   builds: (pid: string, sourceTreeId?: string) => getJSON<{ builds: BuildRow[] }>(`/api/projects/${pid}/builds${sourceTreeId ? `?source_tree_id=${sourceTreeId}` : ""}`),
   buildLog: (bid: string) => getJSON<{ build_id: string; log: string }>(`/api/builds/${bid}/log`),
+  importOssFuzz: (pid: string, body: { source_tree_id: string; build_sh: string; instrumentation?: any; artifacts?: string[] }) => postJSON<any>(`/api/projects/${pid}/builds/import-oss-fuzz`, body),
+  // Editable IDE: revisioned saves + history + rebuild-from-revision (Phase 7)
+  saveSourceRevision: (treeId: string, body: { rel: string; content: string; role?: string; note?: string }) => postJSON<SourceRevision>(`/api/source-trees/${treeId}/revisions`, body),
+  sourceRevisions: (treeId: string, rel?: string) => getJSON<{ revisions: SourceRevision[] }>(`/api/source-trees/${treeId}/revisions${rel ? `?rel=${encodeURIComponent(rel)}` : ""}`),
+  sourceRevision: (rid: string) => getJSON<SourceRevision>(`/api/source-revisions/${rid}`),
+  revertSourceRevision: (treeId: string, rid: string) => postJSON<SourceRevision>(`/api/source-trees/${treeId}/revisions/${rid}/revert`, {}),
+  // Run-to-run coverage diff (Phase 7)
+  coverageDiff: (cid: string, other: string) => getJSON<any>(`/api/campaigns/${cid}/coverage-diff?other=${other}`),
   // Fuzz campaigns + artifacts (Phase 4 triage)
   campaigns: (pid: string, targetId?: string) => getJSON<{ campaigns: Campaign[] }>(`/api/projects/${pid}/campaigns${targetId ? `?target_id=${targetId}` : ""}`),
   campaign: (cid: string) => getJSON<Campaign>(`/api/campaigns/${cid}`),

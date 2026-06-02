@@ -65,6 +65,16 @@ def _build_enabled() -> bool:
     return _flag("features.build.enabled")
 
 
+def _build_fetch_enabled() -> bool:
+    # The bounded dependency-fetch tier is a sub-capability of building (Phase 7).
+    return _build_enabled() and _flag("features.build_fetch.enabled")
+
+
+def _source_edit_enabled() -> bool:
+    # The editable IDE (Phase 7). A UI/capability flag — never touches policy.
+    return _flag("features.source.edit")
+
+
 def capabilities_for(anchor_kind: str, subtype: str | None = None) -> list[str]:
     if anchor_kind == "target":
         caps = list(_TARGET.get(subtype or "unknown", ["recon"]))
@@ -108,6 +118,8 @@ def capability_table() -> dict:
     nodes = {k: extra(k, v) for k, v in _NODE.items()}
     # `features` carries non-anchor affordance flags the SPA reads to show/hide UI
     # that isn't keyed to a target/node/edge — e.g. the Source-tab Build button
-    # (build is anchored on a source_tree, gated by features.build).
+    # (build is anchored on a source_tree, gated by features.build), the bounded
+    # dependency-fetch posture, and the editable-IDE Save/revision affordances.
     return {"target": targets, "node": nodes, "edge": _EDGE,
-            "features": {"build": _build_enabled(), "fuzzing": fuzz, "poc": poc}}
+            "features": {"build": _build_enabled(), "build_fetch": _build_fetch_enabled(),
+                         "source_edit": _source_edit_enabled(), "fuzzing": fuzz, "poc": poc}}
