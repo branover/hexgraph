@@ -1,5 +1,33 @@
 # UI improvement backlog
 
+## Build-from-source modal — modernized to match the Fuzz modal (2026-06-02)
+
+**Shipped in `build/ui-buildmodal`** (Playwright-verified, before/after PNGs judged). Pure
+VISUAL/LAYOUT pass — zero backend/behavior change. Brings `BuildModal.tsx` up to the Fuzz
+modal's standard (PR #62) so the two launch dialogs read as siblings.
+
+- **Before:** a flat, all-caps dump — scattered `ADDRESS/UNDEFINED/MEMORY` + `SANCOV` checkboxes,
+  `ENGINE/ARCH/DEPENDENCIES` selects on loose inline rows, a plain artifacts/custom-phases field,
+  and a monochrome recipe-preview block; Cancel/Build footer with a small primary button.
+- **After:** reuses the `.modal.fuzz` system (`h3` header + boxed `.lede` + grouped `.grp` cards +
+  scrollable `.modal-b` + pinned `.modal-f` footer). New `.build`-scoped CSS in `theme.css`:
+  - **Instrumentation** card — the sanitizers + SanCov are now a tidy **toggle-pill row** (`.toggles/.tgl`)
+    showing a friendly name (ASan/UBSan/MSan/SanCov) + the raw flag as a sub-label; the pill lights
+    up (accent border + tint) when on.
+  - **Engine & arch** — aligned 2-col grid; **Dependencies** — the vendored/fetch posture select
+    (disabled with an explanatory note when `features.build_fetch` is off); **Artifacts to capture**
+    — output paths + the optional custom-phases textarea.
+  - **Recorded recipe preview** — now a proper read-only **code panel** (`.recipe`, dark `#0c0f17`
+    bg, mono) reusing the source-viewer code-styling language: tinted env keys/values (cyan key,
+    green value), `$`-prefixed commands, the fetch phase in amber, and `recipe_sha` as a clean
+    caption under a dashed rule.
+  - Prominent **Build (sandboxed)** primary button (chip icon), Cancel ghost.
+- **Verified (Playwright):** every input intact and the recipe-preview reactivity unchanged —
+  toggling UBSan adds `,undefined` to CFLAGS, deps→fetch switches the meta line + surfaces the
+  fetch phase, a custom phase flows in as `$ sh -c …`, the artifacts field accepts text, and
+  `recipe_sha` recomputes on each change. No console errors (only the pre-existing Cytoscape
+  wheel-sensitivity warning). Screenshots judged at 1440px; readable 1280–1600.
+
 ## UI "sexiness" pass — source viewer + toolbar + fuzz modal (2026-06-02)
 
 **Shipped in `build/ui-sexiness`** (Playwright-verified, before/after screenshots judged;

@@ -522,6 +522,21 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-02: **build: modernize the Build-from-source modal to match the Fuzz modal** (branch
+  `build/ui-buildmodal`). Frontend-only visual/layout pass, ZERO backend/behavior change — brings
+  `BuildModal.tsx` up to PR #62's Fuzz-modal standard so the two launch dialogs are siblings.
+  Reuses the `.modal.fuzz` system (`h3` header + boxed `.lede` + grouped `.grp` cards + scrollable
+  `.modal-b` + pinned footer) and adds `.build`-scoped CSS in `theme.css`: the sanitizers/SanCov
+  become a tidy **toggle-pill row** (`.toggles/.tgl`, friendly name + raw flag sub-label, lights up
+  when on); **Engine & arch** as an aligned grid; **Dependencies** (vendored/fetch posture);
+  **Artifacts to capture** (+ optional custom phases); and the **Recorded recipe preview** as a
+  proper read-only **code panel** (`.recipe`, dark mono, tinted env keys/values, `$`-prefixed
+  commands, fetch phase in amber, `recipe_sha` caption under a dashed rule) — reusing the source-
+  viewer code-styling language. Prominent **Build (sandboxed)** primary button. Playwright-verified
+  ALL inputs + the recipe-preview reactivity intact (UBSan→`,undefined` in CFLAGS; deps→fetch shows
+  the fetch phase; custom phase → `$ sh -c …`; recipe_sha recomputes). `tsc -b` clean; the
+  pre-existing fuzz/Docker e2e `just test` failures on `main` are unrelated. Before/after PNGs +
+  notes in `docs/ui-backlog.md`.
 - 2026-06-02: **build: UI "sexiness" pass — source viewer + toolbar + fuzz modal** (branch
   `build/ui-sexiness`). Frontend-only visual/layout pass, ZERO backend/behavior change. (1) The
   **Source viewer** (`SourceBrowser.tsx` + new `highlight.ts`) replaces the per-line-boxed,
