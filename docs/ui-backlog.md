@@ -1,5 +1,29 @@
 # UI improvement backlog
 
+## Screenshot showcase + capture mechanism (2026-06-02)
+
+**Shipped in `build/showcase`.** A reproducible way to (re)generate the README hero shots and
+per-feature doc images as the UI evolves — so they never bit-rot against the live SPA:
+
+- `just showcase [--reset]` → `scripts/seed_showcase.py` seeds ONE rich, deterministic project on
+  the mock backend (offline, $0, no Docker): a firmware tree + a standalone binary + a `web_app` +
+  a `service` socket surface + a source tree; findings spanning every finding_type + all four
+  assurance rungs (incl. a verified PoC); a wide curated edge variety; typed function/string/sink/
+  socket/endpoint/param nodes; a finished mock fuzz campaign (crash artifacts + coverage map); and
+  egress-audit events.
+- `just capture` → `scripts/capture_screenshots.py` serves it on a spare port and drives headless
+  Chromium (Playwright, dev-only) to shoot **12 PNGs into `docs/images/`** at 1440×900, dark theme,
+  1.5× scale. Manifest + per-image captions/slots in `docs/images/README.md`.
+- Guard test `tests/test_showcase_seed.py` (offline) keeps the seed rich (asserts the target kinds,
+  edge-type variety, node types, the assurance-ladder rungs, the verified PoC, and the finished
+  campaign + coverage) so a UI/data refactor that hollows out the showcase fails CI.
+
+**When the UI changes materially**, re-run `just capture` and re-commit `docs/images/*.png`. The
+capture script tolerates UI churn (it clicks by visible text / titles and degrades gracefully per
+shot), but the *quality* judgement is manual — VIEW the PNGs and tweak the seed/capture for
+composition before committing.
+
+
 ## Build-from-source modal — modernized to match the Fuzz modal (2026-06-02)
 
 **Shipped in `build/ui-buildmodal`** (Playwright-verified, before/after PNGs judged). Pure

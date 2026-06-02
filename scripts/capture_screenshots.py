@@ -1,0 +1,295 @@
+"""Regenerate the committed showcase screenshots in docs/images/ (dev-only).
+
+Seeds the showcase project (mock, offline, $0) into a throwaway HEXGRAPH_HOME, serves
+it on a spare loopback port, drives headless Chromium (Playwright) through the UI at
+1440x900 on the dark theme, and writes a consistent set of hero + per-feature PNGs.
+
+This is NOT a runtime dependency — install the browser once per the CLAUDE.md recipe:
+    .venv/bin/pip install playwright && .venv/bin/playwright install chromium
+
+Run via `just capture` (sets HEXGRAPH_FUZZER=mock) or directly. Deterministic: re-seeds
+a fresh home each run so the captures are reproducible as the UI evolves. The committed
+PNGs are the product's first impression — see docs/images/README.md for the manifest.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.request
+from pathlib import Path
+
+os.environ.setdefault("HEXGRAPH_LLM_BACKEND", "mock")
+os.environ.setdefault("HEXGRAPH_FUZZER", "mock")
+
+REPO = Path(__file__).resolve().parents[1]
+OUT = REPO / "docs" / "images"
+VIEWPORT = {"width": 1440, "height": 900}
+SETTLE = 1400  # ms after networkidle so Cytoscape layout + fetches finish
+
+
+def _free_port() -> int:
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def _seed(home: str) -> str:
+    """Seed the showcase into `home`; return the project id."""
+    env = dict(os.environ, HEXGRAPH_HOME=home, HEXGRAPH_FUZZER="mock")
+    r = subprocess.run([sys.executable, str(REPO / "scripts" / "seed_showcase.py"), "--reset"],
+                       env=env, capture_output=True, text=True)
+    sys.stdout.write(r.stdout)
+    if r.returncode != 0:
+        sys.stderr.write(r.stderr)
+        raise SystemExit("seed failed")
+    # The seed prints "project id: <uuid>".
+    for line in r.stdout.splitlines():
+        if "project id:" in line:
+            return line.split("project id:")[1].strip()
+    raise SystemExit("could not parse project id from seed output")
+
+
+def _serve(home: str, port: int) -> subprocess.Popen:
+    env = dict(os.environ, HEXGRAPH_HOME=home, HEXGRAPH_HOST="127.0.0.1",
+               HEXGRAPH_PORT=str(port), HEXGRAPH_FUZZER="mock")
+    proc = subprocess.Popen([sys.executable, "-m", "hexgraph.cli", "serve"], env=env,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    base = f"http://127.0.0.1:{port}"
+    for _ in range(120):
+        try:
+            urllib.request.urlopen(base + "/api/projects", timeout=1)
+            return proc
+        except Exception:
+            if proc.poll() is not None:
+                raise SystemExit("serve exited early")
+            time.sleep(0.5)
+    proc.terminate()
+    raise SystemExit("server did not come up")
+
+
+async def _shoot(page, name: str) -> None:
+    OUT.mkdir(parents=True, exist_ok=True)
+    await page.wait_for_timeout(400)
+    await page.screenshot(path=str(OUT / name))
+    print(f"  ✓ {name}")
+
+
+async def _fit_graph(page) -> None:
+    """Click the graph 'Fit' control so the whole graph is framed nicely."""
+    try:
+        await page.click("button[title='Fit']", timeout=2500)
+        await page.wait_for_timeout(700)
+    except Exception:
+        pass
+
+
+async def _capture(base: str, pid: str) -> None:
+    from playwright.async_api import async_playwright
+
+    proj = f"{base}/projects/{pid}"
+    async with async_playwright() as p:
+        b = await p.chromium.launch(args=["--no-sandbox", "--force-color-profile=srgb"])
+        # 1.5x device scale: crisp on hi-dpi/README displays while keeping PNGs reasonably
+        # sized (a full 2x roughly doubles the bytes for little visible gain at README width).
+        pg = await b.new_page(viewport=VIEWPORT, device_scale_factor=1.5)
+
+        # ── Projects landing (context) ───────────────────────────────────────────────
+        await pg.goto(base + "/", wait_until="networkidle")
+        await pg.wait_for_timeout(SETTLE)
+        await _shoot(pg, "projects.png")
+
+        # ── HERO 1 — the typed knowledge graph ───────────────────────────────────────
+        await pg.goto(proj, wait_until="networkidle")
+        await pg.wait_for_timeout(SETTLE + 600)
+        await _fit_graph(pg)
+        await _shoot(pg, "graph.png")
+
+        # Select a central FUNCTION node via search → its graph node highlights and the
+        # connected calls/taints/contains edges light up: a richer "knowledge graph" hero
+        # that shows the typed edges as labelled relationships, not just dots.
+        async def search_select(query: str, result_text: str) -> bool:
+            try:
+                box = pg.locator(".toolbar .input input")
+                await box.fill(query, timeout=2500)
+                await pg.wait_for_timeout(500)
+                await pg.locator(".search-pop .res", has_text=result_text).first.click(timeout=2500)
+                await pg.wait_for_timeout(900)
+                return True
+            except Exception as e:
+                print(f"  ! search_select({query}): {e}")
+                return False
+
+        await search_select("cgi_handler", "cgi_handler")
+        await _fit_graph(pg)
+        await pg.wait_for_timeout(600)
+        await _shoot(pg, "graph-selected.png")
+
+        # Now select the critical command-injection finding for the verified-PoC detail hero.
+        async def click_finding(substr: str) -> bool:
+            loc = pg.get_by_text(substr, exact=False)
+            try:
+                await loc.first.click(timeout=2500)
+                await pg.wait_for_timeout(900)
+                return True
+            except Exception:
+                return False
+
+        await click_finding("command injection")
+        await pg.wait_for_timeout(500)
+
+        # ── HERO 2 / feature — verified PoC finding detail (assurance + repro) ─────────
+        # The detail pane now shows the PoC; expand the detail pane for a clean shot.
+        try:
+            await pg.click("button[title='Expand detail']", timeout=2000)
+            await pg.wait_for_timeout(700)
+        except Exception:
+            pass
+        await _shoot(pg, "finding-verified-poc.png")
+        # Restore the detail pane size.
+        try:
+            await pg.click("button[title='Collapse detail']", timeout=1500)
+            await pg.wait_for_timeout(400)
+        except Exception:
+            pass
+
+        # ── Feature — the assurance ladder across findings (findings list) ────────────
+        # Reload to the findings tab default and capture the list with severity + types.
+        await pg.goto(proj, wait_until="networkidle")
+        await pg.wait_for_timeout(SETTLE)
+        await _shoot(pg, "findings-list.png")
+
+        # ── Feature — firmware unpacked filesystem browser ───────────────────────────
+        # Select the firmware target (the first tree row) → its NodeInspector shows the FS.
+        # Expand the detail pane so the file tree fills the right column.
+        try:
+            await pg.click("text=acme_r7000_v1.0.4.chk", timeout=2500)
+            await pg.wait_for_timeout(700)
+            try:
+                await pg.click("button[title='Expand detail']", timeout=1500)
+                await pg.wait_for_timeout(700)
+            except Exception:
+                pass
+            await _shoot(pg, "filesystem-browser.png")
+            try:
+                await pg.click("button[title='Collapse detail']", timeout=1500)
+                await pg.wait_for_timeout(300)
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"  ! filesystem-browser: {e}")
+
+        # ── Feature — Source / IDE tab with coverage shading ─────────────────────────
+        # Open Source view + the file at the campaign-shaded line via the URL deep-link,
+        # then pick the coverage campaign in the shading dropdown.
+        await pg.goto(proj + "?view=source", wait_until="networkidle")
+        await pg.wait_for_timeout(SETTLE)
+        # Pick the coverage-shading campaign (first non-"(off)" option) if present.
+        try:
+            sel = pg.locator("select").filter(has_text="completed").first
+            await sel.select_option(index=1, timeout=2000)
+        except Exception:
+            try:
+                # The shading <select> sits under "Coverage shading"; choose the 2nd option.
+                shading = pg.locator("text=Coverage shading").locator("xpath=following::select[1]")
+                await shading.select_option(index=1, timeout=2000)
+            except Exception:
+                pass
+        await pg.wait_for_timeout(500)
+        # Open target.c (the file the mock coverage map shades).
+        try:
+            await pg.click("text=target.c", timeout=2500)
+            await pg.wait_for_timeout(900)
+        except Exception:
+            pass
+        await _shoot(pg, "source-coverage.png")
+
+        # ── Feature — Campaigns tab (live/triage list) ───────────────────────────────
+        await pg.goto(proj + "?tab=campaigns", wait_until="networkidle")
+        await pg.wait_for_timeout(SETTLE)
+        await _shoot(pg, "campaigns.png")
+
+        # ── Feature / HERO 3 — the Artifacts triage (crash + assurance + stack) ───────
+        # Use the full-screen 2-pane mode so the crash card (assurance chip, exploitability,
+        # stack, triage actions) is readable rather than crammed into the narrow column.
+        try:
+            await pg.click(".card", timeout=2500)  # select the (one) campaign row
+            await pg.wait_for_timeout(900)
+            try:
+                await pg.click("button[title='Expand to full screen']", timeout=1500)
+                await pg.wait_for_timeout(800)
+            except Exception:
+                pass
+            await _shoot(pg, "artifacts-triage.png")
+            try:
+                await pg.click("button[title='Restore']", timeout=1500)
+                await pg.wait_for_timeout(300)
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"  ! artifacts-triage: {e}")
+
+        # ── Feature — the Fuzz modal ─────────────────────────────────────────────────
+        await pg.goto(proj + "?tab=campaigns", wait_until="networkidle")
+        await pg.wait_for_timeout(SETTLE)
+        try:
+            await pg.click("text=New campaign", timeout=2500)
+            await pg.wait_for_timeout(900)
+            await _shoot(pg, "fuzz-modal.png")
+            await pg.keyboard.press("Escape")
+        except Exception as e:
+            print(f"  ! fuzz-modal: {e}")
+
+        # ── Feature — the Build modal ────────────────────────────────────────────────
+        await pg.goto(proj + "?view=source", wait_until="networkidle")
+        await pg.wait_for_timeout(SETTLE)
+        try:
+            await pg.click("text=Build (instrumented)", timeout=2500)
+            await pg.wait_for_timeout(900)
+            await _shoot(pg, "build-modal.png")
+            await pg.keyboard.press("Escape")
+        except Exception as e:
+            print(f"  ! build-modal: {e}")
+
+        # ── Feature — the egress audit log ───────────────────────────────────────────
+        await pg.goto(proj, wait_until="networkidle")
+        await pg.wait_for_timeout(SETTLE)
+        try:
+            await pg.click("button[title*='Egress audit']", timeout=2500)
+            await pg.wait_for_timeout(900)
+            await _shoot(pg, "egress-audit.png")
+            await pg.keyboard.press("Escape")
+        except Exception as e:
+            print(f"  ! egress-audit: {e}")
+
+        await b.close()
+
+
+def main() -> int:
+    home = tempfile.mkdtemp(prefix="hexgraph-showcase-")
+    print(f"▶ seeding showcase into {home}")
+    pid = _seed(home)
+    port = _free_port()
+    print(f"▶ serving on 127.0.0.1:{port}")
+    proc = _serve(home, port)
+    try:
+        asyncio.run(_capture(f"http://127.0.0.1:{port}", pid))
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except Exception:
+            proc.kill()
+    print(f"\n✓ screenshots written to {OUT}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
