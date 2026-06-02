@@ -17,9 +17,14 @@ export const NODE_T: Record<string, string> = {
   hypothesis: "#e3b341", pattern: "#bc8cff",
   input: "#58a6ff", sink: "#db6d28", socket: "#f778ba", endpoint: "#2dd4bf", param: "#a5d6ff",
 };
-// Per-node-type shape, so types are distinguishable independent of color.
+// Per-node-type shape, so types are distinguishable independent of color (a redundant
+// channel: color + shape, so types stay tellable apart when nodes shrink below
+// hue-resolution and for low-contrast/colorblind viewers — color is never weakened).
+// Phase-1 extension: every conceptual type is now shape-distinct.
 export const NODE_SHAPE: Record<string, string> = {
   socket: "hexagon", endpoint: "tag", param: "ellipse", input: "triangle", sink: "vee",
+  struct: "barrel", hypothesis: "pentagon", pattern: "diamond",
+  string: "round-tag", symbol: "round-diamond",
 };
 export const EDGE_C: Record<string, string> = {
   contains: "#46506a", calls: "#6aa3ff", about: "#3b4458", related_to: "#f0883e",
@@ -29,9 +34,38 @@ export const EDGE_C: Record<string, string> = {
 };
 // Semantic edges whose type/attrs are the point — always labelled, not just on hover.
 const ALWAYS_LABEL = new Set(["taints", "bypasses", "listens_on", "connects_to", "routes_to"]);
+// Structural / scaffolding edges (the gray cobweb): recede hardest at rest so the colored
+// semantic edges separate out. (containment, location, references, build provenance.)
+const STRUCTURAL = new Set([
+  "contains", "about", "references", "located_in", "built_from",
+  "produced_artifact", "instrumented_build_of", "derived_from",
+]);
+// Semantic / security edges carry the finding — sit a touch stronger at rest.
+const SEMANTIC = new Set([
+  "calls", "taints", "bypasses", "routes_to", "listens_on", "connects_to",
+  "links_against", "similar_to", "related_to", "instance_of_pattern", "fuzzed_by",
+]);
 const RESOLVED = new Set(["confirmed", "dismissed", "reported"]);
+// Monochrome anchor glyphs (a third redundant channel, on the prominent anchors only) —
+// simple geometric marks that render reliably as SVG text across browsers (no emoji).
+const KIND_GLYPH: Record<string, string> = {
+  firmware_image: "▣",   // ▣ chip
+  executable: "▶",       // ▶ run/terminal
+  shared_library: "⧉",   // ⧉ stacked (library)
+  web_app: "⊕",          // ⊕ globe-ish
+  service: "⇄",          // ⇄ socket/duplex
+  remote: "↗",           // ↗ remote
+};
+// Render an anchor's glyph char as a small monochrome SVG data URI so Cytoscape can lay it
+// on the node as a background-image (a color-independent channel on the prominent anchors).
+function glyphDataUri(ch: string): string {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40">`
+    + `<text x="20" y="21" font-size="24" font-family="sans-serif" text-anchor="middle" `
+    + `dominant-baseline="central" fill="#0a0c12">${ch}</text></svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
 
-export default function GraphView({ graph, onSelect, onEdgeSelect, onDrawEdge, selectedId }: { graph: Graph; onSelect: (id: string, type: string) => void; onEdgeSelect?: (edge: Graph["edges"][number] | null) => void; onDrawEdge?: (srcId: string, dstId: string) => void; selectedId?: string }) {
+export default function GraphView({ graph, onSelect, onEdgeSelect, onDrawEdge, selectedId, isolateType }: { graph: Graph; onSelect: (id: string, type: string) => void; onEdgeSelect?: (edge: Graph["edges"][number] | null) => void; onDrawEdge?: (srcId: string, dstId: string) => void; selectedId?: string; isolateType?: string | null }) {
   const ref = useRef<HTMLDivElement>(null);
   const cyRef = useRef<cytoscape.Core>();
   const ehRef = useRef<any>(null);
@@ -82,12 +116,35 @@ export default function GraphView({ graph, onSelect, onEdgeSelect, onDrawEdge, s
     const vEdges = graph.edges.filter((e) => !isHidden(e.source) && !isHidden(e.target));
     const collapsedCount = (id: string) => descendants(id).filter((d) => !baseHidden.has(d)).length;
 
+    // Importance signal → node size (§4.5): give the eye an entry point. Degree over the
+    // VISIBLE edges, with targets/findings promoted to anchor tiers so hubs and the
+    // firmware root read bigger and leaf nodes smaller (a bounded ramp, never every node 26px).
+    const degree = new Map<string, number>();
+    for (const e of vEdges) {
+      degree.set(e.source, (degree.get(e.source) || 0) + 1);
+      degree.set(e.target, (degree.get(e.target) || 0) + 1);
+    }
     const elements = [
       ...shown.map((n) => {
         const isCollapsed = collapsed.has(n.id);
         const n2 = collapsedCount(n.id);
         const label = isCollapsed && n2 ? `${n.label}  ▸${n2}` : n.label;
-        return { data: { id: n.id, label, gtype: n.type, severity: n.severity, kind: n.kind, node_type: n.node_type, collapsed: isCollapsed ? 1 : 0 } };
+        const deg = degree.get(n.id) || 0;
+        // tier: anchor (target/project root) · hub (high degree) · detail (the rest).
+        // The diamond findings get their own severity-driven bump in the stylesheet.
+        const anchor = n.type === "target";
+        const tier = anchor ? "anchor" : deg >= 8 ? "hub" : "detail";
+        // legend isolate-by-type key (kind for targets, node_type for nodes, "finding").
+        const tkey = n.type === "target" ? (n.kind as string)
+          : n.type === "finding" ? "finding" : (n.node_type as string);
+        const glyph = anchor ? (KIND_GLYPH[n.kind as string] || "") : "";
+        return { data: {
+          id: n.id, label, gtype: n.type, severity: n.severity, kind: n.kind,
+          node_type: n.node_type, collapsed: isCollapsed ? 1 : 0,
+          deg, tier, tkey, glyph,
+          // capped degree for the mapData size ramp on hubs (8→24 → 30→40px).
+          degc: Math.max(8, Math.min(24, deg)),
+        } };
       }),
       ...vEdges.map((e) => {
         const a = e.attrs || {};
@@ -95,41 +152,96 @@ export default function GraphView({ graph, onSelect, onEdgeSelect, onDrawEdge, s
         if (e.type === "calls" && (a.call_sites?.length || (e.count && e.count > 1))) hint = ` ×${a.call_sites?.length || e.count}`;
         else if ((e.type === "listens_on" || e.type === "connects_to") && a.address) hint = ` @${a.address}`;
         else if (a.port) hint = ` :${a.port}`;
+        const eclass = STRUCTURAL.has(e.type) ? "structural" : SEMANTIC.has(e.type) ? "semantic" : "other";
         return { data: { id: e.id, source: e.source, target: e.target, etype: e.type, elabel: e.type + hint,
-                         color: EDGE_C[e.type] || "#3b4458", persist: ALWAYS_LABEL.has(e.type) ? 1 : 0 } };
+                         color: EDGE_C[e.type] || "#3b4458", persist: ALWAYS_LABEL.has(e.type) ? 1 : 0,
+                         eclass } };
       }),
     ];
 
     const cy = cytoscape({
       container: ref.current, elements, wheelSensitivity: 0.25,
+      // Labels never render sub-legibly: they fade/vanish cleanly rather than colliding.
       style: [
         {
           selector: "node",
           style: {
+            // Label discipline (§3.3/§5): node labels fade in with zoom (`mapData(zoom)`)
+            // so they don't collide into soup when zoomed out on a big graph, and grow
+            // crisp on approach. `min-zoomed-font-size` makes a label disappear cleanly
+            // rather than render as illegible mush. Anchors/hubs/selection override below.
             label: "data(label)", color: "#cdd5e2", "font-size": "9px", "font-weight": 600,
+            "text-opacity": "mapData(degc, 8, 24, 0.0, 0.55)" as any,
+            "min-zoomed-font-size": 7,
             "text-valign": "bottom", "text-margin-y": 5, "text-wrap": "ellipsis", "text-max-width": "104px",
-            width: 26, height: 26,
+            "text-background-color": "#0a0c12", "text-background-opacity": 0.9, "text-background-padding": "3px",
+            "text-background-shape": "roundrectangle",
+            // Importance-driven sizing (§4.5): detail = 22px, hubs ramp 30→40 by degree.
+            // Anchors/findings get explicit sizes in their own selectors below.
+            width: 22, height: 22,
             "background-color": (n: any) => n.data("gtype") === "finding" ? (SEV[n.data("severity")] || "#7d8799") : n.data("gtype") === "node" ? (NODE_T[n.data("node_type")] || "#7d8799") : (KIND[n.data("kind")] || "#7d8799"),
             shape: ((n: any) => n.data("gtype") === "finding" ? "diamond" : NODE_SHAPE[n.data("node_type")] || (n.data("gtype") === "node" ? "round-rectangle" : "ellipse")) as any,
-            "border-width": (n: any) => n.data("collapsed") ? 3 : 2, "border-color": (n: any) => n.data("collapsed") ? "#e3b341" : "#0a0c12",
+            "border-width": (n: any) => n.data("collapsed") ? 3 : 1.5, "border-color": (n: any) => n.data("collapsed") ? "#e3b341" : "#0a0c12",
             "underlay-color": (n: any) => n.data("gtype") === "finding" ? (SEV[n.data("severity")] || "#7d8799") : (KIND[n.data("kind")] || "#39c5cf"),
             "underlay-opacity": (n: any) => (n.data("gtype") === "finding" && (n.data("severity") === "critical" || n.data("severity") === "high") ? 0.28 : 0.12),
-            "underlay-padding": 5, "underlay-shape": "ellipse",
+            "underlay-padding": 4, "underlay-shape": "ellipse",
           },
         },
-        { selector: "node:selected", style: { "border-color": "#6aa3ff", "border-width": 3, "underlay-color": "#6aa3ff", "underlay-opacity": 0.4, "underlay-padding": 8 } },
+        // Hubs (degree ≥ 8): a degree-driven 30→40px ramp + a slight glow, and their
+        // labels read a bit earlier (they're the structure-bearing nodes).
+        { selector: "node[tier = 'hub']", style: {
+            width: "mapData(degc, 8, 24, 30, 40)" as any, height: "mapData(degc, 8, 24, 30, 40)" as any,
+            "text-opacity": "mapData(degc, 8, 24, 0.55, 0.95)" as any,
+            "underlay-opacity": 0.18, "underlay-padding": 6,
+        } },
+        // Anchors (targets / firmware root): the entry point — big, crisp, always-labelled,
+        // with a monochrome type glyph as a third (color-independent) channel.
+        { selector: "node[tier = 'anchor']", style: {
+            width: 40, height: 40, "font-size": "11px", "text-opacity": 1,
+            "border-width": 2, "border-color": "#0a0c12",
+            "underlay-opacity": 0.22, "underlay-padding": 7,
+        } },
+        // The anchor glyph (a centered monochrome mark on top of the node fill).
+        { selector: "node[tier = 'anchor'][glyph != '']", style: {
+            "background-image": (n: any) => glyphDataUri(n.data("glyph")) as any,
+            "background-width": "58%", "background-height": "58%",
+            "background-fit": "none", "background-clip": "node",
+        } },
+        // Findings stay diamonds on the SEV ramp, sized up for critical/high so the eye is
+        // pulled to the hot ones first (the missing entry point).
+        { selector: "node[gtype = 'finding']", style: {
+            width: (n: any) => (n.data("severity") === "critical" ? 34 : n.data("severity") === "high" ? 30 : 24),
+            height: (n: any) => (n.data("severity") === "critical" ? 34 : n.data("severity") === "high" ? 30 : 24),
+            "text-opacity": (n: any) => (n.data("severity") === "critical" || n.data("severity") === "high" ? 1 : 0.55),
+        } },
+        { selector: "node:selected", style: { "border-color": "#6aa3ff", "border-width": 3, "text-opacity": 1, "underlay-color": "#6aa3ff", "underlay-opacity": 0.4, "underlay-padding": 8 } },
         {
           selector: "edge",
           style: {
-            width: 1.6, "line-color": "data(color)", "target-arrow-color": "data(color)", "target-arrow-shape": "triangle",
-            "curve-style": "bezier", "arrow-scale": 0.75, opacity: 0.55, label: "", "font-size": "7px", color: "#8893a6",
-            "text-rotation": "autorotate", "text-background-color": "#0a0c12", "text-background-opacity": 0.8, "text-background-padding": "2px",
+            // Edge-ink recede (§3.1/§5): the resting graph is CALM. Base width + opacity
+            // are lower than before so edges stop dominating as a cobweb; structural and
+            // semantic classes tune from here (below).
+            width: 1.1, "line-color": "data(color)", "target-arrow-color": "data(color)", "target-arrow-shape": "triangle",
+            "curve-style": "bezier", "arrow-scale": 0.7, opacity: 0.28, label: "", "font-size": "7px", color: "#8893a6",
+            "text-rotation": "autorotate", "text-background-color": "#0a0c12", "text-background-opacity": 0.9, "text-background-padding": "3px",
+            "min-zoomed-font-size": 7,
           },
         },
-        // Semantic edges (taints/bypasses/listens_on/connects_to/routes_to) carry the
-        // graph's meaning — label them at rest, a touch brighter than structural edges.
-        { selector: "edge[persist = 1]", style: { label: "data(elabel)", opacity: 0.8 } },
-        { selector: "edge.lit", style: { label: "data(elabel)", opacity: 1, width: 2.2 } },
+        // Structural scaffolding (contains/references/located_in/built_from/…): the gray
+        // cobweb — recede hardest and DROP the arrowhead at rest so the colored semantic
+        // edges separate out. This is the biggest LARGE win.
+        { selector: "edge[eclass = 'structural']", style: { opacity: 0.18, width: 1.0, "target-arrow-shape": "none" } },
+        // Semantic / security edges (calls/taints/routes_to/listens_on/…): a touch stronger.
+        { selector: "edge[eclass = 'semantic']", style: { opacity: 0.32, width: 1.3 } },
+        // Semantic edges whose type/attrs are the point — labelled at rest (above the zoom
+        // floor), brighter still. Their labels also obey min-zoomed-font-size.
+        { selector: "edge[persist = 1]", style: { label: "data(elabel)", opacity: 0.42, width: 1.5 } },
+        { selector: "edge.lit", style: { label: "data(elabel)", opacity: 1, width: 2.4, "target-arrow-shape": "triangle", "z-index": 20 } },
+        // Legend isolate-by-type (lightweight Phase-1 preview; the deep focus/context
+        // system is Phase 2): hovering/clicking a legend chip dims everything that ISN'T
+        // that type, hue preserved at low alpha (mute, never de-color — D8).
+        { selector: "node.type-dim", style: { opacity: 0.1, "text-opacity": 0, "underlay-opacity": 0 } },
+        { selector: "edge.type-dim", style: { opacity: 0.05, label: "" } },
       ],
       layout: { name: "dagre", rankDir: "LR", nodeSep: 26, rankSep: 72, padding: 24 } as any,
     });
@@ -184,6 +296,20 @@ export default function GraphView({ graph, onSelect, onEdgeSelect, onDrawEdge, s
     cy.$(":selected").unselect();
     if (selectedId) { const el = cy.getElementById(selectedId); if (el) { el.select(); el.connectedEdges?.().addClass("lit"); } }
   }, [selectedId]);
+
+  // Legend isolate/preview-by-type: dim everything that is not the chosen node-type OR
+  // edge-type. A node-type keeps its nodes + their incident edges; an edge-type keeps those
+  // edges + their endpoints. Hue is preserved (mute, not de-color). Live on the cy instance.
+  useEffect(() => {
+    const cy = cyRef.current; if (!cy) return;
+    cy.elements().removeClass("type-dim");
+    if (!isolateType) return;
+    const keepNodes = cy.nodes(`[tkey = "${isolateType}"]`);
+    const keepByEdge = cy.edges(`[etype = "${isolateType}"]`);
+    const keepEdges = keepByEdge.union(keepNodes.connectedEdges());
+    const keep = keepNodes.union(keepEdges).union(keepByEdge.connectedNodes());
+    cy.elements().not(keep).addClass("type-dim");
+  }, [isolateType, graph]);
 
   const fit = () => cyRef.current?.animate({ fit: { eles: cyRef.current.elements(), padding: 28 } }, { duration: 250 });
   const zoom = (f: number) => { const cy = cyRef.current; if (cy) cy.animate({ zoom: cy.zoom() * f, center: { eles: cy.elements() } }, { duration: 150 }); };

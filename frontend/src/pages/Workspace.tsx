@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api, Finding, Graph, GraphNode, ProjectDetail, SettingsView, TargetNode } from "../api";
 import Header from "../components/Header";
-import GraphView, { NODE_T, EDGE_C, KIND } from "../components/GraphView";
+import GraphView, { NODE_T, EDGE_C, KIND, NODE_SHAPE } from "../components/GraphView";
 import FindingsPanel from "../components/FindingsPanel";
 import Inspector from "../components/Inspector";
 import NodeInspector from "../components/NodeInspector";
@@ -29,6 +29,10 @@ export default function Workspace() {
   const [selNode, setSelNode] = useState<GraphNode | null>(null);
   const [selEdge, setSelEdge] = useState<any | null>(null);
   const [selGraphId, setSelGraphId] = useState<string>();
+  // Legend isolate-by-type: a hovered chip previews (transient), a clicked chip pins.
+  // The pinned type wins; otherwise the hovered one drives the graph dim.
+  const [hoverType, setHoverType] = useState<string | null>(null);
+  const [pinType, setPinType] = useState<string | null>(null);
   const [busy, setBusy] = useState<string>();
   const [tab, setTab] = useState<"findings" | "tasks" | "campaigns">(
     new URLSearchParams(window.location.search).get("tab") === "campaigns" ? "campaigns" : "findings");
@@ -434,12 +438,16 @@ export default function Workspace() {
           ) : (
           <>
           <GraphView graph={graph} selectedId={selGraphId} onSelect={onGraphSelect}
+                     isolateType={pinType || hoverType}
                      onEdgeSelect={(e) => { setSelEdge(e); if (e) { setSelNode(null); setSelFinding(null); setSelTask(undefined); } }}
                      onDrawEdge={(src, dst) => { setEdgePrefill({ src, dst }); setModal("edge"); }} />
           {(() => {
             // Legend driven from the SAME color maps GraphView uses, showing only the
             // node/edge types actually present in this graph (single source of truth).
-            const nodeKeys: { label: string; color: string }[] = [];
+            // Each chip carries its type SHAPE (not just color) and is interactive: hover
+            // previews that type (dims the rest), click pins the isolation (click again to
+            // clear). `key` is the raw type value (the isolate key GraphView matches on).
+            const nodeKeys: { label: string; color: string; key: string; shape: string }[] = [];
             const seen = new Set<string>();
             let hasFinding = false;
             for (const n of graph.nodes) {
@@ -448,20 +456,29 @@ export default function Workspace() {
               const color = (n.type === "target" ? KIND[key] : NODE_T[key]);
               if (!key || seen.has(key) || !color) continue;
               seen.add(key);
-              nodeKeys.push({ label: key === "firmware_image" ? "firmware" : key === "shared_library" ? "library" : key, color });
+              const shape = n.type === "target" ? "circle" : (NODE_SHAPE[key] || "rrect");
+              nodeKeys.push({ label: key === "firmware_image" ? "firmware" : key === "shared_library" ? "library" : key, color, key, shape });
             }
             const edgeKeys = [...new Set(graph.edges.map((e) => e.type))]
               .filter((t) => EDGE_C[t]).map((t) => ({ label: t, color: EDGE_C[t] }));
+            const chip = (key: string, content: React.ReactNode, extraClass = "") => (
+              <span className={"it chip" + (pinType === key ? " pinned" : "") + (extraClass ? " " + extraClass : "")}
+                    key={extraClass + "-" + key}
+                    onMouseEnter={() => setHoverType(key)} onMouseLeave={() => setHoverType(null)}
+                    onClick={() => setPinType((p) => (p === key ? null : key))}
+                    title={pinType === key ? "Click to show all types" : `Isolate ${key} (click)`}>
+                {content}
+              </span>
+            );
             return (
               <div className="legend">
-                {nodeKeys.map((k) => (
-                  <span className="it" key={"n-" + k.label}><span className="sw" style={{ background: k.color }} />{k.label}</span>
-                ))}
-                {hasFinding && <span className="it"><span className="sw" style={{ background: "#ff5d6c", transform: "rotate(45deg)" }} />finding</span>}
+                {nodeKeys.map((k) => chip(k.key,
+                  <><span className={"sw shape-" + k.shape} style={{ background: k.color }} />{k.label}</>, "n"))}
+                {hasFinding && chip("finding",
+                  <><span className="sw shape-diamond" style={{ background: "#ff5d6c" }} />finding</>, "n")}
                 {edgeKeys.length > 0 && <span className="it sep" />}
-                {edgeKeys.map((k) => (
-                  <span className="it" key={"e-" + k.label}><span className="ln" style={{ background: k.color }} />{k.label}</span>
-                ))}
+                {edgeKeys.map((k) => chip(k.label,
+                  <><span className="ln" style={{ background: k.color }} />{k.label}</>, "e"))}
               </div>
             );
           })()}

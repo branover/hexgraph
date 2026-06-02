@@ -412,3 +412,42 @@ not blockers. Priorities: **P1** = high impact / do first when polishing; **P2**
   time would be nicer than the raw ISO timestamp tooltip.
 - [ ] **P3 — Campaigns tab: show the environment a campaign ran on.** The campaign row doesn't yet
   surface its `environment_id`/descriptor (it's in `config_json`); add a small "ran on: <env>" chip.
+
+## Graph presentation — Phase 1: visual legibility (2026-06-02)
+
+**Shipped in `build/graph-phase1`** (`docs/design-graph-presentation.md` §8 Phase 1). Pure
+style/`mapData` over today's flat dagre graph — **zero new deps, color-coding untouched (D8)**.
+Changes: structural edges recede (opacity ~0.18, arrowheads dropped at rest) while semantic edges
+sit a touch stronger (~0.32); importance-driven node sizing (anchors 40px + glyph + always-label,
+hubs degree-ramp 30→40px, detail 22px, findings sized up for critical/high); extended `NODE_SHAPE`
+so every conceptual type is shape-distinct (a redundant channel); node/edge labels fade in with zoom
+via `text-opacity: mapData(zoom/degree)` + `min-zoomed-font-size` (kills the label-collision soup);
+legend gains shape swatches + hover-preview / click-isolate-by-type (lightweight dim, hue preserved).
+
+**Tier fixture (reusable A/B for every phase):** `scripts/seed_graph_tiers.py` (`just graph-tiers
+[--reset|--tier T]`) seeds four deterministic mock/offline projects — SMALL (~13n/26e), MEDIUM (the
+showcase, ~27/58), LARGE (~173/649), PATHOLOGICAL (~494/2144). Guard test
+`tests/test_graph_tiers_seed.py` keeps them sized + deterministic.
+
+**Before/after human-eyes verdict (Playwright, §9 criteria):**
+- **SMALL** — Before: fine, uniform 26px dots. **After: better.** The executable anchor is clearly
+  the biggest node (+glyph, labeled), the critical finding is a prominent red diamond, sink=vee /
+  socket=hexagon read by shape. Eye lands on the anchor + red diamond. *Unregressed → improved.*
+- **MEDIUM** — Before: already the good bar (the showcase). **After: better.** Clear hierarchy now —
+  target anchors are the big circles, hubs sized up, critical findings pop; structural edges recede
+  so `taints`/`routes_to`/`listens_on` colors separate out; labels legible on approach. *Improved.*
+- **LARGE** — Before: an undifferentiated upper-center clump, gray/teal cobweb the dominant ink,
+  letterboxed. **After: markedly calmer.** The gray cobweb is pushed back so semantic structure +
+  sized hubs/anchors read; zoomed in it's navigable (colored semantic edges legible against the
+  receded gray, hub labels appear). Still letterboxed/small at default fit (layout-by-context is
+  Phase 4) — but the eye now has size hierarchy + an entry point where before it slid off. *Clear win.*
+- **PATHOLOGICAL** — Before: a dark illegible smudge. **After: visibly less of a smudge** — distinct
+  sized dots, gray cobweb receded; zoomed regions are now navigable. Not fully fixed at default
+  (the calm-countable-rooms promise needs the compound-islands phase) but a real legibility gain.
+- **Legend isolate-by-type** — verified: clicking `taints` (MEDIUM) / `socket` (LARGE) dims all but
+  that type + incident edges/endpoints, hue preserved at low alpha (mute, not de-color). Surfaces the
+  firmware network map as a readable subset. Hover = transient preview, click = pin (click to clear).
+- [ ] **Phase 2+ (later):** focus/context muting + N-hop neighborhood + breadcrumb (Phase 2);
+  compound target islands + skeleton-collapsed default + size-by-finding-weight (Phase 3);
+  layout-by-context (fcose-spread / scoped dagre / concentric) + semantic-zoom LOD to kill the
+  letterbox at LARGE/PATHOLOGICAL (Phase 4); layer panel + filter rail + Table/Matrix (Phase 5).

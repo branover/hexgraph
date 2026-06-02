@@ -522,6 +522,22 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-02: **build: graph presentation Phase 1 — visual legibility** (branch `build/graph-phase1`;
+  `docs/design-graph-presentation.md` §8 Phase 1). Frontend-only, **zero new deps, color-coding
+  untouched (D8)**. `GraphView.tsx` + `theme.css`: structural edges recede (opacity ~0.18, arrowheads
+  dropped at rest) so the gray cobweb stops dominating and semantic edges (~0.32) separate out;
+  importance-driven node sizing (anchors 40px + monochrome type glyph + always-label · hubs degree-ramp
+  30→40px · detail 22px · findings sized up for critical/high) gives the eye an entry point; extended
+  `NODE_SHAPE` so every conceptual type is shape-distinct (redundant channel); label discipline via
+  `text-opacity: mapData(zoom/degree)` + `min-zoomed-font-size` (no more label-collision soup); legend
+  gains shape swatches + hover-preview / click-isolate-by-type (lightweight dim, hue preserved at low
+  alpha — mute not de-color; un-pin clears the hover preview so click-to-clear works while hovering).
+  **Tier fixture (reusable A/B for every phase):** `scripts/seed_graph_tiers.py` (`just graph-tiers`)
+  seeds 4 deterministic mock/offline projects (SMALL ~13n/26e · MEDIUM showcase ~27/58 · LARGE
+  ~173/649 · PATHOLOGICAL ~494/2144); guard `tests/test_graph_tiers_seed.py`. Before/after human-eyes
+  verdict per tier in `docs/ui-backlog.md`: every tier improves — LARGE is markedly calmer (cobweb
+  pushed back, size hierarchy + entry point), PATHOLOGICAL visibly less of a smudge (full fix awaits
+  the compound-islands + layout phases), SMALL/MEDIUM unregressed → better.
 - 2026-06-02: **docs: README + per-feature docs overhaul, single-folder screenshots** (branch
   `docs/readme-overhaul`). Docs/tooling only (no behavior change beyond the two showcase scripts).
   Slimmed `README.md` from ~680 lines to a lean overview — one-paragraph what-it-is + the graph hero
