@@ -842,15 +842,16 @@ def _verify_network_artifact(session, project, target, campaign, artifact, *, ex
     if not port:
         raise CampaignError("network artifact has no service port to replay against")
     # Confirm the service is UP first, send the crashing message, then re-probe that it is
-    # DOWN (a fresh connect fails). Each run_tcp_probe handles the egress assert + audit;
-    # latin-1 round-trips arbitrary bytes through the str payload field. The death across a
-    # fresh connection is the unforgeable liveness transition.
+    # DOWN (a fresh connect fails). Each run_tcp_probe handles the egress assert + audit.
+    # Replay the reproducer BYTE-EXACT via payload_hex (the str payload field is utf-8
+    # re-encoded and would corrupt any non-ASCII byte). The death across a fresh connection
+    # is the unforgeable liveness transition.
     pre = run_tcp_probe(session, project, target, port=port, runner=executor)  # banner grab
     if pre.get("ok") is False:
         return {"verified": False, "detail": "service was already down before replay",
                 "assurance": assurance(UNCONFIRMED, DYNAMIC, UNSPECIFIED)}
-    run_tcp_probe(session, project, target, port=port, payload=payload.decode("latin-1"),
-                  runner=executor)  # the crashing message (audited)
+    run_tcp_probe(session, project, target, port=port, payload_hex=payload.hex(),
+                  runner=executor)  # the crashing message, byte-exact (audited)
     post = run_tcp_probe(session, project, target, port=port, runner=executor)  # re-probe liveness
     verified = post.get("ok") is False
     return {"verified": verified,

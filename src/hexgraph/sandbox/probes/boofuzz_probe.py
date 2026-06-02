@@ -55,10 +55,22 @@ def _write_status(outdir, obj):
 
 # ── liveness oracle ──────────────────────────────────────────────────────────────
 
+# The active egress allowlist (set in main). The `_egress` socket-guard backstop only
+# covers TCP stream connects; for UDP `sendto` there is no stdlib chokepoint, so we
+# explicitly re-check the destination before EVERY UDP send (per-packet, not just the
+# startup pre-check) — closing the UDP gap in the can't-forget backstop.
+_ALLOW: set = set()
+
+
+def _udp_guard(host, port):
+    _egress.ensure_allowed(host, port, _ALLOW)  # raises EgressBlocked off-list
+
+
 def _alive(host, port, proto, timeout=2.0):
     """True if the service still accepts a connection (TCP) / responds (UDP)."""
     try:
         if proto == "udp":
+            _udp_guard(host, port)            # per-packet egress backstop (UDP)
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.settimeout(timeout)
             s.sendto(b"\x00", (host, port))
@@ -80,6 +92,7 @@ def _send(host, port, proto, payload, timeout=3.0):
     connection failed outright."""
     try:
         if proto == "udp":
+            _udp_guard(host, port)            # per-packet egress backstop (UDP)
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.settimeout(timeout)
             s.sendto(payload, (host, port))
@@ -172,7 +185,10 @@ def main() -> int:
     max_crashes = int(ch.get("max_crashes", 10))
     os.makedirs(outdir, exist_ok=True)
 
-    # Bounded-egress backstop: every connect must be on the allowlist.
+    # Bounded-egress backstop: every TCP connect must be on the allowlist (the stdlib
+    # socket guard), and every UDP send is re-checked per-packet against this set.
+    global _ALLOW
+    _ALLOW = set(allow)
     _egress.install_socket_guard(allow)
     try:
         _egress.ensure_allowed(host, port, allow)
