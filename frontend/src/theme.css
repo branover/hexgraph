@@ -214,6 +214,70 @@ select.sel:focus, .settings select.sel:focus { outline: none; border-color: var(
 .menu.graph-cxt .mi.danger { color: #ff9aa3; }
 .menu.graph-cxt .mi.danger:hover { background: rgba(255,93,108,.16); }
 
+/* ── Phase 5: filter chip rail (value facets, fade-first) ──────────────────────────────── */
+.filter-rail { position: absolute; left: 50%; transform: translateX(-50%); top: 10px; z-index: 8;
+  display: flex; align-items: center; flex-wrap: wrap; justify-content: center; gap: 6px; max-width: 70%;
+  background: rgba(17,20,29,.96); backdrop-filter: blur(6px);
+  border: 1px solid var(--border-strong); border-radius: 8px; padding: 5px 9px; box-shadow: var(--sh-2); }
+.filter-rail .rail-label { display: inline-flex; align-items: center; gap: 4px; font-size: 10px;
+  text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-right: 2px; }
+.chip-sel { background: var(--surface-3); border: 1px solid var(--border); color: var(--fg-dim);
+  border-radius: 999px; font-size: 11px; padding: 3px 8px; cursor: pointer; }
+.chip-sel:hover { border-color: var(--border-strong); color: var(--fg); }
+.filter-rail .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600;
+  background: var(--surface-3); border: 1px solid var(--border); color: var(--fg-dim);
+  border-radius: 999px; padding: 3px 9px; cursor: pointer; transition: background .12s, border-color .12s, color .12s; }
+.filter-rail .chip:hover { border-color: var(--border-strong); color: var(--fg); }
+.filter-rail .chip.active { background: rgba(106,163,255,.18); border-color: rgba(106,163,255,.5); color: var(--fg); }
+.filter-rail .chip.clear { color: var(--muted); }
+
+/* ── Phase 5: layer panel (show/hide node types & edge classes) ────────────────────────── */
+.menu.layer-panel { padding: 8px; }
+.layer-panel .lp-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 4px 3px; }
+.layer-panel .lp-reset { background: none; border: none; color: var(--accent); font-size: 10.5px; cursor: pointer; padding: 0 2px; }
+.layer-panel .lp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px 6px; margin-bottom: 5px; }
+.layer-panel .lp-row { display: flex; align-items: center; gap: 6px; padding: 4px 4px; border-radius: 5px;
+  font-size: 12px; cursor: pointer; color: var(--fg-dim); }
+.layer-panel .lp-row:hover { background: var(--surface-3); color: var(--fg); }
+.layer-panel .lp-row input { accent-color: var(--accent); cursor: pointer; }
+
+/* Scoped target row (panels-drive-scope, §6.3): a left border accent on the scoped binary. */
+.tree-row.scoped { border-color: var(--accent); }
+.tree-row.scoped::before { content: ""; position: absolute; left: -1px; top: 6px; bottom: 6px; width: 2px;
+  border-radius: 2px; background: var(--accent); }
+
+/* ── Phase 5: Table view ───────────────────────────────────────────────────────────────── */
+.table-view, .matrix-view { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.tv-bar { display: flex; align-items: center; gap: 8px; padding: 9px 11px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.tv-scroll, .mx-scroll { flex: 1; overflow: auto; min-height: 0; }
+.dtable { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.dtable thead th { position: sticky; top: 0; z-index: 1; background: var(--surface-2); text-align: left;
+  padding: 8px 10px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
+  border-bottom: 1px solid var(--border-strong); user-select: none; white-space: nowrap; }
+.dtable thead th:hover { color: var(--fg); }
+.dtable .sort-caret { color: var(--accent); font-size: 9px; }
+.dtable tbody td { padding: 7px 10px; border-bottom: 1px solid var(--border); }
+.dtable tbody tr:hover { background: var(--surface-2); cursor: pointer; }
+.dtable td.num { text-align: right; font-variant-numeric: tabular-nums; color: var(--fg-dim); }
+.sw-dot { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+
+/* ── Phase 5: Matrix view ──────────────────────────────────────────────────────────────── */
+.mx-table { border-collapse: collapse; font-size: 11.5px; }
+.mx-table th, .mx-table td { border: 1px solid var(--border); }
+.mx-corner { background: var(--surface-2); position: sticky; left: 0; top: 0; z-index: 3; }
+.mx-colh { padding: 6px 4px; height: 96px; vertical-align: bottom; background: var(--surface-2);
+  position: sticky; top: 0; z-index: 2; }
+.mx-coltxt { display: inline-block; writing-mode: vertical-rl; transform: rotate(180deg); max-height: 88px;
+  overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.mx-rowh { padding: 5px 10px; background: var(--surface-2); position: sticky; left: 0; z-index: 1;
+  text-align: left; white-space: nowrap; max-width: 200px; overflow: hidden; text-overflow: ellipsis;
+  cursor: pointer; font-weight: 600; }
+.mx-rowh:hover { color: var(--accent); }
+.mx-cell { width: 34px; height: 30px; text-align: center; font-variant-numeric: tabular-nums; color: var(--fg); }
+.mx-cell.hot { cursor: pointer; font-weight: 700; }
+.mx-cell.hot:hover { outline: 1px solid var(--accent); outline-offset: -1px; }
+.mx-cell.diag { color: var(--muted); }
+
 /* findings */
 .fbar { display: flex; gap: 6px; align-items: center; padding: 9px 11px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .sevsummary { display: flex; gap: 5px; padding: 8px 11px 0; flex-wrap: wrap; }

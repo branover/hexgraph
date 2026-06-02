@@ -5,6 +5,11 @@ import edgehandles from "cytoscape-edgehandles";
 import fcose from "cytoscape-fcose";
 import { Graph } from "../api";
 import { Icon } from "./Icon";
+import {
+  LayerState, FilterState, defaultLayers, defaultFilters,
+  nodeLayerOn, edgeClassOn, sevRank, anyFilterActive,
+  NODE_TYPE_LAYERS, EDGE_CLASSES,
+} from "./graphLayers";
 
 cytoscape.use(dagre);
 cytoscape.use(edgehandles);
@@ -104,6 +109,8 @@ function typeLabel(t: string): string {
 export default function GraphView({
   graph, onSelect, onEdgeSelect, onDrawEdge, selectedId, isolateType,
   focus, onFocus, onClearFocus,
+  groupBy: groupByProp, onGroupBy, layers: layersProp, onLayers,
+  filters: filtersProp, onFilters, findings: findingsProp, onFindings, scope,
 }: {
   graph: Graph;
   onSelect: (id: string, type: string) => void;
@@ -117,6 +124,20 @@ export default function GraphView({
   focus?: FocusSpec | null;
   onFocus?: (id: string, hop?: number) => void;
   onClearFocus?: () => void;
+  // ── Phase 5: layers / filters / grouping are CONTROLLED by the host (Workspace) so a
+  // Saved Lens can capture + restore the full view state, and the Table/Matrix views share
+  // the same facets. All optional: GraphView falls back to its own state when uncontrolled.
+  groupBy?: GroupBy;
+  onGroupBy?: (g: GroupBy) => void;
+  layers?: LayerState;
+  onLayers?: (l: LayerState) => void;
+  filters?: FilterState;
+  onFilters?: (f: FilterState) => void;
+  findings?: "all" | "unresolved" | "none";
+  onFindings?: (f: "all" | "unresolved" | "none") => void;
+  // panels-drive-scope (§6.3): a target id the view is scoped to. When set, that target's
+  // room is soloed/framed (others fade) — the side panels drive what the center shows.
+  scope?: string | null;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const cyRef = useRef<cytoscape.Core>();
@@ -136,11 +157,21 @@ export default function GraphView({
   // the room most recently expanded by an explicit user act — the build's layoutstop scopes
   // an auto-frame to it (design §3.4: auto-zoom only on an explicit navigation act).
   const justExpanded = useRef<string | null>(null);
-  const [findings, setFindings] = useState<"all" | "unresolved" | "none">("all");
-  const [showFns, setShowFns] = useState(true);
+  // findings tri-state + layer/filter state are CONTROLLED when the host passes them
+  // (Phase 5), else fall back to internal state so GraphView still works standalone.
+  const [findingsLocal, setFindingsLocal] = useState<"all" | "unresolved" | "none">("all");
+  const findings = findingsProp ?? findingsLocal;
+  const setFindings = (f: "all" | "unresolved" | "none") => (onFindings ? onFindings(f) : setFindingsLocal(f));
+  const [layersLocal, setLayersLocal] = useState<LayerState>(defaultLayers);
+  const layers = layersProp ?? layersLocal;
+  const setLayers = (l: LayerState) => (onLayers ? onLayers(l) : setLayersLocal(l));
+  const [filtersLocal, setFiltersLocal] = useState<FilterState>(defaultFilters);
+  const filters = filtersProp ?? filtersLocal;
+  const setFilters = (f: FilterState) => (onFilters ? onFilters(f) : setFiltersLocal(f));
   // Phase-2 legacy double-tap collapse (flat-mode only — used when groupBy === "none").
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [filterOpen, setFilterOpen] = useState(false);
+  const [layersOpen, setLayersOpen] = useState(false);
   const [drawMode, setDrawMode] = useState(false);
   // Phase-2 hop radius for new focuses launched from the verb menu / filter (1–3).
   const [hop, setHop] = useState(1);
@@ -155,7 +186,9 @@ export default function GraphView({
   // "Group by" reorganizes the canvas into compound rooms; "none" = the flat Phase-1/2 graph
   // (the REGRESSION FALLBACK). The default is by-target. Tier detection drives whether rooms
   // open collapsed (skeleton) or expanded.
-  const [groupBy, setGroupBy] = useState<GroupBy>("target");
+  const [groupByLocal, setGroupByLocal] = useState<GroupBy>("target");
+  const groupBy = groupByProp ?? groupByLocal;
+  const setGroupBy = (g: GroupBy) => (onGroupBy ? onGroupBy(g) : setGroupByLocal(g));
   // Which room ids are EXPANDED (revealing their interior). At LARGE/PATHOLOGICAL the
   // default is "no rooms expanded" (the skeleton); at SMALL/MEDIUM all rooms auto-expand.
   const [expandedRooms, setExpandedRooms] = useState<Set<string>>(new Set());
@@ -317,14 +350,43 @@ export default function GraphView({
   useEffect(() => {
     if (!ref.current) return;
     const compound = groupBy !== "none";
+    // ── Phase 5: LAYER visibility (node-type / edge-class) + the findings tri-state ──────
+    // A node type toggled OFF in the layer panel is hidden outright (it's a CLASS lever).
+    // The findings layer keeps its existing tri-state (all / unresolved / none).
     const baseHidden = new Set<string>();
     for (const n of graph.nodes) {
-      if (n.type === "node" && (n.node_type === "symbol" || n.node_type === "string")) baseHidden.add(n.id);
-      else if (n.type === "node" && n.node_type === "function" && !showFns) baseHidden.add(n.id);
-      else if (n.type === "finding") {
-        if (findings === "none") baseHidden.add(n.id);
+      if (n.type === "finding") {
+        if (findings === "none" || !nodeLayerOn(layers, "finding")) baseHidden.add(n.id);
         else if (findings === "unresolved" && RESOLVED.has(n.status)) baseHidden.add(n.id);
+      } else if (n.type === "node") {
+        if (!nodeLayerOn(layers, n.node_type as string)) baseHidden.add(n.id);
       }
+    }
+    // ── Phase 5: FILTER (value facets), FADE-FIRST. A filtered-OUT element fades to
+    // context opacity (mode="fade", default) so context isn't lost, and only fully hides
+    // on the explicit "hide" mode. Targets/findings are filtered; the filter never touches
+    // color (D8) — it only dims (.filtered) or, in hide mode, removes (baseHidden).
+    const filtered = new Set<string>();
+    if (anyFilterActive(filters)) {
+      const targetSet = new Set(filters.targets);
+      const minSev = filters.severity ? sevRank(filters.severity) : -1;
+      const tgtOf = (n: Graph["nodes"][number]): string | undefined =>
+        n.type === "target" ? n.id : (n.target_id as string | undefined);
+      for (const n of graph.nodes) {
+        let out = false;
+        // severity threshold + finding-type apply to FINDINGS (the value facets that scope triage).
+        if (n.type === "finding") {
+          if (minSev >= 0 && sevRank(n.severity as string) < minSev) out = true;
+          if (filters.findingType && (n.finding_type as string) !== filters.findingType) out = true;
+        }
+        // target multiselect: keep only elements belonging to a selected target (others fade).
+        if (targetSet.size > 0) {
+          const t = tgtOf(n);
+          if (!t || !targetSet.has(t)) out = true;
+        }
+        if (out) filtered.add(n.id);
+      }
+      if (filters.mode === "hide") for (const id of filtered) baseHidden.add(id);
     }
     // flat-mode descendant collapse (only when not grouping)
     const collapseHidden = new Set<string>();
@@ -394,7 +456,10 @@ export default function GraphView({
 
     // aggregate cross-room edges into meta-edges; keep within-open-scope edges direct.
     const degree = new Map<string, number>();
-    const realEdges = graph.edges.filter((e) => !isHidden(e.source) && !isHidden(e.target));
+    // Phase 5: an edge whose CLASS is toggled off in the layer panel is dropped entirely
+    // (edges are the dominant ink — the single biggest density lever).
+    const realEdges = graph.edges.filter((e) =>
+      !isHidden(e.source) && !isHidden(e.target) && edgeClassOn(layers, e.type));
     const metaAgg = new Map<string, { source: string; target: string; types: Set<string>; count: number; color: string }>();
     const directEdges: typeof realEdges = [];
     for (const e of realEdges) {
@@ -422,11 +487,16 @@ export default function GraphView({
       const chip = nFind > 0 ? `  ${nNodes} · ${nFind}⚠` : nNodes > 0 ? `  ${nNodes}` : "";
       const parent = parentOf.get(r.id);
       const showParent = parent && roomById.has(parent) && expandedRooms.has(parent);
+      // A room fades (filtered) iff EVERY member it contains is filtered out — so a
+      // by-target filter dims the non-selected island cards while keeping them present.
+      const mem = roomMembers.get(r.id) || [];
+      const roomFiltered = filtered.size > 0 && mem.length > 0 && mem.every((id) => filtered.has(id));
       return { data: {
         id: r.id, label: open ? r.label : r.label + chip, gtype: "room",
         kind: r.kind, tkey: r.tkey, gkind: r.gkind,
         roomOpen: open ? 1 : 0, roomSev: sev, roomWorst: worst,
         roomWeight: Math.max(8, Math.min(60, wgt)), nFind, nNodes,
+        filtered: roomFiltered ? 1 : 0,
         ...(showParent ? { parent } : {}),
       } };
     });
@@ -445,6 +515,7 @@ export default function GraphView({
         node_type: n.node_type, collapsed: 0, deg, tier: t, tkey, glyph,
         degc: Math.max(8, Math.min(24, deg)),
         bus: (n.type === "node" && n.node_type === "socket" && !n.target_id) ? 1 : 0,
+        filtered: filtered.has(n.id) ? 1 : 0,
         ...(parentOpen ? { parent } : {}),
       } };
     });
@@ -649,8 +720,17 @@ export default function GraphView({
         { selector: ".hl-dim", style: { opacity: 0.12 } as any },
         { selector: "node.type-dim", style: { opacity: 0.1, "text-opacity": 0, "underlay-opacity": 0 } },
         { selector: "edge.type-dim", style: { opacity: 0.05, label: "" } },
+        // ── Phase 5: FADE-FIRST filter (design §2.3). A filtered-out element fades to
+        // context opacity (hue PRESERVED — never de-colored, D8) so "there's more behind
+        // this" stays visible; the hard-hide path removes it via baseHidden, not here.
+        { selector: "node[filtered = 1]", style: { opacity: 0.14, "text-opacity": 0, "underlay-opacity": 0 } },
+        { selector: "edge[filtered = 1]", style: { opacity: 0.06, label: "" } },
       ],
     });
+    // An edge is filtered if either endpoint faded out (keeps the fade consistent).
+    cy.batch(() => cy.edges().forEach((e) => {
+      if (e.source().data("filtered") === 1 || e.target().data("filtered") === 1) e.data("filtered", 1);
+    }));
 
     // ── Phase 4: semantic-zoom (LOD) wiring ──────────────────────────────────────────────
     // Stamp the current zoom's LOD class onto every element, and keep it current on zoom.
@@ -810,7 +890,7 @@ export default function GraphView({
       cy.destroy();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [graph, findings, showFns, collapsed, hidden, groupBy, expandedRooms, model]);
+  }, [graph, findings, layers, filters, collapsed, hidden, groupBy, expandedRooms, model]);
 
   // expand/collapse one room (used by double-tap + the room verb menu).
   const toggleRoom = (rid: string) => setExpandedRooms((s) => {
@@ -845,6 +925,27 @@ export default function GraphView({
     if (need.length) setExpandedRooms((s) => { const x = new Set(s); need.forEach((r) => x.add(r)); return x; });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus?.id, groupBy, model]);
+
+  // ── Phase 5: panels-drive-scope (§6.3) ────────────────────────────────────────────────
+  // When the host scopes the center view to a target (a left-tree row click), expand that
+  // target's room and frame it — the panels DRIVE what the center shows. A no-op when a
+  // focus owns the camera (focus is the finer, explicit gesture). Scope-frames the room's
+  // card when collapsed, or its interior when open. Never fires on plain selection.
+  useEffect(() => {
+    const cy = cyRef.current; if (!cy || !scope || focus?.id || groupBy === "none") return;
+    const rid = "room:" + scope;
+    // expand the path to the scoped room so its card/interior is visible
+    const need: string[] = [];
+    let p: string | undefined = model.parentOf.get(rid);
+    while (p) { if (!expandedRooms.has(p)) need.push(p); p = model.parentOf.get(p); }
+    if (need.length) { setExpandedRooms((s) => { const x = new Set(s); need.forEach((r) => x.add(r)); return x; }); return; }
+    const room = cy.getElementById(rid);
+    if (room.nonempty()) {
+      const eles = room.descendants().nonempty() ? room.descendants().union(room) : room;
+      cy.animate({ fit: { eles, padding: 60 } }, { duration: 320 });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scope, groupBy, model, expandedRooms]);
 
   // ── Phase 2: apply the committed focus to the live cy instance ────────────────────────
   useEffect(() => {
@@ -930,6 +1031,37 @@ export default function GraphView({
   const curHop = focus?.hop || 1;
   const compound = groupBy !== "none";
 
+  // ── Phase 5 layer/filter helpers ──────────────────────────────────────────────────────
+  const toggleNodeLayer = (key: string) =>
+    setLayers({ ...layers, nodes: { ...layers.nodes, [key]: layers.nodes[key] === false } });
+  const toggleEdgeLayer = (key: string) =>
+    setLayers({ ...layers, edges: { ...layers.edges, [key]: layers.edges[key] === false } });
+  // node-types actually present (so the panel lists only relevant toggles).
+  const presentNodeTypes = useMemo(() => {
+    const s = new Set<string>();
+    for (const n of graph.nodes) {
+      if (n.type === "finding") s.add("finding");
+      else if (n.type === "node") s.add(n.node_type as string);
+    }
+    return s;
+  }, [graph]);
+  const presentEdgeClasses = useMemo(() => {
+    const s = new Set<string>();
+    for (const e of graph.edges) s.add((EDGE_CLASSES.find((c) => c.types.includes(e.type))?.key) || "semantic");
+    return s;
+  }, [graph]);
+  const targetsInGraph = useMemo(
+    () => graph.nodes.filter((n) => n.type === "target").map((n) => ({ id: n.id, label: n.label })),
+    [graph]);
+  const findingTypesInGraph = useMemo(
+    () => [...new Set(graph.nodes.filter((n) => n.type === "finding")
+      .map((n) => (n.finding_type as string) || "other"))], [graph]);
+  const filterActive = anyFilterActive(filters);
+  const layersDefault = NODE_TYPE_LAYERS.every((l) => nodeLayerOn(layers, l.key) === !["symbol", "string", "param"].includes(l.key))
+    && EDGE_CLASSES.every((c) => layers.edges[c.key] !== false);
+  const resetLayers = () => setLayers(defaultLayers());
+  const clearFilters = () => setFilters(defaultFilters());
+
   return (
     <div className="graph-wrap">
       <div id="cy" ref={ref} />
@@ -978,19 +1110,97 @@ export default function GraphView({
           )}
         </div>
       )}
+      {/* ── Phase 5: FILTER CHIP RAIL (value facets, fade-first) ──────────────────────────
+          A collapsible rail of composable VALUE filters (severity / target / finding-type),
+          distinct from the class LAYERS. Fade-first by default (a filtered-out element fades,
+          keeping context); the ⓘ toggle flips to hard-hide. Pinned top-left under the
+          breadcrumb, shown only when opened or active. */}
+      {(filterOpen || filterActive) && (
+        <div className="filter-rail">
+          <span className="rail-label"><Icon name="filter" size={11} /> filters</span>
+          <select className="chip-sel" value={filters.severity ?? ""} title="Minimum finding severity"
+                  onChange={(e) => setFilters({ ...filters, severity: e.target.value || null })}>
+            <option value="">severity: any</option>
+            <option value="low">≥ low</option><option value="medium">≥ medium</option>
+            <option value="high">≥ high</option><option value="critical">critical</option>
+          </select>
+          {findingTypesInGraph.length > 1 && (
+            <select className="chip-sel" value={filters.findingType ?? ""} title="Finding type"
+                    onChange={(e) => setFilters({ ...filters, findingType: e.target.value || null })}>
+              <option value="">type: any</option>
+              {findingTypesInGraph.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          )}
+          {targetsInGraph.length > 1 && (
+            <select className="chip-sel" value="" title="Add a target to the filter (others fade)"
+                    onChange={(e) => { const v = e.target.value; if (v && !filters.targets.includes(v)) setFilters({ ...filters, targets: [...filters.targets, v] }); }}>
+              <option value="">+ target…</option>
+              {targetsInGraph.filter((t) => !filters.targets.includes(t.id)).map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+            </select>
+          )}
+          {filters.targets.map((tid) => {
+            const t = targetsInGraph.find((x) => x.id === tid);
+            return (
+              <span className="chip active" key={tid} title="Remove target from filter"
+                    onClick={() => setFilters({ ...filters, targets: filters.targets.filter((x) => x !== tid) })}>
+                {t?.label || tid.slice(0, 8)} <Icon name="x" size={10} />
+              </span>
+            );
+          })}
+          <button className={"chip" + (filters.mode === "hide" ? " active" : "")}
+                  title={filters.mode === "hide" ? "Hard-hide filtered elements (click → fade-first)" : "Fade filtered elements (click → hard-hide)"}
+                  onClick={() => setFilters({ ...filters, mode: filters.mode === "hide" ? "fade" : "hide" })}>
+            {filters.mode === "hide" ? "hide" : "fade"}
+          </button>
+          {filterActive && <button className="chip clear" title="Clear all filters" onClick={clearFilters}>clear ↺</button>}
+        </div>
+      )}
       <div className="graph-controls">
+        {/* group-by control */}
+        <select className="btn sm sel" value={groupBy} title="Group by (compound rooms)"
+                onChange={(e) => setGroupBy(e.target.value as GroupBy)}
+                style={{ width: "auto", minWidth: 96 }}>
+          <option value="target">by target</option>
+          <option value="type">by type</option>
+          <option value="finding">by finding</option>
+          <option value="none">flat (none)</option>
+        </select>
+        {/* ── LAYER PANEL: show/hide each node TYPE and edge CLASS independently (§2.2). */}
         <div style={{ position: "relative" }}>
-          <button className="btn icon" title="Filter & grouping" onClick={() => setFilterOpen((o) => !o)}><Icon name="filter" /></button>
+          <button className={"btn icon" + (layersDefault ? "" : " primary")} title="Layers — show/hide node types & edge classes" onClick={() => { setLayersOpen((o) => !o); setFilterOpen(false); }}>
+            <Icon name="hex" />
+          </button>
+          {layersOpen && (
+            <div className="menu layer-panel" style={{ right: 0, top: "auto", bottom: 36, minWidth: 248 }} onMouseLeave={() => setLayersOpen(false)}>
+              <div className="lp-head">
+                <span className="muted" style={{ fontSize: 11 }}>node types</span>
+                {!layersDefault && <button className="lp-reset" onClick={resetLayers} title="Reset layers to defaults">reset</button>}
+              </div>
+              <div className="lp-grid">
+                {NODE_TYPE_LAYERS.filter((l) => presentNodeTypes.has(l.key)).map((l) => (
+                  <label className="lp-row" key={l.key} title={`Toggle ${l.label} nodes`}>
+                    <input type="checkbox" checked={nodeLayerOn(layers, l.key)} onChange={() => toggleNodeLayer(l.key)} />
+                    <span>{l.label}</span>
+                  </label>
+                ))}
+              </div>
+              <div className="lp-head"><span className="muted" style={{ fontSize: 11 }}>edge classes</span></div>
+              <div className="lp-grid">
+                {EDGE_CLASSES.filter((c) => presentEdgeClasses.has(c.key)).map((c) => (
+                  <label className="lp-row" key={c.key} title={`Toggle ${c.label} edges`}>
+                    <input type="checkbox" checked={layers.edges[c.key] !== false} onChange={() => toggleEdgeLayer(c.key)} />
+                    <span>{c.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+        {/* filters / extras */}
+        <div style={{ position: "relative" }}>
+          <button className={"btn icon" + (filterActive ? " primary" : "")} title="Filters & options" onClick={() => { setFilterOpen((o) => !o); setLayersOpen(false); }}><Icon name="filter" /></button>
           {filterOpen && (
             <div className="menu" style={{ right: 0, top: "auto", bottom: 36, minWidth: 216 }}>
-              <div className="sub"><label className="muted" style={{ fontSize: 11 }}>group by (compound rooms)</label>
-                <select className="sel" value={groupBy} onChange={(e) => setGroupBy(e.target.value as GroupBy)}>
-                  <option value="target">target (default)</option>
-                  <option value="type">node type</option>
-                  <option value="finding">finding</option>
-                  <option value="none">none (flat)</option>
-                </select>
-              </div>
               {compound && (
                 <>
                   <div className="mi" onClick={expandAll}><Icon name="fit" size={13} /> Expand all rooms</div>
@@ -1006,7 +1216,6 @@ export default function GraphView({
               <div className="sub"><label className="muted" style={{ fontSize: 11 }}>focus neighborhood ({hop} hop{hop > 1 ? "s" : ""})</label>
                 <input type="range" min={1} max={3} value={hop} onChange={(e) => setHop(Number(e.target.value))} style={{ width: "100%" }} />
               </div>
-              <div className="mi" onClick={() => setShowFns((v) => !v)}><Icon name={showFns ? "check" : "x"} size={13} /> functions</div>
               {!compound && <div className="mi" onClick={() => setCollapsed(new Set())}><Icon name="fit" size={13} /> expand all</div>}
               {hidden.size > 0 && <div className="mi" onClick={restoreHidden}><Icon name="refresh" size={13} /> restore {hidden.size} hidden</div>}
             </div>

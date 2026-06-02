@@ -636,3 +636,68 @@ Changes:
 *Limitation (by design — deferred):* the concentric re-arrange is a Phase-2 live nicety so focus
 frames readably on the flat layout; the resting LARGE/PATH default frame is still letterboxed/small
 (layout-by-context + the skeleton default are Phase 3/4). Hover preview is faint at far zoom.
+
+## Graph presentation — Phase 5: layer panel + filter rail + complementary views (2026-06-02)
+
+**Shipped in `build/graph-phase5`** (`docs/design/design-graph-presentation.md` §8 Phase 5; §2.2/§2.3/§6).
+The final graph-redesign phase — most surface area, lowest risk; each sub-piece independently
+shippable. Frontend-only over the existing `/graph` payload **+** one managed `settings.json`
+field for Saved Lenses (NO DB/schema/migration). **Color untouched (D8)** — layers/filters change
+visibility/opacity only; the fade-first dim preserves hue at low alpha (the Phase-2 `.context` model).
+
+**Shipped (core):**
+- **Layer panel (§2.2)** — the ad-hoc symbol/string/function/findings toggles are generalized into a
+  proper panel: a checkbox per NODE TYPE (function · symbol · string · struct · endpoint · socket ·
+  param · input · sink · hypothesis · pattern · finding) and per EDGE CLASS (structural · call graph ·
+  semantic/security · provenance), listed only for types/classes present. Defaults preserve today's
+  policy (symbol/string/param off). Verified: toggling structural+call OFF on LARGE drops edges
+  119 → 24, de-hairballing to the colored semantic paths.
+- **Filter chip rail (§2.3), fade-first** — a top-center rail of composable VALUE chips: severity
+  threshold, target multiselect, finding-type. Filtered-out elements **fade** to context opacity
+  (hue preserved) by default; a `fade`/`hide` chip flips to hard-hide. `clear ↺` resets.
+- **Center-pane view switcher (§6.1):** `Map · Graph · Table · Matrix · Source` — Graph stays the
+  obvious default; URL-synced (`?view=`).
+- **Table view** — sortable/filterable Nodes (swatch · name · type · target · degree · #findings) and
+  Edges (type · source · target · origin · conf · ×count) tables; honors the same layers/filters/scope;
+  row click → reveal in the graph. Makes a PATHOLOGICAL target fully usable as a list.
+- **Matrix view** — a target×target adjacency matrix over cross-binary relationships
+  (links_against/references/similar_to/connects_to), intensity-scaled cells with counts; cell click →
+  scope that target in the graph.
+
+**Shipped (the deferrable pieces — all landed):**
+- **Map** — the §1 skeleton given a name in the switcher (GraphView with group-by pinned to target).
+- **Saved Lenses (§6.2)** — named snapshots `{view, scope, group-by, findings, layers, filters, focus}`
+  persisted in `settings.json` via the settings API (managed `ui.lenses`, structurally validated, no
+  migration; +tests). Save/apply/delete from a toolbar dropdown; deep-linkable `?lens=<name>`. Verified
+  round-trip: create → persist → reload → apply.
+- **Panels-drive-scope (§6.3)** — clicking a left-tree target row scopes the center view to it (expand +
+  frame in Graph; filter in Table); a scope crumb (`Overview › <target> ×`) clears it. Re-click the row
+  to toggle off.
+
+**State architecture:** layers/filters/group-by/findings/scope are lifted to `Workspace` so the
+switcher, Table/Matrix, and Lenses share one coherent presentation state; `GraphView` accepts them as
+controlled props (falls back to internal state when uncontrolled). A manual facet change drops the
+active-lens badge (the view diverged).
+
+**Human-eyes verdict (Playwright §9, judged as a human):**
+- **Layer panel + filter rail discoverable & narrowing** — **PASS.** The layer panel (hex button) and
+  the top-center filter rail are clearly findable; toggling structural+call to OFF visibly collapses the
+  LARGE cobweb to the colored semantic paths, and a severity≥high filter fades the low findings while
+  keeping them present (fade-first reads right — "there's more behind this"). **[Color kept ✓]**
+- **Table makes PATHOLOGICAL browsable** — **PASS.** The 494-node target lists cleanly, sorted by degree
+  desc by default; the top-degree functions are at the top in one glance; color swatches + severity
+  chips reuse the vocab.
+- **Matrix conveys dense N×N** — **PASS.** The 13×13 (LARGE) / 19×19 (PATHOLOGICAL) links_against grid is
+  legible with zero crossings — the cross-binary structure the node-link view hairballs on.
+- **Switcher clean, Graph stays default** — **PASS.** Graph is highlighted by default at every tier;
+  Map/Table/Matrix are obvious alternatives.
+- **Saved Lenses round-trip** — **PASS.** Saved a lens, confirmed it persisted to the settings API,
+  survived reload, and re-appeared in the menu.
+- **Phases 1–4 unregressed** — **PASS.** SMALL/MEDIUM read identically (call chain, rooms, legend);
+  LARGE/PATHOLOGICAL still open as the calm skeleton; group-by, focus, LOD, the flat "None" fallback all
+  still work.
+
+*Deferred / notes:* none of the §8 Phase-5 scope was dropped. Map is the lightweight "group-by-target"
+surfacing of the skeleton rather than a bespoke read-only territory canvas (the design sanctions this:
+"Map = the §1 skeleton given a name"); a richer no-intra-edges Map canvas could be a later polish. The
+1.16 MB JS bundle warning is pre-existing (code-splitting is a separate cleanup).

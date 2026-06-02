@@ -26,10 +26,25 @@ export interface RunDiff {
   changed: { title: string; from: string; to: string }[];
 }
 export interface SecretStatus { present: boolean; source: string | null; }
+// A Saved Lens (design-graph-presentation §6.2): a named, non-secret snapshot of
+// the center-pane presentation — view + scope + group-by + filters + layer
+// visibility + focus — persisted in settings.json (no DB/schema change).
+export interface SavedLens {
+  name: string;
+  view?: "map" | "graph" | "table" | "matrix" | "source";
+  scope?: string | null;          // target id the view is scoped to (panels-drive-scope)
+  groupBy?: "target" | "type" | "finding" | "none";
+  findings?: "all" | "unresolved" | "none";
+  layers?: { nodes?: Record<string, boolean>; edges?: Record<string, boolean> };
+  filters?: { severity?: string | null; targets?: string[]; findingType?: string | null; mode?: "fade" | "hide" };
+  focus?: string | null;
+  hop?: number;
+}
 export interface SettingsView {
   settings: {
     llm: { backend: string; model: string | null };
     server: { host: string; port: number };
+    ui: { lenses: SavedLens[] };
     features: {
       ghidra: { enabled: boolean; mode: string; enrich_recon: boolean; timeout: number; bridge: { host: string; port: number } };
       fuzzing: { enabled: boolean; max_total_time: number; max_len: number; max_crashes: number; timeout: number; image?: string; resources?: { mem: string; cpus: number; pids: number; tmpfs: string; timeout: number; unconstrained: boolean } };

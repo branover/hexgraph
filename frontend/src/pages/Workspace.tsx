@@ -1,8 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
-import { api, Finding, Graph, GraphNode, ProjectDetail, SettingsView, TargetNode } from "../api";
+import { api, Finding, Graph, GraphNode, ProjectDetail, SavedLens, SettingsView, TargetNode } from "../api";
 import Header from "../components/Header";
-import GraphView, { NODE_T, EDGE_C, KIND, NODE_SHAPE, FocusSpec } from "../components/GraphView";
+import GraphView, { NODE_T, EDGE_C, KIND, NODE_SHAPE, FocusSpec, GroupBy } from "../components/GraphView";
+import TableView from "../components/TableView";
+import MatrixView from "../components/MatrixView";
+import {
+  LayerState, FilterState, defaultLayers, defaultFilters, anyFilterActive,
+} from "../components/graphLayers";
 import FindingsPanel from "../components/FindingsPanel";
 import Inspector from "../components/Inspector";
 import NodeInspector from "../components/NodeInspector";
@@ -55,10 +60,29 @@ export default function Workspace() {
   const [launchFor, setLaunchFor] = useState<{ target: TargetNode; type: string; objective?: string; params?: any; parentFindingId?: string; anchorKind?: string; anchorId?: string } | null>(null);
   const [maxed, setMaxed] = useState(false);
   const [detailBig, setDetailBig] = useState(false);
-  // Center-pane mode switch (Graph ⇆ Source) — a mode, not a route, so selection
-  // state is shared and finding→source jump is instantaneous (design §6.1).
-  const [view, setView] = useState<"graph" | "source">(
-    new URLSearchParams(window.location.search).get("view") === "source" ? "source" : "graph");
+  // Center-pane mode switch (Map ⇆ Graph ⇆ Table ⇆ Matrix ⇆ Source) — a mode, not a route,
+  // so selection state is shared and finding→source jump is instantaneous (design §6.1).
+  // Map/Table/Matrix are Phase-5 complementary views; Graph stays the default.
+  const VIEWS = ["map", "graph", "table", "matrix", "source"] as const;
+  type ViewMode = typeof VIEWS[number];
+  const [view, setView] = useState<ViewMode>(() => {
+    const v = new URLSearchParams(window.location.search).get("view") as ViewMode | null;
+    return v && (VIEWS as readonly string[]).includes(v) ? v : "graph";
+  });
+  // ── Phase 5: layers / filters / grouping / scope are lifted HERE so the view switcher,
+  // the Table/Matrix views, and Saved Lenses all share one coherent presentation state.
+  const [layers, setLayers] = useState<LayerState>(defaultLayers);
+  const [filters, setFilters] = useState<FilterState>(defaultFilters);
+  const [groupBy, setGroupBy] = useState<GroupBy>("target");
+  const [findingsLayer, setFindingsLayer] = useState<"all" | "unresolved" | "none">("all");
+  // panels-drive-scope (§6.3): a target id the center view is scoped to (set by a left-tree
+  // row click). Distinct from `focus` (the finer node-neighborhood gesture).
+  const [scope, setScope] = useState<string | null>(null);
+  // Saved Lenses (§6.2): named snapshots persisted in settings.json (no DB change).
+  const [lenses, setLenses] = useState<SavedLens[]>([]);
+  const [lensMenuOpen, setLensMenuOpen] = useState(false);
+  const [activeLens, setActiveLens] = useState<string | null>(
+    new URLSearchParams(window.location.search).get("lens") || null);
   const [openSource, setOpenSource] = useState<{ treeId?: string; rel?: string; line?: number } | null>(null);
   // Phase-2 focus stack (design §4.2): focusing a node pushes a reversible frame; the
   // breadcrumb trail lets you pop back. The TOP frame is the live focus driving the graph.
@@ -72,6 +96,10 @@ export default function Workspace() {
   });
   const searchTimer = useRef<any>();
   const fileRef = useRef<HTMLInputElement>(null);
+  // Apply a deep-linked ?lens=<name> exactly once on first load (the live applyLens is
+  // defined below, so route through a ref the settings-load effect can call).
+  const lensApplied = useRef(false);
+  const applyLensRef = useRef<((l: SavedLens) => void) | null>(null);
 
   const load = useCallback(async () => {
     if (!projectId) return;
@@ -90,6 +118,13 @@ export default function Workspace() {
       const g = s.settings.features.ghidra;
       setGhidraBridge(g.enabled && g.mode === "bridge");
       setFuzzingEnabled(Boolean(s.settings.features.fuzzing?.enabled));
+      const ls = s.settings.ui?.lenses || [];
+      setLenses(ls);
+      // Deep-link: apply ?lens=<name> once on load so a saved view is shareable/restorable.
+      if (!lensApplied.current && activeLens) {
+        const l = ls.find((x) => x.name === activeLens);
+        if (l) { lensApplied.current = true; applyLensRef.current?.(l); }
+      }
     }).catch(() => {});
   }, [load]);
 
@@ -170,10 +205,68 @@ export default function Workspace() {
   };
   const clearFocus = () => popFocusTo(-1);
 
-  const switchView = (v: "graph" | "source") => {
+  const switchView = (v: ViewMode) => {
     setView(v);
-    setUrl({ view: v === "source" ? "source" : undefined });
+    setUrl({ view: v === "graph" ? undefined : v });
   };
+
+  // ── Phase 5: panels-drive-scope (§6.3) ────────────────────────────────────────────────
+  // Clicking a left-tree target row SELECTS it (today's behavior) AND scopes the center view
+  // to it (a toggle: clicking the scoped target again clears scope). A no-op duplication of
+  // the panels — they DRIVE, the center DISPLAYS.
+  const scopeToTarget = (id: string) => {
+    setScope((cur) => (cur === id ? null : id));
+    setActiveLens(null);
+  };
+
+  // ── Phase 5: Saved Lenses (§6.2) ──────────────────────────────────────────────────────
+  // A lens captures {view, scope, group-by, findings, layers, filters, focus}. Apply restores
+  // them; save snapshots the current state; delete drops it. Persisted via the settings API.
+  const persistLenses = async (next: SavedLens[]) => {
+    setLenses(next);
+    try { await api.patchSettings({ "ui.lenses": next }); }
+    catch (e: any) { alert("Could not save lens: " + (e?.message || e)); }
+  };
+  const currentLensSnapshot = (name: string): SavedLens => ({
+    name, view, scope, groupBy, findings: findingsLayer,
+    layers: { nodes: { ...layers.nodes }, edges: { ...layers.edges } },
+    filters: { severity: filters.severity, targets: [...filters.targets], findingType: filters.findingType, mode: filters.mode },
+    focus: focus?.id ?? null, hop: focus?.hop,
+  });
+  const saveLens = async () => {
+    const name = window.prompt("Name this lens (a saved view — group-by + filters + layers + focus):");
+    if (!name?.trim()) return;
+    const snap = currentLensSnapshot(name.trim());
+    const next = [...lenses.filter((l) => l.name !== snap.name), snap];
+    await persistLenses(next);
+    setActiveLens(snap.name);
+    setUrl({ lens: snap.name });
+    setLensMenuOpen(false);
+  };
+  const deleteLens = async (name: string) => {
+    await persistLenses(lenses.filter((l) => l.name !== name));
+    if (activeLens === name) { setActiveLens(null); setUrl({ lens: undefined }); }
+  };
+  const applyLens = (l: SavedLens) => {
+    setView((l.view as ViewMode) || "graph");
+    setScope(l.scope ?? null);
+    setGroupBy((l.groupBy as GroupBy) || "target");
+    setFindingsLayer(l.findings || "all");
+    setLayers(l.layers ? { nodes: { ...defaultLayers().nodes, ...(l.layers.nodes || {}) }, edges: { ...defaultLayers().edges, ...(l.layers.edges || {}) } } : defaultLayers());
+    setFilters(l.filters ? { ...defaultFilters(), ...l.filters } : defaultFilters());
+    if (l.focus) setFocusStack([{ id: l.focus, hop: Math.max(1, Math.min(3, l.hop || 1)), label: labelFor(l.focus) }]);
+    else setFocusStack([]);
+    setActiveLens(l.name);
+    setUrl({ view: (l.view && l.view !== "graph") ? l.view : undefined, lens: l.name,
+             focus: l.focus || undefined, hop: l.focus && (l.hop || 1) > 1 ? String(l.hop) : undefined });
+    setLensMenuOpen(false);
+  };
+  applyLensRef.current = applyLens;
+  // Any manual change to a presentation facet diverges from a saved lens → drop the badge.
+  const onLayers = (l: LayerState) => { setLayers(l); setActiveLens(null); };
+  const onFilters = (f: FilterState) => { setFilters(f); setActiveLens(null); };
+  const onGroupBy = (g: GroupBy) => { setGroupBy(g); setActiveLens(null); };
+  const onFindingsLayer = (f: "all" | "unresolved" | "none") => { setFindingsLayer(f); setActiveLens(null); };
   const selectCampaign = (id?: string) => {
     setSelCampaign(id); setTab("campaigns"); setSelTask(undefined); setSelNode(null); setSelFinding(null); setSelEdge(null);
     setUrl({ tab: "campaigns", campaign: id });
@@ -282,8 +375,8 @@ export default function Workspace() {
     const fc = findingCounts[t.id];
     return (
       <div key={t.id}>
-        <div className={"tree-row" + (child ? " child" : "") + (selGraphId === t.id ? " sel" : "")}
-             onClick={() => onGraphSelect(t.id, "target")}>
+        <div className={"tree-row" + (child ? " child" : "") + (selGraphId === t.id ? " sel" : "") + (scope === t.id ? " scoped" : "")}
+             onClick={() => { onGraphSelect(t.id, "target"); if (view !== "source" && view !== "matrix") scopeToTarget(t.id); }}>
           <div className="nm">
             <Icon name={NODE_ICON[t.kind] || "binary"} size={15} /> {t.name}
             {fc && <span className={"tbadge" + (fc.hot ? " hot" : "")} style={{ marginLeft: "auto" }}>{fc.n}</span>}
@@ -422,14 +515,46 @@ export default function Workspace() {
 
         <section className="pane">
           <div className="toolbar">
-            {/* view toggle */}
+            {/* ── Phase 5: center-pane view switcher (§6.1) — Map / Graph / Table / Matrix /
+                Source. Graph stays the obvious DEFAULT; Map = the §1 skeleton given a name;
+                Table/Matrix are the scalable alternatives for dense targets. */}
             <div className="seg tgroup" style={{ gap: 2, border: "1px solid var(--border)", borderRadius: 7, padding: 2 }}>
-              <button className={"btn sm" + (view === "graph" ? " primary" : " ghost")} title="Graph view" onClick={() => switchView("graph")}>
+              <button className={"btn sm" + (view === "map" ? " primary" : " ghost")} title="Map — finding-weighted territory overview (the skeleton)" onClick={() => switchView("map")}>
+                <Icon name="fit" size={12} /> Map
+              </button>
+              <button className={"btn sm" + (view === "graph" ? " primary" : " ghost")} title="Graph view (default)" onClick={() => switchView("graph")}>
                 <Icon name="hex" size={12} /> Graph
+              </button>
+              <button className={"btn sm" + (view === "table" ? " primary" : " ghost")} title="Table — sortable/filterable nodes & edges (scales to PATHOLOGICAL)" onClick={() => switchView("table")}>
+                <Icon name="doc" size={12} /> Table
+              </button>
+              <button className={"btn sm" + (view === "matrix" ? " primary" : " ghost")} title="Matrix — cross-target relationship adjacency (dense N×N)" onClick={() => switchView("matrix")}>
+                <Icon name="copy" size={12} /> Matrix
               </button>
               <button className={"btn sm" + (view === "source" ? " primary" : " ghost")} title="Source / IDE view (read-only)" onClick={() => switchView("source")}>
                 <Icon name="doc" size={12} /> Source
               </button>
+            </div>
+            {/* ── Phase 5: Saved Lenses (§6.2) — named view snapshots in settings.json. */}
+            <div className="tgroup" style={{ position: "relative" }}>
+              <button className={"btn sm" + (activeLens ? " primary" : "")} title="Saved lenses — named views (group-by + filters + layers + focus)"
+                      onClick={() => setLensMenuOpen((o) => !o)}>
+                <Icon name="sliders" size={12} /> {activeLens || "Lenses"} <Icon name="chevron" size={10} />
+              </button>
+              {lensMenuOpen && (
+                <div className="menu" style={{ left: 0, top: 34, minWidth: 220, zIndex: 30 }} onMouseLeave={() => setLensMenuOpen(false)}>
+                  {lenses.length === 0 && <div className="mi muted" style={{ cursor: "default" }}>No saved lenses yet.</div>}
+                  {lenses.map((l) => (
+                    <div className={"mi" + (activeLens === l.name ? " sel" : "")} key={l.name} onClick={() => applyLens(l)}>
+                      <Icon name="fit" size={12} /> <span style={{ flex: 1 }}>{l.name}</span>
+                      <button className="btn sm icon ghost danger" title="Delete lens"
+                              onClick={(e) => { e.stopPropagation(); deleteLens(l.name); }}><Icon name="x" size={11} /></button>
+                    </div>
+                  ))}
+                  <div style={{ height: 1, background: "var(--border)", margin: "4px 0" }} />
+                  <div className="mi" onClick={saveLens}><Icon name="plus" size={12} /> Save current view…</div>
+                </div>
+              )}
             </div>
             {/* search — grows to fill the row */}
             <div className="input" style={{ flex: 1, minWidth: 180 }}>
@@ -489,16 +614,30 @@ export default function Workspace() {
                              fuzzEnabled={!!caps.features?.fuzzing} sourceEditEnabled={!!caps.features?.source_edit}
                              onChanged={() => load()} />
             </div>
+          ) : view === "table" ? (
+            <TableView graph={graph} layers={layers} filters={filters} scope={scope}
+                       onReveal={(id, type) => { if (type === "finding") viewFinding(id); else { switchView("graph"); onGraphSelect(id, type); } }} />
+          ) : view === "matrix" ? (
+            <MatrixView graph={graph}
+                        onReveal={(id) => { switchView("graph"); scopeToTarget(id); onGraphSelect(id, "target"); }} />
           ) : (
           <>
           {/* Focus breadcrumb (design §4.2): the reversible navigation trail. Overview ›
               crumb › crumb. A crumb pops to that frame; ↺ clears to the full graph. Pinned
               top-left of the canvas, shown only once a focus has been pushed. */}
-          {focusStack.length > 0 && (
+          {(focusStack.length > 0 || scope) && (
             <div className="focus-crumbs">
-              <button className="crumb home" title="Back to the full graph" onClick={() => clearFocus()}>
+              <button className="crumb home" title="Back to the full graph" onClick={() => { clearFocus(); setScope(null); }}>
                 <Icon name="hex" size={12} /> Overview
               </button>
+              {scope && (
+                <span style={{ display: "inline-flex", alignItems: "center" }}>
+                  <span className="crumb-sep">›</span>
+                  <button className="crumb active" title="Scoped to this target (click to clear)" onClick={() => setScope(null)}>
+                    {labelFor(scope)} <Icon name="x" size={10} />
+                  </button>
+                </span>
+              )}
               {focusStack.map((f, i) => (
                 <span key={f.id + "-" + i} style={{ display: "inline-flex", alignItems: "center" }}>
                   <span className="crumb-sep">›</span>
@@ -507,12 +646,17 @@ export default function Workspace() {
                           onClick={() => popFocusTo(i)}>{f.label}</button>
                 </span>
               ))}
-              <button className="crumb reset" title="Clear focus" onClick={() => clearFocus()}>↺</button>
+              <button className="crumb reset" title="Clear focus" onClick={() => { clearFocus(); setScope(null); }}>↺</button>
             </div>
           )}
           <GraphView graph={graph} selectedId={selGraphId} onSelect={onGraphSelect}
                      isolateType={pinType || hoverType}
                      focus={focus} onFocus={(id, hop) => focusOn(id, hop)} onClearFocus={clearFocus}
+                     groupBy={view === "map" ? "target" : groupBy} onGroupBy={onGroupBy}
+                     layers={layers} onLayers={onLayers}
+                     filters={filters} onFilters={onFilters}
+                     findings={findingsLayer} onFindings={onFindingsLayer}
+                     scope={scope}
                      onEdgeSelect={(e) => { setSelEdge(e); if (e) { setSelNode(null); setSelFinding(null); setSelTask(undefined); } }}
                      onDrawEdge={(src, dst) => { setEdgePrefill({ src, dst }); setModal("edge"); }} />
           {(() => {

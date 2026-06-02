@@ -77,6 +77,16 @@ then run the resume verifier, then continue at the next unchecked task.
   `--build-arg WITH_GHIDRA`. UI: PoC verification panel + re-verify, edit-any-field (finding+node),
   firmware file viewer, search-includes-targets, edge inspector, Author modals (`name·type·target` +
   type help + draw-to-connect), tighter Settings inputs.
+- **Graph-presentation redesign — ALL 5 PHASES DONE** (`docs/design/design-graph-presentation.md`;
+  detail + human-eyes verdicts per phase in `docs/ui-backlog.md`): P1 visual legibility (edge-ink
+  recede, importance sizing, shape/glyph redundancy, label discipline, interactive legend); P2
+  focus/context + breadcrumb + hover preview + search-drives-focus + verb menu; P3 compound target
+  islands + group-by + expand/collapse + skeleton-collapsed default + meta-edges + socket bus; P4
+  layout-by-context (fcose-spread / scoped dagre / concentric) + semantic-zoom LOD; **P5 (this work):
+  the layer panel (node-type/edge-class toggles), the fade-first filter chip rail, the center-pane
+  view switcher (Map/Graph/Table/Matrix/Source), Table + Matrix views, Map-as-named-view,
+  Saved Lenses (managed `ui.lenses` in `settings.json`, no migration), and panels-drive-scope.**
+  All client-side over `/graph` except the one validated `ui.lenses` settings field (+tests).
 - **Current state:** **P0–P8 all delivered** (core) + **researcher depth (P6/P7) complete**: annotations
   (rename/note/tag, agent-proposed→confirm, confirmed facts feed context), hypothesis lifecycle
   (evidence-derived status, sticky human verdict, open hypotheses feed context), in-app report viewer +
