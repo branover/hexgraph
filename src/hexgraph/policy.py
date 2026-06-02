@@ -48,6 +48,7 @@ class AnalysisPolicy:
     allow_network: bool = False    # sandboxes run --network none unless this is on
     allow_rehost: bool = False     # full-system emulation of the firmware (features.rehost)
     allow_remote: bool = False     # connect to ONE live remote device (features.remote)
+    allow_fuzz_remote: bool = False  # run a campaign on a user-owned remote Docker host (features.fuzz_remote)
     tier: int = TIER_STATIC_ONLY
     # The bounded egress scope, when one applies. None == --network none. The scope is
     # built per-target (local_network_scope); the policy only authorizes "network at all".
@@ -76,7 +77,15 @@ def current_policy() -> AnalysisPolicy:
         net_on = bool(settings.get("features.network.enabled"))
         rehost_on = bool(settings.get("features.rehost.enabled"))
         remote_on = bool(settings.get("features.remote.enabled"))
-        if exec_on or build_on or net_on or rehost_on or remote_on:
+        # features.fuzz_remote is ORTHOGONAL to the tier ladder (like allow_build /
+        # allow_rehost): it governs WHERE a campaign's container runs (a user-owned remote
+        # Docker host the operator authorizes), NOT what the sandbox may do. It does not
+        # raise the tier — the SAME sandbox boundary applies on the remote — so it is a
+        # peer flag, fail-closed (off => a remote-environment campaign is refused). Like
+        # build, it is implied by enabling exec OR can stand alone (register + health-check
+        # a remote without yet running a campaign that executes the target).
+        fuzz_remote_on = bool(settings.get("features.fuzz_remote.enabled"))
+        if exec_on or build_on or net_on or rehost_on or remote_on or fuzz_remote_on:
             # features.remote raises the live-remote tier and inherently permits egress (to the
             # one operator-authorized host — enforced by remote_scope, not by allow_network alone).
             # Building is a sub-capability of the sandboxed-exec tier, so build-only still sits
@@ -85,7 +94,7 @@ def current_policy() -> AnalysisPolicy:
                     TIER_LOCAL_NETWORK if net_on else TIER_SANDBOXED_EXEC)
             return AnalysisPolicy(static_only=False, allow_execution=exec_on, allow_build=build_on,
                                   allow_network=net_on or remote_on, allow_rehost=rehost_on,
-                                  allow_remote=remote_on, tier=tier)
+                                  allow_remote=remote_on, allow_fuzz_remote=fuzz_remote_on, tier=tier)
     except Exception:  # noqa: BLE001 — a settings problem must never widen the policy
         pass
     return AnalysisPolicy()
@@ -129,6 +138,26 @@ def assert_allows_remote(policy: AnalysisPolicy | None = None) -> None:
         raise PolicyViolation(
             "remote-device access is not permitted (enable features.remote to connect to an "
             "operator-authorized SSH/telnet target)")
+
+
+def assert_allows_fuzz_remote(policy: AnalysisPolicy | None = None) -> None:
+    """Gate running a fuzz campaign on a user-owned REMOTE Docker host (the
+    `RemoteDockerExecutor`, design §5.8b). Opt-in via features.fuzz_remote — a remote
+    COMPUTE backend the user owns and explicitly authorizes (the exact posture as
+    features.remote: one operator-authorized endpoint, connection details a secret read
+    from env/config.toml — never the DB/logs — and the connection audited).
+
+    This is NOT a relaxation of the sandbox boundary: the SAME hardening (`--network
+    none` except the gated net-fuzz tier, `--cap-drop ALL`, `--no-new-privileges`,
+    `--read-only`, `--user`, resource caps) applies on the remote — hostile bytes only
+    ever materialize inside the container, now on a host the user chose. The control
+    plane (API/UI) stays bound to 127.0.0.1; the remote is purely compute. Fail-closed:
+    a campaign that selects a remote environment is refused unless this is on."""
+    policy = policy or current_policy()
+    if not policy.allow_fuzz_remote:
+        raise PolicyViolation(
+            "remote fuzz environments are not permitted (enable features.fuzz_remote to run a "
+            "campaign on a user-owned, operator-authorized remote Docker host)")
 
 
 def remote_scope(host: str, port: int) -> NetworkScope:

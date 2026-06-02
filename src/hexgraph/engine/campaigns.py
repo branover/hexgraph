@@ -164,6 +164,25 @@ def resolve_resources(override: dict | None) -> ResourceSpec:
     return ResourceSpec.from_dict(merged)
 
 
+def _executor_for(session, row: FuzzCampaign, executor):
+    """The Executor to poll/stop/verify a campaign with: a caller-supplied one wins
+    (tests); else the campaign's recorded fuzz environment (design §5.8b) — so the reaper
+    and a serve-restart re-bind to the SAME remote daemon over its secret DOCKER_HOST,
+    fail-closed under features.fuzz_remote. Degrades to the local executor if the env is
+    no longer resolvable (e.g. the gate was turned off) so the row can still finalize."""
+    if executor is not None:
+        return executor
+    from hexgraph.sandbox.executor import get_executor
+    env_id = (row.config_json or {}).get("environment_id")
+    from hexgraph.engine import fuzz_env as FE
+    if not env_id or env_id == FE.LOCAL_ID:
+        return get_executor()
+    try:
+        return FE.get_campaign_executor(session, env_id)
+    except Exception:  # noqa: BLE001 — a degraded env must not strand the campaign row
+        return get_executor()
+
+
 # ── Start a campaign (returns immediately) ──────────────────────────────────────
 
 def start_campaign(session: Session, project: Project, target: Target, *,
@@ -188,7 +207,22 @@ def start_campaign(session: Session, project: Project, target: Target, *,
                        and os.environ.get("HEXGRAPH_FUZZER") != "mock")
     if not is_live_network:
         assert_allows_execution()  # the existing exec gate — NO new gate for campaigns
-    executor = executor or get_executor()
+
+    # Resolve WHERE the container runs (the fuzz-environment seam, design §5.8b). `local`/
+    # None → the local executor; a registered remote env → a RemoteDockerExecutor over its
+    # SECRET DOCKER_HOST, GATED by features.fuzz_remote (the ONLY gate; the SAME sandbox
+    # boundary holds on the remote — only the compute host changes). A caller-supplied
+    # executor (tests) wins, but selecting a remote endpoint stays fail-closed regardless.
+    # The env's ResourceSpec CEILING folds under the per-campaign override.
+    from hexgraph.engine import fuzz_env as FE
+    env_id = spec.environment_id or FE.LOCAL_ID
+    if executor is None:
+        executor = FE.get_campaign_executor(session, env_id)
+    elif env_id and env_id != FE.LOCAL_ID:
+        from hexgraph.policy import assert_allows_fuzz_remote
+        assert_allows_fuzz_remote()
+    if env_id and env_id != FE.LOCAL_ID:
+        resources = FE.resolve_resources_ceiling(session, env_id, resources)
 
     res = resolve_resources(resources)
     # Host concurrency cap (resource governance). A request ABOVE the cap is refused
@@ -281,6 +315,13 @@ def start_campaign(session: Session, project: Project, target: Target, *,
         if isinstance(exc, CampaignError):
             raise
         raise CampaignError(str(exc)) from exc
+
+    # Audit a REMOTE-environment launch (design §5.8b: the connection is audited). A
+    # local campaign needs no egress audit (it never leaves the host).
+    if env_id and env_id != FE.LOCAL_ID:
+        FE.audit_remote_launch(session, project=project, env_id=env_id,
+                               target_id=target.id, task_id=row.task_id,
+                               container_name=row.container_name)
 
     session.flush()
     return row
@@ -397,27 +438,31 @@ def reap_campaign(session: Session, row: FuzzCampaign, *, executor=None) -> int:
     fuzz_crash findings, update stats, and finalize when the container exits. Idempotent
     — already-ingested dedup buckets are skipped, so polling repeatedly is safe and
     crashes stream as they appear."""
-    from hexgraph.sandbox.executor import get_executor
-
-    executor = executor or get_executor()
+    executor = _executor_for(session, row, executor)
     project = session.get(Project, row.project_id)
     target = session.get(Target, row.target_id)
     outdir = row.outdir
     is_mock = row.engine == "mock"
 
-    # Read the streamed status.json the probe writes (continuously / on completion).
-    status = _read_status(outdir)
+    # Poll FIRST (before reading status). For a LOCAL detached container /out is a live
+    # bind-mount, so this is just a status check; for a REMOTE container poll_detached also
+    # STREAMS /out back to the local outdir over the Docker connection — so the status.json
+    # / crashes / coverage we read next are the freshest the remote has emitted, and the
+    # final tick captures them before finalize. Mock campaigns wrote /out locally already.
     done = False
     if outdir and (Path(outdir) / "DONE").exists():
         # The probe (or the mock launcher) signals completion with a DONE marker.
         done = True
     elif row.container_name and not is_mock:
-        # Crash-safe re-attach: poll the detached container by its durable name. If it
-        # no longer exists (e.g. removed) or has exited, the campaign is done.
+        # Crash-safe re-attach: poll the detached container by its durable name (streams
+        # back for a remote executor). If it no longer exists / has exited, the campaign is done.
         poll = executor.poll_detached(row.container_name)
         if not poll.get("exists") or not poll.get("running"):
             done = True
 
+    # Read the streamed status.json the probe writes (continuously / on completion) — now
+    # reflecting the just-streamed-back remote /out.
+    status = _read_status(outdir)
     created = 0
     if status:
         created = _ingest_artifacts(session, project, target, row, status)
@@ -545,9 +590,15 @@ def _update_stats(row: FuzzCampaign, status: dict) -> None:
 def stop_campaign(session: Session, row: FuzzCampaign, *, executor=None) -> FuzzCampaign:
     """Stop a running campaign — kill the container PRESERVING the corpus in CAS
     (resumable). Reaps any final artifacts first so nothing is lost."""
-    from hexgraph.sandbox.executor import get_executor
-
-    executor = executor or get_executor()
+    executor = _executor_for(session, row, executor)
+    # For a REMOTE campaign, poll first so the executor streams `/out` back to the local
+    # outdir BEFORE we read it for the final ingest (a local campaign bind-mounts /out, so
+    # this is a harmless no-op there).
+    if row.container_name:
+        try:
+            executor.poll_detached(row.container_name)
+        except Exception:  # noqa: BLE001 — best-effort final stream-back
+            pass
     # Final ingest of whatever the probe already streamed.
     status = _read_status(row.outdir)
     if status:
@@ -623,6 +674,14 @@ def _spec_from_config(session, project, target, row, cfg) -> FuzzCampaignSpec:
         max_crashes=int(cfg.get("max_crashes", 10)),
         instances=int(cfg.get("instances", 1)),
         build_spec_id=row.build_spec_id,
+        # Preserve the selected fuzz environment across resume (design §5.8b) — else a
+        # resumed REMOTE campaign would silently revert to `local`.
+        environment_id=cfg.get("environment_id"),
+        # Carry the network-fuzz fields so a resumed boofuzz campaign still targets the
+        # right host/port/netns (also previously dropped).
+        host=cfg.get("host"), port=cfg.get("port"),
+        protocol=cfg.get("protocol") or "tcp", proto_spec=cfg.get("proto_spec"),
+        net_container=cfg.get("net_container"),
     )
 
 
@@ -759,7 +818,6 @@ def verify_artifact(session: Session, artifact: FuzzArtifact, *, executor=None) 
     a crashing MESSAGE, so we re-send it over the live socket + a liveness oracle (the
     bounded-egress tcp path) — the service dying again is `input_reachable/dynamic`."""
     from hexgraph.policy import assert_allows_execution
-    from hexgraph.sandbox.executor import get_executor
 
     project = session.get(Project, artifact.project_id)
     campaign = session.get(FuzzCampaign, artifact.campaign_id)
@@ -769,7 +827,14 @@ def verify_artifact(session: Session, artifact: FuzzArtifact, *, executor=None) 
                                         executor=executor)
 
     assert_allows_execution()
-    executor = executor or get_executor()
+    # Re-verify on the SAME environment the campaign ran on (the fuzzer binary was built
+    # there) — a remote campaign re-runs its reproducer on the remote, fail-closed under
+    # features.fuzz_remote. A caller-supplied executor (tests) wins.
+    if campaign is not None:
+        executor = _executor_for(session, campaign, executor)
+    elif executor is None:
+        from hexgraph.sandbox.executor import get_executor
+        executor = get_executor()
     if not artifact.content_cas:
         raise CampaignError("artifact has no stored reproducer to re-verify")
     repro = cas.get(project, artifact.content_cas)

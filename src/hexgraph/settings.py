@@ -141,6 +141,23 @@ DEFAULTS: dict[str, Any] = {
             "timeout": 30,
             "max_file_bytes": 262144,   # cap on a remote read_file (256 KiB)
         },
+        "fuzz_remote": {
+            # OFF by default. Run a fuzz CAMPAIGN on a user-owned REMOTE Docker host
+            # (design §5.8b) — beefier/unconstrained compute. A registered "fuzz
+            # environment" (the fuzz_environment table) points at the remote via
+            # DOCKER_HOST (ssh:// over an SSH control socket, or tcp:// + TLS certs);
+            # because the Builder/Fuzzer call the Executor seam, building + fuzzing run on
+            # the remote with NO code change. The SAME sandbox boundary applies there
+            # (--network none except the gated net-fuzz tier, cap-drop, no-new-privileges,
+            # read-only, user, resource caps) — a host the user chose is not a weaker box,
+            # and the control plane (API/UI) stays bound to 127.0.0.1. Connection details
+            # are SECRETS: read from env (HEXGRAPH_FUZZ_REMOTE_<ID>_DOCKER_HOST) or
+            # config.toml [fuzz_remote.<id>], NEVER stored in the DB or logged, reported
+            # presence-only. This is the ONLY gate for remote campaigns
+            # (policy.assert_allows_fuzz_remote, fail-closed). Register + health-check
+            # environments in Settings; a campaign selects one (defaulting `local`).
+            "enabled": False,
+        },
     },
 }
 
@@ -192,6 +209,10 @@ ALLOWED: dict[str, tuple[Any, set | None]] = {
     "features.remote.enabled": (bool, None),
     "features.remote.timeout": (int, None),
     "features.remote.max_file_bytes": (int, None),
+    # Remote fuzz environments (design §5.8b, Phase 6). The toggle is the ONLY policy
+    # gate; the environments themselves (non-secret metadata) live in the
+    # fuzz_environment table, their secret connections in env/config.toml.
+    "features.fuzz_remote.enabled": (bool, None),
 }
 
 

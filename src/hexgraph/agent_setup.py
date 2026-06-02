@@ -235,7 +235,7 @@ recorded recipe in the sandbox. This is the analogue of "you direct, HexGraph ru
 A **campaign** is a long-lived, detached fuzz job — the SOTA upgrade over the single
 `fuzzing` task. You NEVER run a fuzzer; you REQUEST a campaign and HexGraph spawns +
 reaps a hardened sandbox container.
-- **`start_fuzz_campaign(target_id, surface?, engine?, function?, host?, port?, protocol?, proto_spec?, max_total_time?, max_crashes?, instances?, resources?)`**
+- **`start_fuzz_campaign(target_id, surface?, engine?, function?, host?, port?, protocol?, proto_spec?, max_total_time?, max_crashes?, instances?, resources?, environment?)`**
   returns immediately with `{id, status:'running'}`. The `Fuzzer` seam picks the engine by
   attack **surface** (auto-inferred from the target; override `surface`/`engine` if needed):
   - **source_lib** — a **Phase-2 instrumented derived target** (a `build_target` rebuild, with
@@ -278,6 +278,17 @@ reaps a hardened sandbox container.
   EXECUTES a target → needs **`features.fuzzing`** (or `features.poc`); a LIVE-socket boofuzz
   campaign talks to a service → needs **`features.network`** (bounded + audited) — pick the right
   flag, neither is a NEW permission.
+- **Remote fuzz environments (off by default).** A campaign can run on a user-owned **remote Docker
+  host** (beefier compute) instead of this box: `list_fuzz_environments()` shows the registered
+  places a container can run (`local` + remote endpoints, with presence-only connection status +
+  health), `fuzz_environment_health(id)` checks one, and you pass `environment=<id>` to
+  `start_fuzz_campaign`. **NOTHING about the analysis changes** — building + fuzzing run on the
+  remote behind the Executor seam, crashes/coverage stream back into THIS local graph, and the SAME
+  sandbox boundary applies there (`--network none` except the gated net-fuzz tier, cap-drop,
+  no-new-privileges, read-only, non-root). The trust model: the control plane stays loopback; the
+  remote is purely compute the user owns + authorized; its connection details are a **secret**
+  (env/`config.toml`, never the DB/logs — never ask for or echo them); each launch is audited.
+  Gated by **`features.fuzz_remote`** (the only gate; fail-closed). Default/omit → `local`.
 - **Tell the user where to LOOK.** Everything above is browsable + triageable in the web UI: the
   **Campaigns** tab shows live campaign status (execs/s, coverage, crashes) and an **Artifacts**
   view that groups crashes by dedup bucket with assurance chips, a source-mapped stack (click a

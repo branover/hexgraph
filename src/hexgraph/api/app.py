@@ -25,6 +25,7 @@ from hexgraph.api.routers import (
     campaigns,
     capabilities,
     findings,
+    fuzz_env,
     ghidra,
     graph,
     hypotheses,
@@ -106,6 +107,7 @@ def create_app() -> FastAPI:
     app.include_router(source.router)
     app.include_router(build.router)
     app.include_router(campaigns.router)
+    app.include_router(fuzz_env.router)
     app.include_router(tasks_runs.router)
     app.include_router(capabilities.router)
     app.include_router(ghidra.router)

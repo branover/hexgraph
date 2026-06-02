@@ -255,7 +255,7 @@ def start_fuzz_campaign(target_id: str, surface: str | None = None, engine: str 
                         max_crashes: int | None = None, instances: int | None = None,
                         host: str | None = None, port: int | None = None,
                         protocol: str | None = None, proto_spec: dict | None = None,
-                        resources: dict | None = None) -> dict:
+                        resources: dict | None = None, environment: str | None = None) -> dict:
     """Start a fuzz CAMPAIGN on a target; returns immediately with {id, status:'running'}.
     HexGraph spawns a DETACHED hardened sandbox container that fuzzes continuously + a
     reaper streams crashes → fuzz_crash findings (each one-click-re-verifiable). The model
@@ -272,9 +272,16 @@ def start_fuzz_campaign(target_id: str, surface: str | None = None, engine: str 
     ladder: a binary-only crash is code_present/dynamic; a network service-death is
     input_reachable/dynamic (reached + triggered end-to-end through the live input boundary).
     NOTE: remote blind network-fuzz of a physical bench device is OFF by default (destructive
-    — prefer replay/PoC)."""
+    — prefer replay/PoC).
+
+    `environment` selects WHERE the container runs (design §5.8b): omit / 'local' for the
+    host Docker daemon, or a registered remote fuzz-environment id (see
+    list_fuzz_environments) to run the WHOLE campaign on a beefier user-owned remote Docker
+    host — building + fuzzing run there with no analysis change, gated by
+    features.fuzz_remote, the SAME sandbox boundary, connection details secret + audited."""
     from hexgraph.db.models import Task as _Task
     from hexgraph.engine import campaigns as C
+    from hexgraph.engine import fuzz_env as FE
     from hexgraph.engine.fuzzers import FuzzCampaignSpec
     from hexgraph.engine.fuzzing import resolve_harness, resolve_target_sources
     from hexgraph.policy import PolicyViolation
@@ -292,16 +299,48 @@ def start_fuzz_campaign(target_id: str, surface: str | None = None, engine: str 
             harness_source=source, function=function or fn, target_sources=sources,
             max_total_time=max_total_time or 60, max_crashes=max_crashes or 10,
             instances=instances or 1, host=host, port=port,
-            protocol=protocol or "tcp", proto_spec=proto_spec,
+            protocol=protocol or "tcp", proto_spec=proto_spec, environment_id=environment,
         )
         try:
             row = C.start_campaign(s, p, t, spec=spec, resources=resources)
-        except (C.CampaignError, ValueError) as exc:
+        except (C.CampaignError, FE.FuzzEnvError, ValueError) as exc:
             return {"error": str(exc)}
         except PolicyViolation as exc:
             return {"error": f"not permitted — {exc} (features.fuzzing/poc for binary fuzzing; "
-                             "features.network for live network fuzzing)"}
+                             "features.network for live network fuzzing; features.fuzz_remote "
+                             "for a remote environment)"}
         return C.campaign_to_dict(row)
+
+
+def list_fuzz_environments(project_id: str | None = None) -> dict:
+    """List registered fuzz ENVIRONMENTS — where a campaign's container can run (design
+    §5.8b): `local` (the host Docker daemon) + N user-owned remote Docker hosts. Each
+    carries the non-secret label/descriptor, the ResourceSpec ceiling, presence-only
+    connection status (`connection_present` — the secret DOCKER_HOST/creds are in
+    env/config.toml, never stored/returned), and the cached health-check. Pass the
+    `environment` id to start_fuzz_campaign to run a campaign there (gated by
+    features.fuzz_remote)."""
+    from hexgraph.engine import fuzz_env as FE
+
+    with session_scope() as s:
+        return {"environments": FE.list_environments(s)}
+
+
+def fuzz_environment_health(environment_id: str) -> dict:
+    """Health-check a remote fuzz environment: is it reachable + authorized + does it have
+    the fuzz image present (the one-time remote build/pull). Gated by features.fuzz_remote.
+    Returns a NON-SECRET dict {ok, reachable, authorized, image_present, docker_version,
+    detail} — the connection string is never echoed."""
+    from hexgraph.engine import fuzz_env as FE
+    from hexgraph.policy import PolicyViolation
+
+    with session_scope() as s:
+        try:
+            return FE.health_check(s, environment_id)
+        except FE.FuzzEnvError as exc:
+            return {"error": str(exc)}
+        except PolicyViolation as exc:
+            return {"error": f"not permitted — {exc}"}
 
 
 def stop_fuzz_campaign(campaign_id: str) -> dict:

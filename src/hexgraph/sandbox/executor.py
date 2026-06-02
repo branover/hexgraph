@@ -1,10 +1,13 @@
 """The Executor seam (v2 P0-2).
 
-All sandboxed work goes through an `Executor`. Today the only implementation is
-`LocalDockerExecutor` (the existing `SandboxRunner`). This seam is where a future
-`RemoteExecutor` (Kubernetes / horizontal scale) or a `DynamicExecutor` (emulated
-execution / fuzzing — gated by the analysis policy) drops in **without touching
-task code**. Selection is via `HEXGRAPH_EXECUTOR` (default `local_docker`).
+All sandboxed work goes through an `Executor`. Implementations: `LocalDockerExecutor`
+(the existing `SandboxRunner`) and — as of Phase 6 — `RemoteDockerExecutor`, which runs
+the SAME hardened containers on a user-owned remote Docker host over `DOCKER_HOST`
+(ssh:// or tcp:// + TLS), so building/fuzzing run on beefier hardware with NO
+fuzzer/builder code change (design §5.8b; gated by features.fuzz_remote, normally
+selected per-campaign via a registered fuzz environment). This seam is also where a
+future k8s/job executor or a `DynamicExecutor` drops in **without touching task code**.
+Selection is via `HEXGRAPH_EXECUTOR` (default `local_docker`) or per-campaign.
 
 Rule: engine/task code calls `get_executor()`; it never names a concrete class.
 """
@@ -50,5 +53,16 @@ def get_executor(name: str | None = None) -> Executor:
     name = (name or os.environ.get("HEXGRAPH_EXECUTOR") or DEFAULT_EXECUTOR).lower()
     if name in ("local_docker", "local", "docker"):
         return LocalDockerExecutor()
-    # Future: "remote"/"k8s" (RemoteExecutor), "dynamic" (DynamicExecutor, policy-gated).
-    raise ValueError(f"unknown executor {name!r}; expected 'local_docker'")
+    if name in ("remote_docker", "remote"):
+        # A user-owned remote Docker host via DOCKER_HOST (design §5.8b, Phase 6). Gated
+        # by features.fuzz_remote and normally selected PER-CAMPAIGN via a registered fuzz
+        # environment (engine.fuzz_env.get_campaign_executor); this env override is for a
+        # blanket remote executor (e.g. HEXGRAPH_EXECUTOR=remote_docker + the ambient
+        # DOCKER_HOST). The SAME sandbox boundary applies on the remote.
+        from hexgraph.sandbox.remote_executor import RemoteDockerExecutor
+        dh = os.environ.get("DOCKER_HOST")
+        if not dh:
+            raise ValueError("HEXGRAPH_EXECUTOR=remote_docker requires DOCKER_HOST to be set")
+        return RemoteDockerExecutor(dh)
+    # Future: "k8s" (a real RemoteExecutor / job executor), "dynamic" (policy-gated).
+    raise ValueError(f"unknown executor {name!r}; expected 'local_docker' or 'remote_docker'")

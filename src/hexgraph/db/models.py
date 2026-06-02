@@ -364,6 +364,42 @@ class FuzzArtifact(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class FuzzEnvironment(Base):
+    """A registered fuzz environment — a place a campaign's container can run (design
+    §5.8b, Phase 6). `local` (the host Docker daemon, always implicit) plus N user-owned
+    REMOTE Docker endpoints reached via DOCKER_HOST (ssh:// over an SSH control socket,
+    or tcp:// + TLS client certs). A campaign SELECTS an environment (defaulting `local`).
+
+    This row holds ONLY NON-SECRET metadata: a stable id, a human label, a non-secret
+    `host_descriptor` (e.g. 'ssh://fuzzbox' or 'tcp://10.0.0.5:2376' — shown in the UI for
+    identification), the transport, and a per-environment `ResourceSpec` CEILING the
+    campaign inherits. The SECRET connection details (the full DOCKER_HOST string, SSH
+    key/password, TLS certs) are NEVER stored here — they are read at connect time from
+    env/config.toml KEYED BY THIS ENVIRONMENT'S `id`, exactly like the SSH/telnet remote
+    creds (config.py / engine/remote.py). `last_health_json` caches the last health-check
+    result (reachable/authorized/image-present) for the Settings indicator — also
+    non-secret. Environments are HOST-level (not per-project): a registered remote box
+    serves every project, so there is no project_id."""
+
+    __tablename__ = "fuzz_environment"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    name: Mapped[str] = mapped_column(String(120), default="remote")
+    # ssh | tcp | local
+    transport: Mapped[str] = mapped_column(String(8), default="ssh")
+    # A NON-SECRET descriptor for the UI/audit (NOT the full DOCKER_HOST when it carries
+    # an embedded credential — but ssh://user@host / tcp://host:port are safe to show).
+    host_descriptor: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # The per-environment ResourceSpec CEILING the campaign inherits
+    # (mem/cpus/pids/tmpfs/timeout/unconstrained).
+    resources_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # Cached last health-check (non-secret): {ok, reachable, authorized, image_present,
+    # docker_version, checked_at, detail}.
+    last_health_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    archived: Mapped[bool] = mapped_column(default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Node(Base):
     """A sub-file / conceptual node (function, symbol, string, ...). Distinct from
     `target` (artifacts with bytes). Identity is content-addressed via

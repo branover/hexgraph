@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { GhidraStatus, SettingsView, api } from "../api";
+import { FuzzEnvironment, GhidraStatus, SettingsView, api } from "../api";
 import Header from "../components/Header";
 import { Icon } from "../components/Icon";
 
@@ -13,10 +13,18 @@ export default function Settings() {
   const [err, setErr] = useState("");
   const [ghidra, setGhidra] = useState<GhidraStatus | null>(null);
   const [testing, setTesting] = useState(false);
+  // Remote fuzz environments (Phase 6) — NON-SECRET metadata + presence-only connection.
+  const [envs, setEnvs] = useState<FuzzEnvironment[]>([]);
+  const [newEnvName, setNewEnvName] = useState("");
+  const [newEnvTransport, setNewEnvTransport] = useState("ssh");
+  const [newEnvDesc, setNewEnvDesc] = useState("");
+  const [envBusy, setEnvBusy] = useState("");
+  const loadEnvs = () => api.fuzzEnvironments().then((r) => setEnvs(r.environments)).catch(() => {});
 
   const close = () => { if (window.history.length > 1) nav(-1); else nav("/"); };
   useEffect(() => {
     api.getSettings().then(setV).catch((e) => setErr(String(e.message || e)));
+    loadEnvs();
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -269,6 +277,75 @@ export default function Settings() {
               <div className="row"><label>probe timeout (s)</label>
                 <input className="inp num-input" type="number" defaultValue={v.settings.features.network.timeout}
                        onBlur={(e) => patch({ "features.network.timeout": parseInt(e.target.value) || 30 })} /></div>
+            )}
+          </section>
+
+          {/* Remote fuzz environments — run a campaign on a user-owned remote Docker host */}
+          <section className="card2">
+            <div className="h3row">
+              <h3><Icon name="chip" size={15} /> Remote fuzz environments <span className="muted">· optional · beefier compute</span></h3>
+              <label className="switch">
+                <input type="checkbox" checked={Boolean(v.settings.features.fuzz_remote?.enabled)}
+                       onChange={(e) => patch({ "features.fuzz_remote.enabled": e.target.checked })} />
+                <span>{v.settings.features.fuzz_remote?.enabled ? "enabled" : "disabled"}</span>
+              </label>
+            </div>
+            <p className="hint">
+              Run a whole fuzz <b>campaign</b> on a user-owned <b>remote Docker host</b> (beefier/unconstrained
+              compute) — building + fuzzing run there with no analysis change. The control plane stays
+              bound to <code>127.0.0.1</code>; the remote is purely compute and the <b>same sandbox boundary</b>
+              applies there (<code>--network none</code>, cap-drop, no-new-privileges, read-only, non-root).
+              The connection is a <b>secret</b> set in env (<code>HEXGRAPH_FUZZ_REMOTE_&lt;ID&gt;_DOCKER_HOST</code>)
+              or <code>config.toml [fuzz_remote.&lt;id&gt;]</code> — <b>never stored here</b>, shown presence-only.
+              This toggle is the only gate (<code>features.fuzz_remote</code>).
+            </p>
+            {v.settings.features.fuzz_remote?.enabled && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+                {envs.filter((e) => !e.is_local).length === 0 && (
+                  <div className="muted" style={{ fontSize: 12 }}>No remote environments registered yet.</div>
+                )}
+                {envs.filter((e) => !e.is_local).map((e) => (
+                  <div key={e.id} className="row" style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                    <b>{e.name}</b>
+                    <span className="tag">{e.transport}</span>
+                    <span className="muted" style={{ fontSize: 11.5 }}>{e.host_descriptor || "—"}</span>
+                    <span className="tag" style={{ background: e.connection_present ? "var(--ok-bg, #143)" : "var(--warn-bg, #431)" }}>
+                      {e.connection_present ? "connection configured" : "no connection"}
+                    </span>
+                    {e.health?.checked_at && (
+                      <span className="tag" title={e.health.detail}>
+                        {e.health.ok ? "healthy" : "unhealthy"}{e.health.docker_version ? ` · docker ${e.health.docker_version}` : ""}
+                      </span>
+                    )}
+                    <button className="btn sm ghost" disabled={envBusy === e.id}
+                            onClick={async () => { setEnvBusy(e.id); try { await api.fuzzEnvironmentHealth(e.id); await loadEnvs(); } finally { setEnvBusy(""); } }}>
+                      {envBusy === e.id ? "checking…" : "Health-check"}
+                    </button>
+                    <button className="btn sm ghost" onClick={async () => { await api.deleteFuzzEnvironment(e.id); loadEnvs(); }}>Remove</button>
+                    <code style={{ fontSize: 10.5 }}>id: {e.id}</code>
+                  </div>
+                ))}
+                <div className="row" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 6 }}>
+                  <input className="inp" placeholder="name (e.g. fuzzbox)" value={newEnvName}
+                         onChange={(e) => setNewEnvName(e.target.value)} style={{ width: 160 }} />
+                  <select className="sel" value={newEnvTransport} onChange={(e) => setNewEnvTransport(e.target.value)}>
+                    <option value="ssh">ssh</option><option value="tcp">tcp</option>
+                  </select>
+                  <input className="inp" placeholder="descriptor (non-secret, e.g. ssh://beefybox)" value={newEnvDesc}
+                         onChange={(e) => setNewEnvDesc(e.target.value)} style={{ width: 240 }} />
+                  <button className="btn sm primary" disabled={!newEnvName.trim() || envBusy === "new"}
+                          onClick={async () => {
+                            setEnvBusy("new");
+                            try {
+                              const r = await api.registerFuzzEnvironment({ name: newEnvName.trim(), transport: newEnvTransport, host_descriptor: newEnvDesc.trim() || undefined });
+                              setNewEnvName(""); setNewEnvDesc("");
+                              await loadEnvs();
+                              setErr(`Registered '${r.name}' (id: ${r.id}). Set its secret connection in env: HEXGRAPH_FUZZ_REMOTE_${r.id.toUpperCase().replace(/-/g, "_")}_DOCKER_HOST`);
+                            } catch (x: any) { setErr(String(x.message || x)); }
+                            finally { setEnvBusy(""); }
+                          }}>Register</button>
+                </div>
+              </div>
             )}
           </section>
 

@@ -203,3 +203,15 @@ not blockers. Priorities: **P1** = high impact / do first when polishing; **P2**
   collapsible/responsive.
 - [ ] **P3 — Affordances/a11y.** The ⟳ refresh button is tiny/unlabeled; add tooltips, focus states,
   and keyboard navigation.
+
+## Phase 6 — remote fuzz environments (shipped)
+- **DONE** — a **Remote fuzz environments** Settings card (toggle `features.fuzz_remote`; register /
+  list / health-check / remove environments; presence-only connection + health badges; trust-model
+  hint) and an **environment selector in the Fuzz modal** (shown only when the gate is on; defaults to
+  `local`). Playwright-verified the Settings card renders with an env row, status badges, health-check/
+  remove buttons, the slug id, and the register form.
+- [ ] **P3 — env health auto-refresh.** Health is shown from the cached `last_health_json`; the
+  Health-check button refreshes on demand. A periodic/auto refresh + a per-env "last checked" relative
+  time would be nicer than the raw ISO timestamp tooltip.
+- [ ] **P3 — Campaigns tab: show the environment a campaign ran on.** The campaign row doesn't yet
+  surface its `environment_id`/descriptor (it's in `config_json`); add a small "ran on: <env>" chip.

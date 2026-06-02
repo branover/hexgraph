@@ -129,6 +129,38 @@ def test_0014_fuzz_campaign_applies_on_0013_and_round_trips(tmp_path, monkeypatc
     reset_engine_for_tests()
 
 
+def test_0015_fuzz_environment_applies_on_0014_and_round_trips(tmp_path, monkeypatch):
+    """0015 (fuzz_environment — remote fuzz environments) applies cleanly on 0014 and the
+    downgrade removes exactly that table. The row carries NON-SECRET metadata only."""
+    monkeypatch.setenv("HEXGRAPH_DB_PATH", str(tmp_path / "phase6.db"))
+    from alembic import command
+    from sqlalchemy import create_engine, inspect
+
+    from hexgraph.db.migrate import _alembic_config
+    from hexgraph.db.session import db_url, reset_engine_for_tests
+
+    reset_engine_for_tests()
+    cfg = _alembic_config()
+    command.upgrade(cfg, "0014_fuzz_campaign")
+    before = set(inspect(create_engine(db_url())).get_table_names())
+    assert "fuzz_environment" not in before
+
+    command.upgrade(cfg, "0015_fuzz_environment")
+    after = set(inspect(create_engine(db_url())).get_table_names())
+    assert "fuzz_environment" in after
+    cols = {c["name"] for c in inspect(create_engine(db_url())).get_columns("fuzz_environment")}
+    assert {"name", "transport", "host_descriptor", "resources_json", "last_health_json",
+            "archived"} <= cols
+    # NON-SECRET only: there is no connection-string column on the table.
+    assert not any("docker_host" in c or "secret" in c or "password" in c or "key" in c
+                   for c in cols)
+
+    command.downgrade(cfg, "0014_fuzz_campaign")
+    rolled = set(inspect(create_engine(db_url())).get_table_names())
+    assert "fuzz_environment" not in rolled and "fuzz_campaign" in rolled
+    reset_engine_for_tests()
+
+
 def test_fresh_init_db_has_build_tables(tmp_path, monkeypatch):
     """A fresh create_all (the test path) materializes the new tables too."""
     monkeypatch.setenv("HEXGRAPH_DB_PATH", str(tmp_path / "fresh.db"))
@@ -139,7 +171,8 @@ def test_fresh_init_db_has_build_tables(tmp_path, monkeypatch):
     reset_engine_for_tests()
     init_db()
     names = set(inspect(create_engine(db_url())).get_table_names())
-    assert {"build", "build_spec", "source_tree", "fuzz_campaign", "fuzz_artifact"} <= names
+    assert {"build", "build_spec", "source_tree", "fuzz_campaign", "fuzz_artifact",
+            "fuzz_environment"} <= names
     reset_engine_for_tests()
 
 

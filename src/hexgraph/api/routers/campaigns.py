@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from hexgraph.db.models import FuzzArtifact, FuzzCampaign, Project, Target
 from hexgraph.db.session import session_scope
 from hexgraph.engine import campaigns as C
+from hexgraph.engine import fuzz_env as FE
 from hexgraph.engine.fuzzers import FuzzCampaignSpec
 from hexgraph.policy import PolicyViolation
 
@@ -48,6 +49,9 @@ class CampaignCreate(BaseModel):
     net: CampaignNet | None = None      # network-fuzz overrides (surface=network)
     # Per-campaign ResourceSpec override (mem/cpus/pids/tmpfs/timeout/unconstrained).
     resources: dict | None = None
+    # WHERE the campaign runs (design §5.8b): a registered fuzz environment id, or
+    # `local`/None for the host daemon. A remote env is gated by features.fuzz_remote.
+    environment: str | None = None
 
 
 def _resolve_target_inputs(session, project, target):
@@ -90,13 +94,14 @@ def api_start_campaign(project_id: str, body: CampaignCreate):
             host=net.host if net else None, port=net.port if net else None,
             protocol=(net.protocol if net and net.protocol else "tcp"),
             proto_spec=net.proto_spec if net else None,
+            environment_id=body.environment,
         )
         try:
             row = C.start_campaign(s, p, t, spec=spec, resources=body.resources)
-        except C.CampaignError as exc:
-            raise HTTPException(400, str(exc))
         except PolicyViolation as exc:
             raise HTTPException(403, str(exc))
+        except (C.CampaignError, FE.FuzzEnvError) as exc:
+            raise HTTPException(400, str(exc))
         except ValueError as exc:
             raise HTTPException(400, str(exc))
         return C.campaign_to_dict(row)

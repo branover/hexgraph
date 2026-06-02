@@ -100,6 +100,51 @@ def get_hexgraph_api_key() -> str | None:
     return _load_toml().get("hexgraph", {}).get("api_key")
 
 
+def fuzz_remote_connection(env_id: str) -> dict | None:
+    """The SECRET connection details for a registered remote fuzz environment, keyed by
+    the environment id (design §5.8b). Read from env first, then `config.toml
+    [fuzz_remote.<env_id>]` — NEVER stored in the DB, NEVER logged, reported presence-only
+    (same discipline as the SSH/telnet remote creds, get_anthropic_api_key, etc.).
+
+    env vars (UPPER, `-`→`_`): HEXGRAPH_FUZZ_REMOTE_<ID>_DOCKER_HOST and the optional TLS
+    triple HEXGRAPH_FUZZ_REMOTE_<ID>_{TLS_VERIFY,CERT_PATH}. config.toml:
+        [fuzz_remote.<env_id>]
+        docker_host = "ssh://user@beefybox"        # or "tcp://10.0.0.5:2376"
+        tls_verify = true                           # optional (tcp:// + certs)
+        cert_path  = "/home/me/.docker/fuzzbox"     # optional
+
+    Returns {docker_host, tls_env} or None when no connection is configured for the id."""
+    key = (env_id or "").strip()
+    if not key:
+        return None
+    env_key = key.upper().replace("-", "_").replace(".", "_")
+    prefix = f"HEXGRAPH_FUZZ_REMOTE_{env_key}_"
+    docker_host = os.environ.get(prefix + "DOCKER_HOST")
+    tls_verify = os.environ.get(prefix + "TLS_VERIFY")
+    cert_path = os.environ.get(prefix + "CERT_PATH")
+    if not docker_host:
+        cfg = (_load_toml().get("fuzz_remote", {}) or {}).get(key, {})
+        docker_host = cfg.get("docker_host")
+        if tls_verify is None and cfg.get("tls_verify") is not None:
+            tls_verify = "1" if cfg.get("tls_verify") else None
+        if cert_path is None:
+            cert_path = cfg.get("cert_path")
+    if not docker_host:
+        return None
+    tls_env: dict = {}
+    if tls_verify:
+        tls_env["DOCKER_TLS_VERIFY"] = "1"
+    if cert_path:
+        tls_env["DOCKER_CERT_PATH"] = os.path.expanduser(str(cert_path))
+    return {"docker_host": docker_host, "tls_env": tls_env}
+
+
+def fuzz_remote_has_connection(env_id: str) -> bool:
+    """Presence-only check for a remote fuzz environment's secret connection details —
+    never returns or logs the value (the Settings UI shows this as a boolean badge)."""
+    return fuzz_remote_connection(env_id) is not None
+
+
 def ensure_dirs() -> None:
     """Create the runtime directories if missing (idempotent)."""
     hexgraph_home().mkdir(parents=True, exist_ok=True)

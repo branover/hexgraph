@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { FuzzEngines, SettingsView, TargetNode, api } from "../api";
+import { FuzzEngines, FuzzEnvironment, SettingsView, TargetNode, api } from "../api";
 import { Icon } from "./Icon";
 
 // The surface-aware Fuzz modal (design §6.3). The engine list is SERVER-ADVERTISED
@@ -25,6 +25,11 @@ export default function FuzzModal({ projectId, target, settings, onClose, onStar
   const [cpus, setCpus] = useState(String(rdef?.cpus ?? 2));
   const [pids, setPids] = useState(String(rdef?.pids ?? 256));
   const [unconstrained, setUnconstrained] = useState(Boolean(rdef?.unconstrained));
+  // Remote fuzz environments (Phase 6) — WHERE the campaign runs. Shown only when
+  // features.fuzz_remote is on (the gate); defaults to `local`.
+  const fuzzRemoteOn = Boolean(settings?.settings.features.fuzz_remote?.enabled);
+  const [envs, setEnvs] = useState<FuzzEnvironment[]>([]);
+  const [environment, setEnvironment] = useState("local");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>();
 
@@ -34,6 +39,10 @@ export default function FuzzModal({ projectId, target, settings, onClose, onStar
       if (e.default) setEngine(e.default);
     }).catch((x) => setErr(String(x.message || x)));
   }, [target.id]);
+
+  useEffect(() => {
+    if (fuzzRemoteOn) api.fuzzEnvironments().then((r) => setEnvs(r.environments)).catch(() => {});
+  }, [fuzzRemoteOn]);
 
   const start = async () => {
     setBusy(true); setErr(undefined);
@@ -51,6 +60,7 @@ export default function FuzzModal({ projectId, target, settings, onClose, onStar
         max_crashes: parseInt(maxCrashes) || 10,
         instances: parseInt(instances) || 1,
         resources,
+        environment: fuzzRemoteOn && environment !== "local" ? environment : undefined,
       });
       onStarted(c.id);
       onClose();
@@ -82,6 +92,23 @@ export default function FuzzModal({ projectId, target, settings, onClose, onStar
               {(eng?.engines || []).map((x) => <option key={x} value={x}>{x}{x === eng?.default ? " (default)" : ""}</option>)}
             </select>
           </div>
+
+          {fuzzRemoteOn && (
+            <div className="row" style={{ display: "flex", gap: 12, alignItems: "center" }}>
+              <label style={{ fontSize: 12 }}>environment</label>
+              <select value={environment} onChange={(e) => setEnvironment(e.target.value)}
+                      style={{ background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, fontSize: 12, padding: "2px 6px" }}>
+                {envs.map((e) => (
+                  <option key={e.id} value={e.id} disabled={!e.is_local && !e.connection_present}>
+                    {e.name}{e.is_local ? " (local)" : e.connection_present ? "" : " — no connection"}
+                  </option>
+                ))}
+              </select>
+              <span className="muted" style={{ fontSize: 10.5 }}>
+                where the container runs — remote = a user-owned Docker host, SAME sandbox boundary.
+              </span>
+            </div>
+          )}
 
           <div className="field"><label>focus function (optional)</label>
             <input value={fn} onChange={(e) => setFn(e.target.value)} placeholder="e.g. cgi_handler (uses the latest harness for this target)"
