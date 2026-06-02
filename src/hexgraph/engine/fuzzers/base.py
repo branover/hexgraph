@@ -22,9 +22,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
-# The attack surfaces (design §2.3). Phase 3 ships source_lib (the coverage-guided
-# headline) — binary_only / network / file_format are wired in later phases but the
-# seam already dispatches on them so they drop in additively.
+# The attack surfaces (design §2.3). Phase 3 shipped source_lib (the coverage-guided
+# headline); Phase 5 wires binary_only (AFL++ qemu-mode/frida) + network (boofuzz /
+# desock+AFL++) behind the same seam, so each drops in additively.
 SURFACES = ("source_lib", "binary_only", "network", "file_format")
 
 # Which engines are valid for each surface (the surface×engine matrix, §2.3). The
@@ -33,12 +33,21 @@ SURFACE_ENGINES: dict[str, tuple[str, ...]] = {
     # Source present → coverage-guided. AFL++ (afl-clang-lto + CmpLog, persistent mode)
     # is the default; libFuzzer is the alternative (and the back-compat Phase-0 path).
     "source_lib": ("afl", "libfuzzer"),
-    # No source → AFL++ qemu-mode (Phase 5); libFuzzer can't instrument a prebuilt binary.
-    "binary_only": ("afl",),
-    # Live/rehosted service (Phase 5).
-    "network": ("afl", "boofuzz"),
-    # Structured input parser — same as source_lib if source is present.
-    "file_format": ("afl", "libfuzzer"),
+    # No source → AFL++ qemu-mode (`-Q`, full edge coverage via QEMU TCG) is the DEFAULT
+    # and reuses HexGraph's proven qemu-user foreign-arch path (a MIPS/ARM firmware binary
+    # under qemu-user + the parent firmware rootfs as the `-L` sysroot). frida-mode is the
+    # opt-in alternative (faster on some native x86, weaker cross-arch) — Phase 5.
+    "binary_only": ("qemu", "frida"),
+    # Live/rehosted/local service or a server binary (Phase 5). boofuzz (generational,
+    # spec'd protocol blocks/checksums/a small state graph) is the DEFAULT live-socket
+    # fuzzer — pure-Python, joins the emulator netns cleanly, bounded by local_tcp_scope +
+    # features.network + every send audited to EgressEvent. `desock` is the static-by-
+    # default tier-1 alternative: LD_PRELOAD preeny/desock turns a LOCAL server binary's
+    # socket into stdin so AFL++ coverage-fuzzes it with --network none (no real net).
+    "network": ("boofuzz", "desock"),
+    # Structured input parser — same as source_lib if source is present (the auto-dict +
+    # structure-aware hook ride the AFL/libFuzzer path); else binary_only qemu-mode.
+    "file_format": ("afl", "libfuzzer", "qemu"),
 }
 
 
@@ -66,6 +75,16 @@ class FuzzCampaignSpec:
     max_crashes: int = 10
     instances: int = 1                   # AFL++ master + N-1 secondaries (host-cores, capped)
     build_spec_id: str | None = None
+    # ── binary_only (qemu/frida) — Phase 5 ──────────────────────────────────────────
+    target_binary: str | None = None     # host path to the prebuilt ELF (qemu-mode fuzzes it directly)
+    sysroot: str | None = None           # host path: the parent firmware rootfs (qemu `-L` for foreign-arch)
+    # ── network (boofuzz/desock) — Phase 5 ──────────────────────────────────────────
+    host: str | None = None              # the live device IP (rehosted/local) the protocol fuzzer targets
+    port: int | None = None              # the service port
+    protocol: str = "tcp"                # tcp | udp (transport for boofuzz)
+    proto_spec: dict | None = None       # the boofuzz request/state spec (generational) — see net fuzzers
+    net_container: str | None = None     # an emulator container netns to join (rehosted device)
+    structured: bool = False             # file_format: enable the structure-aware/grammar hook
 
     def to_dict(self) -> dict:
         return {
@@ -76,6 +95,10 @@ class FuzzCampaignSpec:
             "max_total_time": self.max_total_time, "max_len": self.max_len,
             "max_crashes": self.max_crashes, "instances": self.instances,
             "build_spec_id": self.build_spec_id,
+            "target_binary": self.target_binary, "sysroot": self.sysroot,
+            "host": self.host, "port": self.port, "protocol": self.protocol,
+            "proto_spec": self.proto_spec, "net_container": self.net_container,
+            "structured": self.structured,
             # harness_source is bytes, not recorded in config_json (it lives on the
             # managed harness node / parent finding; resolved at prepare time).
         }
@@ -93,6 +116,16 @@ class PreparedFuzz:
     extra_ro_mounts: list[tuple[str, str]] = field(default_factory=list)
     coverage_instrumented: bool = False
     engine: str = "libfuzzer"
+    # ── Network-fuzz launch (the ONLY place the campaign relaxes --network none) ─────
+    # `requires_egress` flips the detached launch onto the bounded-egress path: the
+    # campaign engine asserts assert_allows_egress(dest, local_tcp_scope(host,port)) +
+    # audits an EgressEvent BEFORE launch, and the container runs with the bridge (or
+    # `net_container` to join a rehosted device's netns) instead of --network none. A
+    # desock/qemu/source campaign leaves this False — it stays --network none.
+    requires_egress: bool = False
+    egress_host: str | None = None               # the live device host (for the scope + audit)
+    egress_port: int | None = None
+    net_container: str | None = None             # join this container's netns (rehosted device)
 
 
 @runtime_checkable

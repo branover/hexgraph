@@ -175,6 +175,41 @@ then run the resume verifier, then continue at the next unchecked task.
   **Target soft-removal** (archive subtree, restore on re-add) and **firmware filesystem browser**
   (persisted unpacked tree, add any file as a child target; library exports → nodes; function nodes
   launch tasks).
+  **Fuzzing+source Phase 5 DONE** (`docs/design-fuzzing-and-source.md` §7 Phase 5, branch
+  `build/fuzz-phase5`): **binary-only + network/protocol fuzzing**, behind the EXISTING `Fuzzer`
+  seam (no new gate, **no migration** — all new structure rides `config_json`/`evidence.extra` + the
+  String `surface`/`engine` columns). The surface×engine matrix gained **binary_only → `qemu`
+  (default) / `frida`** and **network → `boofuzz` (default) / `desock`**. (1) **Binary-only**
+  (`engine/fuzzers/binary_only.py`, `sandbox/probes/afl_qemu_probe.py`): AFL++ **qemu-mode** (`-Q`,
+  full edge coverage via QEMU TCG, NO source/instrumentation) — a foreign-arch MIPS/ARM firmware
+  binary runs under qemu-user with the **parent firmware rootfs as the `-L` sysroot** (REUSING
+  `poc._find_sysroot` + `filesystem.host_root`, the proven PoC path); **frida-mode** the opt-in alt
+  (`-O`). Crashes flow into the SAME Phase-3 dedup/exploitability/minimize/verify pipeline
+  (`code_present/dynamic`). (2) **Network** (`engine/fuzzers/network.py`): **boofuzz** (default,
+  `boofuzz_probe.py` — generational; ships a built-in field mutator so it works even without the
+  boofuzz pip) drives a **LIVE service** over a real socket with a **liveness oracle** (service died +
+  stayed down = a crash); it rides the **EXISTING local-network tier** — `_launch_network` asserts
+  `assert_allows_egress(dest, local_tcp_scope(host,port))` (loopback/private ONLY, refuses any public
+  host) + **audits every launch to `EgressEvent`**, the detached container joins a rehosted device's
+  emulator **netns** (`net_container`); the crash is **`input_reachable/dynamic`** (the strongest rung
+  — reached + triggered end-to-end) and its crashing MESSAGE re-verifies over the socket
+  (`_verify_network_artifact`). **desock+AFL++** (`desock_probe.py`, the tier-1 alt) LD_PRELOADs
+  preeny/desock to turn a LOCAL server's socket into stdin so AFL++ coverage-fuzzes it with
+  `--network none`. (3) **file_format** gains the auto-dictionary/structured hook on the AFL/qemu
+  paths. **Gating, by surface (the ONLY change is which existing gate applies):** source/binary-only/
+  desock EXECUTE a target → the exec gate (`features.fuzzing`/`poc`); a live boofuzz campaign talks to
+  a service → `features.network` — `start_campaign`/`verify_artifact`/the API/MCP pick the right gate,
+  **no `policy.py` edit, no new gate**. `start_detached` gained a policy-checked `allow_network`/
+  `net_container` (the single place a detached campaign relaxes `--network none`; all other security
+  flags hold). Image: `Dockerfile.fuzz` now builds AFL++ from source with **qemu-mode (afl-qemu-trace)
+  + frida-mode**, **preeny/desock**, and **boofuzz** (a PRIVATE `hexgraph-fuzz:wt-fuzz-phase5` tag for
+  the worktree, `HEXGRAPH_FUZZ_IMAGE`). Tests: `tests/test_fuzz_phase5.py` (19 offline — the matrix +
+  fail-closed pairs, prepare() launch descriptions, the network bounded-egress gate + audit + the
+  non-local-host refusal, network-vs-binary gate selection, the network-crash `input_reachable`
+  assurance, surface inference/input resolution, the engines endpoint) + Docker-gated
+  `tests/test_fuzz_phase5_e2e.py` (qemu-mode finds a planted crash in a stripped ELF; **boofuzz drops a
+  planted-overflow live TCP service via its netns and the reproducer re-verifies** — the blind-network-
+  fuzz battle-test path; desock+AFL fuzzes a local server with `--network none`). MCP/API/SKILL updated.
 - **Entity removal (`engine/removal.py`, migration 0011 `node.archived`):** nodes **soft-archive** —
   `archive_node` hides the node *and* the edges touching it (the graph already skips edges to hidden
   endpoints); re-adding the same node (`get_or_create_node`) or `restore_node` brings it and its edges

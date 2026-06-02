@@ -10,7 +10,14 @@
 #   - afl-cov / llvm-cov — coverage reporting on a campaign.
 #   - gdb + an `exploitable`-style classifier helper (the deterministic classifier lives
 #     in fuzz_probe.classify_exploitability; gdb is here for deeper triage).
-#   - qemu-user — the foreign-arch path (binary_only qemu-mode is Phase 5; staged here).
+#   - qemu-user + AFL++ QEMU-mode (afl-qemu-trace) — BINARY-ONLY fuzzing (Phase 5): full
+#     edge coverage of a stripped binary with NO source, incl. foreign-arch firmware
+#     (MIPS/ARM) via the bundled qemuafl + the parent firmware rootfs as the `-L` sysroot.
+#   - AFL++ FRIDA-mode (afl-frida-trace.so) — the binary-only opt-in alternative.
+#   - boofuzz + a built-in generational mutator — NETWORK/protocol fuzzing of a LIVE
+#     service (Phase 5), bounded by features.network + local_tcp_scope + audited.
+#   - preeny / desock.so — desock+AFL++ coverage-fuzzes a LOCAL server binary with
+#     --network none (network tier 1, static-by-default).
 #
 # Build:  docker build -f Dockerfile.fuzz -t hexgraph-fuzz:latest .
 #         WORKTREE DISCIPLINE: for local testing build a PRIVATE tag and point the env
@@ -55,26 +62,63 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# AFL++ — the coverage-guided engine (afl-clang-lto/fast + CmpLog + persistent mode,
-# afl-cmin / afl-tmin / afl-cov / afl-showmap). Prefer the apt package; fall back to a
-# source build only if needed (kept best-effort so the image still serves libFuzzer/
-# SanCov builds if AFL++ is unavailable on a given base — the graceful-degrade rule).
+# AFL++ — the coverage-guided engine. We BUILD FROM SOURCE so the Phase-5 binary-only
+# modes are present: QEMU-mode (`-Q`, afl-qemu-trace — full edge coverage of a stripped
+# binary with NO source, incl. foreign-arch firmware via the bundled qemuafl) and
+# FRIDA-mode (`-O`, afl-frida-trace.so). The source build also gives afl-clang-lto/fast +
+# CmpLog + persistent mode + afl-cmin / afl-tmin / afl-cov / afl-showmap (Phase 3). Falls
+# back to the apt package if the source build fails (graceful-degrade — libFuzzer/SanCov
+# still work, qemu-mode then depends on the apt package shipping afl-qemu-trace).
 RUN apt-get update \
-    && (apt-get install -y --no-install-recommends afl++ \
-        || apt-get install -y --no-install-recommends aflplusplus \
-        || echo "WARN: AFL++ not in apt; afl-* unavailable (libFuzzer/SanCov still work)") \
+    && apt-get install -y --no-install-recommends \
+        git automake bison flex libtool libtool-bin libglib2.0-dev \
+        ninja-build meson wget python3-dev python3-setuptools libpixman-1-dev \
+        llvm-dev libstdc++-12-dev libseccomp-dev \
     && rm -rf /var/lib/apt/lists/*
+# Build AFL++'s CORE binaries (afl-fuzz/afl-cmin/afl-tmin/afl-showmap — NO LLVM needed),
+# then the LLVM passes (afl-clang-fast/lto — best-effort, needs matching llvm headers),
+# then qemu-mode (afl-qemu-trace) + frida-mode, then install. The core+qemu+frida steps
+# are what Phase 5 binary-only/network fuzzing needs and don't depend on the LLVM passes,
+# so a passes failure (header mismatch) doesn't lose qemu-mode. Falls back to apt.
+RUN ( set -e; \
+      git clone --depth 1 https://github.com/AFLplusplus/AFLplusplus /tmp/aflpp; \
+      cd /tmp/aflpp; \
+      make -j"$(nproc)" afl-fuzz afl-showmap afl-tmin afl-cmin afl-as; \
+      ( make -j"$(nproc)" llvm || echo "WARN: AFL++ LLVM passes failed (afl-clang-fast may be absent)" ); \
+      ( cd qemu_mode && CPU_TARGET=x86_64 ./build_qemu_support.sh ); \
+      ( cd frida_mode && make || echo "WARN: frida_mode build failed" ); \
+      make install; \
+      cp -v afl-qemu-trace /usr/local/bin/ 2>/dev/null || true; \
+      cp -v afl-frida-trace.so /usr/local/lib/afl/ 2>/dev/null || true; \
+      cd /; rm -rf /tmp/aflpp ) \
+    || ( echo "WARN: AFL++ source build failed; falling back to apt" \
+         && apt-get update \
+         && (apt-get install -y --no-install-recommends afl++ \
+             || apt-get install -y --no-install-recommends aflplusplus \
+             || echo "WARN: AFL++ unavailable") \
+         && rm -rf /var/lib/apt/lists/* )
 
 # afl-cov (line/function coverage reporting from afl's queue) — best-effort.
 RUN (pip3 install --no-cache-dir --break-system-packages afl-cov 2>/dev/null \
         || echo "WARN: afl-cov not installed; coverage reporting degrades to llvm-cov") \
     || true
 
-# desock / preeny + boofuzz are STAGED for Phase 5 (network fuzzing) — installed
-# best-effort so the layer exists; not exercised in Phase 3.
+# Network fuzzing (Phase 5):
+#  - boofuzz: the DEFAULT live-socket generational protocol fuzzer (the probe also ships a
+#    built-in generational mutator so the network path works even if pip can't fetch it).
+#  - preeny / desock.so: LD_PRELOADed onto a LOCAL server binary so its socket becomes
+#    stdin → AFL++ coverage-fuzzes it with --network none (tier 1, static-by-default).
 RUN (pip3 install --no-cache-dir --break-system-packages boofuzz 2>/dev/null \
-        || echo "WARN: boofuzz not installed (Phase 5 network fuzzing)") \
+        || echo "WARN: boofuzz not installed (the built-in generational mutator covers it)") \
     || true
+RUN ( set -e; \
+      git clone --depth 1 https://github.com/zardus/preeny /tmp/preeny; \
+      cd /tmp/preeny; make || true; \
+      mkdir -p /usr/lib/preeny; \
+      cp -v $(find . -name 'desock*.so' 2>/dev/null) /usr/lib/preeny/ 2>/dev/null || true; \
+      ( cp -v ./x86_64-lib/desock.so /usr/lib/preeny/desock.so 2>/dev/null || true ); \
+      cd /; rm -rf /tmp/preeny ) \
+    || echo "WARN: preeny/desock build failed (desock path degrades to qemu-mode file-input)"
 
 # Bake the probe scripts into the image (mounted-over at run time, except NO_MOUNT mode).
 COPY src/hexgraph/sandbox/probes/ /opt/hexgraph/

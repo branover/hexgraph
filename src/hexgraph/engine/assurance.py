@@ -171,6 +171,17 @@ def derive_fuzz_assurance() -> dict:
                      detail="lab-confirmed by a fuzzing harness; production input path not established")
 
 
+def derive_network_fuzz_assurance() -> dict:
+    """A NETWORK fuzz crash drops a LIVE service through its real socket input boundary
+    (the liveness oracle confirmed the process died and stayed down on the mutated
+    message). Unlike a harness crash, the production input path IS the one exercised —
+    so this is `input_reachable/dynamic`, the strongest assurance (reached AND fires),
+    exactly like a verified live-surface PoC (design §5.6)."""
+    return assurance(INPUT_REACHABLE, DYNAMIC, UNSPECIFIED,
+                     detail="the live service died on a mutated message sent over its real "
+                            "socket — reached and triggered end-to-end through the input boundary")
+
+
 # ── Precedence on the ladder, so a weaker rung NEVER overwrites a stronger one ──────────────
 #
 # The ladder (weakest → strongest), per LADDER above. The middle two are NOT strictly

@@ -20,9 +20,18 @@ from hexgraph.db.models import FuzzArtifact, FuzzCampaign, Project, Target
 from hexgraph.db.session import session_scope
 from hexgraph.engine import campaigns as C
 from hexgraph.engine.fuzzers import FuzzCampaignSpec
-from hexgraph.policy import PolicyViolation, assert_allows_execution
+from hexgraph.policy import PolicyViolation
 
 router = APIRouter()
+
+
+class CampaignNet(BaseModel):
+    """Optional network-fuzz overrides (host/port/proto/spec usually inferred from the
+    target — a rehosted device IP / a local service)."""
+    host: str | None = None
+    port: int | None = None
+    protocol: str | None = None
+    proto_spec: dict | None = None
 
 
 class CampaignCreate(BaseModel):
@@ -36,6 +45,7 @@ class CampaignCreate(BaseModel):
     instances: int | None = None
     seeds: list[str] | None = None
     build_spec_id: str | None = None
+    net: CampaignNet | None = None      # network-fuzz overrides (surface=network)
     # Per-campaign ResourceSpec override (mem/cpus/pids/tmpfs/timeout/unconstrained).
     resources: dict | None = None
 
@@ -56,11 +66,10 @@ def _resolve_target_inputs(session, project, target):
 
 @router.post("/api/projects/{project_id}/campaigns")
 def api_start_campaign(project_id: str, body: CampaignCreate):
-    """Start a detached fuzz campaign; returns immediately (status `running`)."""
-    try:
-        assert_allows_execution()
-    except PolicyViolation as exc:
-        raise HTTPException(403, str(exc))
+    """Start a detached fuzz campaign; returns immediately (status `running`). The policy
+    gate is applied INSIDE start_campaign by surface (a live-socket boofuzz campaign rides
+    features.network + local_tcp_scope; everything else the exec gate) — NO new gate. A
+    PolicyViolation surfaces as 403."""
     with session_scope() as s:
         p = s.get(Project, project_id)
         if p is None:
@@ -70,6 +79,7 @@ def api_start_campaign(project_id: str, body: CampaignCreate):
             raise HTTPException(404, "target not found in this project")
         surface = body.surface or C.infer_surface(t)
         source, function, sources = _resolve_target_inputs(s, p, t)
+        net = body.net
         spec = FuzzCampaignSpec(
             target_id=t.id, surface=surface, engine=body.engine,
             harness_source=source, function=body.function or function,
@@ -77,6 +87,9 @@ def api_start_campaign(project_id: str, body: CampaignCreate):
             max_total_time=body.max_total_time or 60, max_len=body.max_len or 4096,
             max_crashes=body.max_crashes or 10, instances=body.instances or 1,
             build_spec_id=body.build_spec_id,
+            host=net.host if net else None, port=net.port if net else None,
+            protocol=(net.protocol if net and net.protocol else "tcp"),
+            proto_spec=net.proto_spec if net else None,
         )
         try:
             row = C.start_campaign(s, p, t, spec=spec, resources=body.resources)
@@ -136,17 +149,17 @@ def api_stop_campaign(campaign_id: str):
 
 @router.post("/api/campaigns/{campaign_id}/resume")
 def api_resume_campaign(campaign_id: str):
-    """Resume a stopped campaign, seeded from the preserved corpus."""
-    try:
-        assert_allows_execution()
-    except PolicyViolation as exc:
-        raise HTTPException(403, str(exc))
+    """Resume a stopped campaign, seeded from the preserved corpus. The surface-correct
+    policy gate is applied inside start_campaign (exec for binary/source, egress for a
+    live-socket network campaign) — NO new gate."""
     with session_scope() as s:
         c = s.get(FuzzCampaign, campaign_id)
         if c is None:
             raise HTTPException(404, "campaign not found")
         try:
             return C.campaign_to_dict(C.resume_campaign(s, c))
+        except PolicyViolation as exc:
+            raise HTTPException(403, str(exc))
         except (C.CampaignError, ValueError) as exc:
             raise HTTPException(400, str(exc))
 
@@ -166,16 +179,14 @@ def api_verify_artifact(artifact_id: str):
     reproducer against the instrumented harness binary and check the unforgeable `crash`
     oracle. Returns {verified, detail, assurance}. (Reproduce and Re-verify are the same
     action — both re-run the stored reproducer.)"""
-    try:
-        assert_allows_execution()
-    except PolicyViolation as exc:
-        raise HTTPException(403, str(exc))
     with session_scope() as s:
         a = _get_artifact(s, artifact_id)
         if not a.content_cas:
             raise HTTPException(400, "artifact has no stored reproducer to verify")
         try:
             res = C.verify_artifact(s, a)
+        except PolicyViolation as exc:
+            raise HTTPException(403, str(exc))
         except (C.CampaignError, ValueError) as exc:
             raise HTTPException(400, str(exc))
         return {"artifact_id": artifact_id, "verified": bool(res.get("verified")),

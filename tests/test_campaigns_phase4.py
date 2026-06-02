@@ -130,9 +130,9 @@ def test_api_fuzz_engines_advertised(hg_home, monkeypatch):
         r = c.get(f"/api/fuzz/engines?target_id={tid}").json()
         assert r["surface"] == "source_lib"
         assert "afl" in r["engines"] and r["default"] == "afl"
-        # explicit surface
+        # explicit surface (Phase 5: binary_only → qemu-mode default + frida alt)
         r2 = c.get("/api/fuzz/engines?surface=binary_only").json()
-        assert r2["engines"] == ["afl"]
+        assert r2["engines"] == ["qemu", "frida"] and r2["default"] == "qemu"
         # whole matrix when no surface
         r3 = c.get("/api/fuzz/engines").json()
         assert "surfaces" in r3 and "source_lib" in r3["surfaces"]
