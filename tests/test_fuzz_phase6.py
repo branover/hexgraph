@@ -175,6 +175,33 @@ def test_config_reads_from_toml(hg_home, monkeypatch):
     assert conn["tls_env"]["DOCKER_CERT_PATH"] == "/tmp/certs"
 
 
+def test_dashed_env_name_resolves_connection(hg_home, monkeypatch):
+    """A REAL user's env name very often contains dashes ('my-remote-box'). Its id is the
+    SLUG (dashes preserved) and the secret env-var key normalizes dashes→underscores — so the
+    env-var key is HEXGRAPH_FUZZ_REMOTE_MY_REMOTE_BOX_DOCKER_HOST and the config.toml table is
+    [fuzz_remote.my-remote-box]. Registration (slug) and lookup (config) MUST agree on both
+    sides, or a dashed-name env can never find its connection. (Regression guard for the
+    slug↔connection-key normalization: the rest of the suite only exercises single-word
+    names, so a regression here would otherwise go unnoticed.)"""
+    # env-var path: dashes→underscores in the key.
+    monkeypatch.setenv("HEXGRAPH_FUZZ_REMOTE_MY_REMOTE_BOX_DOCKER_HOST", "tcp://10.0.0.9:2376")
+    config._load_toml.cache_clear()
+    with session_scope() as s:
+        env = FE.register_environment(s, name="my-remote-box", transport="tcp",
+                                      host_descriptor="ssh://beefybox")
+        assert env.id == "my-remote-box"
+        assert config.fuzz_remote_has_connection(env.id) is True
+        assert config.fuzz_remote_connection(env.id)["docker_host"] == "tcp://10.0.0.9:2376"
+    # config.toml path: the table key keeps the dashed slug verbatim.
+    monkeypatch.delenv("HEXGRAPH_FUZZ_REMOTE_MY_REMOTE_BOX_DOCKER_HOST", raising=False)
+    home = config.hexgraph_home()
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.toml").write_text(
+        '[fuzz_remote.my-remote-box]\ndocker_host = "ssh://user@beefybox"\n')
+    config._load_toml.cache_clear()
+    assert config.fuzz_remote_connection("my-remote-box")["docker_host"] == "ssh://user@beefybox"
+
+
 # ── Environment registration + health-check ───────────────────────────────────────
 
 def test_register_validates_transport(hg_home):

@@ -249,7 +249,10 @@ def dind_remote():
             pytest.skip(f"could not load {fuzz_img} into the dind remote: {load.stderr.strip()[:200]}")
         yield dh
     finally:
-        subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+        # `-v` reaps the anonymous volume `docker:dind` declares for /var/lib/docker
+        # (the dind daemon's whole image store — incl. the loaded fuzz image, easily GBs).
+        # Without it that volume is orphaned every run; over CI it leaks unboundedly.
+        subprocess.run(["docker", "rm", "-f", "-v", name], capture_output=True)
 
 
 @pytest.fixture
