@@ -65,20 +65,62 @@ function glyphDataUri(ch: string): string {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
-export default function GraphView({ graph, onSelect, onEdgeSelect, onDrawEdge, selectedId, isolateType }: { graph: Graph; onSelect: (id: string, type: string) => void; onEdgeSelect?: (edge: Graph["edges"][number] | null) => void; onDrawEdge?: (srcId: string, dstId: string) => void; selectedId?: string; isolateType?: string | null }) {
+// A committed focus: the anchor node + the hop radius of neighborhood it pulls into focus.
+export interface FocusSpec { id: string; hop: number }
+
+export default function GraphView({
+  graph, onSelect, onEdgeSelect, onDrawEdge, selectedId, isolateType,
+  focus, onFocus, onClearFocus,
+}: {
+  graph: Graph;
+  onSelect: (id: string, type: string) => void;
+  onEdgeSelect?: (edge: Graph["edges"][number] | null) => void;
+  onDrawEdge?: (srcId: string, dstId: string) => void;
+  selectedId?: string;
+  isolateType?: string | null;
+  // Phase 2 focus model: the committed focus (anchor + hop) is owned by the host (so it can
+  // serialize to the URL + drive the breadcrumb). GraphView renders it onto the live cy
+  // instance via .focus/.context classes + a scoped auto-frame, and reports focus intents up.
+  focus?: FocusSpec | null;
+  onFocus?: (id: string, hop?: number) => void;
+  onClearFocus?: () => void;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const cyRef = useRef<cytoscape.Core>();
   const ehRef = useRef<any>(null);
   const drawRef = useRef<(src: string, dst: string) => void>();
+  const focusCbRef = useRef<((id: string, hop?: number) => void) | undefined>();
   const tapRef = useRef<{ id: string | null; t: number }>({ id: null, t: 0 });
+  // Saved resting positions of nodes the focus model temporarily re-arranges, so clearing
+  // focus restores the graph exactly (the rearrange is a live-instance, reversible nicety —
+  // NOT a layout-engine change to the resting graph).
+  const savedPos = useRef<Map<string, { x: number; y: number }>>(new Map());
+  // true once the current cy's initial dagre layout has settled — so the focus effect knows
+  // whether to apply immediately or wait for layoutstop (positions must be final first).
+  const layoutDone = useRef(false);
+  // the live focus-applier, so the build effect's layoutstop can invoke the *current* one.
+  const applyFocusRef = useRef<(() => void) | null>(null);
   const [findings, setFindings] = useState<"all" | "unresolved" | "none">("all");
   const [showFns, setShowFns] = useState(true);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [filterOpen, setFilterOpen] = useState(false);
   const [drawMode, setDrawMode] = useState(false);
+  // Phase-2 hop radius for new focuses launched from the verb menu / filter (1–3).
+  const [hop, setHop] = useState(1);
+  // Reversible hard-hide: nodes the user explicitly hid (right-click → Hide). Surfaced as a
+  // restore chip; never a silent loss (design §4.1 — manuallyHidden + a "N hidden ↺" chip).
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+  // Dependency-free right-click verb menu (focus / expand-hops / hide / reveal). Cytoscape-
+  // native cxttap drives it — no cytoscape-cxtmenu dependency (Phase 2 stays dep-free).
+  const [menu, setMenu] = useState<{ x: number; y: number; id: string; type: string } | null>(null);
 
-  // keep the latest callback in a ref so the cytoscape effect needn't re-run on it
+  // keep the latest callbacks in refs so the cytoscape effect needn't re-run on them
   drawRef.current = onDrawEdge;
+  focusCbRef.current = onFocus;
+  // the current committed focus, mirrored into a ref so the build effect's one-shot
+  // layoutstop handler can read it without re-subscribing.
+  const focusValRef = useRef<FocusSpec | null>(null);
+  focusValRef.current = focus ?? null;
 
   // children map for collapse: contains (parent→child) + about (node/target → its finding)
   const childrenOf = useMemo(() => {
@@ -98,7 +140,6 @@ export default function GraphView({ graph, onSelect, onEdgeSelect, onDrawEdge, s
 
   useEffect(() => {
     if (!ref.current) return;
-    const nodeById = new Map(graph.nodes.map((n) => [n.id, n] as const));
     const baseHidden = new Set<string>();
     for (const n of graph.nodes) {
       if (n.type === "node" && (n.node_type === "symbol" || n.node_type === "string")) baseHidden.add(n.id);
@@ -110,7 +151,7 @@ export default function GraphView({ graph, onSelect, onEdgeSelect, onDrawEdge, s
     }
     const collapseHidden = new Set<string>();
     for (const id of collapsed) for (const d of descendants(id)) collapseHidden.add(d);
-    const isHidden = (id: string) => baseHidden.has(id) || collapseHidden.has(id);
+    const isHidden = (id: string) => baseHidden.has(id) || collapseHidden.has(id) || hidden.has(id);
 
     const shown = graph.nodes.filter((n) => !isHidden(n.id));
     const vEdges = graph.edges.filter((e) => !isHidden(e.source) && !isHidden(e.target));
@@ -185,6 +226,8 @@ export default function GraphView({ graph, onSelect, onEdgeSelect, onDrawEdge, s
             "underlay-color": (n: any) => n.data("gtype") === "finding" ? (SEV[n.data("severity")] || "#7d8799") : (KIND[n.data("kind")] || "#39c5cf"),
             "underlay-opacity": (n: any) => (n.data("gtype") === "finding" && (n.data("severity") === "critical" || n.data("severity") === "high") ? 0.28 : 0.12),
             "underlay-padding": 4, "underlay-shape": "ellipse",
+            // Smooth the focus/context mute transitions (live class toggles, no relayout).
+            "transition-property": "opacity background-blacken border-width", "transition-duration": "160ms" as any,
           },
         },
         // Hubs (degree ≥ 8): a degree-driven 30→40px ramp + a slight glow, and their
@@ -225,6 +268,7 @@ export default function GraphView({ graph, onSelect, onEdgeSelect, onDrawEdge, s
             "curve-style": "bezier", "arrow-scale": 0.7, opacity: 0.28, label: "", "font-size": "7px", color: "#8893a6",
             "text-rotation": "autorotate", "text-background-color": "#0a0c12", "text-background-opacity": 0.9, "text-background-padding": "3px",
             "min-zoomed-font-size": 7,
+            "transition-property": "opacity width", "transition-duration": "160ms" as any,
           },
         },
         // Structural scaffolding (contains/references/located_in/built_from/…): the gray
@@ -237,14 +281,52 @@ export default function GraphView({ graph, onSelect, onEdgeSelect, onDrawEdge, s
         // floor), brighter still. Their labels also obey min-zoomed-font-size.
         { selector: "edge[persist = 1]", style: { label: "data(elabel)", opacity: 0.42, width: 1.5 } },
         { selector: "edge.lit", style: { label: "data(elabel)", opacity: 1, width: 2.4, "target-arrow-shape": "triangle", "z-index": 20 } },
-        // Legend isolate-by-type (lightweight Phase-1 preview; the deep focus/context
-        // system is Phase 2): hovering/clicking a legend chip dims everything that ISN'T
-        // that type, hue preserved at low alpha (mute, never de-color — D8).
+
+        // ── Phase 2: the focus model (the core fix for the drowned highlight) ───────────
+        // A committed focus (.focus) is the SUBJECT: full saturation, crisp label, bright
+        // edges with labels — color does maximal work here. Everything outside the focus
+        // neighborhood becomes .context: muted to ~16% opacity + desaturated
+        // (background-blacken) + labels dropped — BUT hue preserved at low alpha (mute, not
+        // de-color, per D8). `events:no` so the faded backdrop doesn't steal taps.
+        { selector: "node.context", style: {
+            opacity: 0.16, "background-blacken": 0.4, "text-opacity": 0, "underlay-opacity": 0,
+            events: "no" as any,
+        } },
+        { selector: "edge.context", style: { opacity: 0.05, label: "", "target-arrow-shape": "none", events: "no" as any } },
+        { selector: "node.focus", style: {
+            opacity: 1, "background-blacken": 0, "text-opacity": 1, "z-index": 30,
+            "border-width": 2.5, "border-color": "#cdd5e2",
+            "underlay-opacity": 0.3, "underlay-padding": 7,
+        } },
+        // The focus ANCHOR (the node you focused) reads strongest of all — amber ring.
+        { selector: "node.focus-anchor", style: {
+            "border-color": "#ffd166", "border-width": 3.5,
+            "underlay-color": "#ffd166", "underlay-opacity": 0.5, "underlay-padding": 11, "text-opacity": 1,
+        } },
+        { selector: "edge.focus", style: {
+            opacity: 1, width: 2.4, label: "data(elabel)", "target-arrow-shape": "triangle", "z-index": 25,
+        } },
+        // Hover preview (transient, no commit): lift the hovered node + its 1-hop ring out
+        // of the resting graph WITHOUT muting everything (distinct from .focus, §4.1).
+        { selector: "node.hl", style: { "border-color": "#6aa3ff", "border-width": 2.5, "text-opacity": 1, "z-index": 28, "underlay-opacity": 0.3 } },
+        { selector: "edge.hl", style: { opacity: 0.95, width: 2.2, label: "data(elabel)", "target-arrow-shape": "triangle", "z-index": 24 } },
+        { selector: ".hl-dim", style: { opacity: 0.12 } as any },
+
+        // Legend isolate-by-type (lightweight Phase-1 preview): hovering/clicking a legend
+        // chip dims everything that ISN'T that type, hue preserved at low alpha.
         { selector: "node.type-dim", style: { opacity: 0.1, "text-opacity": 0, "underlay-opacity": 0 } },
         { selector: "edge.type-dim", style: { opacity: 0.05, label: "" } },
       ],
-      layout: { name: "dagre", rankDir: "LR", nodeSep: 26, rankSep: 72, padding: 24 } as any,
+      // NB: dagre is synchronous — if the layout runs from the constructor it fires
+      // `layoutstop` before we can subscribe. So we run it explicitly below, AFTER wiring the
+      // layoutstop handler, so the focus model reliably gets the final-positions signal.
     });
+    // The focus model needs FINAL node positions before its concentric re-arrange + scoped
+    // frame. Run the layout explicitly, mark done on settle, and invoke whatever focus is
+    // committed at that point (a URL-restored focus applies here).
+    layoutDone.current = false;
+    cy.one("layoutstop", () => { layoutDone.current = true; applyFocusRef.current?.(); });
+    cy.layout({ name: "dagre", rankDir: "LR", nodeSep: 26, rankSep: 72, padding: 24 } as any).run();
     const edgeById = new Map(graph.edges.map((e) => [e.id, e] as const));
     cy.on("tap", "edge", (evt) => {
       cy.edges().removeClass("lit"); evt.target.addClass("lit");
@@ -254,16 +336,44 @@ export default function GraphView({ graph, onSelect, onEdgeSelect, onDrawEdge, s
       const id = evt.target.id();
       onSelect(id, evt.target.data("gtype"));
       onEdgeSelect?.(null);
+      setMenu(null);
       cy.edges().removeClass("lit"); evt.target.connectedEdges().addClass("lit");
       const now = performance.now();
       if (tapRef.current.id === id && now - tapRef.current.t < 350) {
-        // double-tap → collapse/expand this node's subtree (if it has children)
-        if ((childrenOf[id] || []).length) setCollapsed((prev) => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
+        // double-tap → FOCUS this node's neighborhood (the high-value Phase-2 gesture).
+        // Collapse/expand moved to the right-click verb menu.
+        focusCbRef.current?.(id);
         tapRef.current = { id: null, t: 0 };
       } else tapRef.current = { id, t: now };
     });
-    cy.on("tap", (evt) => { if (evt.target === cy) { cy.edges().removeClass("lit"); onEdgeSelect?.(null); } });
+    cy.on("tap", (evt) => { if (evt.target === cy) { cy.edges().removeClass("lit"); onEdgeSelect?.(null); setMenu(null); } });
+
+    // Hover preview (transient, design §4.1): lift the hovered node + its direct edges,
+    // gently dim the rest — never commits focus, never reframes. Suspended while a focus is
+    // committed (the committed .context mute already governs the canvas).
+    cy.on("mouseover", "node", (evt) => {
+      if (cy.elements(".focus, .context").nonempty()) return; // committed focus owns the canvas
+      const n = evt.target;
+      cy.elements().addClass("hl-dim");
+      n.closedNeighborhood().removeClass("hl-dim").addClass("hl");
+    });
+    cy.on("mouseout", "node", () => {
+      if (cy.elements(".focus, .context").nonempty()) return;
+      cy.elements().removeClass("hl hl-dim");
+    });
+
+    // Right-click verb menu (dependency-free): focus / expand a hop / hide / reveal.
+    cy.on("cxttap", "node", (evt) => {
+      evt.originalEvent?.preventDefault?.();
+      const n = evt.target;
+      const rp = n.renderedPosition();
+      setMenu({ x: rp.x, y: rp.y, id: n.id(), type: n.data("gtype") });
+    });
+    cy.on("cxttap", (evt) => { if (evt.target === cy) setMenu(null); });
+    cy.on("pan zoom drag", () => setMenu(null));
+
     cyRef.current = cy;
+    (window as any).__cy = cy; // exposed for headless A/B capture + debugging (harmless)
 
     // Draw-to-connect: edgehandles draws a temporary edge src→dst; we cancel its
     // creation and instead open the Add-edge modal prefilled with the endpoints.
@@ -282,8 +392,14 @@ export default function GraphView({ graph, onSelect, onEdgeSelect, onDrawEdge, s
       drawRef.current?.(src.id(), tgt.id());
     });
 
-    return () => { try { eh.destroy(); } catch { /* ignore */ } ehRef.current = null; cy.destroy(); };
-  }, [graph, findings, showFns, collapsed]);
+    return () => {
+      try { eh.destroy(); } catch { /* ignore */ }
+      ehRef.current = null;
+      savedPos.current.clear(); // positions belong to THIS cy; the next build gets fresh ones
+      if ((window as any).__cy === cy) (window as any).__cy = undefined;
+      cy.destroy();
+    };
+  }, [graph, findings, showFns, collapsed, hidden]);
 
   // Toggle edgehandles draw mode on the live instance (no graph rebuild needed).
   useEffect(() => {
@@ -297,22 +413,103 @@ export default function GraphView({ graph, onSelect, onEdgeSelect, onDrawEdge, s
     if (selectedId) { const el = cy.getElementById(selectedId); if (el) { el.select(); el.connectedEdges?.().addClass("lit"); } }
   }, [selectedId]);
 
+  // ── Phase 2: apply the committed focus to the live cy instance ────────────────────────
+  // A focus = the anchor node + its N-hop neighborhood gets `.focus`; everything else gets
+  // `.context` (muted, hue-preserved). Then a SCOPED auto-frame fits to the focus set —
+  // never a full-graph fit, never on hover (design D5). Re-runs when the focus or hop
+  // changes, and after a rebuild (graph dep) so a URL-restored focus survives reload.
+  useEffect(() => {
+    const cy = cyRef.current; if (!cy) return;
+    let cancelled = false;
+    const restore = () => {
+      // put every re-arranged node back where the resting layout left it
+      if (savedPos.current.size) {
+        cy.batch(() => savedPos.current.forEach((p, id) => { const el = cy.getElementById(id); if (!el.empty()) el.position(p); }));
+        savedPos.current.clear();
+      }
+    };
+    let ran = false;
+    const apply = () => {
+      if (cancelled || ran) return;
+      ran = true;
+      cy.elements().removeClass("focus context focus-anchor hl hl-dim");
+      if (!focus?.id) { if (savedPos.current.size) { restore(); cy.animate({ fit: { eles: cy.elements(), padding: 28 } }, { duration: 300 }); } return; }
+      const anchor = cy.getElementById(focus.id);
+      if (anchor.empty()) return; // focus target not in the visible graph — nothing to do
+      const h = Math.max(1, Math.min(3, focus.hop || 1));
+      // grow the neighborhood hop-by-hop over the visible graph; track each node's hop ring.
+      const ring = new Map<string, number>([[anchor.id(), 0]]);
+      let frontier = anchor as any;
+      let reached = anchor as any;
+      for (let i = 1; i <= h; i++) {
+        const next = frontier.neighborhood().nodes().difference(reached);
+        next.forEach((n: any) => { if (!ring.has(n.id())) ring.set(n.id(), i); });
+        reached = reached.union(next);
+        frontier = next;
+      }
+      const focusNodes = reached;
+      const focusEles = focusNodes.union(focusNodes.edgesWith(focusNodes));
+      cy.elements().not(focusEles).addClass("context");
+      focusEles.addClass("focus");
+      anchor.removeClass("focus").addClass("focus focus-anchor");
+
+      // Live concentric re-arrange of JUST the focus set around the anchor, so the scoped
+      // auto-frame lands on a genuinely readable local diagram instead of fitting a
+      // hub's neighbours scattered across a flat dagre layout (the resting graph is
+      // untouched; positions are saved + restored on clear — design §3.1 hub focus, applied
+      // live within Phase-2's "isolate + auto-frame" without a layout-engine swap).
+      restore();
+      const center = { ...anchor.position() };
+      const byRing = new Map<number, string[]>();
+      ring.forEach((r, id) => { if (r > 0) (byRing.get(r) || byRing.set(r, []).get(r)!).push(id); });
+      cy.batch(() => {
+        focusNodes.forEach((n: any) => savedPos.current.set(n.id(), { ...n.position() }));
+        anchor.position(center);
+        byRing.forEach((ids, r) => {
+          const radius = 150 * r;
+          ids.forEach((id, idx) => {
+            const ang = (2 * Math.PI * idx) / ids.length + r * 0.4;
+            cy.getElementById(id).position({ x: center.x + radius * Math.cos(ang), y: center.y + radius * Math.sin(ang) });
+          });
+        });
+      });
+      cy.animate({ fit: { eles: focusNodes, padding: 70 } }, { duration: 340 });
+    };
+    // Positions must be FINAL before the concentric re-arrange + scoped frame, else dagre's
+    // late completion overwrites them. If the layout has already settled, apply now; otherwise
+    // the build effect's layoutstop handler invokes us via this ref (it ran first, so it sees
+    // the committed focus and defers full-graph framing to us).
+    applyFocusRef.current = apply;
+    if (layoutDone.current) apply();
+    return () => { cancelled = true; if (applyFocusRef.current === apply) applyFocusRef.current = null; };
+  }, [focus?.id, focus?.hop, graph, hidden]);
+
   // Legend isolate/preview-by-type: dim everything that is not the chosen node-type OR
   // edge-type. A node-type keeps its nodes + their incident edges; an edge-type keeps those
   // edges + their endpoints. Hue is preserved (mute, not de-color). Live on the cy instance.
+  // Suppressed while a focus is committed (focus owns the canvas).
   useEffect(() => {
     const cy = cyRef.current; if (!cy) return;
     cy.elements().removeClass("type-dim");
-    if (!isolateType) return;
+    if (!isolateType || focus?.id) return;
     const keepNodes = cy.nodes(`[tkey = "${isolateType}"]`);
     const keepByEdge = cy.edges(`[etype = "${isolateType}"]`);
     const keepEdges = keepByEdge.union(keepNodes.connectedEdges());
     const keep = keepNodes.union(keepEdges).union(keepByEdge.connectedNodes());
     cy.elements().not(keep).addClass("type-dim");
-  }, [isolateType, graph]);
+  }, [isolateType, graph, focus?.id]);
 
   const fit = () => cyRef.current?.animate({ fit: { eles: cyRef.current.elements(), padding: 28 } }, { duration: 250 });
   const zoom = (f: number) => { const cy = cyRef.current; if (cy) cy.animate({ zoom: cy.zoom() * f, center: { eles: cy.elements() } }, { duration: 150 }); };
+
+  // Verb-menu actions (right-click). All reversible / non-destructive.
+  const menuFocus = () => { if (menu) onFocus?.(menu.id, hop); setMenu(null); };
+  const menuExpand = () => { if (menu) { const h = Math.min(3, (focus?.id === menu.id ? (focus.hop || 1) : 1) + 1); onFocus?.(menu.id, h); } setMenu(null); };
+  const menuHide = () => { if (menu) setHidden((s) => { const x = new Set(s); x.add(menu.id); return x; }); setMenu(null); };
+  const menuReveal = () => { if (menu) onSelect(menu.id, menu.type); setMenu(null); };
+  const restoreHidden = () => setHidden(new Set());
+
+  const curHop = focus?.hop || 1;
 
   return (
     <div className="graph-wrap">
@@ -321,18 +518,57 @@ export default function GraphView({ graph, onSelect, onEdgeSelect, onDrawEdge, s
         <span className="badge">{graph.nodes.length} nodes</span>
         {collapsed.size > 0 && <span className="badge" style={{ marginLeft: 6 }}>{collapsed.size} collapsed</span>}
       </div>
+      {/* Reversible hide chip (design §4.1): hidden nodes are never a silent loss. */}
+      {hidden.size > 0 && (
+        <button className="badge hide-chip" title="Restore all hidden nodes"
+                onClick={restoreHidden}
+                style={{ position: "absolute", left: 10, bottom: 10, cursor: "pointer", zIndex: 5, display: "inline-flex", alignItems: "center", gap: 4 }}>
+          <Icon name="refresh" size={11} /> {hidden.size} hidden · restore ↺
+        </button>
+      )}
+      {/* Focus bar: present only while a focus is committed; grows the neighborhood 1→3 hops
+          live (re-framing each step) and offers "Clear focus" back to the resting view. */}
+      {focus?.id && (
+        <div className="focus-bar"
+             style={{ position: "absolute", right: 10, top: 10, zIndex: 6, display: "flex", gap: 4, alignItems: "center",
+                      background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: 8, padding: "3px 6px" }}>
+          <span className="muted" style={{ fontSize: 11 }}>focus · {curHop} hop{curHop > 1 ? "s" : ""}</span>
+          <button className="btn sm icon ghost" title="Fewer hops" disabled={curHop <= 1}
+                  onClick={() => onFocus?.(focus.id, Math.max(1, curHop - 1))}><Icon name="minus" size={12} /></button>
+          <button className="btn sm icon ghost" title="More hops" disabled={curHop >= 3}
+                  onClick={() => onFocus?.(focus.id, Math.min(3, curHop + 1))}><Icon name="plus" size={12} /></button>
+          <button className="btn sm ghost" title="Clear focus — back to the full graph" onClick={() => onClearFocus?.()}>
+            <Icon name="x" size={12} /> clear
+          </button>
+        </div>
+      )}
+      {/* Right-click verb menu (dependency-free). */}
+      {menu && (
+        <div className="menu graph-cxt"
+             style={{ position: "absolute", left: Math.max(4, Math.min(menu.x, 1100)), top: Math.max(4, menu.y), zIndex: 20, minWidth: 172 }}
+             onMouseLeave={() => setMenu(null)}>
+          <div className="mi" onClick={menuFocus}><Icon name="search" size={13} /> Focus neighborhood</div>
+          <div className="mi" onClick={menuExpand}><Icon name="plus" size={13} /> Expand one hop</div>
+          <div className="mi" onClick={menuReveal}><Icon name="fit" size={13} /> Reveal in panel</div>
+          <div className="mi danger" onClick={menuHide}><Icon name="x" size={13} /> Hide this node</div>
+        </div>
+      )}
       <div className="graph-controls">
         <div style={{ position: "relative" }}>
           <button className="btn icon" title="Filter" onClick={() => setFilterOpen((o) => !o)}><Icon name="filter" /></button>
           {filterOpen && (
-            <div className="menu" style={{ right: 0, top: "auto", bottom: 36, minWidth: 180 }}>
+            <div className="menu" style={{ right: 0, top: "auto", bottom: 36, minWidth: 200 }}>
               <div className="sub"><label className="muted" style={{ fontSize: 11 }}>findings</label>
                 <select className="sel" value={findings} onChange={(e) => setFindings(e.target.value as any)}>
                   <option value="all">all findings</option><option value="unresolved">unresolved only</option><option value="none">hide findings</option>
                 </select>
               </div>
+              <div className="sub"><label className="muted" style={{ fontSize: 11 }}>focus neighborhood ({hop} hop{hop > 1 ? "s" : ""})</label>
+                <input type="range" min={1} max={3} value={hop} onChange={(e) => setHop(Number(e.target.value))} style={{ width: "100%" }} />
+              </div>
               <div className="mi" onClick={() => setShowFns((v) => !v)}><Icon name={showFns ? "check" : "x"} size={13} /> functions</div>
               <div className="mi" onClick={() => setCollapsed(new Set())}><Icon name="fit" size={13} /> expand all</div>
+              {hidden.size > 0 && <div className="mi" onClick={restoreHidden}><Icon name="refresh" size={13} /> restore {hidden.size} hidden</div>}
             </div>
           )}
         </div>
