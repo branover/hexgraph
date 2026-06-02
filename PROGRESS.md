@@ -522,6 +522,27 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-02: **build: interactive `hexgraph setup` wizard** (branch `build/setup-wizard`).
+  `just setup` now bootstraps (venv + deps + SPA) then launches a polished, sequential TUI wizard
+  (**Rich** panels/tables/progress + **questionary** checkboxes/selects/confirms; added to `[server]`
+  + `[dev]` extras and a `[setup]` extra). New `src/hexgraph/setup_catalog.py` is the canonical
+  feature/gate REGISTRY — one entry per optional `features.*` toggle with label, what-it-unlocks, the
+  **security implication** (accurate to `policy.py` — which gate/tier it relaxes, in the user's words),
+  `policy_changing`, the `policy.TIER_*` it raises, and the required build step(s). `setup_wizard.py`:
+  detects state (settings.json present? which Docker images built?), presents features pre-checked to
+  current state, shows a **red security-implication panel + explicit confirm for each newly-enabled
+  policy-relaxing feature**, collects non-secret config (loopback-default bind with a hard
+  refuse-unless-`HEXGRAPH_I_KNOW_WHAT_IM_DOING` for non-loopback; backend; Ghidra mode), a
+  review-and-confirm screen, then applies settings **via the settings layer only** and runs the chosen
+  builds with progress. **Secrets are never prompted-or-stored** (presence-only; pointed to
+  env/config.toml) — double-guarded by an `_is_secret_path` assertion in `build_plan`/`apply_settings`.
+  **CI-safe:** no TTY / `--non-interactive` / `--yes` / `--defaults` (or `just setup yes=1`) applies the
+  static-only baseline + sandbox image WITHOUT prompting. The apply layer (`build_plan`/`apply_settings`/
+  `default_plan`) is pure/headless so it's fully unit-tested (`tests/test_setup_wizard.py`, 26 tests:
+  registry covers every toggle, each policy-changing feature has a non-understated implication,
+  apply writes the right settings + NEVER a secret, loopback refusal, build-step mapping, the
+  non-interactive path). No migration (settings.json is not the DB); frozen Finding schema untouched.
+  Docs: README setup section, CLAUDE.md `just setup` description + module map.
 - 2026-06-02: **build: modernize the Build-from-source modal to match the Fuzz modal** (branch
   `build/ui-buildmodal`). Frontend-only visual/layout pass, ZERO backend/behavior change — brings
   `BuildModal.tsx` up to PR #62's Fuzz-modal standard so the two launch dialogs are siblings.

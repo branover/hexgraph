@@ -11,7 +11,10 @@ dist/
 
 # HexGraph runtime data (never commit projects/artifacts/keys)
 .hexgraph/
-.hghome*/        # per-worktree HEXGRAPH_HOME used during dev (DB, settings.json, projects)
+# per-worktree HEXGRAPH_HOME used during dev (DB, settings.json, projects).
+# NB: gitignore has no trailing-comment support, so this comment is on its own line —
+# `.hghome*/  # ...` would make the comment PART of the pattern and silently not match.
+.hghome*/
 *.db
 *.sqlite3
 

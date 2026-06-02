@@ -299,6 +299,19 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_setup(args: argparse.Namespace) -> int:
+    """Interactive setup wizard: choose optional features (with their security
+    implications) + non-secret config, then build the chosen images. Falls back to the
+    static-only baseline without prompting when non-interactive (no TTY / --yes / CI)."""
+    from hexgraph.setup_wizard import run_setup
+
+    return run_setup(
+        non_interactive=args.non_interactive or args.yes,
+        defaults=args.defaults,
+        rebuild=args.rebuild,
+    )
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     from hexgraph.api.app import run_server
 
@@ -311,6 +324,17 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="_cmd", required=True)
 
     sub.add_parser("init", help="initialize HexGraph (DB + dirs, via migrations)").set_defaults(func=_cmd_init)
+
+    psw = sub.add_parser("setup", help="interactive setup wizard (optional features + their security implications, builds)")
+    psw.add_argument("--non-interactive", action="store_true",
+                     help="never prompt; apply the static-only baseline + base build (CI-safe)")
+    psw.add_argument("--yes", "-y", action="store_true",
+                     help="alias for --non-interactive (accept the static-only defaults)")
+    psw.add_argument("--defaults", action="store_true",
+                     help="apply the default plan without prompting (same as --yes)")
+    psw.add_argument("--rebuild", action="store_true",
+                     help="rebuild images even if already present")
+    psw.set_defaults(func=_cmd_setup)
 
     pdb = sub.add_parser("db", help="database maintenance")
     dbsub = pdb.add_subparsers(dest="_dbcmd", required=True)

@@ -23,6 +23,17 @@ server = [
     "uvicorn>=0.29",
     "sqlalchemy>=2.0",
     "python-multipart>=0.0.9",
+    # The interactive `hexgraph setup` wizard (Rich framing + questionary prompts).
+    # Pure-Python, offline, no native deps; the headless/non-interactive path imports
+    # them lazily so a missing lib never blocks the CI baseline.
+    "rich>=13.0",
+    "questionary>=2.0",
+]
+# The interactive setup wizard's TUI libs, on their own so a minimal install can pull
+# just these (also bundled into `server` since `just setup` runs it).
+setup = [
+    "rich>=13.0",
+    "questionary>=2.0",
 ]
 # NB: there is no host-side "analysis" extra. The binary-analysis libs
 # (r2pipe/lief/pyelftools) are imported ONLY inside sandbox/probes/*.py, which run
@@ -40,6 +51,8 @@ dev = [
     "httpx>=0.27",
     "anthropic>=0.40",
     "mcp>=1.2",
+    "rich>=13.0",
+    "questionary>=2.0",
 ]
 
 [project.scripts]
