@@ -1,4 +1,6 @@
-"""`just demo` runs the offline loop and exits 0 (SPEC §10 acceptance)."""
+"""`just demo` runs the offline loop (ingest → build → fuzz → verify → graph →
+spawn) and exits 0 — the narrated smoke test. Docker-gated (the recon/unpack stage
+needs the base sandbox image); the build/fuzz/poc stages are offline mock seams."""
 
 import os
 

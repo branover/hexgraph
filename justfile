@@ -198,7 +198,9 @@ fixtures:
 # demo — the full offline loop (doubles as a smoke test)
 # ===========================================================================
 
-# Full offline loop on bundled fixtures (mock, no key/network), exits 0. Needs Docker; doubles as a smoke test.
+# Narrated offline loop: ingest firmware → build-from-source INSTRUMENTED (MockBuilder) → fuzz
+# campaign (MockFuzzer) → verified PoC + assurance ladder → spawn follow-up → graph. Mock LLM,
+# no key/network, $0; needs only the base sandbox image (Docker) for recon/unpack. Smoke test.
 [group('demo')]
 demo:
     {{py}} -m hexgraph.demo
