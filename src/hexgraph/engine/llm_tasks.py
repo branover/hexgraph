@@ -291,6 +291,24 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
     if findings and low_confidence:
         task.status = TaskStatus.needs_triage
 
+    # Promote any harness this task produced to a managed source_file + harness node
+    # (design §4.3): the transient evidence.decompiled_snippet stays for back-compat,
+    # but going forward a harness is navigable source in the graph. Best-effort —
+    # never fail the task over it (the findings are already persisted).
+    if task.type == "harness_generation" and persisted_ids:
+        from hexgraph.db.models import Finding as _Finding
+        from hexgraph.engine.harness_promote import promote_harness
+
+        for fid in persisted_ids:
+            f = session.get(_Finding, fid)
+            ev = (f.evidence_json or {}) if f else {}
+            if ev.get("decompiled_snippet"):
+                try:
+                    promote_harness(session, project, f.target_id, ev["decompiled_snippet"],
+                                    function=ev.get("function"), finding_id=f.id)
+                except Exception:  # noqa: BLE001 — promotion is best-effort
+                    pass
+
     # Fold any duplicate function/symbol nodes this task introduced (e.g. a
     # decompiler `sym.foo` colliding with an agent's `foo`) into one node.
     from hexgraph.engine.nodemerge import merge_duplicate_nodes

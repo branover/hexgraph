@@ -93,8 +93,10 @@ def fuzz_config(task: Task) -> dict:
 
 def resolve_harness(session: Session, target: Target, task: Task) -> tuple[str | None, str | None, str | None]:
     """Find harness source → (source, source_finding_id, function). Order: explicit
-    task param → the task's parent finding → the latest harness_generation finding
-    for this target."""
+    task param → the task's parent finding → a managed `source_file(role=harness)`
+    promoted for this target (the new home, design §4.3) → the latest
+    harness_generation finding's transient `evidence.decompiled_snippet` (the legacy
+    back-compat read path, so old findings still drive fuzzing without a backfill)."""
     p = task.params_json or {}
     if p.get("harness_source"):
         return p["harness_source"], None, p.get("function")
@@ -103,6 +105,15 @@ def resolve_harness(session: Session, target: Target, task: Task) -> tuple[str |
         ev = (f.evidence_json or {}) if f else {}
         if ev.get("decompiled_snippet"):
             return ev["decompiled_snippet"], f.id, ev.get("function")
+    # Prefer a promoted managed harness file (durable, navigable).
+    project = session.get(Project, target.project_id)
+    if project is not None:
+        from hexgraph.engine.harness_promote import resolve_managed_harness
+
+        managed, _node_id = resolve_managed_harness(session, project, target.id)
+        if managed:
+            return managed, None, p.get("function")
+    # Legacy fallback: the transient snippet on a harness_generation finding.
     hg = (
         session.query(Task)
         .filter(Task.target_id == target.id, Task.type == "harness_generation")

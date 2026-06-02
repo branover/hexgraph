@@ -92,11 +92,12 @@ function PocSteps({ poc }: { poc: any }) {
 }
 
 // Detail + triage + follow-on launch + provenance for a selected finding.
-export default function Inspector({ finding, projectId, hypotheses = [], onChanged, onLaunch, onOpenLaunch, onViewTask, onHighlight, fuzzingEnabled }: {
+export default function Inspector({ finding, projectId, hypotheses = [], onChanged, onLaunch, onOpenLaunch, onViewTask, onHighlight, fuzzingEnabled, onOpenSource }: {
   finding: Finding | null; projectId?: string; hypotheses?: { id: string; statement: string }[];
   onChanged: () => void; onLaunch: (taskId: string) => void;
   onOpenLaunch?: (type: string, opts?: { objective?: string; params?: any }) => void;
   onViewTask?: (taskId: string) => void; onHighlight?: (ids: string[]) => void; fuzzingEnabled?: boolean;
+  onOpenSource?: (ref: { tree_id?: string; rel?: string; line?: number }) => void;
 }) {
   const [sugg, setSugg] = useState<any[]>([]);
   const [copied, setCopied] = useState(false);
@@ -119,6 +120,7 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
   const ev = finding.evidence || {};
   const poc = ev.extra?.poc;
   const verification = ev.extra?.verification;
+  const sourceRef = ev.extra?.source_ref;  // {tree_id, rel, line} — the jump-to-source link (Phase 1)
   // Canonical assurance is evidence.extra.assurance; a PoC also nests it under verification.
   const assurance = ev.extra?.assurance || verification?.assurance;
   const reproCommand = ev.extra?.repro_command;
@@ -327,6 +329,15 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
             {ev.extra?.mitigations && <><span className="k">mitigations</span><code>{JSON.stringify(ev.extra.mitigations)}</code></>}
           </div>
         </>
+      )}
+
+      {sourceRef?.tree_id && sourceRef?.rel && onOpenSource && (
+        <div className="actions" style={{ marginTop: 8 }}>
+          <button className="btn sm" title="Open this finding's source location in the Source tab"
+                  onClick={() => onOpenSource(sourceRef)}>
+            <Icon name="doc" size={12} /> Open in source{sourceRef.line ? ` (line ${sourceRef.line})` : ""}
+          </button>
+        </div>
       )}
 
       {ev.decompiled_snippet && (

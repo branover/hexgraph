@@ -346,6 +346,43 @@ Each phase is independently shippable through the worktree→PR-review-subagent�
 
 **Phase 1 — Source-tree foundation + IDE browse (no exec, no new gate).** `source_tree` table (0012) + `source_file` node vocab + lazy materialization (`engine/source.py`, mirroring `filesystem.py`); `built_from`/`located_in`/`harnesses` edges; the `EDGE_KINDS` widening lands here if `source_tree` becomes an endpoint, else with 0014; the read-only Source tab (extract `<FileTree>`, the Graph⇆Source switch, finding→source jump); promote existing transient harnesses to `source_file`s (backfill, back-compat read path). *Risk:* the `EDGE_KINDS` validator change touches `authoring.py`+`edges.py` — keep it minimal and well-tested.
 
+> **Shipped (`build/fuzz-phase1`). — ✅ DONE.** `source_tree` is a new SQL entity (migration
+> **0012**, `down_revision=0011`, applies clean on 0011 and round-trips) — a project holds
+> multiple trees, each optionally linked to a target via a `built_from` edge (**D1**: source
+> trees are SQL entities, surfaced through their own Source pane, NOT a `TargetKind` proper, so
+> recon/ingest never branch on them). Storage is **filesystem + manifest + lazy nodes** (**D2**,
+> `engine/source.py` mirrors `engine/filesystem.py`): files on disk under
+> `<data_dir>/source/<tree_id>/`, a flat `manifest_json` (rel/size/role) on the row, and
+> `source_file` *nodes* materialized only on reference (`materialize_source_file`, identity
+> `fq_name=<tree_id>:<rel>`, `target_id=None`) — never a row per file. Reads are bounded +
+> path-traversal-safe (the `filesystem.read_file` containment guard, reused); `origin=extracted`
+> marks firmware bytes as untrusted-for-reading (display only — no exec/parse, that stays in the
+> sandbox in later phases). Harnesses/PoCs/scripts unify as **role-tagged `source_file`** (**D3**):
+> `promote_harness`/`backfill_harnesses` (`engine/harness_promote.py`) move a `harness_generation`
+> finding's transient `evidence.decompiled_snippet` into a managed `source_file(role=harness)` +
+> a `harness` node `harnesses`→ the target, and `fuzzing.resolve_harness` now prefers the managed
+> file but **falls back to the legacy snippet** (old findings still render/fuzz with no backfill).
+> New vocab is String-column zero-migration: node types `source_file`/`harness`; edge types
+> `built_from`/`located_in`/`harnesses`. The riskiest touch — admitting `source_tree` as a
+> polymorphic edge endpoint — is a **surgical** widening of the `EDGE_KINDS` tuple + the
+> `authoring._entity_exists` existence map (the `edges.add_edge` validator already reads the
+> tuple), tested both ways. **Read-only Source tab**: a Graph⇆Source segmented control in the
+> Workspace toolbar (`?view=source`, mode not route), a `SourceBrowser` with a multi-tree dropdown
+> + `<FileTree>` (mirroring `FilesystemBrowser`) + a line-numbered code viewer, and the
+> **finding→source jump** (`link_finding_to_source` stamps a `located_in` edge + a frozen-schema-
+> respecting `evidence.extra.source_ref`; the Inspector's "Open in source (line N)" opens the file
+> at the line). REST: `GET/POST .../source-trees`, `GET .../source-trees/{id}/files|file`,
+> `POST .../findings/link-source`, `POST .../backfill-harnesses`. MCP: **read** `list_source_trees`/
+> `read_source_file`, **write** `import_source_tree`/`link_finding_to_source` (grouped + gated by
+> `features.mcp.{read,write}`). `merge_duplicates` copes with `source_file` nodes via its default
+> key (`(type, target_id=None, fq_name)`). The frozen Finding schema is untouched (everything rides
+> `evidence.extra` / the new table); no `policy.py` edit; no execution. Tests:
+> `tests/test_source.py` (model + lazy materialization + dedup, the three edges incl. the
+> endpoint-validator widening, the harness backfill + back-compat resolve, the API/MCP read tools,
+> path-traversal safety). **Known limit:** no "Sources" section in the left target tree yet (the
+> Source-mode dropdown is the only tree picker) and the viewer is a plain `<pre>` (no Monaco /
+> syntax highlighting) — both deferred per `docs/ui-backlog.md`.
+
 **Phase 2 — Builder seam + build-as-API (gated `features.build`).** `engine/build.py` + `SandboxBuilder` + `build_detect_probe.py`/`build_probe.py` + `Dockerfile.build`/`hexgraph-build`; `assert_allows_build()` (the only `policy.py` edit); `build_spec`/`build` tables (0013); `BuildSpec` model + CAS storage + the base-image contract; rebuild-VR-target-with-instrumentation → derived target; `/api/builds` + `build_target` MCP run-tool; the IDE Build modal (recorded-recipe preview, instrumentation toggles, vendored-only). **Vendored/offline only.** *Risk:* supply-chain — contained by sandbox `--network none` compile, non-root RO source, ephemeral container.
 
 **Phase 3 — Coverage-guided source fuzzing, first-class (existing exec gate).** `engine/fuzzers/` seam; refactor `execute_fuzzing` → `LibFuzzerFuzzer` (zero behaviour change) + `AflPlusPlusFuzzer` against the Phase-2 instrumented build (real coverage at last); persistent-mode harness template; seed corpus + auto-dictionary from `list_strings`; CmpLog; coverage reporting; the **detached campaign lifecycle** (`fuzz_campaign`/`fuzz_artifact` tables 0014 + `EDGE_KINDS` widening 0015, reaper, stop/resume, crash-safe re-attach); streaming crashes → `fuzz_crash` findings → triage follow-ups; reproducer → `verify_poc(reproducer_ref)` tie-in. The user-tunable **`ResourceSpec`** lands here (Settings default + per-campaign override, incl. the `unconstrained` opt-in that relaxes only mem/cpu/pids, never the security flags — §5.8a). *Risk:* resource governance + restart-safety — addressed by §5.5.

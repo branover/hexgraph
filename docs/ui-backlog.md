@@ -1,5 +1,24 @@
 # UI improvement backlog
 
+## Source/IDE tab — Phase 1 (fuzzing+source design §6, 2026-06-01)
+
+**Shipped in `build/fuzz-phase1`:** the center-pane **Graph ⇆ Source** segmented control
+(`?view=source` persisted, mode not route); a read-only **Source mode** (`SourceBrowser.tsx`)
+with a multi-tree dropdown switcher + a `<FileTree>` explorer (mirrors `FilesystemBrowser`) +
+a line-numbered code viewer; the **finding→source jump** (Inspector "Open in source (line N)"
+reads `evidence.extra.source_ref`, switches to Source mode, opens the file, highlights the line).
+Source trees with `origin=extracted` are labelled untrusted; editability is shown read-only.
+Harness/source_file nodes render in the graph wired by `harnesses`/`located_in`/`built_from`.
+
+**Deferred to later phases (per the design):**
+- [ ] **P2** — a "Sources" section under each target in the left tree (currently the dropdown
+  switcher in Source mode is the only tree picker). The design §6.1 wants both.
+- [ ] **P3** — finding-count dots / coverage shading / a PoC ▶ on the file tree (Phase 4 triage UX).
+- [ ] **P3** — Monaco/CodeMirror syntax highlighting (the viewer is a plain line-numbered `<pre>`).
+- [ ] **P7** — editable IDE (`features.source.edit`, revisioned saves, rebuild-from-revision).
+- [ ] An "Open source" button beside Decompile on a source-mapped `function` node (§6.3) — the
+  node→source flip; deferred until functions carry `attrs.source` (Phase 2+ build mapping).
+
 ## From the dynamic-surfaces UX review (2026-05-31)
 
 **Done in the `ux-refresh` PR:** network-egress Settings card (A1); type-aware NodeInspector tip for

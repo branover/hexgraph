@@ -63,6 +63,8 @@ class NodeType(str, enum.Enum):
     socket = "socket"    # a network/IPC endpoint (tcp/udp/unix/io) shared across binaries
     endpoint = "endpoint"  # a web route / RPC method on a dynamic surface (analogue of function)
     param = "param"        # a request field (query/body/header/cookie) — analogue of input
+    source_file = "source_file"  # a file in a source_tree (role-tagged: code|harness|poc|script|…), lazily materialized
+    harness = "harness"    # a fuzz harness (references a source_file), supersedes the transient evidence.decompiled_snippet
     task = "task"
 
 
@@ -95,11 +97,18 @@ class EdgeType(str, enum.Enum):
     listens_on = "listens_on"  # a binary/function opens a listening socket (server side)
     connects_to = "connects_to"  # a binary/function connects to a socket (client side)
     routes_to = "routes_to"    # a web endpoint/route dispatches to its handler function (static↔dynamic link)
+    built_from = "built_from"  # a target is built from a source_tree (target → source_tree)
+    located_in = "located_in"  # a finding/node is located in a source_file (finding|node → node[source_file], attrs={line,col})
+    harnesses = "harnesses"    # a harness exercises a target/function (node[harness] → target|node)
     related_to = "related_to"  # generic fallback (kept for back-compat)
 
 
 # Edge endpoint kinds + provenance origins (plain strings in the DB).
-EDGE_KINDS = ("target", "node", "finding", "task")
+# `source_tree` is a polymorphic endpoint kind for the `built_from` / `depends_on`
+# edges (source trees are SQL entities, not nodes — design §4.1/§4.5 D1). Source
+# FILES are `node`s (node_type=source_file), so a finding→source_file `located_in`
+# edge uses the existing `node` kind, not this.
+EDGE_KINDS = ("target", "node", "finding", "task", "source_tree")
 EDGE_ORIGINS = ("tool", "llm", "human", "derived")
 
 
@@ -158,6 +167,38 @@ class Target(Base):
 
     project: Mapped[Project] = relationship(back_populates="targets")
     children: Mapped[list["Target"]] = relationship()
+
+
+class SourceTree(Base):
+    """A managed tree of trusted source we possess and (later) build — distinct
+    from a `target` (hostile bytes the adversary reaches). Design §4.1 (D1): a
+    project holds MULTIPLE independent source trees, each optionally linked to a
+    target via a `built_from` edge.
+
+    Storage (D2): files live on disk under the project data dir, indexed by a
+    JSON `manifest_json` (a flat file listing — rel/size/role/origin); individual
+    `source_file` *nodes* are materialized LAZILY on reference (mirrors
+    engine/filesystem.py + engine/nodes.py), never one row per file. `root_rel` is
+    derived from the data dir — never a trusted absolute path. `content_hash` is a
+    tree hash over the manifest (cheap content identity), NOT a byte sha256."""
+
+    __tablename__ = "source_tree"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("project.id"), index=True)
+    name: Mapped[str] = mapped_column(String(300))
+    # upload | git | archive | extracted | scratch (extracted == firmware bytes:
+    # untrusted-for-reading, build-only; surfaced read-only in the viewer).
+    origin: Mapped[str] = mapped_column(String(16), default="upload")
+    vcs_rev: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # Editable trees (HexGraph-authored harness/poc/script roles) get revisions later
+    # (Phase 7); imported/extracted source is read-only for reproducibility.
+    editable: Mapped[bool] = mapped_column(default=False)
+    manifest_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # Soft removal, mirrors target.archived / node.archived.
+    archived: Mapped[bool] = mapped_column(default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class Node(Base):

@@ -101,6 +101,22 @@ EDGE_ATTRIBUTE_SCHEMAS: dict[str, dict[str, Any]] = {
         "attributes": {"handler": _attr("the handler symbol the route maps to"),
                        "address": _attr("hex address of the dispatch, if known", type="hex")},
     },
+    "built_from": {
+        "description": "a target is built from a source_tree (target → source_tree). The "
+                       "graph keeps the shipped binary and its source linked.",
+        "attributes": {"subdir": _attr("subdirectory within the tree the target builds from")},
+    },
+    "located_in": {
+        "description": "a finding/node is located in a source_file (finding|node → "
+                       "node[source_file]). The jump-from-finding-to-source link.",
+        "attributes": {"line": _attr("1-based line in the file", type="int"),
+                       "col": _attr("1-based column, if known", type="int")},
+    },
+    "harnesses": {
+        "description": "a harness exercises a target/function (node[harness] → "
+                       "target|node). The harness's source is a role-tagged source_file.",
+        "attributes": {"function": _attr("the function the harness drives, if focused")},
+    },
 }
 
 
