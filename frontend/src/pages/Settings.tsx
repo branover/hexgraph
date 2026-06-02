@@ -227,14 +227,57 @@ export default function Settings() {
               appears in the Source tab; its instrumented derived target becomes coverage-guided-fuzzable.
             </p>
             {v.settings.features.build.enabled && (
-              <div className="grid2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                <div className="row"><label>build image</label>
-                  <input className="inp" defaultValue={v.settings.features.build.image ?? "hexgraph-build:latest"}
-                         onBlur={(e) => patch({ "features.build.image": e.target.value.trim() || "hexgraph-build:latest" })} /></div>
-                <div className="row"><label>build timeout (s)</label>
-                  <input className="inp num-input" type="number" defaultValue={v.settings.features.build.timeout ?? 1800}
-                         onBlur={(e) => patch({ "features.build.timeout": parseInt(e.target.value) || 1800 })} /></div>
-              </div>
+              <>
+                <div className="grid2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  <div className="row"><label>build image</label>
+                    <input className="inp" defaultValue={v.settings.features.build.image ?? "hexgraph-build:latest"}
+                           onBlur={(e) => patch({ "features.build.image": e.target.value.trim() || "hexgraph-build:latest" })} /></div>
+                  <div className="row"><label>build timeout (s)</label>
+                    <input className="inp num-input" type="number" defaultValue={v.settings.features.build.timeout ?? 1800}
+                           onBlur={(e) => patch({ "features.build.timeout": parseInt(e.target.value) || 1800 })} /></div>
+                </div>
+                <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginTop: 8 }}>
+                  <label style={{ fontSize: 12.5 }}>
+                    <input type="checkbox" checked={(v.settings.features.build as any).ccache ?? true}
+                           onChange={(e) => patch({ "features.build.ccache": e.target.checked })} /> ccache (incremental rebuild reuse)
+                  </label>
+                  <label style={{ fontSize: 12.5 }}>
+                    <input type="checkbox" checked={(v.settings.features.build as any).cache_reuse ?? true}
+                           onChange={(e) => patch({ "features.build.cache_reuse": e.target.checked })} /> reuse cached artifact (skip identical rebuild)
+                  </label>
+                </div>
+                {/* The bounded dependency-fetch tier (design §3.5 — the highest residual
+                    supply-chain risk, its own fail-closed gate). */}
+                <div style={{ marginTop: 10, borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+                  <label className="switch">
+                    <input type="checkbox" checked={(v.settings.features as any).build_fetch?.enabled ?? false}
+                           onChange={(e) => patch({ "features.build_fetch.enabled": e.target.checked })} />
+                    <span>Bounded dependency fetch {(v.settings.features as any).build_fetch?.enabled ? "enabled" : "disabled"}</span>
+                  </label>
+                  <p className="hint" style={{ marginTop: 4 }}>
+                    ⚠ The <b>highest residual supply-chain risk</b>. A SEPARATE, audited, <b>allowlisted</b> fetch
+                    phase resolves declared deps over the network (package registries only), produces a
+                    <b> hash-pinned lockfile</b> + SBOM-lite, then <b>drops network</b> and compiles
+                    <code> --network none</code>. Fetch-then-offline — a malicious dep can be downloaded
+                    (recorded) but can never run during compile or exfiltrate. NEVER folded into
+                    <code> features.network</code>.
+                  </p>
+                </div>
+                {/* The editable IDE (design §6.2 D-edit). */}
+                <div style={{ marginTop: 6 }}>
+                  <label className="switch">
+                    <input type="checkbox" checked={(v.settings.features as any).source?.edit ?? false}
+                           onChange={(e) => patch({ "features.source.edit": e.target.checked })} />
+                    <span>Editable IDE {(v.settings.features as any).source?.edit ? "enabled" : "disabled"}</span>
+                  </label>
+                  <p className="hint" style={{ marginTop: 4 }}>
+                    Makes the Source tab <b>editable</b> for HexGraph-authored files (harness/PoC/script + scratch).
+                    A save creates a <b>new revision</b> (never an in-place mutation); a build can be launched
+                    <b> rebuild-from-revision</b>. Imported / extracted / vendor source stays <b>read-only</b>
+                    (editing it would break the build content-hash contract).
+                  </p>
+                </div>
+              </>
             )}
           </section>
 

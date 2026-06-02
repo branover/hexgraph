@@ -236,6 +236,22 @@ def api_campaign_coverage(campaign_id: str):
         return C.coverage_for(s, c)
 
 
+@router.get("/api/campaigns/{campaign_id}/coverage-diff")
+def api_campaign_coverage_diff(campaign_id: str, other: str):
+    """Run-to-run coverage diff (design §7, Phase 7): what new lines did `other` reach
+    that this campaign (`campaign_id`, the base) did not? Returns per-file
+    `{base_covered, other_covered, gained, lost}` + project totals; `available=False`
+    when either campaign has no line map."""
+    with session_scope() as s:
+        base = s.get(FuzzCampaign, campaign_id)
+        oth = s.get(FuzzCampaign, other)
+        if base is None or oth is None:
+            raise HTTPException(404, "campaign not found")
+        if base.project_id != oth.project_id:
+            raise HTTPException(400, "campaigns belong to different projects")
+        return C.coverage_diff(s, base, oth)
+
+
 # ── Server-advertised engines per surface (the Fuzz modal asks the server) ────────
 
 @router.get("/api/fuzz/engines")

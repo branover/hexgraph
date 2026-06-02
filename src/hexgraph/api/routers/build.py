@@ -29,33 +29,81 @@ class BuildSpecBody(BaseModel):
     env: dict | None = None
     arch: str | None = None
     name: str | None = None
+    # Phase 7: "none" (vendored/offline, default) | "fetch" (bounded audited deps phase,
+    # requires features.build_fetch). `fetch_phases` are the dep-resolution commands.
+    network: str | None = None
+    fetch_phases: list | None = None
 
 
 class BuildCreate(BaseModel):
     # Either reference an existing recorded recipe, or inline a spec to record + run.
     build_spec_id: str | None = None
     spec: BuildSpecBody | None = None
+    # Phase 7: rebuild from a specific editable-IDE source revision (rebuild-from-revision).
+    source_revision_id: str | None = None
 
 
-def _spec_from_body(body: BuildSpecBody, tree: SourceTree) -> BuildSpec:
+class OssFuzzImportBody(BaseModel):
+    source_tree_id: str
+    build_sh: str
+    instrumentation: dict | None = None
+    artifacts: list[str] | None = None
+
+
+def _resolve_sysroot(s, project, tree, arch):
+    """For a cross-build (arch != native), the parent firmware's extracted rootfs is the
+    clang --sysroot (design §3.4) — REUSING poc._find_sysroot + filesystem.host_root.
+    Best-effort: None ⇒ native fallback (degrade-to-qemu)."""
+    from hexgraph.engine.build import CROSS_TRIPLES
+
+    if not CROSS_TRIPLES.get((arch or "x86_64").lower()):
+        return None
+    origin = B._origin_target(s, project, tree)
+    fw = None
+    if origin is not None and origin.parent_id:
+        from hexgraph.db.models import Target
+        fw = s.get(Target, origin.parent_id)
+    if fw is None or not (fw.metadata_json or {}).get("filesystem"):
+        return None
+    try:
+        from pathlib import Path as _P
+        from hexgraph.engine.filesystem import host_root as _fs_root
+        from hexgraph.engine.poc import _find_sysroot
+        root = _find_sysroot(_fs_root(project, fw))
+        return str(root) if root and _P(str(root)).is_dir() else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _spec_from_body(body: BuildSpecBody, tree: SourceTree, *, session=None, project=None) -> BuildSpec:
     detected = B.propose_build_spec(tree)
+    arch = body.arch or "x86_64"
+    network = body.network or "none"
+    fetch_phases = body.fetch_phases
+    if network == "fetch" and fetch_phases is None:
+        fetch_phases = [p.to_dict() for p in B.default_fetch_phases(body.system or detected["system"])]
+    sysroot = _resolve_sysroot(session, project, tree, arch) if session is not None else None
     return BuildSpec.from_dict({
         "source_tree_id": tree.id,
         "system": body.system or detected["system"],
         "phases": body.phases if body.phases is not None else detected["phases"],
+        "fetch_phases": fetch_phases or [],
         "instrumentation": body.instrumentation or {},
         "artifacts": body.artifacts or [],
         "env": body.env or {},
-        "arch": body.arch or "x86_64",
+        "arch": arch,
+        "network": network,
+        "sysroot": sysroot,
         "name": body.name or detected.get("name", "build"),
     })
 
 
 @router.post("/api/projects/{project_id}/build/preview")
 def api_build_preview(project_id: str, body: BuildSpecBody):
-    """Return the RECORDED recipe (read-only preview) for a spec — phases, injected
-    toolchain env, recipe_sha — without running anything. The Build modal calls this
-    so instrumentation toggles regenerate the preview. No gate (it computes, doesn't run)."""
+    """Return the RECORDED recipe (read-only preview) for a spec — phases, fetch phases,
+    injected toolchain env (incl. cross --target/--sysroot), recipe_sha, reproducibility
+    posture — without running anything. The Build modal calls this so instrumentation/
+    arch/dependency-posture toggles regenerate the preview. No gate (it computes)."""
     from hexgraph.engine.build import instrumentation_env
 
     with session_scope() as s:
@@ -66,14 +114,39 @@ def api_build_preview(project_id: str, body: BuildSpecBody):
         if tree is None or tree.project_id != project_id:
             raise HTTPException(404, "source tree not found")
         try:
-            spec = _spec_from_body(body, tree)
+            spec = _spec_from_body(body, tree, session=s, project=p)
         except BuildError as exc:
             raise HTTPException(400, str(exc))
         d = spec.to_dict()
         d["recipe_sha"] = spec.recipe_sha()
-        d["injected_env"] = instrumentation_env(spec.instrumentation)
-        d["network"] = "none"  # vendored/offline only this phase
+        d["injected_env"] = instrumentation_env(spec.instrumentation, arch=spec.arch,
+                                                sysroot=spec.sysroot)
+        d["network"] = spec.network
+        d["cross"] = bool(spec.sysroot)
         return d
+
+
+@router.post("/api/projects/{project_id}/builds/import-oss-fuzz")
+def api_import_oss_fuzz(project_id: str, body: OssFuzzImportBody):
+    """Import an OSS-Fuzz `build.sh` into a recorded build_spec (the script is stored in
+    the tree as role=script; the OSS-Fuzz env contract maps to ours). Returns the spec.
+    The tree must be editable. No build is run (call POST /builds with the returned id)."""
+    from hexgraph.engine.source import SourceError
+
+    with session_scope() as s:
+        p = s.get(Project, project_id)
+        if p is None:
+            raise HTTPException(404, "project not found")
+        tree = s.get(SourceTree, body.source_tree_id)
+        if tree is None or tree.project_id != project_id:
+            raise HTTPException(404, "source tree not found")
+        try:
+            row = B.import_oss_fuzz_build(s, p, tree, build_sh=body.build_sh,
+                                          instrumentation=body.instrumentation,
+                                          artifacts=body.artifacts)
+        except (BuildError, SourceError) as exc:
+            raise HTTPException(400, str(exc))
+        return B.spec_to_dict(row)
 
 
 @router.get("/api/projects/{project_id}/build-specs")
@@ -139,14 +212,19 @@ def api_create_build(project_id: str, body: BuildCreate):
             if tree is None or tree.project_id != project_id:
                 raise HTTPException(404, "source tree not found")
             try:
-                spec = _spec_from_body(body.spec, tree)
+                spec = _spec_from_body(body.spec, tree, session=s, project=p)
                 spec_row = B.create_build_spec(s, p, spec)
             except BuildError as exc:
                 raise HTTPException(400, str(exc))
         else:
             raise HTTPException(400, "pass build_spec_id or spec")
         try:
-            build = B.run_build(s, p, spec_row)
+            if body.source_revision_id:
+                # Rebuild-from-revision (editable IDE): revert the file to the revision,
+                # then build (records source_revision_id). Gated by features.source.edit.
+                build = B.rebuild_from_revision(s, p, spec_row, body.source_revision_id)
+            else:
+                build = B.run_build(s, p, spec_row)
         except BuildError as exc:
             raise HTTPException(400, str(exc))
         except PolicyViolation as exc:

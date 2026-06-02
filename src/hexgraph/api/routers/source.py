@@ -38,6 +38,13 @@ class FindingSourceLink(BaseModel):
     col: int | None = None
 
 
+class SourceRevisionSave(BaseModel):
+    rel: str
+    content: str
+    role: str | None = None
+    note: str | None = None
+
+
 @router.get("/api/projects/{project_id}/source-trees")
 def api_list_source_trees(project_id: str):
     """All managed source trees in a project (id/name/origin/file count + linked targets)."""
@@ -138,3 +145,75 @@ def api_backfill_harnesses(project_id: str):
         from hexgraph.engine.harness_promote import backfill_harnesses
 
         return backfill_harnesses(s, p)
+
+
+# ── Editable IDE: revisioned saves + rebuild-from-revision (design §6.2, Phase 7) ──
+
+@router.post("/api/source-trees/{tree_id}/revisions")
+def api_save_source_revision(tree_id: str, body: SourceRevisionSave):
+    """Save an EDIT to a HexGraph-authored source file as a NEW REVISION (never an
+    in-place mutation) — the editable-IDE save. Gated by features.source.edit; the
+    per-tree editability check refuses an extracted/vendor/imported (read-only) tree.
+    Returns the revision dict."""
+    from hexgraph.engine import revisions as R
+    from hexgraph.policy import PolicyViolation
+
+    with session_scope() as s:
+        tree = s.get(SourceTree, tree_id)
+        if tree is None:
+            raise HTTPException(404, "source tree not found")
+        p = s.get(Project, tree.project_id)
+        try:
+            return R.save_revision(s, p, tree, body.rel, body.content, role=body.role,
+                                   note=body.note)
+        except PolicyViolation as exc:
+            raise HTTPException(403, str(exc))
+        except R.SourceError as exc:
+            raise HTTPException(400, str(exc))
+
+
+@router.get("/api/source-trees/{tree_id}/revisions")
+def api_list_source_revisions(tree_id: str, rel: str | None = None):
+    """Revision history for an editable tree (optionally one file), newest first."""
+    from hexgraph.engine import revisions as R
+
+    with session_scope() as s:
+        tree = s.get(SourceTree, tree_id)
+        if tree is None:
+            raise HTTPException(404, "source tree not found")
+        return {"revisions": R.list_revisions(s, tree, rel=rel)}
+
+
+@router.get("/api/source-revisions/{revision_id}")
+def api_get_source_revision(revision_id: str):
+    """Read one revision's full content (for a diff/restore view)."""
+    from hexgraph.db.models import SourceRevision
+    from hexgraph.engine import revisions as R
+
+    with session_scope() as s:
+        rev = s.get(SourceRevision, revision_id)
+        if rev is None:
+            raise HTTPException(404, "revision not found")
+        p = s.get(Project, rev.project_id)
+        return {**R.revision_to_dict(rev), "diff": rev.diff,
+                "content": R.get_revision_content(p, s, revision_id)}
+
+
+@router.post("/api/source-trees/{tree_id}/revisions/{revision_id}/revert")
+def api_revert_source_revision(tree_id: str, revision_id: str):
+    """Revert a file to a past revision (append-only — the revert is itself a new
+    revision). Gated by features.source.edit. Returns the new revision."""
+    from hexgraph.engine import revisions as R
+    from hexgraph.policy import PolicyViolation
+
+    with session_scope() as s:
+        tree = s.get(SourceTree, tree_id)
+        if tree is None:
+            raise HTTPException(404, "source tree not found")
+        p = s.get(Project, tree.project_id)
+        try:
+            return R.revert_to_revision(s, p, tree, revision_id)
+        except PolicyViolation as exc:
+            raise HTTPException(403, str(exc))
+        except R.SourceError as exc:
+            raise HTTPException(400, str(exc))

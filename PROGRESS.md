@@ -241,6 +241,34 @@ then run the resume verifier, then continue at the next unchecked task.
   LOCAL daemon-as-remote** (health + CAS-stage-in + run + JSON-back + `/out` stream-back; + a
   FUZZ_IMAGE-gated whole campaign via local-as-remote). `just test` green (577 offline); `just demo`
   exits 0.
+  **Fuzzing+source Phase 7 DONE — the fuzzing+source EPIC (Phases 0–7) is COMPLETE**
+  (`docs/design-fuzzing-and-source.md` §7 Phase 7, branch `build/fuzz-phase7`): supply-chain +
+  cross-compile + determinism/cache + OSS-Fuzz import + the editable IDE + coverage diff.
+  **(1) Bounded audited fetch (`features.build_fetch`, fail-closed, the ONLY gate edit
+  `policy.assert_allows_build_fetch` + a `build_fetch_scope` registry allowlist):** a SEPARATE
+  `build_fetch_probe.py` sandbox run with network ON but bounded to the allowlist (egress-guard
+  backstop, never "any host"), producing a **hash-pinned lockfile + SBOM-lite**; then HexGraph DROPS
+  NETWORK and compiles `--network none` against the snapshot — **fetch-then-offline** (a Docker-gated
+  test proves the compile fails if it touches the network even with fetch on); every fetch audited
+  (`EgressEvent tool=build_fetch`). A **reproducibility BADGE** (`build.reproducible`) + a **cache-key**
+  that reuses a prior CAS artifact on a hit (`build.cache_hit`; keyed on the TRUE byte-content hash via
+  `source.tree_content_sha`, so a same-size edit misses). **(2) Cross-compile (`WITH_CROSS=1`):**
+  `instrumentation_env` injects clang `--target`/`--sysroot` (the firmware rootfs); a real MIPS object
+  is produced (Docker-gated test); failure degrades to native→qemu-mode. **(3) Determinism:**
+  `SOURCE_DATE_EPOCH` + ccache. **(4) OSS-Fuzz import** (`engine/oss_fuzz.py`): a `build.sh` → a
+  BuildSpec mapped to our `$CC/$CXX/$CFLAGS/$LIB_FUZZING_ENGINE/$SRC/$OUT` contract. **(5) Editable IDE
+  (`features.source.edit`):** `engine/revisions.py` — a save writes a NEW `SourceRevision` (CAS + diff,
+  **migration 0016** adds `source_revision` + `build` lockfile/SBOM/reproducible/cache_hit/cache_key/
+  source_revision_id columns), `rebuild_from_revision`; CONFINED — the write refuses any non-editable
+  tree, so extracted/vendor source can NEVER be revised. **(6) Coverage diff** (`campaigns.coverage_diff`).
+  New MCP: `import_oss_fuzz`/`save_source_revision` (write), `coverage_diff` (read); `build_target` gained
+  `network`/`fetch_phases`/`arch`/`source_revision_id`. UI: the Build modal gained arch + dependency
+  posture + a reproducibility/cross preview; the Source tab a per-file Edit/Save + revision history +
+  reproducible/cached/locked build badges; a Settings Source-&-Build card with the fetch + editable-IDE
+  toggles. Frozen Finding schema untouched. Tests: `tests/test_fuzz_phase7.py` (28 offline) +
+  Docker-gated `tests/test_fuzz_phase7_e2e.py`. `just test` green (607 offline); `just demo` exits 0;
+  migration 0016 round-trips + fresh init_db + no autogen drift; Playwright-verified the editable IDE +
+  badges + Build modal.
 - **Entity removal (`engine/removal.py`, migration 0011 `node.archived`):** nodes **soft-archive** —
   `archive_node` hides the node *and* the edges touching it (the graph already skips edges to hidden
   endpoints); re-adding the same node (`get_or_create_node`) or `restore_node` brings it and its edges
@@ -478,6 +506,28 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-02: **Fuzzing+source Phase 7 — supply-chain + cross-compile + editable IDE (EPIC COMPLETE)**
+  ([`docs/design-fuzzing-and-source.md`](docs/design-fuzzing-and-source.md) §7 Phase 7, branch
+  `build/fuzz-phase7`). The FINAL feature phase — closes Phases 0–7. **Bounded audited dependency
+  fetch** (`features.build_fetch`, fail-closed, its OWN gate `assert_allows_build_fetch`, never
+  `features.network`): a SEPARATE `build_fetch_probe.py` run, network ON but bounded to a registry
+  ALLOWLIST (`build_fetch_scope`, egress-guard backstop), produces a hash-pinned **lockfile + SBOM-lite**,
+  then HexGraph DROPS NETWORK and compiles `--network none` — **fetch-then-offline** (compile is a
+  different container; a fetched dep can be recorded but never run during compile/exfiltrate). A
+  **reproducibility BADGE** + **cache-key artifact reuse** (true byte-content hash via
+  `tree_content_sha`) + `SOURCE_DATE_EPOCH`/ccache. **Cross-compile** (`WITH_CROSS=1`,
+  `instrumentation_env` injects clang `--target`/firmware-rootfs `--sysroot`, degrade→native→qemu-mode;
+  real MIPS object proven). **OSS-Fuzz `build.sh` import** (`engine/oss_fuzz.py`). **Editable IDE**
+  (`features.source.edit`, `engine/revisions.py`, migration **0016** `source_revision` + build columns):
+  revisioned saves (CAS + diff, never in-place) + rebuild-from-revision; CONFINED — refuses
+  extracted/vendor/imported trees. **Coverage diff** (`campaigns.coverage_diff`). New MCP
+  `import_oss_fuzz`/`save_source_revision`/`coverage_diff`; `build_target` gained network/fetch/arch/
+  source_revision_id. UI: Build modal arch + dependency posture + reproducible/cross preview, Source-tab
+  Edit/Save + revision history + reproducible/cached/locked badges, Settings fetch + editable-IDE
+  toggles. Frozen schema untouched; policy edited ONLY for `assert_allows_build_fetch`. Tests:
+  `test_fuzz_phase7.py` (28 offline) + Docker-gated `test_fuzz_phase7_e2e.py` (compile-no-network,
+  allowlist-block + audit, real MIPS cross-build). `just test` green (607 offline); `just demo` exits 0;
+  migration 0016 round-trips + fresh init_db + no drift; Playwright-verified.
 - 2026-06-02: **Fuzzing+source Phase 6 — remote fuzz environments**
   ([`docs/design-fuzzing-and-source.md`](docs/design-fuzzing-and-source.md) §7 Phase 6, branch
   `build/fuzz-phase6`). A campaign can run on a **user-owned remote Docker host** behind the Executor

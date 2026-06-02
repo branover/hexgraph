@@ -1055,6 +1055,45 @@ def coverage_for(session: Session, campaign: FuzzCampaign) -> dict:
     return {"available": bool(files), "percent": pct, "files": files}
 
 
+def coverage_diff(session: Session, base: FuzzCampaign, other: FuzzCampaign) -> dict:
+    """Run-to-run coverage diff (design §7, Phase 7): what NEW lines/files did `other`
+    reach that `base` did not (and vice-versa)? Reuses the Phase-3/4 per-file line maps
+    (`coverage_for`). Returns per-file `{base_covered, other_covered, gained, lost}` plus
+    project-level totals — the 'did this run reach new edges?' answer for triage.
+
+    `gained` = lines covered by `other` but not `base` (progress); `lost` = lines `base`
+    had that `other` didn't (a regression/flake signal). `available=False` when either
+    campaign exposed no line map (honest — aggregate edge counts aren't a per-line diff)."""
+    cb = coverage_for(session, base)
+    co = coverage_for(session, other)
+    if not (cb.get("available") and co.get("available")):
+        return {"available": False, "base_id": base.id, "other_id": other.id,
+                "base_percent": cb.get("percent"), "other_percent": co.get("percent"),
+                "files": {}, "summary": {}}
+    bf = cb.get("files") or {}
+    of = co.get("files") or {}
+    files: dict[str, dict] = {}
+    total_gained = total_lost = 0
+    for rel in sorted(set(bf) | set(of)):
+        b_cov = set((bf.get(rel) or {}).get("covered") or [])
+        o_cov = set((of.get(rel) or {}).get("covered") or [])
+        gained = sorted(o_cov - b_cov)
+        lost = sorted(b_cov - o_cov)
+        total_gained += len(gained)
+        total_lost += len(lost)
+        files[rel] = {
+            "base_covered": sorted(b_cov), "other_covered": sorted(o_cov),
+            "gained": gained, "lost": lost,
+        }
+    return {
+        "available": True, "base_id": base.id, "other_id": other.id,
+        "base_percent": cb.get("percent"), "other_percent": co.get("percent"),
+        "files": files,
+        "summary": {"lines_gained": total_gained, "lines_lost": total_lost,
+                    "files_with_gain": sum(1 for f in files.values() if f["gained"])},
+    }
+
+
 def _read_coverage(session, campaign) -> dict | None:
     # Prefer a live outdir file; fall back to the CAS snapshot ref.
     if campaign.outdir:

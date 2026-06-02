@@ -62,6 +62,28 @@ def host_root(project: Project, tree: SourceTree) -> Path:
     return _host_root(project, tree)
 
 
+def tree_content_sha(project: Project, tree: SourceTree) -> str:
+    """A TRUE byte-content hash over every file in the tree (rel + sha256(bytes)), for
+    BUILD reproducibility + the cache key (design §3 Phase 7). Distinct from the row's
+    `content_hash`, which is a cheap manifest (size-based) identity (D2) — that is fine for
+    'is this the same tree?' but NOT for cache reuse, where a same-SIZE byte edit must
+    produce a different key (else a stale artifact would be wrongly reused). Reads the
+    on-disk working tree (trusted source text). Deterministic; sorted by rel."""
+    h = hashlib.sha256()
+    root = _host_root(project, tree).resolve()
+    for f in sorted(_manifest_files(tree), key=lambda x: x["rel"]):
+        rel = f["rel"]
+        try:
+            data = (root / rel).read_bytes()
+        except OSError:
+            data = b""
+        h.update(rel.encode("utf-8"))
+        h.update(b"\x00")
+        h.update(hashlib.sha256(data).digest())
+        h.update(b"\n")
+    return h.hexdigest()
+
+
 def _tree_hash(files: list[dict]) -> str:
     """A cheap content identity over the manifest (rel+size+role), NOT a byte sha256
     of every file — enough to detect "this is the same tree" and to anchor builds."""

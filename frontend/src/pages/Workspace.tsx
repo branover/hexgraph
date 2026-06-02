@@ -23,7 +23,7 @@ export default function Workspace() {
   const { projectId } = useParams();
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [graph, setGraph] = useState<Graph | null>(null);
-  const [caps, setCaps] = useState<{ target?: Record<string, string[]>; node?: Record<string, string[]>; edge?: Record<string, string[]>; features?: { build?: boolean; fuzzing?: boolean; poc?: boolean } }>({});
+  const [caps, setCaps] = useState<{ target?: Record<string, string[]>; node?: Record<string, string[]>; edge?: Record<string, string[]>; features?: { build?: boolean; build_fetch?: boolean; source_edit?: boolean; fuzzing?: boolean; poc?: boolean } }>({});
   const [selFinding, setSelFinding] = useState<Finding | null>(null);
   const [selNode, setSelNode] = useState<GraphNode | null>(null);
   const [selEdge, setSelEdge] = useState<any | null>(null);
@@ -399,7 +399,9 @@ export default function Workspace() {
           {view === "source" ? (
             <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
               <SourceBrowser projectId={projectId!} open={openSource} buildEnabled={!!caps.features?.build}
-                             fuzzEnabled={!!caps.features?.fuzzing} onChanged={() => load()} />
+                             buildFetchEnabled={!!caps.features?.build_fetch}
+                             fuzzEnabled={!!caps.features?.fuzzing} sourceEditEnabled={!!caps.features?.source_edit}
+                             onChanged={() => load()} />
             </div>
           ) : (
           <>

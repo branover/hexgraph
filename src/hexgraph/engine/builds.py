@@ -29,7 +29,13 @@ from hexgraph.engine.build import (
     get_builder,
 )
 from hexgraph.engine.edges import add_edge
-from hexgraph.engine.source import host_root
+from hexgraph.engine.source import host_root, tree_content_sha
+from hexgraph.policy import PolicyViolation
+
+
+def settings_get(path: str, default=None):
+    from hexgraph import settings
+    return settings.get(path, default)
 
 
 # ── Detection: propose a recipe from a source tree (deterministic, runs no project code) ──
@@ -129,35 +135,64 @@ def spec_from_row(row: BuildSpecRow) -> BuildSpec:
 # ── Execution: run a recorded recipe, persist the build, register derived target ──
 
 def run_build(session: Session, project: Project, spec_row: BuildSpecRow, *,
-              builder=None, register_derived: bool = True) -> Build:
+              builder=None, register_derived: bool = True,
+              source_revision_id: str | None = None) -> Build:
     """Execute a recorded `build_spec` in the sandbox via the Builder seam, ingest
     artifacts + log into CAS, persist the `build` ledger row, and (the headline
     capability, §3.3) register the instrumented rebuild as a DERIVED target wired
     `instrumented_build_of`→ the original target. Gated by assert_allows_build()
-    (inside the Builder). Returns the build row."""
+    (inside the Builder). Returns the build row.
+
+    Phase 7: a bounded FETCH phase (network='fetch', gated by features.build_fetch) runs
+    BEFORE an offline compile, producing a hash-pinned lockfile + SBOM-lite; the build
+    records a reproducibility BADGE; and a cache-key HIT (same recipe_sha + source
+    content_hash + toolchain_digest + lockfile) REUSES a prior CAS artifact and skips the
+    rebuild. `source_revision_id` records a rebuild-from-revision launch."""
+    from hexgraph.engine.build import cache_key as _cache_key, is_reproducible
+
     spec = spec_from_row(spec_row)
     tree = session.get(SourceTree, spec.source_tree_id)
     if tree is None or tree.project_id != project.id:
         raise BuildError("source tree not found in this project")
 
+    # A TRUE byte-content hash (not the row's cheap size-based manifest hash) — so the
+    # reproducibility triple + cache key reflect the ACTUAL bytes built (a same-size edit
+    # changes it, preventing a stale-artifact cache hit).
+    content_sha = tree_content_sha(project, tree)
+
     build = Build(
         project_id=project.id, build_spec_id=spec_row.id, source_tree_id=tree.id,
         status="building", recipe_sha=spec_row.recipe_sha,
         instrumentation_json=spec.instrumentation.to_dict(),
+        source_revision_id=source_revision_id,
     )
     session.add(build)
     session.flush()
 
+    # ── Cache-key artifact reuse (design §3 determinism). When a prior SUCCEEDED build
+    # has the SAME reproducibility key, reuse its recorded artifacts (skip the rebuild).
+    # Deterministic + safe: identical inputs ⇒ identical output. Opt-out via cache_reuse.
+    if bool(settings_get("features.build.cache_reuse", True)):
+        reused = _try_cache_reuse(session, project, tree, build, spec_row, spec, content_sha)
+        if reused is not None:
+            return reused
+
     source_root = str(host_root(project, tree))
     builder = builder or get_builder()
+    target_id = None
+    o = _origin_target(session, project, tree)
+    if o is not None:
+        target_id = o.id
     try:
-        result = builder.build(spec, source_root=source_root, content_hash=tree.content_hash)
+        result = builder.build(spec, source_root=source_root, content_hash=content_sha,
+                               fetch_session=session, project=project, target_id=target_id,
+                               task_id=None)
     except BuildUnavailable as exc:
         build.status = "failed"
         build.error = str(exc)
         session.flush()
         return build
-    except BuildError as exc:
+    except (BuildError, PolicyViolation) as exc:
         build.status = "failed"
         build.error = str(exc)
         session.flush()
@@ -180,6 +215,14 @@ def run_build(session: Session, project: Project, spec_row: BuildSpecRow, *,
     build.toolchain_digest = result.toolchain_digest
     build.returncode = result.returncode
     build.duration = result.duration
+    # Supply-chain provenance + reproducibility badge (Phase 7).
+    build.lockfile_json = result.lockfile or {}
+    build.sbom_json = result.sbom or []
+    build.reproducible = is_reproducible(result.recipe_sha, result.source_content_hash,
+                                         result.toolchain_digest, network=spec.network,
+                                         lockfile=result.lockfile)
+    build.cache_key = _cache_key(result.recipe_sha, result.source_content_hash,
+                                 result.toolchain_digest, result.lockfile)
     build.status = "succeeded" if result.ok else "failed"
     if not result.ok:
         build.error = result.error or "build failed (see log)"
@@ -188,6 +231,63 @@ def run_build(session: Session, project: Project, spec_row: BuildSpecRow, *,
     if result.ok and register_derived and artifacts_cas:
         derived = _register_derived_target(session, project, tree, build, spec, artifact_files,
                                            artifacts_cas)
+        if derived is not None:
+            build.derived_target_id = derived.id
+            session.flush()
+    return build
+
+
+def _try_cache_reuse(session: Session, project: Project, tree: SourceTree, build: Build,
+                     spec_row: BuildSpecRow, spec: BuildSpec, content_sha: str) -> Build | None:
+    """If a prior SUCCEEDED build shares this build's reproducibility cache key, reuse its
+    CAS artifacts (copy them onto this build row, register a fresh derived target) and skip
+    the rebuild — mark cache_hit=True. None ⇒ no hit (proceed to build). Keyed on the
+    recipe_sha + the TRUE byte-content hash (`content_sha`, not the size-based manifest
+    hash) of a PRIOR build with the SAME recipe + source (same recipe_sha + content_sha ⇒
+    same toolchain, since the image is part of recipe_sha) — so a same-size edit MISSES."""
+    from hexgraph.engine.build import cache_key as _cache_key
+
+    if not (spec_row.recipe_sha and content_sha):
+        return None
+    prior = (session.query(Build)
+             .filter(Build.project_id == project.id, Build.status == "succeeded",
+                     Build.recipe_sha == spec_row.recipe_sha,
+                     Build.source_content_hash == content_sha)
+             .order_by(Build.created_at.desc()).first())
+    if prior is None or not prior.artifacts_json:
+        return None
+    key = _cache_key(prior.recipe_sha, prior.source_content_hash, prior.toolchain_digest,
+                     prior.lockfile_json)
+    # Reuse the prior build's recorded CAS artifacts verbatim.
+    build.artifacts_json = dict(prior.artifacts_json or {})
+    build.source_content_hash = prior.source_content_hash
+    build.toolchain_digest = prior.toolchain_digest
+    build.lockfile_json = prior.lockfile_json or {}
+    build.sbom_json = prior.sbom_json or []
+    build.reproducible = prior.reproducible
+    build.cache_key = key
+    build.cache_hit = True
+    build.returncode = 0
+    build.duration = 0.0
+    build.log_cas = prior.log_cas
+    build.status = "succeeded"
+    session.flush()
+    # Register a fresh derived target from the reused CAS bytes (so the campaign has a real
+    # path), materializing the artifact files back out of CAS.
+    artifact_files: dict[str, str] = {}
+    import tempfile
+    work = Path(tempfile.mkdtemp(prefix="hexgraph-cachereuse-"))
+    for rel, sha in (build.artifacts_json or {}).items():
+        data = cas.get(project, sha)
+        if data is None:
+            continue
+        p = work / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(data)
+        artifact_files[rel] = str(p)
+    if artifact_files:
+        derived = _register_derived_target(session, project, tree, build, spec, artifact_files,
+                                           dict(build.artifacts_json or {}))
         if derived is not None:
             build.derived_target_id = derived.id
             session.flush()
@@ -281,6 +381,10 @@ def build_to_dict(build: Build) -> dict:
         "log_cas": build.log_cas, "instrumentation": build.instrumentation_json or {},
         "returncode": build.returncode, "duration": build.duration, "error": build.error,
         "derived_target_id": build.derived_target_id,
+        # Phase 7 supply-chain provenance + the reproducibility badge.
+        "lockfile": build.lockfile_json or {}, "sbom": build.sbom_json or [],
+        "reproducible": bool(build.reproducible), "cache_hit": bool(build.cache_hit),
+        "cache_key": build.cache_key, "source_revision_id": build.source_revision_id,
         "created_at": build.created_at.isoformat() if build.created_at else None,
     }
 
@@ -309,3 +413,61 @@ def list_build_specs(session: Session, project: Project, *, source_tree_id: str 
     if source_tree_id:
         q = q.filter(BuildSpecRow.source_tree_id == source_tree_id)
     return [spec_to_dict(r) for r in q.order_by(BuildSpecRow.created_at.asc()).all()]
+
+
+# ── Bounded fetch defaults (design §3.5 — features.build_fetch) ─────────────────
+
+def default_fetch_phases(system: str) -> list[BuildPhase]:
+    """The default FETCH-phase commands for a build system (run with network ON to the
+    allowlist, BEFORE the offline compile). These resolve + download declared deps into a
+    vendor dir; the compile then runs --network none. Empty for systems without a fetch
+    step (a plain Makefile)."""
+    if system == "cargo":
+        return [BuildPhase(("cargo", "fetch"))]
+    if system == "go":
+        return [BuildPhase(("go", "mod", "download"))]
+    if system == "meson":
+        return [BuildPhase(("meson", "subprojects", "download"))]
+    return []
+
+
+# ── OSS-Fuzz build.sh import (design §3.1/§7) ───────────────────────────────────
+
+def import_oss_fuzz_build(session: Session, project: Project, tree: SourceTree, *,
+                          build_sh: str, instrumentation: dict | None = None,
+                          artifacts: list | None = None) -> BuildSpecRow:
+    """Ingest an OSS-Fuzz `build.sh` into a recorded `build_spec` (stores the script in
+    the tree + maps the OSS-Fuzz env contract to ours). Returns the persisted spec row.
+    The tree must be editable (the script is written into it as role=script)."""
+    from hexgraph.engine.oss_fuzz import import_oss_fuzz
+
+    spec = import_oss_fuzz(session, project, tree, build_sh=build_sh,
+                           instrumentation=instrumentation, artifacts=artifacts)
+    return create_build_spec(session, project, spec)
+
+
+# ── Rebuild from a source revision (design §6.2 — editable IDE) ─────────────────
+
+def rebuild_from_revision(session: Session, project: Project, spec_row: BuildSpecRow,
+                          revision_id: str, *, builder=None) -> Build:
+    """Build a recorded recipe from a SPECIFIC editable-IDE revision. Reverts the file to
+    that revision's content (append-only — the revert is itself a new revision, so nothing
+    is lost), refreshes the tree content_hash, then runs the build recording
+    `source_revision_id`. Gated by features.source.edit (the revert) + features.build (the
+    build). The build is reproducible from {recipe_sha + the reverted source content_hash}."""
+    from hexgraph.db.models import SourceRevision
+    from hexgraph.engine import revisions as R
+
+    rev = session.get(SourceRevision, revision_id)
+    if rev is None or rev.project_id != project.id:
+        raise BuildError("revision not found in this project")
+    tree = session.get(SourceTree, rev.source_tree_id)
+    if tree is None or tree.id != spec_row.source_tree_id:
+        raise BuildError("revision belongs to a different source tree than the build spec")
+    R.revert_to_revision(session, project, tree, revision_id)
+    # The just-created revision is the new latest; record THAT one as the build's source.
+    latest = (session.query(SourceRevision)
+              .filter(SourceRevision.source_tree_id == tree.id, SourceRevision.rel == rev.rel)
+              .order_by(SourceRevision.seq.desc()).first())
+    return run_build(session, project, spec_row, builder=builder,
+                     source_revision_id=latest.id if latest else revision_id)

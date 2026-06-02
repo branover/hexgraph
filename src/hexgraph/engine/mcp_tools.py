@@ -187,10 +187,83 @@ def list_builds(project_id: str, source_tree_id: str | None = None) -> dict:
                 "builds": B.list_builds(s, p, source_tree_id=source_tree_id)}
 
 
+def import_oss_fuzz(project_id: str, source_tree_id: str, build_sh: str,
+                    instrumentation: dict | None = None, artifacts: list | None = None) -> dict:
+    """Import an OSS-Fuzz-style `build.sh` into a recorded build_spec so an existing
+    OSS-Fuzz target builds in HexGraph with minimal hand-authoring. The script is stored
+    in the tree (role=script); HexGraph maps the OSS-Fuzz env contract ($CC/$CXX/$CFLAGS/
+    $LIB_FUZZING_ENGINE/$SRC/$OUT) to ours, so the script runs essentially unchanged via a
+    single shell phase. The tree must be EDITABLE. Returns the build_spec; then build_target
+    (or POST builds with the spec id) runs it. Detects the $OUT/<name> fuzz targets to capture."""
+    from hexgraph.db.models import SourceTree
+    from hexgraph.engine import builds as B
+    from hexgraph.engine.build import BuildError
+    from hexgraph.engine.source import SourceError
+
+    with session_scope() as s:
+        p = s.get(Project, project_id)
+        if p is None:
+            return {"error": "project not found"}
+        tree = s.get(SourceTree, source_tree_id)
+        if tree is None or tree.project_id != project_id:
+            return {"error": "source tree not found in this project"}
+        try:
+            row = B.import_oss_fuzz_build(s, p, tree, build_sh=build_sh,
+                                          instrumentation=instrumentation, artifacts=artifacts)
+        except (BuildError, SourceError) as exc:
+            return {"error": str(exc)}
+        return B.spec_to_dict(row)
+
+
+def save_source_revision(tree_id: str, rel: str, content: str, role: str | None = None,
+                         note: str | None = None) -> dict:
+    """Edit a HexGraph-AUTHORED source file (a harness/PoC/script you wrote) and save it as
+    a NEW REVISION — never an in-place mutation, so the edit is durable + reversible and a
+    build can be launched rebuild-from-revision (pass the returned revision id as the
+    recipe's source_revision_id). Gated by features.source.edit; REFUSES an imported/
+    extracted/vendor (read-only) tree — editing those would break the build content_hash.
+    Returns the revision {id, seq, rel, role, ...}. Use to iterate on a harness/PoC in-place."""
+    from hexgraph.db.models import SourceTree
+    from hexgraph.engine import revisions as R
+    from hexgraph.policy import PolicyViolation
+
+    with session_scope() as s:
+        tree = s.get(SourceTree, tree_id)
+        if tree is None:
+            return {"error": "source tree not found"}
+        p = s.get(Project, tree.project_id)
+        try:
+            return R.save_revision(s, p, tree, rel, content, role=role, note=note)
+        except PolicyViolation as exc:
+            return {"error": f"not permitted — {exc}"}
+        except R.SourceError as exc:
+            return {"error": str(exc)}
+
+
+def coverage_diff(campaign_id: str, other_campaign_id: str) -> dict:
+    """Run-to-run COVERAGE DIFF between two fuzz campaigns: what NEW source lines did
+    `other_campaign_id` reach that `campaign_id` (the base) did not (and which did it
+    lose)? The 'did this run reach new edges?' answer — use to judge whether a harness/
+    corpus/engine change actually improved reach. Returns per-file {gained, lost} + totals;
+    `available=False` when either campaign exposed no per-line coverage map."""
+    from hexgraph.db.models import FuzzCampaign
+    from hexgraph.engine import campaigns as C
+
+    with session_scope() as s:
+        base = s.get(FuzzCampaign, campaign_id)
+        oth = s.get(FuzzCampaign, other_campaign_id)
+        if base is None or oth is None:
+            return {"error": "campaign not found"}
+        if base.project_id != oth.project_id:
+            return {"error": "campaigns belong to different projects"}
+        return C.coverage_diff(s, base, oth)
+
+
 def build_target(project_id: str, source_tree_id: str, system: str | None = None,
                  phases: list | None = None, instrumentation: dict | None = None,
                  artifacts: list | None = None, env: dict | None = None,
-                 arch: str | None = None) -> dict:
+                 arch: str | None = None, network: str | None = None,
+                 fetch_phases: list | None = None, source_revision_id: str | None = None) -> dict:
     """Build a managed SOURCE tree into an INSTRUMENTED artifact in the sandbox via a
     RECORDED, REPRODUCIBLE recipe (build-as-API). You author/approve a BuildSpec and
     REQUEST the build — you never run a compiler yourself; HexGraph runs the recipe.
@@ -203,15 +276,27 @@ def build_target(project_id: str, source_tree_id: str, system: str | None = None
     rejected). Instrumentation is INJECTED as CC/CXX/CFLAGS by HexGraph (the base-image
     contract), so the SAME phases yield ASan/SanCov/AFL++ builds by swapping the profile.
 
-    Reproducibility: recipe_sha = hash of {phases,env,base_image,instrumentation,arch};
-    same recipe_sha + same source content_hash + same toolchain_digest ⇒ the same build.
+    CROSS-COMPILE: pass `arch` (mips/mipsel/arm/armhf/aarch64/…) to cross-build for a
+    firmware's arch — HexGraph injects clang --target + the parent firmware's extracted
+    rootfs as the --sysroot, so the instrumented binary is binary-compatible with the
+    device userland (runs under qemu-user; a cross-build failure degrades to qemu-mode
+    binary-only fuzzing of the original).
 
-    If the source tree is linked (built_from) to a target, the instrumented rebuild is
-    registered as a DERIVED target wired instrumented_build_of→ the original — ready for
-    coverage-guided fuzzing next. VENDORED/OFFLINE ONLY: the build runs --network none
-    (a recipe needing network deps fails honestly). Requires features.build (else error)."""
+    DEPENDENCIES: `network` defaults 'none' (VENDORED/OFFLINE — fully reproducible, the
+    recommendation). 'fetch' (requires features.build_fetch) runs a SEPARATE, audited,
+    ALLOWLISTED fetch phase (`fetch_phases`, default per system) that hash-pins deps into a
+    LOCKFILE, then DROPS NETWORK and compiles --network none — a fetched dep can never run
+    during compile or exfiltrate. The build records a LOCKFILE + SBOM-lite + a reproducibility
+    BADGE. Reproducibility: recipe_sha=hash{phases,fetch_phases,env,base_image,instrumentation,
+    arch}; same recipe_sha + source content_hash + toolchain_digest (+ lockfile) ⇒ the same
+    build — a cache HIT REUSES the prior CAS artifact (skips the rebuild).
+
+    `source_revision_id` builds from a specific editable-IDE revision (rebuild-from-revision).
+    If the source tree is built_from a target, the rebuild is registered as a DERIVED target
+    wired instrumented_build_of→ the original — ready for coverage-guided fuzzing. Requires
+    features.build (else error)."""
     from hexgraph.engine import builds as B
-    from hexgraph.engine.build import BuildError, BuildSpec
+    from hexgraph.engine.build import BuildError, BuildSpec, CROSS_TRIPLES
     from hexgraph.policy import PolicyViolation, assert_allows_build
 
     try:
@@ -228,22 +313,50 @@ def build_target(project_id: str, source_tree_id: str, system: str | None = None
         if tree is None or tree.project_id != project_id:
             return {"error": "source tree not found in this project"}
         detected = B.propose_build_spec(tree)
+        net = network or "none"
+        fp = fetch_phases
+        if net == "fetch" and fp is None:
+            fp = [ph.to_dict() for ph in B.default_fetch_phases(system or detected["system"])]
+        # Cross-build sysroot: the parent firmware's extracted rootfs (best-effort; native
+        # fallback degrades to qemu-mode binary-only fuzzing per §3.4).
+        sysroot = None
+        eff_arch = arch or "x86_64"
+        if CROSS_TRIPLES.get(eff_arch.lower()):
+            origin = B._origin_target(s, p, tree)
+            if origin is not None and origin.parent_id:
+                from hexgraph.db.models import Target
+                fw = s.get(Target, origin.parent_id)
+                if fw is not None and (fw.metadata_json or {}).get("filesystem"):
+                    try:
+                        from pathlib import Path as _P
+                        from hexgraph.engine.filesystem import host_root as _fs
+                        from hexgraph.engine.poc import _find_sysroot
+                        r = _find_sysroot(_fs(p, fw))
+                        sysroot = str(r) if r and _P(str(r)).is_dir() else None
+                    except Exception:  # noqa: BLE001
+                        sysroot = None
         try:
             spec = BuildSpec.from_dict({
                 "source_tree_id": tree.id,
                 "system": system or detected["system"],
                 "phases": phases if phases is not None else detected["phases"],
+                "fetch_phases": fp or [],
                 "instrumentation": instrumentation or {},
                 "artifacts": artifacts or [],
                 "env": env or {},
-                "arch": arch or "x86_64",
+                "arch": eff_arch,
+                "network": net,
+                "sysroot": sysroot,
             })
             spec_row = B.create_build_spec(s, p, spec)
-            build = B.run_build(s, p, spec_row)
+            if source_revision_id:
+                build = B.rebuild_from_revision(s, p, spec_row, source_revision_id)
+            else:
+                build = B.run_build(s, p, spec_row)
         except BuildError as exc:
             return {"error": str(exc)}
-        except PolicyViolation:
-            return {"error": "building not permitted — enable features.build in Settings"}
+        except PolicyViolation as exc:
+            return {"error": f"not permitted — {exc}"}
         return B.build_to_dict(build)
 
 

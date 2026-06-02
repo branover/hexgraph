@@ -1,6 +1,6 @@
 # Design — First-Class Fuzzing & Source-Code/Build Management in HexGraph
 
-**Status:** Proposed (canonical synthesis of the five-lens design council: fuzzing-engines, build-from-source, data-model, ux-ide, architecture-security).
+**Status:** ✅ SHIPPED — Phases 0–7 all DONE (the fuzzing+source epic is COMPLETE). Canonical synthesis of the five-lens design council: fuzzing-engines, build-from-source, data-model, ux-ide, architecture-security.
 **Scope:** Make fuzzing a first-class, multi-surface, coverage-guided capability; make source-tree management and reproducible, instrumented, *build-as-API* building first-class; wire both into the typed graph, the verification/assurance ladder, the policy seam, and the SPA. Companion to `docs/design-verification-oracles.md`, `docs/design-dynamic-surfaces.md`, `docs/design-rehosting.md`.
 
 This document grounds entirely in the shipped architecture: the seam rule (`get_executor`/`get_decompiler`/`get_rehoster`), the policy tiers in `policy.py` (`TIER_STATIC_ONLY=0` … `TIER_LIVE_REMOTE=3`, `current_policy()` deriving the tier from `features.*`, fail-closed at 0), the sandbox boundary in `sandbox/runner.py` (`--network none`, `--read-only`, `--cap-drop ALL`, `--no-new-privileges`, `--user 1000`, mem/cpu/pids caps, tmpfs, hard timeout, `net_container=` netns join), CAS (`engine/cas.py`), the firmware-filesystem precedent (`engine/filesystem.py`), the in-process `TaskWorker` (`engine/worker.py`), and the frozen Finding schema. It honours every non-negotiable: loopback-only, BYOK/mock, hostile bytes only in the sandbox, the LLM never runs a shell, **no gate relaxed anywhere except `policy.py`**, zero token spend by default, the Finding schema frozen, migrations mandatory.
@@ -632,6 +632,63 @@ Each phase is independently shippable through the worktree→PR-review-subagent�
 > via the cert env triple but only the SSH path is exercised against the local-daemon test rig.
 
 **Phase 7 — Supply-chain, cross-compile, editable IDE, polish (was Phase 6).** `features.build_fetch` bounded audited fetch tier + lockfile + SBOM-lite + reproducibility badges; `WITH_CROSS=1` cross-compile (firmware-rootfs-as-sysroot, degrade to qemu-mode on failure); ccache incrementality + `SOURCE_DATE_EPOCH` determinism + cache-key artifact reuse; OSS-Fuzz `build.sh` import; editable IDE behind `features.source.edit` (revisioned saves, rebuild-from-revision — last because riskiest and least-needed for the core loop); run-to-run coverage diff (reuse `AnalysisRun`). *Risk:* fetch tier is the highest residual supply-chain risk — fail-closed, allowlisted, audited, fetch-then-offline.
+
+> **Shipped (`build/fuzz-phase7`). — ✅ DONE. This COMPLETES the fuzzing+source epic
+> (Phases 0–7).** **(1) Bounded audited dependency fetch (`features.build_fetch`, default
+> off, fail-closed):** the FETCH phase (`BuildSpec.fetch_phases`, `network="fetch"`,
+> `build_fetch_probe.py`) runs in a SEPARATE sandbox container with network ON but bounded
+> to a registry ALLOWLIST (`policy.build_fetch_scope` — crates.io/pypi.org/github.com/…,
+> operator-extendable, NEVER "any host"), enforced by the `_egress.install_socket_guard`
+> backstop (drops any off-allowlist TCP connect); it produces a hash-pinned **lockfile** +
+> an **SBOM-lite**, then HexGraph DROPS NETWORK and runs the COMPILE phase `--network none`
+> against the snapshotted vendor dir — **fetch-then-offline**, proven by a Docker-gated test
+> that a compile attempting the network FAILS even with fetch on. The ONLY gate edit is
+> `policy.assert_allows_build_fetch` (+ `features.build_fetch`, a sub-capability of
+> `features.build`, orthogonal to the tier ladder); every fetch is **audited** to
+> `EgressEvent(tool="build_fetch")`. A **reproducibility BADGE** (`build.reproducible`) is
+> recorded when recipe_sha + source_content_hash + toolchain_digest (+ a hash-pinned lockfile
+> for fetch builds) are all present. **(2) Cross-compile (`WITH_CROSS=1`):** `instrumentation_env`
+> injects clang `--target=<triple>` per `arch` + the parent firmware's extracted rootfs as
+> `--sysroot` (REUSING `poc._find_sysroot`); a Docker-gated test proves a real MIPS ELF object
+> is produced. A cross-build failure / unknown arch **degrades to native** (then qemu-mode
+> binary-only fuzzing of the original — §3.4). Cross toolchains + qemu-user added to
+> `Dockerfile.build` under `WITH_CROSS=1`. **(3) Determinism + cache:** `SOURCE_DATE_EPOCH`
+> + ccache (injected env, wrapped CC/CXX in the probe) + a **cache-key** (recipe_sha +
+> TRUE byte-content hash + toolchain_digest + lockfile digest) that REUSES a prior CAS
+> artifact on a hit (skips the rebuild, `build.cache_hit`); a same-SIZE edit MISSES (the
+> build now hashes real bytes via `source.tree_content_sha`, not the size-based manifest
+> hash). **(4) OSS-Fuzz import** (`engine/oss_fuzz.py`): a `build.sh` → a `BuildSpec` (stored
+> as `role=script`, mapped to our `$CC/$CXX/$CFLAGS/$LIB_FUZZING_ENGINE/$SRC/$OUT` contract,
+> a single `shell:true` phase, auto-detected `$OUT/<name>` artifacts). **(5) Editable IDE
+> (`features.source.edit`, default off):** `engine/revisions.py` — a save writes a NEW
+> `SourceRevision` (migration **0016**: `source_revision` table + `build` lockfile/SBOM/
+> reproducible/cache_hit/cache_key/source_revision_id columns), content in CAS + a diff,
+> never an in-place mutation; **rebuild-from-revision** (`builds.rebuild_from_revision`)
+> reverts (append-only) + builds. **Confinement is the safety property:** the write goes
+> through `write_source_file`, which REFUSES any non-editable tree — so extracted/vendor/
+> imported (`origin=git|archive|extracted|upload`) source is read-only and can NEVER be
+> revised (proven by a test). The UI gates Edit/Save on `features.source_edit` + per-tree
+> editability. **(6) Run-to-run coverage diff** (`campaigns.coverage_diff` + `/api/campaigns/
+> {id}/coverage-diff` + the `coverage_diff` MCP tool): per-file gained/lost lines between two
+> campaigns, reusing the Phase-3/4 line maps. **Migration 0016** applies clean on 0015 +
+> round-trips + no autogen drift; fresh init_db works. New MCP tools: `import_oss_fuzz`/
+> `save_source_revision` (write), `coverage_diff` (read); `build_target` gained `network`/
+> `fetch_phases`/`arch`/`source_revision_id`. API: `/builds/import-oss-fuzz`, source-tree
+> `/revisions` (save/list/get/revert), `/campaigns/{id}/coverage-diff`; the build modal gained
+> arch + dependency-posture + a reproducibility/cross preview, and the Source tab a per-file
+> Edit/Save + revision history + reproducibility/cached/locked build badges. The frozen Finding
+> schema is untouched (all new structure rides the DB envelope). Tests: `tests/test_fuzz_phase7.py`
+> (28 offline — fetch gate fail-closed/orthogonal/allowlist-only/audited, cross env injection +
+> degrade, determinism/badge/cache hit+miss, OSS-Fuzz mapping + read-only refusal, revisioning +
+> read-only-tree refusal + revert + rebuild-from-revision, coverage-diff, migration round-trip +
+> fresh init_db, capability flags) + Docker-gated `tests/test_fuzz_phase7_e2e.py` (compile is
+> `--network none` even with fetch on; the fetch egress backstop blocks a non-allowlisted host +
+> audits; a real MIPS cross-build object). `just test` green (607 offline); `just demo` exits 0;
+> Playwright-verified the editable IDE (Edit/Save/revision history) + the reproducibility badges +
+> the Build modal's arch/dependency posture (`docs/ui-backlog.md`). **Known limits:** ccache/
+> determinism are best-effort per toolchain; the OSS-Fuzz importer maps the common single-script
+> layout (multi-target `$OUT` projects build, but per-target capture is heuristic); the editable
+> IDE viewer is a plain textarea (no Monaco — the long-standing deferral).
 
 ---
 

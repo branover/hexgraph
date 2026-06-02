@@ -190,7 +190,9 @@ def test_run_build_persists_ledger_and_artifacts(hg_home):
         assert build.status == "succeeded"
         assert build.recipe_sha == spec.recipe_sha()
         assert build.toolchain_digest == "mock-clang-18.0.0"
-        assert build.source_content_hash == tree.content_hash
+        # Phase 7: source_content_hash is the TRUE byte-content hash (not the cheap
+        # size-based manifest hash on the row) — recorded + non-empty.
+        assert build.source_content_hash and len(build.source_content_hash) == 64
         # artifacts homed in CAS (rel → sha)
         assert "foo.o" in build.artifacts_json and len(build.artifacts_json["foo.o"]) == 64
         # the log is in CAS
@@ -257,7 +259,7 @@ def test_run_build_failed_when_builder_unavailable(hg_home, monkeypatch):
     from hexgraph.engine.build import BuildUnavailable
 
     class Unavail(MockBuilder):
-        def build(self, spec, *, source_root, content_hash=None):
+        def build(self, spec, *, source_root, content_hash=None, **kwargs):
             raise BuildUnavailable("no docker")
 
     with session_scope() as s:

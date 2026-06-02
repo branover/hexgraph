@@ -26,12 +26,14 @@ function buildTree(files: SourceFileEntry[]): TreeNode {
 
 const fmtSize = (n?: number) => (n == null ? "" : n < 1024 ? `${n} B` : n < 1e6 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1e6).toFixed(1)} MB`);
 
-export default function SourceBrowser({ projectId, open, onPickedTarget, buildEnabled, fuzzEnabled, onChanged }: {
+export default function SourceBrowser({ projectId, open, onPickedTarget, buildEnabled, buildFetchEnabled, fuzzEnabled, sourceEditEnabled, onChanged }: {
   projectId: string;
   open?: { treeId?: string; rel?: string; line?: number } | null;
   onPickedTarget?: (targetIds: string[]) => void;
   buildEnabled?: boolean;
+  buildFetchEnabled?: boolean;
   fuzzEnabled?: boolean;
+  sourceEditEnabled?: boolean;
   onChanged?: () => void;
 }) {
   const [trees, setTrees] = useState<SourceTreeRow[] | null>(null);
@@ -45,6 +47,11 @@ export default function SourceBrowser({ projectId, open, onPickedTarget, buildEn
   const [coverage, setCoverage] = useState<import("../api").Coverage | null>(null);
   const [showBuild, setShowBuild] = useState(false);
   const [builds, setBuilds] = useState<BuildRow[]>([]);
+  // Editable IDE (Phase 7): per-file edit mode + revision history.
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+  const [revs, setRevs] = useState<import("../api").SourceRevision[]>([]);
   const lineRef = useRef<HTMLDivElement>(null);
 
   const loadTrees = () => api.sourceTrees(projectId).then((r) => setTrees(r.source_trees)).catch(() => setTrees([]));
@@ -88,10 +95,40 @@ export default function SourceBrowser({ projectId, open, onPickedTarget, buildEn
     if (!treeId) return;
     setView({ rel, loading: true });
     setLine(gotoLine);
+    setEditing(false); setSaveErr(null);
     try {
       const r = await api.sourceFile(treeId, rel);
       setView({ rel, loading: false, role: r.role, origin: r.origin, encoding: r.encoding, content: r.content, truncated: r.truncated });
     } catch (e: any) { setView({ rel, loading: false, err: String(e.message || e) }); }
+  };
+
+  const tree0 = treeId ? trees?.find((t) => t.id === treeId) : undefined;
+  // An editable file: features.source.edit on + an editable tree + a HexGraph-authored
+  // role (extracted/vendor/imported trees stay read-only — the backend enforces this).
+  const canEdit = !!(sourceEditEnabled && tree0?.editable && view?.encoding === "text"
+                     && view.role && ["harness", "poc", "script", "build_recipe", "code"].includes(view.role));
+
+  const loadRevs = () => {
+    if (!treeId || !view?.rel) { setRevs([]); return; }
+    api.sourceRevisions(treeId, view.rel).then((r) => setRevs(r.revisions)).catch(() => setRevs([]));
+  };
+  useEffect(() => { loadRevs(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [treeId, view?.rel]);
+
+  const saveEdit = async () => {
+    if (!treeId || !view?.rel) return;
+    setSaveErr(null);
+    try {
+      await api.saveSourceRevision(treeId, { rel: view.rel, content: draft, role: view.role });
+      setEditing(false);
+      await openFile(view.rel);
+      loadRevs(); loadBuilds(); onChanged?.();
+    } catch (e: any) { setSaveErr(String(e.message || e)); }
+  };
+
+  const revert = async (rid: string) => {
+    if (!treeId || !view?.rel) return;
+    try { await api.revertSourceRevision(treeId, rid); await openFile(view.rel); loadRevs(); }
+    catch (e: any) { setSaveErr(String(e.message || e)); }
   };
 
   // finding→source jump: when `open` carries a rel, switch tree + open the file at the line
@@ -213,6 +250,10 @@ export default function SourceBrowser({ projectId, open, onPickedTarget, buildEn
                 <span className="muted" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
                   {Object.keys(b.artifacts || {}).join(", ") || (b.error ? "(failed)" : "—")}
                 </span>
+                {/* Reproducibility badge + supply-chain posture (Phase 7) */}
+                {b.reproducible && <span className="tag" title="recipe_sha + source_content_hash + toolchain_digest (+ lockfile) all recorded ⇒ replayable" style={{ color: "var(--ok, #6c6)" }}>reproducible</span>}
+                {b.cache_hit && <span className="tag" title="reused a prior identical build's artifact (cache hit) — no rebuild" style={{ color: "var(--fg)" }}>cached</span>}
+                {b.lockfile && Object.keys(b.lockfile).length > 0 && <span className="tag" title={`${Object.keys(b.lockfile).length} hash-pinned deps (fetch tier)`} style={{ color: "var(--accent)" }}>locked</span>}
                 {b.derived_target_id && <span className="tag" style={{ color: "var(--accent)" }}>instrumented</span>}
               </div>
             ))}
@@ -220,7 +261,8 @@ export default function SourceBrowser({ projectId, open, onPickedTarget, buildEn
         )}
       </div>
       {showBuild && tree && (
-        <BuildModal projectId={projectId} tree={tree} onClose={() => setShowBuild(false)}
+        <BuildModal projectId={projectId} tree={tree} fetchEnabled={buildFetchEnabled}
+                    onClose={() => setShowBuild(false)}
                     onBuilt={() => { loadBuilds(); loadTrees(); onChanged?.(); }} />
       )}
 
@@ -234,8 +276,25 @@ export default function SourceBrowser({ projectId, open, onPickedTarget, buildEn
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{view.rel}</span>
               {view.role && view.role !== "code" && <span className="tag" style={{ color: "var(--accent)" }}>{view.role}</span>}
               <span className="muted" style={{ fontSize: 10.5 }}>{fmtSize(view.encoding === "text" ? new Blob([view.content || ""]).size : undefined)}{view.encoding === "binary" && "binary (hex)"}{view.truncated && " · truncated"}</span>
+              <span style={{ flex: 1 }} />
+              {/* Editable IDE: read-only vs editable affordance (design §6.2 D-edit) */}
+              {!canEdit && view.encoding === "text" && <span className="muted" style={{ fontSize: 10 }}>read-only</span>}
+              {canEdit && !editing && (
+                <button className="btn sm" title="Edit this HexGraph-authored file (a save creates a new revision)"
+                        onClick={() => { setDraft(view.content || ""); setEditing(true); }}>Edit</button>
+              )}
+              {canEdit && editing && (
+                <>
+                  <button className="btn sm" onClick={saveEdit} title="Save as a new revision (never an in-place mutation)">Save revision</button>
+                  <button className="btn sm" onClick={() => { setEditing(false); setSaveErr(null); }}>Cancel</button>
+                </>
+              )}
             </div>
-            {view.encoding === "text" ? (
+            {saveErr && <div className="err" style={{ padding: "4px 12px", fontSize: 11 }}>{saveErr}</div>}
+            {editing ? (
+              <textarea value={draft} onChange={(e) => setDraft(e.target.value)} spellCheck={false}
+                        style={{ width: "100%", minHeight: "60vh", boxSizing: "border-box", fontFamily: "var(--mono, monospace)", fontSize: 11.5, lineHeight: "1.55em", background: "var(--bg)", color: "var(--fg)", border: "none", padding: 12, resize: "vertical" }} />
+            ) : view.encoding === "text" ? (
               <div className="codelines" style={{ fontFamily: "var(--mono, monospace)", fontSize: 11.5, lineHeight: "1.55em" }}>
                 {(view.content || "").split("\n").map((l, i) => {
                   const n = i + 1;
@@ -256,6 +315,22 @@ export default function SourceBrowser({ projectId, open, onPickedTarget, buildEn
               </div>
             ) : (
               <pre className="codewrap" style={{ whiteSpace: "pre-wrap", padding: 12, fontFamily: "var(--mono, monospace)", fontSize: 11 }}>{view.content}</pre>
+            )}
+            {revs.length > 0 && (
+              <div style={{ borderTop: "1px solid var(--border)", padding: "6px 12px" }}>
+                <div className="sec-label" style={{ fontSize: 10.5 }}>Revisions ({revs.length})</div>
+                {revs.map((r) => (
+                  <div key={r.id} style={{ fontSize: 10.5, display: "flex", gap: 8, alignItems: "center", padding: "2px 0" }}>
+                    <span className="tag" style={{ color: "var(--accent)" }}>r{r.seq}</span>
+                    <span className="muted">{r.origin}</span>
+                    {r.note && <span className="muted" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{r.note}</span>}
+                    {!r.note && <span style={{ flex: 1 }} />}
+                    {canEdit && r.seq !== revs[0].seq && (
+                      <button className="btn sm" title="Revert the working file to this revision (append-only)" onClick={() => revert(r.id)}>revert</button>
+                    )}
+                  </div>
+                ))}
+              </div>
             )}
           </>
         )}

@@ -121,9 +121,28 @@ def main() -> int:
     env.setdefault("SRC", SRC)
     env["OUT"] = art_out
     env["WORK"] = BUILD_DIR
+    # Determinism + incrementality (Phase 7): SOURCE_DATE_EPOCH (injected by the
+    # orchestrator) pins embedded timestamps; ccache (USE_CCACHE) wraps CC/CXX so an
+    # incremental rebuild reuses cached objects. Neither touches the sandbox security flags.
+    if env.get("USE_CCACHE") == "1" and shutil.which("ccache"):
+        cache_dir = env.get("CCACHE_DIR") or os.path.join(SCRATCH, "ccache")
+        os.makedirs(cache_dir, exist_ok=True)
+        env["CCACHE_DIR"] = cache_dir
+        for var in ("CC", "CXX"):
+            val = env.get(var)
+            if val and not val.startswith("ccache "):
+                env[var] = "ccache " + val
+        w("[build_probe] ccache enabled (incremental object reuse)")
+    # The bounded-fetch vendor dir (Phase F) is mounted RO at /vendor; point package
+    # managers at it for the OFFLINE compile (the recipe env can override).
+    if spec.get("vendor"):
+        env.setdefault("CARGO_HOME", os.path.join(spec["vendor"], "cargo"))
+        env.setdefault("GOPATH", os.path.join(spec["vendor"], "go"))
+        env.setdefault("GOMODCACHE", os.path.join(spec["vendor"], "go", "pkg", "mod"))
+        w(f"[build_probe] vendor dir mounted at {spec['vendor']} (offline compile)")
     w(f"[build_probe] injected: CC={env.get('CC')} CXX={env.get('CXX')} "
       f"CFLAGS={env.get('CFLAGS')} SANITIZER={env.get('SANITIZER')} "
-      f"FUZZING_ENGINE={env.get('FUZZING_ENGINE')}")
+      f"FUZZING_ENGINE={env.get('FUZZING_ENGINE')} SOURCE_DATE_EPOCH={env.get('SOURCE_DATE_EPOCH')}")
 
     phases = spec.get("phases") or []
     phase_results = []
@@ -175,15 +194,28 @@ def main() -> int:
     # <rel> back agrees). The sandbox already contains this (RO rootfs, no secrets,
     # --network none), but a build has no business reading outside its own tree.
     build_root = os.path.realpath(BUILD_DIR)
+    art_root = os.path.realpath(art_out)
     captured: dict[str, bool] = {}
     if ok:
         for rel in spec.get("artifacts") or []:
             if os.path.isabs(rel):
                 w(f"[build_probe] refusing absolute artifact path: {rel}")
                 continue
-            srcp = os.path.realpath(os.path.join(BUILD_DIR, rel))
-            if not (srcp == build_root or srcp.startswith(build_root + os.sep)):
-                w(f"[build_probe] refusing artifact outside the build dir: {rel}")
+            # An artifact may resolve under the BUILD dir ($WORK) — the common case — OR
+            # already be in $OUT (= art_out): an OSS-Fuzz build.sh copies its fuzz targets to
+            # $OUT, so `out/<name>` resolves there, not under $WORK. Try $OUT first (where a
+            # script intentionally placed it), then the build dir. Both are contained roots.
+            cand_out = os.path.realpath(os.path.join(art_out, rel))
+            cand_work = os.path.realpath(os.path.join(BUILD_DIR, rel))
+            srcp = None
+            if (cand_out == art_root or cand_out.startswith(art_root + os.sep)) and os.path.isfile(cand_out):
+                # Already in /out/artifacts (placed by the script) — keep it as-is.
+                captured[rel] = True
+                continue
+            if cand_work == build_root or cand_work.startswith(build_root + os.sep):
+                srcp = cand_work
+            else:
+                w(f"[build_probe] refusing artifact outside the build dir / $OUT: {rel}")
                 continue
             if os.path.isfile(srcp):
                 dstp = os.path.join(art_out, rel)

@@ -229,14 +229,13 @@ class RemoteDockerExecutor(SandboxRunner):
     # ── one-shot probe ──────────────────────────────────────────────────────────────
     def run_probe(self, probe, artifact, *, outdir=None, extra_args=None,
                   requires_execution=False, extra_ro_mounts=None, allow_network=False,
-                  net_container=None, secret=None, resources=None) -> RunResult:
+                  net_container=None, secret=None, resources=None, network_gate="network") -> RunResult:
         if requires_execution:
             from hexgraph.policy import assert_allows_execution
             assert_allows_execution()
         if allow_network:
-            from hexgraph.policy import PolicyViolation, current_policy
-            if not current_policy().allow_network:
-                raise PolicyViolation("network egress is not permitted by the active policy")
+            from hexgraph.sandbox.runner import _assert_network_gate
+            _assert_network_gate(network_gate)  # "build_fetch" re-checks features.build_fetch, not features.network
         if artifact is not None:
             artifact = Path(artifact).resolve()
             if not artifact.is_file():

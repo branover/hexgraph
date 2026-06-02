@@ -91,7 +91,7 @@ sandbox-build with_ghidra="0":
 # the recorded base_image a BuildSpec compiles in; it is NOT the shared sandbox image.
 # WORKTREE DISCIPLINE: build a PRIVATE tag and point HEXGRAPH_BUILD_IMAGE at it — never
 # clobber a shared tag: `HEXGRAPH_BUILD_IMAGE=hexgraph-build:wt-<topic> just build-image`.
-# Build the build-from-source image (needs Docker; with_cross=1 adds cross gcc/sysroots — Phase 7 stub).
+# Build the build-from-source image (needs Docker; with_cross=1 adds cross gcc/binutils + qemu-user for firmware cross-compile).
 [group('build')]
 build-image with_cross="0":
     docker build -f Dockerfile.build --build-arg WITH_CROSS={{with_cross}} -t {{build_image}} .
