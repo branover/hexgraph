@@ -87,21 +87,44 @@ def run_task_sync(task_id: str) -> str:
         return task.status.value
 
 
+# How often the reaper polls detached fuzz-campaign containers (seconds). A campaign
+# runs for minutes-to-hours but crashes must surface within minutes — so this is short
+# enough to stream the first crash quickly, cheap enough to run continuously.
+REAPER_INTERVAL = 15
+
+
+def reap_campaigns_sync() -> int:
+    """Run one reaper pass: poll every live campaign's detached container, ingest new
+    artifacts → fuzz_crash findings, update stats, finalize completed ones. Crash-safe
+    re-attach lives here — the reaper re-binds to running containers by their durable
+    `container_name` from the (durable) fuzz_campaign rows, so campaigns survive a
+    `serve` restart. Runs in a thread (the docker poll is blocking)."""
+    from hexgraph.engine import campaigns
+
+    with session_scope() as session:
+        return campaigns.reap_all(session)
+
+
 class TaskWorker:
-    """Background consumer of queued task ids."""
+    """Background consumer of queued task ids + the periodic fuzz-campaign reaper."""
 
     def __init__(self) -> None:
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._runner: asyncio.Task | None = None
+        self._reaper: asyncio.Task | None = None
 
     async def start(self) -> None:
         if self._runner is None:
             self._runner = asyncio.create_task(self._loop())
+        if self._reaper is None:
+            self._reaper = asyncio.create_task(self._reaper_loop())
 
     async def stop(self) -> None:
-        if self._runner is not None:
-            self._runner.cancel()
-            self._runner = None
+        for attr in ("_runner", "_reaper"):
+            t = getattr(self, attr)
+            if t is not None:
+                t.cancel()
+                setattr(self, attr, None)
 
     async def enqueue(self, task_id: str) -> None:
         await self._queue.put(task_id)
@@ -115,6 +138,18 @@ class TaskWorker:
                 pass
             finally:
                 self._queue.task_done()
+
+    async def _reaper_loop(self) -> None:
+        """Periodically reap detached fuzz campaigns — a SEPARATE task from the queue
+        loop so a multi-hour campaign never pins the worker thread (design §5.5: detached
+        + reaped, no worker-thread starvation). The first pass on startup is the
+        crash-safe re-attach to any container that survived a restart."""
+        while True:
+            try:
+                await asyncio.to_thread(reap_campaigns_sync)
+            except Exception:  # noqa: BLE001 — never let the reaper die
+                pass
+            await asyncio.sleep(REAPER_INTERVAL)
 
 
 _worker: TaskWorker | None = None

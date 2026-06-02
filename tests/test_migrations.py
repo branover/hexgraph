@@ -95,6 +95,40 @@ def test_0013_build_applies_on_0012_and_round_trips(tmp_path, monkeypatch):
     reset_engine_for_tests()
 
 
+def test_0014_fuzz_campaign_applies_on_0013_and_round_trips(tmp_path, monkeypatch):
+    """0014 (fuzz_campaign + fuzz_artifact) applies cleanly on 0013 (build) and the
+    downgrade removes exactly those two tables — the migration is reversible."""
+    monkeypatch.setenv("HEXGRAPH_DB_PATH", str(tmp_path / "phase3.db"))
+    from alembic import command
+    from sqlalchemy import create_engine, inspect
+
+    from hexgraph.db.migrate import _alembic_config
+    from hexgraph.db.session import db_url, reset_engine_for_tests
+
+    reset_engine_for_tests()
+    cfg = _alembic_config()
+    command.upgrade(cfg, "0013_build")
+    before = set(inspect(create_engine(db_url())).get_table_names())
+    assert "build" in before and "fuzz_campaign" not in before and "fuzz_artifact" not in before
+
+    command.upgrade(cfg, "0014_fuzz_campaign")
+    after = set(inspect(create_engine(db_url())).get_table_names())
+    assert {"fuzz_campaign", "fuzz_artifact"} <= after
+    # the campaign row carries the detached-lifecycle + ResourceSpec columns
+    ccols = {c["name"] for c in inspect(create_engine(db_url())).get_columns("fuzz_campaign")}
+    assert {"container_name", "outdir", "resources_json", "stats_json", "corpus_ref",
+            "surface", "engine", "instances"} <= ccols
+    # fuzz_artifact carries the dedup + reproducer + exploitability columns
+    acols = {c["name"] for c in inspect(create_engine(db_url())).get_columns("fuzz_artifact")}
+    assert {"dedup_key", "content_cas", "exploitability_json", "finding_id",
+            "faulting_function"} <= acols
+
+    command.downgrade(cfg, "0013_build")
+    rolled = set(inspect(create_engine(db_url())).get_table_names())
+    assert "fuzz_campaign" not in rolled and "fuzz_artifact" not in rolled and "build" in rolled
+    reset_engine_for_tests()
+
+
 def test_fresh_init_db_has_build_tables(tmp_path, monkeypatch):
     """A fresh create_all (the test path) materializes the new tables too."""
     monkeypatch.setenv("HEXGRAPH_DB_PATH", str(tmp_path / "fresh.db"))
@@ -105,7 +139,7 @@ def test_fresh_init_db_has_build_tables(tmp_path, monkeypatch):
     reset_engine_for_tests()
     init_db()
     names = set(inspect(create_engine(db_url())).get_table_names())
-    assert {"build", "build_spec", "source_tree"} <= names
+    assert {"build", "build_spec", "source_tree", "fuzz_campaign", "fuzz_artifact"} <= names
     reset_engine_for_tests()
 
 

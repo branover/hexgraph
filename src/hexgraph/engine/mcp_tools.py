@@ -247,6 +247,123 @@ def build_target(project_id: str, source_tree_id: str, system: str | None = None
         return B.build_to_dict(build)
 
 
+# ── Fuzz campaigns (run/read) — design §5.7. The LLM REQUESTS a campaign; HexGraph
+# spawns + reaps a detached sandbox container. The model never runs afl-fuzz. ──────
+
+def start_fuzz_campaign(target_id: str, surface: str | None = None, engine: str | None = None,
+                        function: str | None = None, max_total_time: int | None = None,
+                        max_crashes: int | None = None, instances: int | None = None,
+                        resources: dict | None = None) -> dict:
+    """Start a coverage-guided fuzz CAMPAIGN on a target; returns immediately with
+    {id, status:'running'}. HexGraph spawns a DETACHED hardened sandbox container that
+    fuzzes continuously + a reaper streams crashes → fuzz_crash findings (each with a
+    minimized, one-click-re-verifiable reproducer). The model never runs afl-fuzz."""
+    from hexgraph.db.models import Task as _Task
+    from hexgraph.engine import campaigns as C
+    from hexgraph.engine.fuzzers import FuzzCampaignSpec
+    from hexgraph.engine.fuzzing import resolve_harness, resolve_target_sources
+    from hexgraph.policy import PolicyViolation, assert_allows_execution
+
+    try:
+        assert_allows_execution()
+    except PolicyViolation:
+        return {"error": "fuzzing not permitted — enable features.fuzzing (or features.poc) in Settings"}
+    with session_scope() as s:
+        t = s.get(Target, target_id)
+        if t is None:
+            return {"error": "target not found"}
+        p = s.get(Project, t.project_id)
+        fake = _Task(project_id=p.id, target_id=t.id, type="fuzzing", params_json={})
+        source, _fid, fn = resolve_harness(s, t, fake)
+        sources = resolve_target_sources(t, fake)
+        spec = FuzzCampaignSpec(
+            target_id=t.id, surface=surface or C.infer_surface(t), engine=engine,
+            harness_source=source, function=function or fn, target_sources=sources,
+            max_total_time=max_total_time or 60, max_crashes=max_crashes or 10,
+            instances=instances or 1,
+        )
+        try:
+            row = C.start_campaign(s, p, t, spec=spec, resources=resources)
+        except (C.CampaignError, ValueError) as exc:
+            return {"error": str(exc)}
+        except PolicyViolation:
+            return {"error": "fuzzing not permitted — enable features.fuzzing/poc"}
+        return C.campaign_to_dict(row)
+
+
+def stop_fuzz_campaign(campaign_id: str) -> dict:
+    """Stop a running fuzz campaign — kills the container PRESERVING the corpus in CAS
+    (resumable). Reaps any final crashes first so nothing is lost."""
+    from hexgraph.db.models import FuzzCampaign
+    from hexgraph.engine import campaigns as C
+
+    with session_scope() as s:
+        c = s.get(FuzzCampaign, campaign_id)
+        if c is None:
+            return {"error": "campaign not found"}
+        return C.campaign_to_dict(C.stop_campaign(s, c))
+
+
+def fuzz_status(campaign_id: str) -> dict:
+    """Live status + stats of a campaign (execs, edges_covered, crash_count, coverage,
+    status). Reaps on read so the figures are fresh. Poll this while a campaign runs."""
+    from hexgraph.db.models import FuzzCampaign
+    from hexgraph.engine import campaigns as C
+
+    with session_scope() as s:
+        c = s.get(FuzzCampaign, campaign_id)
+        if c is None:
+            return {"error": "campaign not found"}
+        try:
+            C.reap_campaign(s, c)
+        except Exception:  # noqa: BLE001
+            s.rollback()
+            c = s.get(FuzzCampaign, campaign_id)
+        return C.campaign_to_dict(c)
+
+
+def list_fuzz_artifacts(campaign_id: str) -> dict:
+    """List a campaign's deduplicated artifacts (crash/hang/leak/oom/corpus) — each with
+    the normalized dedup_key, dupe_count, sanitizer kind, faulting function, deterministic
+    exploitability, the CAS reproducer sha (re-runnable via verify_poc), and the
+    fuzz_crash finding it produced."""
+    from hexgraph.db.models import FuzzCampaign
+    from hexgraph.engine import campaigns as C
+
+    with session_scope() as s:
+        c = s.get(FuzzCampaign, campaign_id)
+        if c is None:
+            return {"error": "campaign not found"}
+        return {"campaign_id": campaign_id, "artifacts": C.list_artifacts(s, c)}
+
+
+def minimize_artifact(artifact_id: str) -> dict:
+    """Re-verify a crash artifact's reproducer by replaying its stored, CAS
+    content-addressed minimized input against the target IN THE SANDBOX — the
+    crash→verify tie-in. The unforgeable `crash` oracle confirms the bug still fires;
+    LLM-free, gated by the existing exec policy. Returns {verified, detail, assurance}."""
+    from hexgraph.db.models import FuzzArtifact
+    from hexgraph.engine import campaigns as C
+    from hexgraph.policy import PolicyViolation, assert_allows_execution
+
+    try:
+        assert_allows_execution()
+    except PolicyViolation:
+        return {"error": "execution not permitted — enable features.fuzzing/poc in Settings"}
+    with session_scope() as s:
+        a = s.get(FuzzArtifact, artifact_id)
+        if a is None:
+            return {"error": "artifact not found"}
+        if not a.content_cas:
+            return {"error": "artifact has no stored reproducer to re-verify"}
+        try:
+            res = C.verify_artifact(s, a)
+        except (C.CampaignError, ValueError) as exc:
+            return {"error": str(exc)}
+        return {"artifact_id": artifact_id, "verified": bool(res.get("verified")),
+                "detail": res.get("detail"), "assurance": res.get("assurance")}
+
+
 def _tool(target_id: str, name: str, args: dict) -> str:
     """Run a sandboxed inspection tool (decompile/strings/…) via the shared registry."""
     from hexgraph.engine.agent_tools import ToolContext, run_tool

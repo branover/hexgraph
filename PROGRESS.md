@@ -111,6 +111,42 @@ then run the resume verifier, then continue at the next unchecked task.
   (recorded-recipe preview, instrumentation toggles, vendored-only) gated by the new
   `capabilities.features.build`. **Vendored/offline only** (`--network none`; the audited fetch tier
   is Phase 7). Frozen schema untouched.
+  **Fuzzing+source Phase 3 DONE** (`docs/design-fuzzing-and-source.md` §7 Phase 3, branch
+  `build/fuzz-phase3`): **coverage-guided source fuzzing made first-class + the detached campaign
+  lifecycle + the user-tunable `ResourceSpec`.** The **`Fuzzer` seam** (`engine/fuzzers/` →
+  `get_fuzzer(surface, engine=None)`, dispatch on attack SURFACE not engine identity, fail-closed on
+  a nonsensical pair; `HEXGRAPH_FUZZER=mock` for offline tests): `LibFuzzerFuzzer` (a STRICT SUPERSET
+  of the Phase-0 single-pass path — `execute_fuzzing` now resolves inputs through the seam, byte-
+  identical, regression-tested) + **`AflPlusPlusFuzzer`** (`afl-clang-fast` + persistent libFuzzer-
+  driver `main` + llvm-symbolizer, real coverage on the Phase-2 instrumented derived target) +
+  `MockFuzzer`. **Dedicated `hexgraph-fuzz` image** (`Dockerfile.fuzz` / `just fuzz-build` [D4] —
+  AFL++ LTO/CmpLog + libFuzzer + llvm-symbolizer + afl-cov + gdb + qemu-user; worktree builds a
+  PRIVATE tag, `HEXGRAPH_FUZZ_IMAGE`). **Detached campaign lifecycle [§5.5]:** `Executor.start_detached`/
+  `poll_detached`/`stop_detached` (a `docker run -d` long-lived container, SAME hardening) owned by a
+  durable **`fuzz_campaign`** row (migration **0014**, + **`fuzz_artifact`**); the launching task
+  returns immediately (`running`, `campaign_id`). A periodic **reaper** (`engine/campaigns.py` `reap_all`,
+  a worker job) polls, ingests new crashes → `fuzz_crash` findings (reusing the Phase-0 stack-hash dedup
+  + exploitability + minimization, `UNIQUE(campaign_id,dedup_key)`), updates `stats_json`, finalizes.
+  **Stop/resume** preserves the corpus in CAS; **crash-safe re-attach** — the reaper re-binds to
+  running containers by `container_name` on a `serve` restart (the worker's startup pass). **Crash →
+  verify tie-in:** the minimized reproducer + the instrumented harness binary are CAS-preserved;
+  `campaigns.verify_artifact` / `poc.verify_reproducer` replay it against THAT binary via the
+  unforgeable `crash` oracle (LLM-free, `code_present/dynamic`). **User-tunable `ResourceSpec`**
+  (`sandbox/resources.py` — `{mem,cpus,pids,tmpfs,timeout,unconstrained}`, Settings default +
+  per-campaign override): `unconstrained` drops `--memory`/`--cpus`/`--pids-limit` ONLY — **NEVER** a
+  security flag (`--network none`, cap-drop, no-new-privileges, read-only, `--user` all still hold;
+  `ResourceSpec` never touches `policy.py`). Resource governance: a per-host instance cap + a corpus
+  disk quota. API `/api/campaigns` (start/list/get/stop/resume, artifacts); MCP run-tools
+  `start_fuzz_campaign`/`stop_fuzz_campaign`/`minimize_artifact` + read-tools `fuzz_status`/
+  `list_fuzz_artifacts` (gated `features.mcp.run/read` + the existing exec gate — **no new gate**).
+  New edge vocab `fuzzed_by`/`produced_artifact`/`reproduces`/`covers` + `fuzz_campaign` endpoint
+  (String-column zero-migration + the `EDGE_ATTRIBUTE_SCHEMAS`/authoring widening). Frozen schema
+  untouched (all on `evidence.extra.fuzz` + the new tables). Tests: `test_campaigns.py` (seam +
+  fail-closed, ResourceSpec unconstrained-keeps-security-flags, lifecycle start→reap→finalize,
+  crash-safe re-attach, stop/resume, LibFuzzer-superset regression, the verify tie-in, the API),
+  `test_migrations.py` (0014 on 0013 round-trip + fresh init_db), Docker-gated `test_campaign_e2e.py`
+  (a REAL AFL++ campaign finds a planted bug in an instrumented build with coverage, dedups/classifies/
+  minimizes it, and the reproducer re-verifies). The rich Campaigns/Artifacts triage UX is Phase 4.
   **Target soft-removal** (archive subtree, restore on re-add) and **firmware filesystem browser**
   (persisted unpacked tree, add any file as a child target; library exports → nodes; function nodes
   launch tasks).
@@ -351,6 +387,23 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-02: **Fuzzing+source Phase 3 — coverage-guided fuzzing first-class + the detached
+  campaign lifecycle + the `ResourceSpec`** ([`docs/design-fuzzing-and-source.md`](docs/design-fuzzing-and-source.md)
+  §7 Phase 3, branch `build/fuzz-phase3`). The `Fuzzer` seam (`engine/fuzzers/`, dispatch by attack
+  surface, fail-closed) — `LibFuzzerFuzzer` (strict superset of the Phase-0 single-pass path, byte-
+  identical, regression-tested) + `AflPlusPlusFuzzer` (real coverage on the Phase-2 instrumented
+  derived target via `afl-clang-fast` + the persistent libFuzzer driver + llvm-symbolizer) +
+  `MockFuzzer`. Dedicated `hexgraph-fuzz` image (`Dockerfile.fuzz`/`just fuzz-build`). Detached
+  lifecycle: `Executor.start_detached`/`poll_detached`/`stop_detached` (a hardened `docker run -d`),
+  a durable `fuzz_campaign`/`fuzz_artifact` (migration 0014), a periodic reaper (worker job) that
+  streams crashes → `fuzz_crash` findings, finalizes, and re-attaches by `container_name` on restart
+  (crash-safe). Stop/resume preserves the corpus in CAS. Crash→verify tie-in: the minimized
+  reproducer + the harness binary are CAS-preserved and replayed via the unforgeable `crash` oracle
+  (`campaigns.verify_artifact`). User-tunable `ResourceSpec` (`sandbox/resources.py`); `unconstrained`
+  lifts mem/cpu/pids ONLY — never a security flag, never `policy.py`. API `/api/campaigns`; MCP
+  `start_fuzz_campaign`/`stop_fuzz_campaign`/`fuzz_status`/`minimize_artifact`/`list_fuzz_artifacts`.
+  No new policy gate (the existing exec gate). README + SKILL + design-doc §7 updated. `just test`
+  green (522+ offline); the AFL++ e2e proven against a private `hexgraph-fuzz:wt-fuzz-phase3` image.
 - 2026-06-01: **Fuzzing+source Phase 2 — the `Builder` seam + build-as-API**
   ([`docs/design-fuzzing-and-source.md`](docs/design-fuzzing-and-source.md) §7 Phase 2, branch
   `build/fuzz-phase2`). First phase to add a new policy gate + a dedicated image. The `Builder`

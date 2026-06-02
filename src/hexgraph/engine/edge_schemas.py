@@ -132,6 +132,33 @@ EDGE_ATTRIBUTE_SCHEMAS: dict[str, dict[str, Any]] = {
                        "The recorded recipe that built the (instrumented) target.",
         "attributes": {"build_id": _attr("the build (execution) that produced the target")},
     },
+    "fuzzed_by": {
+        "description": "a target/harness is fuzzed by a long-lived campaign "
+                       "(target|node → fuzz_campaign). The campaign accumulates "
+                       "corpus/coverage/dedup across runs (start/stop/resume-able).",
+        "attributes": {
+            "surface": _attr("the attack surface (source_lib|binary_only|network|file_format)"),
+            "engine": _attr("the fuzzing engine (afl|libfuzzer)"),
+        },
+    },
+    "produced_artifact": {
+        "description": "a fuzz campaign produced a deduplicated crash artifact "
+                       "(fuzz_campaign → finding). One representative per stack-hash bucket.",
+        "attributes": {
+            "kind": _attr("artifact kind (crash|hang|leak|oom|corpus)"),
+            "dedup_key": _attr("the normalized stack-hash bucket key"),
+        },
+    },
+    "reproduces": {
+        "description": "a reproducer/finding reproduces a crash "
+                       "(finding → fuzz_campaign|finding) — the re-runnable PoC link.",
+        "attributes": {"reproducer_ref": _attr("the CAS sha of the minimized reproducer bytes")},
+    },
+    "covers": {
+        "description": "a fuzz campaign reached a function (fuzz_campaign → node[function]) — "
+                       "coverage attribution from the campaign's instrumented run.",
+        "attributes": {"hits": _attr("execution count, if known", type="int")},
+    },
 }
 
 

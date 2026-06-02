@@ -21,6 +21,7 @@ import secrets
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Project, Target, Task, TaskStatus
+from hexgraph.engine import cas
 from hexgraph.engine.findings import persist_finding
 from hexgraph.engine.tasks import write_trace
 from hexgraph.models.finding import Evidence, Finding, FollowupSuggestion
@@ -303,6 +304,51 @@ def execute_poc(session: Session, project: Project, target: Target, task: Task,
     if not verification.get("verified"):
         task.status = TaskStatus.needs_triage
     return 1 if row else 0
+
+
+def verify_reproducer(session: Session, project: Project, target: Target, *,
+                      reproducer_ref: str, function: str | None = None,
+                      runner: Executor | None = None) -> dict:
+    """Re-run a fuzz-crash reproducer against the target and report whether it still
+    crashes — the crash→verify tie-in (design §4.6). A fuzz crash's minimized
+    reproducer is a self-contained, content-addressed input in CAS (`reproducer_ref`):
+    we read the bytes, feed them to the target IN THE SANDBOX as stdin, and check the
+    unforgeable `crash` oracle (signal/ASan abort). So a one-click re-verify is
+    identical to re-running a hand-written PoC — LLM-free, gated by the same
+    `assert_allows_execution`. Returns the verify_poc result dict (incl. `assurance`,
+    code_present/dynamic for an isolated reproducer replay)."""
+    from hexgraph.policy import assert_allows_execution
+
+    assert_allows_execution()  # the same exec gate fuzzing/poc already require
+    raw = cas.get(project, reproducer_ref)
+    if raw is None:
+        raise ValueError(f"reproducer {reproducer_ref!r} not found in CAS")
+    # The reproducer bytes drive the target directly. A compiled fuzzer/harness reads
+    # its input from stdin in our harness template; the `crash` oracle (signal/ASan
+    # abort) is unforgeable — the process really died on this input.
+    spec = {
+        "stdin": raw.decode("latin-1"),  # exact bytes, round-trips through subprocess input
+        "oracle": {"type": "crash"},
+        "scope": "harness",  # an isolated reproducer replay → code_present/dynamic
+    }
+    return verify_poc(session, project, target, spec, runner=runner)
+
+
+def verify_finding_reproducer(session: Session, project: Project, finding,
+                              *, runner: Executor | None = None) -> dict:
+    """Re-verify a `fuzz_crash` finding by replaying its stored reproducer (read from
+    `evidence.extra.fuzz.reproducer_ref`). The one-click re-verify for a fuzz finding —
+    no LLM, the assurance ladder applies. Returns the verification result."""
+    ev = finding.evidence_json or {}
+    fuzz = (ev.get("extra") or {}).get("fuzz") or {}
+    ref = fuzz.get("reproducer_ref")
+    if not ref:
+        raise ValueError("this finding has no stored reproducer (reproducer_ref) to re-verify")
+    target = session.get(Target, finding.target_id)
+    if target is None:
+        raise ValueError("finding target not found")
+    return verify_reproducer(session, project, target, reproducer_ref=ref,
+                             function=ev.get("function"), runner=runner)
 
 
 def _generate_spec(session: Session, project: Project, target: Target, task: Task):

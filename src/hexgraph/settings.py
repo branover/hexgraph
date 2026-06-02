@@ -38,12 +38,28 @@ DEFAULTS: dict[str, Any] = {
         "fuzzing": {
             # OFF by default: enabling this flips the analysis policy to allow
             # execution (still --network none, capped, timed, disposable). The
-            # static-only invariant holds unless a user opts in. (engine: libFuzzer)
+            # static-only invariant holds unless a user opts in. Phase 3 makes
+            # fuzzing coverage-guided + first-class: AFL++ (afl-clang-lto + CmpLog +
+            # persistent mode) on the Phase-2 instrumented derived target, or libFuzzer.
             "enabled": False,
             "max_total_time": 60,        # seconds of actual fuzzing per run
             "max_len": 4096,             # max generated input size (bytes)
             "max_crashes": 10,           # cap on unique-crash findings per run
             "timeout": 300,              # sandbox wall-clock (>= compile + max_total_time)
+            # The DEDICATED fuzz image (AFL++/libFuzzer/llvm-symbolizer/afl-cov/gdb +
+            # an exploitable-style classifier, design §5.4 D4). NEVER the shared sandbox
+            # image; set HEXGRAPH_FUZZ_IMAGE to override (worktree: a private tag).
+            "image": "hexgraph-fuzz:latest",
+            # The user-tunable ResourceSpec DEFAULT (design §5.8a) — a global default a
+            # campaign inherits unless it carries a per-campaign override. `unconstrained`
+            # lifts mem/cpu/pids ONLY so a campaign can use the whole machine; it is a
+            # RESOURCE knob, NOT a security/policy relaxation (the sandbox security flags
+            # — --network none, cap-drop, no-new-privileges, read-only, user — always
+            # hold, regardless of the ResourceSpec; ResourceSpec NEVER touches policy.py).
+            "resources": {
+                "mem": "2g", "cpus": 2.0, "pids": 256, "tmpfs": "512m",
+                "timeout": 300, "unconstrained": False,
+            },
         },
         "poc": {
             # OFF by default. Like fuzzing, enabling this relaxes the static-only
@@ -146,6 +162,15 @@ ALLOWED: dict[str, tuple[Any, set | None]] = {
     "features.fuzzing.max_len": (int, None),
     "features.fuzzing.max_crashes": (int, None),
     "features.fuzzing.timeout": (int, None),
+    "features.fuzzing.image": (str, None),
+    # The user-tunable ResourceSpec default (design §5.8a). `unconstrained` lifts
+    # mem/cpu/pids ONLY — never a security/policy relaxation (see DEFAULTS comment).
+    "features.fuzzing.resources.mem": (str, None),
+    "features.fuzzing.resources.cpus": ((int, float), None),
+    "features.fuzzing.resources.pids": (int, None),
+    "features.fuzzing.resources.tmpfs": (str, None),
+    "features.fuzzing.resources.timeout": (int, None),
+    "features.fuzzing.resources.unconstrained": (bool, None),
     "features.poc.enabled": (bool, None),
     "features.poc.timeout": (int, None),
     "features.build.enabled": (bool, None),

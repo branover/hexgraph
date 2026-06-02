@@ -1,0 +1,88 @@
+# HexGraph fuzz image (design §5.4, KEY DECISION D4 — a DEDICATED image, never the
+# shared hexgraph-sandbox). It carries the coverage-guided fuzzing toolchain so a
+# campaign can fuzz the Phase-2 INSTRUMENTED derived target with real coverage feedback:
+#   - AFL++ (afl-clang-lto / afl-clang-fast — LTO + collision-free coverage + CmpLog
+#     `-c` for magic-byte/memcmp gating + persistent mode), afl-cmin / afl-tmin
+#     (corpus minimization + reproducer minimization).
+#   - libFuzzer runtimes (clang -fsanitize=fuzzer) — the back-compat / alternative engine.
+#   - llvm-symbolizer — RESOLVES the Phase-0 symbolization limitation, so ASan frames
+#     symbolize to function:line → symbolized cross-build dedup + function attribution.
+#   - afl-cov / llvm-cov — coverage reporting on a campaign.
+#   - gdb + an `exploitable`-style classifier helper (the deterministic classifier lives
+#     in fuzz_probe.classify_exploitability; gdb is here for deeper triage).
+#   - qemu-user — the foreign-arch path (binary_only qemu-mode is Phase 5; staged here).
+#
+# Build:  docker build -f Dockerfile.fuzz -t hexgraph-fuzz:latest .
+#         WORKTREE DISCIPLINE: for local testing build a PRIVATE tag and point the env
+#         override at it — NEVER clobber a shared tag:
+#           docker build -f Dockerfile.fuzz -t hexgraph-fuzz:wt-fuzz-phase3 .
+#           export HEXGRAPH_FUZZ_IMAGE=hexgraph-fuzz:wt-fuzz-phase3
+#
+# Run ONLY via sandbox/runner.py — same hardening as every sandbox container:
+# --network none, --read-only rootfs, tmpfs /scratch (rw,exec), --cap-drop ALL,
+# --no-new-privileges, --user 1000, mem/cpu/pids caps (a ResourceSpec; `unconstrained`
+# lifts mem/cpu/pids ONLY — never a security flag), a hard timeout. A bigger image is
+# NOT a weaker box. Probes (fuzz_probe.py / afl_probe.py) are MOUNTED from the install
+# at run time — editing a probe needs no rebuild; only this toolchain change does.
+FROM debian:bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Core compiler + sanitizer/coverage toolchain (clang/LLVM carries libFuzzer,
+# SanitizerCoverage, llvm-symbolizer, llvm-cov), build frontends, gdb for triage,
+# and qemu-user for the staged foreign-arch path.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        clang \
+        llvm \
+        lld \
+        libclang-rt-dev \
+        clang-tools \
+        make \
+        cmake \
+        ninja-build \
+        pkg-config \
+        gcc \
+        g++ \
+        libc6-dev \
+        gdb \
+        file \
+        binutils \
+        ca-certificates \
+        python3 \
+        python3-pip \
+        qemu-user \
+        qemu-user-static \
+        xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# AFL++ — the coverage-guided engine (afl-clang-lto/fast + CmpLog + persistent mode,
+# afl-cmin / afl-tmin / afl-cov / afl-showmap). Prefer the apt package; fall back to a
+# source build only if needed (kept best-effort so the image still serves libFuzzer/
+# SanCov builds if AFL++ is unavailable on a given base — the graceful-degrade rule).
+RUN apt-get update \
+    && (apt-get install -y --no-install-recommends afl++ \
+        || apt-get install -y --no-install-recommends aflplusplus \
+        || echo "WARN: AFL++ not in apt; afl-* unavailable (libFuzzer/SanCov still work)") \
+    && rm -rf /var/lib/apt/lists/*
+
+# afl-cov (line/function coverage reporting from afl's queue) — best-effort.
+RUN (pip3 install --no-cache-dir --break-system-packages afl-cov 2>/dev/null \
+        || echo "WARN: afl-cov not installed; coverage reporting degrades to llvm-cov") \
+    || true
+
+# desock / preeny + boofuzz are STAGED for Phase 5 (network fuzzing) — installed
+# best-effort so the layer exists; not exercised in Phase 3.
+RUN (pip3 install --no-cache-dir --break-system-packages boofuzz 2>/dev/null \
+        || echo "WARN: boofuzz not installed (Phase 5 network fuzzing)") \
+    || true
+
+# Bake the probe scripts into the image (mounted-over at run time, except NO_MOUNT mode).
+COPY src/hexgraph/sandbox/probes/ /opt/hexgraph/
+
+# Drop privileges: the fuzz probe runs as the unprivileged analyst (uid 1000),
+# matching the runner's --user 1000. Source/harness is RO; output only to /out.
+RUN useradd --create-home --uid 1000 analyst
+USER analyst
+
+ENTRYPOINT []
+CMD ["afl-fuzz", "--version"]

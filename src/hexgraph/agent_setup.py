@@ -231,6 +231,36 @@ recorded recipe in the sandbox. This is the analogue of "you direct, HexGraph ru
   deps-bundled tarball) and retry. Building needs **`features.build`** enabled in Settings (its own
   gate, separate from executing the target).
 
+## 2h. Coverage-guided fuzz CAMPAIGNS (AFL++ + libFuzzer) — you direct, HexGraph runs
+A **campaign** is a long-lived, detached fuzz job — the SOTA upgrade over the single
+`fuzzing` task. You NEVER run `afl-fuzz`; you REQUEST a campaign and HexGraph spawns +
+reaps a hardened sandbox container.
+- **`start_fuzz_campaign(target_id, surface?, engine?, function?, max_total_time?, max_crashes?, instances?, resources?)`**
+  returns immediately with `{id, status:'running'}`. The `Fuzzer` seam picks the engine by
+  attack **surface**: fuzz a **Phase-2 instrumented derived target** (a `build_target` rebuild,
+  with source) → **AFL++** (`afl-clang-lto` + persistent mode) on the code under test = **real
+  coverage** (vs. coverage-blind black-box on a plain `.so`). So the high-value loop is:
+  `import_source_tree` → `build_target` (→ instrumented derived target) → `start_fuzz_campaign`
+  on THAT target. `instances` = AFL++ master + N-1 secondaries (capped per host).
+- **Poll `fuzz_status(campaign_id)`** for live stats (execs, edges_covered, crash_count, coverage)
+  and **`list_fuzz_artifacts(campaign_id)`** for the deduplicated crashes. Crashes STREAM as they
+  happen — an early crash in a 6-hour run surfaces in minutes; you don't wait for the budget.
+  Each unique crash becomes a **`fuzz_crash` finding** (one representative per normalized
+  stack-hash bucket + a `dupe_count`) with a minimized reproducer, a deterministic exploitability
+  rating, and the coverage flag — all on `evidence.extra.fuzz`.
+- **`stop_fuzz_campaign(campaign_id)`** preserves the corpus (resumable). Campaigns are
+  **crash-safe**: they survive a server restart (the reaper re-attaches).
+- **A crash is a re-runnable PoC.** `minimize_artifact(artifact_id)` replays the stored, minimized
+  reproducer against the campaign's instrumented harness binary IN THE SANDBOX and reports
+  `{verified, assurance}` via the unforgeable `crash` oracle — LLM-free, one click. So a
+  `fuzz_crash` climbs the assurance ladder the same way a hand-written PoC does (`code_present /
+  dynamic` — lab-confirmed).
+- **Resource limits are a `resources` knob** (`{mem, cpus, pids, tmpfs, timeout, unconstrained}`,
+  defaulted from Settings, per-campaign override). `unconstrained:true` lets a campaign use the
+  whole machine — but it lifts mem/cpu/pids ONLY; it is **NOT** a security relaxation (the sandbox
+  still runs `--network none`, cap-drop, no-new-privileges, read-only, non-root). Needs
+  **`features.fuzzing`** (or `features.poc`) enabled — the same exec gate, no new permission.
+
 ## 3. Record AS YOU GO — write to the graph BEFORE you've confirmed things
 Capture the moment you have a lead, not after you've proven it. The graph is a
 live worklog: a suspicion recorded early is visible to the analyst and other
