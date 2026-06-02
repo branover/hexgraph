@@ -13,7 +13,24 @@ import os
 import sys
 
 OVERRIDE_ENV = "HEXGRAPH_I_KNOW_WHAT_IM_DOING"
+# Set inside the official app container (docker/app.Dockerfile + docker-compose.yml). The
+# container binds 0.0.0.0 so it can receive traffic Docker forwards from the published port,
+# but the host-side loopback guarantee is preserved at the PUBLISH boundary: compose maps
+# `127.0.0.1:8765:8765`, so the only thing that can reach the container is the host's own
+# loopback. Binding 0.0.0.0 inside that namespace is therefore safe, and this flag lets the
+# assertion accept it WITHOUT widening the Host-header allowlist to a wildcard (unlike the
+# operator override) — the anti-DNS-rebinding defense stays intact.
+CONTAINER_ENV = "HEXGRAPH_IN_CONTAINER"
+# The only non-loopback bind the container mode accepts: the "all interfaces" wildcard that
+# lets Docker's published-port forwarder reach the service. Any other non-loopback host still
+# raises even in container mode (it would imply a deliberate, unguarded external bind).
+_CONTAINER_BIND = "0.0.0.0"
 _LOOPBACK_NAMES = {"localhost"}
+
+
+def _in_container_bind(host: str) -> bool:
+    """True when we're the official app container binding the published-port wildcard."""
+    return host == _CONTAINER_BIND and os.environ.get(CONTAINER_ENV) == "1"
 
 
 def is_loopback(host: str) -> bool:
@@ -70,8 +87,13 @@ def host_allowed(host_header: str, bind_host: str | None = None) -> bool:
 
 
 def assert_loopback(host: str) -> None:
-    """Raise unless `host` is loopback or the override env is set (warn even then)."""
+    """Raise unless `host` is loopback, we're the official container binding the published-port
+    wildcard (see CONTAINER_ENV), or the operator override is set (warn even then)."""
     if is_loopback(host):
+        return
+    if _in_container_bind(host):
+        # Recognized container mode: 0.0.0.0 inside a namespace whose only ingress is the
+        # host-loopback-published port. No warning — this is the supported compose path.
         return
     if os.environ.get(OVERRIDE_ENV) == "1":
         print(

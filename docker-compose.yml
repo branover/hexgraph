@@ -1,0 +1,61 @@
+# Run the whole HexGraph workbench with one command:
+#
+#     docker compose up --build      # → http://127.0.0.1:8765   (or: just up)
+#
+# This is the OPTIONAL containerized path. The primary/dev path is still the host pip
+# install (`just setup` → `just serve`). See the "Run with Docker" section of README.md.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# SECURITY NOTE — the Docker socket mount (read this).
+#
+# HexGraph does all hostile-target handling inside disposable sibling containers (the
+# sandbox / build / fuzz / rehost images). To launch those, the app needs to talk to a
+# Docker daemon, so we bind-mount the HOST daemon's socket (/var/run/docker.sock) into the
+# app container ("Docker-out-of-Docker"). The siblings then run on the host daemon, fully
+# isolated (--network none, RO rootfs, caps, timeouts) exactly as they do in the pip path.
+#
+# Mounting the daemon socket gives the app container the ability to drive the host's Docker,
+# which is effectively host-root-equivalent access. This is an INTENTIONAL trade-off for a
+# single-user, local, self-hosted tool that you run on your own machine. It is NOT a
+# hardened or multi-tenant deployment posture — do not expose this stack to untrusted users
+# or networks.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  app:
+    image: hexgraph-app:latest
+    build:
+      context: .
+      dockerfile: docker/app.Dockerfile
+    # Publish on the HOST LOOPBACK ONLY. The "127.0.0.1:" prefix is load-bearing: it keeps
+    # the product's local-only guarantee at the publish boundary. NEVER drop it to a bare
+    # "8765:8765" (that would bind 0.0.0.0 on the host and expose the workbench to the LAN).
+    ports:
+      - "127.0.0.1:8765:8765"
+    environment:
+      # The app binds 0.0.0.0 INSIDE the container so it can receive the traffic Docker
+      # forwards from the published port. That is safe because the only ingress to the
+      # container is the host-loopback-published port above. HEXGRAPH_IN_CONTAINER=1 makes
+      # the loopback startup assertion accept this specific 0.0.0.0 bind WITHOUT widening the
+      # anti-DNS-rebinding Host-header allowlist (unlike the I_KNOW_WHAT_IM_DOING override).
+      HEXGRAPH_IN_CONTAINER: "1"
+      HEXGRAPH_HOST: "0.0.0.0"
+      HEXGRAPH_PORT: "8765"
+      HEXGRAPH_HOME: "/data"
+      HEXGRAPH_LLM_BACKEND: "${HEXGRAPH_LLM_BACKEND:-mock}"
+      # BYOK passthrough: forwarded from your shell if set. A key is NEVER baked into the
+      # image. Leave unset to run the zero-cost mock backend. For Claude Code / config.toml
+      # paths, also see the optional config.toml mount below.
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+    volumes:
+      # Host Docker daemon socket — see the SECURITY NOTE above.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Durable runtime state: the SQLite project DB + projects/ + settings.json.
+      - hexgraph-data:/data
+      # OPTIONAL: mount your host config.toml (BYOK key / prefs) read-only. Uncomment if you
+      # keep your key there instead of in ANTHROPIC_API_KEY. The image never contains a key.
+      # - ${HOME}/.hexgraph/config.toml:/data/config.toml:ro
+    restart: unless-stopped
+
+volumes:
+  hexgraph-data:

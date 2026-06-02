@@ -1,6 +1,6 @@
 # HexGraph analysis sandbox (SPEC §3, §7). One image with the static-analysis
 # toolchain. Run ONLY via sandbox/runner.py with --network none + resource caps.
-# Build:  docker build -f Dockerfile.sandbox -t hexgraph-sandbox:latest .
+# Build:  docker build -f docker/sandbox.Dockerfile -t hexgraph-sandbox:latest .  (context = repo root)
 #         add --build-arg WITH_GHIDRA=1 to include Ghidra headless (large).
 FROM debian:bookworm-slim
 
