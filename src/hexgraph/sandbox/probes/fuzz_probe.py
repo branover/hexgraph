@@ -39,6 +39,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 SCRATCH = os.environ.get("TMPDIR", "/scratch")
 
@@ -407,14 +408,31 @@ def main() -> int:
     candidates = [s for s in seeds if os.path.isfile(s)] + artifacts[: max_crashes * 4]
     crashes = []
     seen: dict[str, int] = {}  # dedup_key → index into crashes
+    # Minimization is bounded by a CUMULATIVE wall-clock budget so the triage phase
+    # never blows the sandbox's hard timeout (DEFAULT_TIMEOUT 300s): max_total_time of
+    # fuzzing + per-crash repro + N×minimize must fit. We give minimization at most a
+    # third of the remaining budget below the 300s ceiling (leaving headroom for
+    # repro/IO), split as a per-crash cap; once exhausted we still record every unique
+    # crash, just without a minimized reproducer (best-effort, never fatal).
+    minimize_budget = max(0, int((300 - int(max_total_time)) * 0.33))
+    minimize_deadline = time.monotonic() + minimize_budget
     for path in candidates:
         data = open(path, "rb").read()
         sha = hashlib.sha256(data).hexdigest()
-        repro = subprocess.run([FUZZER, path], capture_output=True, text=True, cwd=outdir)
-        report = (repro.stdout or "") + (repro.stderr or "")
+        try:
+            repro = subprocess.run([FUZZER, path], capture_output=True, text=True, cwd=outdir,
+                                   timeout=60)
+        except subprocess.TimeoutExpired:
+            # A single input that hangs the replay is a finding (a hang/DoS), but we
+            # can't symbolize it; treat it as a timeout crash so it's not lost, and
+            # never let it kill the whole triage phase.
+            report, rc = "libFuzzer: timeout\n", 1
+        else:
+            report = (repro.stdout or "") + (repro.stderr or "")
+            rc = repro.returncode
         # libFuzzer exits nonzero on a crash/leak/timeout; a clean replay (e.g. a
         # benign seed) is not a finding.
-        if repro.returncode == 0:
+        if rc == 0:
             continue
         info = parse_asan(report)
         key = dedup_key(info["kind"], report)
@@ -424,7 +442,12 @@ def main() -> int:
         if len(seen) >= max_crashes:
             continue
         expl = classify_exploitability(report, info["kind"])
-        min_sha, min_size = _minimize(FUZZER, path, outdir, minimize_runs)
+        remaining = minimize_deadline - time.monotonic()
+        if remaining >= 5:
+            min_sha, min_size = _minimize(FUZZER, path, outdir, minimize_runs,
+                                          timeout=min(120, int(remaining)))
+        else:
+            min_sha, min_size = None, None  # budget exhausted — keep the crash, skip minimize
         seen[key] = len(crashes)
         crashes.append({
             **info,
@@ -443,18 +466,20 @@ def main() -> int:
                   "max_total_time": max_total_time, "crash_count": len(crashes), "crashes": crashes})
 
 
-def _minimize(fuzzer: str, crash_path: str, outdir: str, runs: int) -> tuple[str | None, int | None]:
+def _minimize(fuzzer: str, crash_path: str, outdir: str, runs: int,
+              *, timeout: int = 120) -> tuple[str | None, int | None]:
     """Shrink a crashing input with libFuzzer's own `-minimize_crash=1 -runs=R`
     (no AFL++ needed). libFuzzer writes a successively smaller input to the
     `-exact_artifact_path`; we return the sha256 + size of the result when it
-    actually shrank, else (None, None) (best-effort, never fatal)."""
+    actually shrank, else (None, None) (best-effort, never fatal). `timeout` bounds
+    this single minimize so the cumulative triage stays under the sandbox wall-clock."""
     try:
         exact = os.path.join(outdir, "minimized-current")
         before = set(glob.glob(os.path.join(outdir, "minimized-from-*")))
         subprocess.run(
             [fuzzer, "-minimize_crash=1", f"-runs={int(runs)}",
              f"-exact_artifact_path={exact}", crash_path],
-            capture_output=True, text=True, cwd=outdir, timeout=120,
+            capture_output=True, text=True, cwd=outdir, timeout=timeout,
         )
         candidates = [
             p for p in glob.glob(os.path.join(outdir, "minimized-from-*")) if p not in before
