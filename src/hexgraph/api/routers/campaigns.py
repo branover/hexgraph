@@ -94,6 +94,27 @@ def api_start_campaign(project_id: str, body: CampaignCreate):
             raise HTTPException(404, "target not found in this project")
         surface = body.surface or C.infer_surface(t)
         source, function, sources = _resolve_target_inputs(s, p, t)
+        # Fail FAST with a human reason when there is simply nothing to fuzz, BEFORE we
+        # spin up a campaign row / container only to fail in the fuzzer's prepare() with
+        # a terse internal message. Each surface has its own minimum input:
+        #   • source_lib  → an instrumented build's fuzz_target_sources or a harness
+        #   • binary_only → a target ELF on disk (target.path or a derived build)
+        #   • network     → a live host/port (a rehosted/remote/web surface) — not a file
+        if surface in ("source_lib", "file_format") and not source and not sources:
+            raise HTTPException(
+                400,
+                f"Nothing to fuzz on “{t.name}” yet: this target has no fuzz "
+                "harness or instrumented build. Generate a harness (run a "
+                "harness_generation task on a function), or build it from source with "
+                "fuzzing instrumentation, then start the campaign.",
+            )
+        if surface == "binary_only" and not (body.net and body.net.host) and not (t.path):
+            raise HTTPException(
+                400,
+                f"Nothing to fuzz on “{t.name}” yet: no target binary is on "
+                "disk for binary-only fuzzing. Add the executable as a target (or build "
+                "one), then start the campaign.",
+            )
         net = body.net
         spec = FuzzCampaignSpec(
             target_id=t.id, surface=surface, engine=body.engine,

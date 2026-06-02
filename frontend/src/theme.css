@@ -176,6 +176,21 @@ code { font-family: var(--mono); }
 .menu .sub { padding: 6px 9px; }
 .menu select { width: 100%; }
 
+/* Expressive Run menu: each task row carries a title + one-line summary; hovering a row
+   reveals a richer popover (.task-pop) anchored to the menu's side. */
+.menu.task-menu { padding: 5px; }
+.menu.task-menu .task-mi { align-items: flex-start; gap: 9px; padding: 8px 9px; }
+.menu.task-menu .task-mi > svg { margin-top: 1px; color: var(--accent, #7aa2ff); flex: 0 0 auto; }
+.task-mi-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.task-mi-label { font-weight: 600; font-size: 12.5px; line-height: 1.2; }
+.task-mi-sum { font-size: 11px; color: var(--muted); line-height: 1.3; }
+.task-pop { position: fixed; z-index: 201; width: 280px; background: var(--surface-2);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm); box-shadow: var(--sh-2);
+  padding: 10px 11px; pointer-events: none; }
+.task-pop-h { display: flex; align-items: center; gap: 7px; font-weight: 600; font-size: 12.5px; margin-bottom: 6px; }
+.task-pop-h > svg { color: var(--accent, #7aa2ff); }
+.task-pop-b { font-size: 11.5px; line-height: 1.5; color: var(--muted); }
+
 /* toolbar */
 .toolbar { display: flex; align-items: center; gap: 8px; padding: 9px 11px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .input { display: flex; align-items: center; gap: 7px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 5px 10px; color: var(--fg); }
