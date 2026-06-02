@@ -571,15 +571,29 @@ def _collect_coverage(clang: str, harness: str, target_sources: list[str], inc_f
             capture_output=True, text=True, timeout=180)
         if build.returncode != 0 or not os.path.isfile(covbin):
             return None
-        profraw = os.path.join(outdir, "cov.profraw")
-        # Replay the accumulated corpus once (-runs=0 → run every input then exit).
-        subprocess.run([covbin, "-runs=0", corpus_dir],
-                       capture_output=True, text=True, cwd=outdir, timeout=120,
-                       env={**os.environ, "LLVM_PROFILE_FILE": profraw})
-        if not os.path.isfile(profraw):
+        # Replay the corpus PER FILE (each in its own process) rather than `-runs=0` over
+        # the whole dir: a single crashing input (e.g. a copied seed that crashes) would
+        # otherwise abort the one-shot replay and truncate the profile, suppressing the whole
+        # map. Per-file `%m`-merge-pool profraws are robust to a mid-corpus crash — a
+        # crashing input contributes whatever it covered and the rest still run.
+        corpus_files = [p for p in glob.glob(os.path.join(corpus_dir, "*")) if os.path.isfile(p)]
+        if not corpus_files:
+            return None
+        profpat = os.path.join(outdir, "cov-%m.profraw")
+        deadline = time.monotonic() + 100
+        for cf in corpus_files:
+            if time.monotonic() > deadline:
+                break
+            try:
+                subprocess.run([covbin, "-runs=1", cf], capture_output=True, cwd=outdir,
+                               timeout=20, env={**os.environ, "LLVM_PROFILE_FILE": profpat})
+            except subprocess.TimeoutExpired:
+                continue  # a hang on one input must not suppress coverage of the rest
+        profraws = glob.glob(os.path.join(outdir, "cov-*.profraw"))
+        if not profraws:
             return None
         profdata = os.path.join(outdir, "cov.profdata")
-        merge = subprocess.run([profdata_tool, "merge", "-sparse", profraw, "-o", profdata],
+        merge = subprocess.run([profdata_tool, "merge", "-sparse", *profraws, "-o", profdata],
                                capture_output=True, text=True, timeout=60)
         if merge.returncode != 0 or not os.path.isfile(profdata):
             return None
