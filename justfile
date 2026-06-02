@@ -55,6 +55,7 @@ setup yes="0": install ui
 
 # Create the virtualenv (.venv). Rerun only if you delete .venv.
 [group('setup')]
+[private]
 venv:
     python3 -m venv .venv
 
@@ -80,6 +81,7 @@ serve: ui-check
 # so a plain `just serve` always ships current UI without paying a full npm build when
 # nothing changed. Run `just ui` to force an unconditional rebuild.
 [group('run')]
+[private]
 ui-check:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -157,6 +159,7 @@ test:
 # (they silently skip) — this recipe refuses to "pass" without them. Build the image first
 # with `just sandbox-build`. Override with allow_no_docker=1 only to deliberately run offline.
 [group('test')]
+[private]
 test-ci allow_no_docker="0":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -178,12 +181,14 @@ test-ci allow_no_docker="0":
 
 # Scored real-key detection test (opt-in): needs ANTHROPIC_API_KEY + the sandbox image; cassette-backed so CI replays at $0.
 [group('test')]
+[private]
 test-live:
     {{py}} -m pytest -q tests/test_p8_realkey.py -k real_key -rs
 
 # REBUILD WHEN you change a fixture source under tests/fixtures/.
 # (Re)build the test target binaries/firmware under tests/fixtures (needs a C toolchain).
 [group('test')]
+[private]
 fixtures:
     tests/fixtures/build.sh
     tests/fixtures/vuln_fw/build.sh
@@ -204,6 +209,7 @@ demo:
 # hero shots + the per-feature doc captures. `--reset` rebuilds it. Then `just serve` to view,
 # or `just capture` to regenerate docs/images/. Enables fuzzing/poc/network/build features.
 [group('demo')]
+[private]
 showcase *args:
     HEXGRAPH_FUZZER=mock {{py}} scripts/seed_showcase.py {{args}}
 
@@ -212,6 +218,7 @@ showcase *args:
 # port, captures the hero + per-feature shots, and tears down. Needs the dev-only Playwright
 # browser: `.venv/bin/pip install playwright && .venv/bin/playwright install chromium`.
 [group('demo')]
+[private]
 capture:
     HEXGRAPH_FUZZER=mock {{py}} scripts/capture_screenshots.py
 
