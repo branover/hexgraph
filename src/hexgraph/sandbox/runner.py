@@ -219,6 +219,15 @@ class SandboxRunner:
         if allow_network:
             _assert_network_gate(network_gate)
         if artifact is not None:
+            # Defense-in-depth: an empty/whitespace artifact path is a path-less SURFACE
+            # target (web_app/service/remote, `path=""`) accidentally routed onto the byte
+            # path. `Path("").resolve()` is the cwd, so the old check produced a baffling
+            # "artifact not found: <repo root>". Refuse it with a clear, actionable error.
+            if not str(artifact).strip():
+                raise SandboxError(
+                    "this target has no byte artifact — it's a Channel-reached surface "
+                    "(web_app/service/remote); use surface recon / a network probe, not the "
+                    "byte sandbox")
             artifact = Path(artifact).resolve()
             if not artifact.is_file():
                 raise SandboxError(f"artifact not found: {artifact}")
@@ -368,6 +377,15 @@ class SandboxRunner:
             if not current_policy().allow_network:
                 raise PolicyViolation("network egress is not permitted by the active policy")
         if artifact is not None:
+            # Defense-in-depth: an empty/whitespace artifact path is a path-less SURFACE
+            # target (web_app/service/remote, `path=""`) accidentally routed onto the byte
+            # path. `Path("").resolve()` is the cwd, so the old check produced a baffling
+            # "artifact not found: <repo root>". Refuse it with a clear, actionable error.
+            if not str(artifact).strip():
+                raise SandboxError(
+                    "this target has no byte artifact — it's a Channel-reached surface "
+                    "(web_app/service/remote); use surface recon / a network probe, not the "
+                    "byte sandbox")
             artifact = Path(artifact).resolve()
             if not artifact.is_file():
                 raise SandboxError(f"artifact not found: {artifact}")

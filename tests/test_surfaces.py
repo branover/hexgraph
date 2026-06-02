@@ -94,6 +94,72 @@ def test_surface_recon_via_worker_task(hg_home):
         assert recon and "Web surface mapped: 2 endpoint(s)" in recon[0].title
 
 
+def test_generic_recon_on_web_app_routes_to_surface_recon(hg_home):
+    """Regression: running the GENERIC byte `recon` task on a path-less web_app surface
+    must route to surface recon (materialise the route spec), NOT crash on the byte path
+    with `SandboxError: artifact not found: <cwd>` (Path("").resolve() == cwd)."""
+    from hexgraph.db.models import Finding, Node, NodeType
+
+    with session_scope() as s:
+        p = create_project(s, name="surf-recon-route")
+        surface = register_web_surface(s, p, "http://10.0.0.9", endpoints=SPEC)
+        task = create_task(s, project=p, target_id=surface.id, type="recon")
+        tid, pid = task.id, p.id
+
+    # Must succeed via surface recon — no executor/Docker, no artifact-not-found.
+    assert run_task_sync(tid) == "succeeded"
+    with session_scope() as s:
+        eps = s.query(Node).filter(Node.project_id == pid,
+                                   Node.node_type == NodeType.endpoint.value).count()
+        assert eps == 2  # the route spec was materialised
+        recon = [f for f in s.query(Finding).filter_by(project_id=pid).all()
+                 if f.finding_type == "recon"]
+        assert recon and "Web surface mapped" in recon[0].title
+
+
+def test_generic_recon_on_socket_surface_fails_cleanly(hg_home):
+    """A `service`/`remote` surface has no offline recon probe — the generic `recon` task
+    must fail with a CLEAR error (not byte recon's confusing artifact-not-found)."""
+    from hexgraph.db.models import Project, Task, TaskStatus
+    from hexgraph.engine.surfaces import register_socket_target
+    from hexgraph.engine.worker import _dispatch
+
+    with session_scope() as s:
+        p = create_project(s, name="surf-recon-sock")
+        sock = register_socket_target(s, p, "127.0.0.1", 9000)
+        task = create_task(s, project=p, target_id=sock.id, type="recon")
+        tid = task.id
+
+    # The full task path marks the task failed (no Docker, no artifact-not-found crash).
+    assert run_task_sync(tid) == "failed"
+    with session_scope() as s:
+        assert s.get(Task, tid).status == TaskStatus.failed
+
+    # The dispatch raises a clear, actionable error naming the surface kind.
+    with session_scope() as s:
+        t = s.get(Task, tid)
+        proj = s.get(Project, t.project_id)
+        tgt = s.get(Target, t.target_id)
+        with pytest.raises(NotImplementedError) as ei:
+            _dispatch(s, proj, tgt, t)
+        msg = str(ei.value)
+        assert "service surface" in msg and "artifact not found" not in msg
+
+
+def test_byte_sandbox_refuses_empty_artifact(hg_home):
+    """Defense-in-depth: the byte sandbox runner refuses an empty/path-less artifact with a
+    clear surface error instead of resolving '' → cwd → 'artifact not found: <repo root>'."""
+    from hexgraph.sandbox.runner import SandboxError, SandboxRunner
+
+    runner = SandboxRunner()
+    for empty in ("", "   "):
+        with pytest.raises(SandboxError) as ei:
+            runner.run_probe("recon_probe.py", empty)
+        msg = str(ei.value)
+        assert "no byte artifact" in msg and "surface" in msg
+        assert "artifact not found" not in msg
+
+
 def test_endpoint_and_param_are_hand_authorable(hg_home):
     """A4/A3 UX: endpoint and param are first-class, target-bound, hand-authorable
     node types (an analyst can add a route/field the same way as a function node)."""

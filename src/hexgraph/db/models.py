@@ -49,6 +49,13 @@ class TargetKind(str, enum.Enum):
     unknown = "unknown"
 
 
+# A *surface* target is a reachable surface reached via a Channel (web_app/service/remote),
+# NOT bytes at rest: it has `path=""` and is described by `metadata_json["channel"]`. Byte
+# tasks (recon over a file, decompile, binary PoC) must never run their byte path against
+# one — they route to the surface-appropriate probe instead. (design-dynamic-surfaces.md)
+SURFACE_KINDS = frozenset({TargetKind.web_app, TargetKind.service, TargetKind.remote})
+
+
 class NodeType(str, enum.Enum):
     """Sub-file / conceptual node kinds (P1 materializes function/symbol/string;
     struct/hypothesis/pattern/task arrive in later phases)."""

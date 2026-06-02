@@ -12,7 +12,7 @@ import asyncio
 
 from sqlalchemy.orm import Session
 
-from hexgraph.db.models import Project, Target, Task, TaskStatus
+from hexgraph.db.models import SURFACE_KINDS, Project, Target, Task, TargetKind, TaskStatus
 from hexgraph.db.session import session_scope
 from datetime import datetime, timezone
 
@@ -24,6 +24,13 @@ from hexgraph.sandbox.executor import get_executor
 
 def _dispatch(session: Session, project: Project, target: Target, task: Task) -> None:
     if task.type == "recon":
+        # A SURFACE target (web_app/service/remote) has no bytes at rest — it's reached via
+        # a Channel, with `path=""`. Byte recon (recon_probe over a file) would resolve the
+        # empty path to the cwd and crash with a confusing "artifact not found". Route the
+        # generic `recon` task to the surface-appropriate analysis instead.
+        if target.kind in SURFACE_KINDS or not (target.path or "").strip():
+            _dispatch_surface_recon(session, project, target, task)
+            return
         execute_recon(session, project, target, task, get_executor())
         return
     if task.type == "fuzzing":
@@ -60,6 +67,34 @@ def _dispatch(session: Session, project: Project, target: Target, task: Task) ->
         execute_llm_task(session, project, target, task)
         return
     raise NotImplementedError(f"unknown task type {task.type!r}")
+
+
+def _dispatch_surface_recon(session: Session, project: Project, target: Target, task: Task) -> None:
+    """Route a generic `recon` task on a path-less SURFACE target to the right analysis.
+
+    A `web_app` maps to deterministic, offline `run_surface_recon` (materialise the route
+    spec → endpoint/param nodes + routes_to handler edges) — the surface analogue of byte
+    recon, no network. A `service`/`remote` surface has no offline deterministic recon
+    probe, so we fail with a clear, actionable error rather than crashing on the byte path."""
+    from hexgraph.engine.surfaces import run_surface_recon
+
+    if target.kind == TargetKind.web_app:
+        run_surface_recon(session, project, target, task)
+        return
+    kind = target.kind.value if isinstance(target.kind, TargetKind) else str(target.kind)
+    if target.kind == TargetKind.service:
+        raise NotImplementedError(
+            f"target {target.name!r} is a {kind} surface (a live network listener, no bytes "
+            "at rest) — 'recon' has no offline probe for it. Use a network fuzzing campaign "
+            "or run_tcp_probe (features.network) to assess it.")
+    if target.kind == TargetKind.remote:
+        raise NotImplementedError(
+            f"target {target.name!r} is a {kind} surface (a live device over SSH/telnet, no "
+            "bytes at rest) — 'recon' has no offline probe for it. Use the remote read-only "
+            "tools (features.remote) to assess it.")
+    raise NotImplementedError(
+        f"target {target.name!r} has no byte artifact (path is empty) and is a {kind} target; "
+        "the 'recon' task only handles byte targets and web_app surfaces.")
 
 
 def run_task_sync(task_id: str) -> str:
