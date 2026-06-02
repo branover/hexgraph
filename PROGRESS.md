@@ -210,6 +210,37 @@ then run the resume verifier, then continue at the next unchecked task.
   `tests/test_fuzz_phase5_e2e.py` (qemu-mode finds a planted crash in a stripped ELF; **boofuzz drops a
   planted-overflow live TCP service via its netns and the reproducer re-verifies** — the blind-network-
   fuzz battle-test path; desock+AFL fuzzes a local server with `--network none`). MCP/API/SKILL updated.
+  **Fuzzing+source Phase 6 DONE** (`docs/design-fuzzing-and-source.md` §7 Phase 6, branch
+  `build/fuzz-phase6`): **remote fuzz environments** — a campaign can run on a user-owned remote
+  Docker host (beefier compute) behind the **Executor seam** with NO fuzzer/builder change.
+  **`RemoteDockerExecutor`** (`sandbox/remote_executor.py`, a `SandboxRunner` subclass) targets
+  **`DOCKER_HOST`** (ssh:// or tcp://+TLS); it REUSES `_hardening_args` so the SAME sandbox boundary
+  (`--network none`/cap-drop/no-new-privileges/read-only/`--user 1000`/caps) holds on the remote —
+  bind-mounts (which don't cross a remote daemon) are replaced by **CAS-staging inputs into a per-run
+  named VOLUME** (probes/artifact/corpus via `docker cp`) + **streaming `/out` back** (`docker cp`,
+  stateless re-attach via container labels so the reaper + a serve restart re-bind by name —
+  crash-safe). The **fuzz-environment concept** is a table (**migration 0015**, applies clean on 0014
+  + round-trips + no autogen drift): `FuzzEnvironment` holds ONLY non-secret metadata (slug id, label,
+  transport, descriptor, a per-env `ResourceSpec` ceiling, cached health); a campaign **selects** one
+  (`local` default) via `engine.fuzz_env.get_campaign_executor` (the single seam point). **Secrets:**
+  the DOCKER_HOST/SSH-key/TLS-certs are read from env (`HEXGRAPH_FUZZ_REMOTE_<ID>_DOCKER_HOST`) or
+  `config.toml [fuzz_remote.<id>]` keyed by the env id — NEVER stored in the DB, NEVER logged (the
+  executor scrubs it from errors), reported presence-only. **Gate:** `features.fuzz_remote` →
+  `policy.assert_allows_fuzz_remote` (fail-closed, default off) — an ORTHOGONAL peer flag (governs
+  WHERE compute runs, never raises the tier ladder), the ONLY place consulted; no engine/task/executor
+  code branches on identity. Every remote launch **audited** to `EgressEvent` (`tool="fuzz_remote"`,
+  non-secret descriptor). Control-plane loopback invariant untouched. An environment **health-check**
+  (reachable + authorized + `hexgraph-fuzz` image present) is surfaced via Settings/API/MCP. API
+  (`/api/fuzz/environments` + `/health`), MCP (`list_fuzz_environments`/`fuzz_environment_health` +
+  `start_fuzz_campaign(environment=)`), UI (a Remote-fuzz-environments Settings card + a Fuzz-modal
+  selector when the gate is on). Tests `tests/test_fuzz_phase6.py` (27 offline + 2 Docker-gated): the
+  gate fail-closed/orthogonal, the **secret never-stored (greps the sqlite file)/never-logged/
+  presence-only** across engine+MCP+API, env registration+health, the seam returns
+  `RemoteDockerExecutor`, ResourceSpec-ceiling fold, error-scrub, campaign-via-remote
+  audited+gated+recorded, local campaigns unchanged, and **the REAL `RemoteDockerExecutor` against the
+  LOCAL daemon-as-remote** (health + CAS-stage-in + run + JSON-back + `/out` stream-back; + a
+  FUZZ_IMAGE-gated whole campaign via local-as-remote). `just test` green (577 offline); `just demo`
+  exits 0.
 - **Entity removal (`engine/removal.py`, migration 0011 `node.archived`):** nodes **soft-archive** —
   `archive_node` hides the node *and* the edges touching it (the graph already skips edges to hidden
   endpoints); re-adding the same node (`get_or_create_node`) or `restore_node` brings it and its edges
@@ -447,6 +478,26 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-02: **Fuzzing+source Phase 6 — remote fuzz environments**
+  ([`docs/design-fuzzing-and-source.md`](docs/design-fuzzing-and-source.md) §7 Phase 6, branch
+  `build/fuzz-phase6`). A campaign can run on a **user-owned remote Docker host** behind the Executor
+  seam with NO fuzzer/builder change. **`RemoteDockerExecutor`** (`sandbox/remote_executor.py`)
+  targets `DOCKER_HOST` (ssh:// or tcp://+TLS), REUSES `_hardening_args` (SAME boundary on the
+  remote), and — since bind-mounts can't cross a remote daemon — **CAS-stages inputs into a per-run
+  named volume + streams `/out` back** via `docker cp` (stateless re-attach via container labels →
+  crash-safe). A **fuzz environment** is a new table (**migration 0015**, applies clean on 0014 +
+  round-trips + no drift): NON-SECRET metadata only (slug id/label/transport/descriptor + a
+  `ResourceSpec` ceiling + cached health). A campaign selects one (`local` default) via
+  `engine.fuzz_env.get_campaign_executor`. **Secret** connection details (DOCKER_HOST/key/certs) come
+  from env (`HEXGRAPH_FUZZ_REMOTE_<ID>_DOCKER_HOST`)/`config.toml [fuzz_remote.<id>]` — never DB/
+  logged, presence-only. **Gate** `features.fuzz_remote` → `assert_allows_fuzz_remote` (fail-closed,
+  orthogonal peer flag, the only place); remote launches **audited** to `EgressEvent`; control plane
+  stays loopback. Health-check (reachable/authorized/image-present) via Settings/API/MCP. API
+  `/api/fuzz/environments` (+ `/health`); MCP `list_fuzz_environments`/`fuzz_environment_health` +
+  `start_fuzz_campaign(environment=)`; UI Settings card + Fuzz-modal selector. Tests
+  `tests/test_fuzz_phase6.py` (27 offline + 2 Docker-gated incl. the REAL executor against the LOCAL
+  daemon-as-remote + a secret-leak grep of the sqlite file). `just test` green (577 offline); `just
+  demo` exits 0. README/SKILL/MCP/PROGRESS/design-doc/ui-backlog updated.
 - 2026-06-02: **Fuzzing+source Phase 4 — the Source/IDE tab full UX + Campaigns/Artifacts triage**
   ([`docs/design-fuzzing-and-source.md`](docs/design-fuzzing-and-source.md) §7 Phase 4, branch
   `build/fuzz-phase4`). The user-facing payoff of Phases 1–3 — mostly frontend + thin API/serializer

@@ -187,6 +187,51 @@ entity (finding, source line, campaign, artifact, node) is addressable through a
 navigation primitive and **deep-linkable** by URL (`?view=source&file=…&line=…`,
 `?tab=campaigns&campaign=…`), so a view is shareable and restored on reload.
 
+### Remote fuzz environments — run a campaign on beefier hardware (`features.fuzz_remote`)
+
+Fuzzing is the one genuinely resource-hungry workload, so a campaign can run on a **Docker host you
+own** instead of your laptop — beefier or unconstrained compute. A **fuzz environment** is a
+registered place a campaign's container runs: `local` (the host daemon, the default) plus N remote
+Docker endpoints. Because the Builder and Fuzzer call HexGraph's **Executor seam**, *building and
+fuzzing run on the remote with no analysis change* — the `RemoteDockerExecutor` stages the build
+context + seed corpus to the remote over `DOCKER_HOST` (CAS-content-addressed, via a named volume)
+and streams crashes/coverage/stats back into your **local graph**, exactly as for a local campaign.
+
+**Trust model — the control plane stays loopback.** The API/UI never leave `127.0.0.1`; the remote
+is *purely a compute backend you own and explicitly authorize* (the same posture as `features.remote`
+for live devices). The **same sandbox boundary applies on the remote** — every container there still
+runs `--network none` (except the gated net-fuzz tier), `--cap-drop ALL`, `--no-new-privileges`,
+`--read-only`, `--user 1000`, and the resource caps. A host you chose is not a weaker box; hostile
+target bytes only ever materialize inside the container. Each remote launch is **audited**
+(`EgressEvent`). Running a campaign on a remote endpoint is gated *only* by `features.fuzz_remote`
+(off by default, fail-closed) — the single place the policy is consulted.
+
+**Register one** in Settings → *Remote fuzz environments* (or `POST /api/fuzz/environments`): give it
+a name (its id is a slug of the name), a transport (`ssh`/`tcp`), and a non-secret descriptor. The
+**connection details are a secret** — read at connect time from env or `config.toml`, **never stored
+in the DB or logged**, shown presence-only:
+
+```bash
+# env (preferred) — keyed by the environment id (e.g. id "fuzzbox"):
+export HEXGRAPH_FUZZ_REMOTE_FUZZBOX_DOCKER_HOST="ssh://you@beefybox"     # SSH control socket
+# or tcp:// + TLS client certs:
+#   HEXGRAPH_FUZZ_REMOTE_FUZZBOX_DOCKER_HOST="tcp://10.0.0.5:2376"
+#   HEXGRAPH_FUZZ_REMOTE_FUZZBOX_TLS_VERIFY=1   HEXGRAPH_FUZZ_REMOTE_FUZZBOX_CERT_PATH=~/.docker/fuzzbox
+hexgraph config set features.fuzz_remote.enabled true
+```
+```toml
+# …or config.toml
+[fuzz_remote.fuzzbox]
+docker_host = "ssh://you@beefybox"
+```
+
+A one-click **Health-check** verifies the endpoint is reachable + authorized and has the
+`hexgraph-fuzz` image present (a one-time remote `docker pull`/build). Then pick the environment in
+the **Fuzz modal** (it appears when `features.fuzz_remote` is on; defaults to `local`), or pass
+`environment` to `start_fuzz_campaign` (MCP) / the campaign API. Each environment also carries a
+per-environment **`ResourceSpec` ceiling** the campaign inherits. (A heavier dedicated fuzz-worker /
+k8s job executor remains a later drop-in behind the same seam.)
+
 ---
 
 ## Dynamic web surfaces & firmware rehosting
@@ -318,6 +363,7 @@ static-only/local defaults hold unless you opt in.
 | **Build from source** | `hexgraph config set features.build.enabled true` (needs `just build-image`) | **Build-as-API:** compile a managed source tree into an **instrumented artifact** via a *recorded, reproducible recipe* HexGraph runs in the sandbox (the `Builder` seam — you/the agent author a `BuildSpec`, never run a compiler). Instrumentation (SanCov+ASan/UBSan, libFuzzer/AFL++) is injected as CC/CXX/CFLAGS per the base-image contract, so the same recipe yields different profiles. A build of a source tree linked (`built_from`) to a target registers an **instrumented derived target** (`instrumented_build_of`→ the original) — the fuzzable twin, unlocking coverage-guided fuzzing. Reproducible: `recipe_sha = hash{phases,env,base_image,instrumentation,arch}`. **Its own policy gate** (`assert_allows_build`, separate from executing the target — you can build-and-inspect without running). **Vendored/offline only** (the build runs `--network none`; the audited fetch tier is a later phase). Uses the dedicated `hexgraph-build` image (`just build-image`). |
 | **Network** | `hexgraph config set features.network.enabled true` | Bounded **local-network egress** for live web assessment (`http_request` + web `verify_poc`). Raises the policy from `--network none`; a per-target deny-all-but-loopback/private allowlist (no public hosts), every request audited to an `EgressEvent`. |
 | **Rehost** | `hexgraph config set features.rehost.enabled true` | Boots a firmware image under **full-system emulation** (qemu+KVM for full-OS disk images, FirmAE for vendor blobs) and registers its live web UI as a `web_app` surface. Separate policy gate (`assert_allows_rehost`); pair with **Network** to assess the running device. Needs `just firmae-build` / `just qemu-build`. |
+| **Remote fuzz environments** | `hexgraph config set features.fuzz_remote.enabled true` + register an environment (Settings) + set its secret `HEXGRAPH_FUZZ_REMOTE_<ID>_DOCKER_HOST` | Run a whole fuzz **campaign** on a **user-owned remote Docker host** (beefier/unconstrained compute) — the `RemoteDockerExecutor` behind the Executor seam targets `DOCKER_HOST` (ssh:// or tcp:// + TLS), so building + fuzzing run on the remote with **no fuzzer/builder change**; build context + corpus stage there via CAS, crashes/coverage stream back into the local graph. **The control plane stays loopback**; the remote is purely compute and the **same sandbox boundary** applies there. Connection details are a **secret** (env/`config.toml`, never DB/logged, presence-only); each launch is **audited**. Its own fail-closed gate (`assert_allows_fuzz_remote`) — the *only* place. A registered environment carries a `ResourceSpec` ceiling; a campaign selects one (defaulting `local`). |
 | **Coding-agent (MCP)** | `features.mcp.{read,write,run}` + `hexgraph mcp install` | Drive HexGraph from Claude Code/Codex/gemini-cli (above). |
 | **Delegate** | `hexgraph config set features.agent.enabled true` | The `agent_delegate` task: HexGraph launches your agent headless, restricted to its sandboxed tools. |
 
@@ -376,6 +422,8 @@ port = 8765
 | `HEXGRAPH_BUILDER` | `sandbox` | Override the Builder seam (`sandbox` \| `mock`). |
 | `HEXGRAPH_FUZZ_IMAGE` | `hexgraph-fuzz:latest` | Coverage-guided fuzz image (`features.fuzzing` campaigns; AFL++ LLVM/qemu/frida modes + libFuzzer + preeny/desock + boofuzz + llvm-symbolizer). Point at a private tag in a worktree — never clobber the shared tag. |
 | `HEXGRAPH_FUZZER` | _(by surface)_ | Force the Fuzzer seam to the offline `mock` engine (tests/$0); otherwise the seam picks the engine by attack surface (source_lib→AFL++/libFuzzer, binary_only→qemu/frida, network→boofuzz/desock). |
+| `HEXGRAPH_EXECUTOR` | `local_docker` | The Executor seam (`local_docker` \| `remote_docker`). `remote_docker` runs containers on the host in the ambient `DOCKER_HOST` (gated by `features.fuzz_remote`); normally a remote is selected *per-campaign* via a registered fuzz environment instead. |
+| `HEXGRAPH_FUZZ_REMOTE_<ID>_DOCKER_HOST` | — | **Secret.** The remote fuzz environment `<ID>`'s Docker endpoint (`ssh://…` or `tcp://…`). Read on demand; never logged or stored in the DB. `…_<ID>_TLS_VERIFY` / `…_<ID>_CERT_PATH` add TLS for a `tcp://` endpoint. |
 | `HEXGRAPH_SANDBOX_NO_MOUNT` | — | `1` to use the image's baked-in probes instead of mounting the local copies (probes mount by default, so editing one needs no rebuild). |
 | `HEXGRAPH_DECOMPILER` | `r2` | Override the decompiler seam (`r2` \| `ghidra`). |
 | `HEXGRAPH_DISABLE_DECOMPILE` | — | `1` to skip decompilation in LLM tasks (offline/no-Docker dev + tests). |
@@ -407,6 +455,12 @@ port = 8765
     `EgressEvent`;
   - **rehost** — a separate gate (`assert_allows_rehost`) that boots a firmware image under
     full-system emulation.
+  - **remote fuzz environment** — a separate gate (`assert_allows_fuzz_remote`, `features.fuzz_remote`)
+    that lets a campaign's container run on a *user-owned* remote Docker host. This governs **where**
+    compute runs, not **what** the sandbox may do — the same hardening applies on the remote, the
+    control plane stays loopback, and the connection is a secret + audited. Resource ceilings (the
+    `ResourceSpec`/`unconstrained` knob) are likewise **never** a policy relaxation — they only lift
+    mem/cpu/pids, never a security flag.
 - **The LLM never sees raw target bytes** — only tool output.
 - **Secrets are never persisted or logged.** Your API key lives only in env/config, read on demand.
 

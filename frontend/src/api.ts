@@ -36,6 +36,7 @@ export interface SettingsView {
       build: { enabled: boolean; image?: string; timeout?: number };
       poc: { enabled: boolean; timeout: number };
       network: { enabled: boolean; timeout: number };
+      fuzz_remote?: { enabled: boolean };
       mcp: { read: boolean; write: boolean; run: boolean };
       agent: { enabled: boolean; cli: string; binary: string; timeout: number };
     };
@@ -72,6 +73,10 @@ export interface FuzzArtifact {
 }
 export interface Coverage { available: boolean; percent?: number | null; files: Record<string, { covered: number[]; uncovered?: number[]; total?: number }>; }
 export interface FuzzEngines { surface?: string; inferred?: boolean; engines?: string[]; default?: string | null; surfaces?: Record<string, { engines: string[]; default: string | null }>; }
+// Remote fuzz environments (Phase 6) — WHERE a campaign's container runs. NON-SECRET only:
+// `connection_present` is presence-only (the DOCKER_HOST/creds live in env/config.toml).
+export interface FuzzEnvHealth { ok?: boolean; reachable?: boolean; authorized?: boolean; image_present?: boolean; docker_version?: string | null; detail?: string; checked_at?: string; }
+export interface FuzzEnvironment { id: string; name: string; transport: string; host_descriptor?: string | null; is_local: boolean; connection_present: boolean; resources: Record<string, any>; health: FuzzEnvHealth; created_at?: string | null; }
 
 export interface GraphNode { id: string; type: "target" | "node" | "finding"; label: string; [k: string]: any; }
 export interface GraphEdge { id: string; source: string; target: string; type: string; src_kind?: string; dst_kind?: string; origin?: string; confidence?: number | null; attrs?: Record<string, any>; count?: number; }
@@ -168,7 +173,7 @@ export const api = {
   // Fuzz campaigns + artifacts (Phase 4 triage)
   campaigns: (pid: string, targetId?: string) => getJSON<{ campaigns: Campaign[] }>(`/api/projects/${pid}/campaigns${targetId ? `?target_id=${targetId}` : ""}`),
   campaign: (cid: string) => getJSON<Campaign>(`/api/campaigns/${cid}`),
-  startCampaign: (pid: string, body: { target_id: string; surface?: string | null; engine?: string | null; function?: string | null; max_total_time?: number; max_len?: number; max_crashes?: number; instances?: number; build_spec_id?: string | null; resources?: Record<string, any> }) => postJSON<Campaign>(`/api/projects/${pid}/campaigns`, body),
+  startCampaign: (pid: string, body: { target_id: string; surface?: string | null; engine?: string | null; function?: string | null; max_total_time?: number; max_len?: number; max_crashes?: number; instances?: number; build_spec_id?: string | null; resources?: Record<string, any>; environment?: string | null }) => postJSON<Campaign>(`/api/projects/${pid}/campaigns`, body),
   stopCampaign: (cid: string) => postJSON<Campaign>(`/api/campaigns/${cid}/stop`, {}),
   resumeCampaign: (cid: string) => postJSON<Campaign>(`/api/campaigns/${cid}/resume`, {}),
   campaignArtifacts: (cid: string) => getJSON<{ artifacts: FuzzArtifact[] }>(`/api/campaigns/${cid}/artifacts`),
@@ -183,6 +188,11 @@ export const api = {
     return getJSON<FuzzEngines>(`/api/fuzz/engines${qs.toString() ? "?" + qs.toString() : ""}`);
   },
   campaignEventsUrl: (cid: string) => `/api/campaigns/${cid}/events`,
+  // Remote fuzz environments (Phase 6). Secrets are presence-only — never sent/echoed.
+  fuzzEnvironments: () => getJSON<{ environments: FuzzEnvironment[] }>(`/api/fuzz/environments`),
+  registerFuzzEnvironment: (body: { name: string; transport?: string; host_descriptor?: string; resources?: Record<string, any> }) => postJSON<FuzzEnvironment>(`/api/fuzz/environments`, body),
+  fuzzEnvironmentHealth: (id: string) => postJSON<FuzzEnvHealth>(`/api/fuzz/environments/${id}/health`, {}),
+  deleteFuzzEnvironment: (id: string) => fetch(`/api/fuzz/environments/${id}`, { method: "DELETE" }).then((r) => r.json()),
   createEdge: (pid: string, body: any) => postJSON<any>(`/api/projects/${pid}/edges`, body),
   updateEdge: (eid: string, body: { attrs: Record<string, any>; merge?: boolean }) => patchJSON<any>(`/api/edges/${eid}`, body),
   createSocket: (pid: string, body: { kind?: string; port?: number | string | null; name?: string | null; bind_addr?: string | null; attrs?: any }) => postJSON<any>(`/api/projects/${pid}/sockets`, body),

@@ -85,6 +85,11 @@ class FuzzCampaignSpec:
     proto_spec: dict | None = None       # the boofuzz request/state spec (generational) — see net fuzzers
     net_container: str | None = None     # an emulator container netns to join (rehosted device)
     structured: bool = False             # file_format: enable the structure-aware/grammar hook
+    # ── remote fuzz environment (Phase 6) — WHERE the container runs ─────────────────
+    # The selected fuzz environment id ("local" / None → the host daemon; a remote env →
+    # a RemoteDockerExecutor over its secret DOCKER_HOST, gated by features.fuzz_remote).
+    # The SAME sandbox boundary applies on the remote — this only changes the compute host.
+    environment_id: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -98,7 +103,7 @@ class FuzzCampaignSpec:
             "target_binary": self.target_binary, "sysroot": self.sysroot,
             "host": self.host, "port": self.port, "protocol": self.protocol,
             "proto_spec": self.proto_spec, "net_container": self.net_container,
-            "structured": self.structured,
+            "structured": self.structured, "environment_id": self.environment_id,
             # harness_source is bytes, not recorded in config_json (it lives on the
             # managed harness node / parent finding; resolved at prepare time).
         }
