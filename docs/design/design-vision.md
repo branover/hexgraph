@@ -374,7 +374,7 @@ projections of the same node/edge data.
   table + task history; finding evidence + snippet with width; edge provenance link to the task
   trace), **Related context** (typed neighbor pivot chips), and **Launchpad** (§6).
 
-This subsumes and supersedes `docs/ui-backlog.md`: interactive nodes, target-detail view,
+This subsumes and supersedes `docs/dev/ui-backlog.md`: interactive nodes, target-detail view,
 findings sort/filter/group, label/`about`-edge fixes, fit/zoom/layout, single launcher,
 mock-scenario gated on backend, live feedback, cost display — all map into this whole.
 
