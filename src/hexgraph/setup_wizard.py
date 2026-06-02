@@ -75,6 +75,11 @@ def _docker_image_exists(tag: str) -> bool:
         return False
 
 
+# The CORE analysis image — a failure here breaks ingest/recon/decompile, so the wizard
+# exits non-zero. The heavy OPTIONAL images (fuzz/build/firmae/qemu) are best-effort:
+# a build miss is reported but never fails the bootstrap (you can retry the recipe).
+_CORE_BUILDS = frozenset({"sandbox", "sandbox_ghidra"})
+
 # Which docker tag each build step produces (for "already built?" detection).
 _BUILD_TAGS = {
     "sandbox": "hexgraph-sandbox:latest",
@@ -155,8 +160,8 @@ def _is_secret_path(path: str) -> bool:
     excludes every secret, but we double-check the shape here so a future edit can't
     smuggle one in. Any key containing these tokens is treated as a secret."""
     lowered = path.lower()
-    secret_tokens = ("api_key", "apikey", "password", "secret", "token", "key", "credential")
-    # `key` would false-positive on legitimate keys; only flag the dangerous suffixes.
+    # Flag any dangerous secret-shaped suffix/token. (settings.ALLOWED already excludes
+    # every secret; this is a defensive second gate so a future edit can't smuggle one in.)
     dangerous = ("api_key", "apikey", "password", "secret", "credential", "_key", ".key")
     return any(tok in lowered for tok in dangerous) or lowered.endswith("key")
 
@@ -244,6 +249,15 @@ def build_plan(
         if b not in wanted_builds:
             wanted_builds.append(b)
 
+    # `sandbox` and `sandbox_ghidra` share the tag `hexgraph-sandbox:latest`, so a tag's
+    # mere existence does NOT prove it contains Ghidra. When the user newly requests
+    # headless Ghidra and it isn't already enabled, force the (re)build rather than trust
+    # the shared tag — otherwise a pre-existing radare2-only image would be silently kept
+    # and Ghidra would not work. (Bridge mode / already-headless need no special-case.)
+    force_rebuild = set()
+    if ghidra_headless and "features.ghidra.enabled" not in current_enabled:
+        force_rebuild.add("sandbox_ghidra")
+
     final_builds: list[str] = []
     for b in wanted_builds:
         step = BUILD_STEPS[b]
@@ -251,7 +265,7 @@ def build_plan(
             notes.append(f"SKIP build '{step.label}' — Docker not available.")
             continue
         already = built_images.get(b, False)
-        if already and not rebuild_existing:
+        if already and not rebuild_existing and b not in force_rebuild:
             notes.append(f"SKIP build '{step.label}' — image already present.")
             continue
         final_builds.append(b)
@@ -406,8 +420,13 @@ def _run_non_interactive(state: DetectedState, *, reason: str, rebuild: bool) ->
         print(f"  building: {step.label} ({step.cost}) …")
         code = run_build_step(b)
         if code != 0:
-            print(f"  (!) build '{step.label}' failed (exit {code}); continuing.")
-            rc = rc or 0  # do not fail the whole bootstrap on a heavy-image build miss
+            # A core-image failure breaks the install → non-zero exit; optional heavy
+            # images are best-effort (retry the recipe later) and never fail the bootstrap.
+            fatal = b in _CORE_BUILDS
+            print(f"  (!) build '{step.label}' failed (exit {code})"
+                  + ("." if fatal else "; continuing."))
+            if fatal:
+                rc = code
     for n in plan.notes:
         print(f"  note: {n}")
     try:
@@ -583,7 +602,9 @@ def _run_interactive(state: DetectedState, *, rebuild: bool) -> int:  # pragma: 
             else:
                 console.print(f"[red]✗[/red] build failed (exit {code}) — {step.label}. "
                               f"You can retry later with: just {step.recipe}")
-                rc = rc or 0  # don't fail the whole wizard on a heavy-image miss
+                # Core-image failure → non-zero exit; heavy optional images are best-effort.
+                if b in _CORE_BUILDS:
+                    rc = code
 
     # DB init (idempotent), like the old `just setup`.
     try:

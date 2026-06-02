@@ -192,6 +192,25 @@ def test_build_plan_ghidra_headless_uses_ghidra_image():
     assert plan.settings_patch["features.ghidra.mode"] == "headless"
 
 
+def test_build_plan_ghidra_headless_rebuilds_even_if_plain_sandbox_tag_exists():
+    # The plain sandbox + ghidra image SHARE a tag, so a pre-existing radare2-only image
+    # reports built_images['sandbox_ghidra']=True. Newly enabling headless Ghidra must
+    # NOT be silently skipped — it must (re)build the Ghidra image.
+    plan = wiz.build_plan(**_state(
+        enable_keys={"features.ghidra.enabled"}, ghidra_mode="headless",
+        current_enabled=set(), built_images={"sandbox": True, "sandbox_ghidra": True}))
+    assert "sandbox_ghidra" in plan.build_keys
+
+
+def test_build_plan_ghidra_already_headless_can_skip_existing():
+    # If Ghidra-headless was ALREADY enabled, the existing image is trusted (no forced rebuild).
+    plan = wiz.build_plan(**_state(
+        enable_keys={"features.ghidra.enabled"}, ghidra_mode="headless",
+        current_enabled={"features.ghidra.enabled"},
+        built_images={"sandbox_ghidra": True}))
+    assert "sandbox_ghidra" not in plan.build_keys
+
+
 def test_build_plan_ghidra_bridge_does_not_force_ghidra_image():
     plan = wiz.build_plan(**_state(
         enable_keys={"features.ghidra.enabled"}, ghidra_mode="bridge"))
@@ -283,6 +302,36 @@ def test_run_setup_non_interactive_does_not_prompt(hg_home, monkeypatch):
     monkeypatch.setattr(w, "_docker_image_exists", lambda tag: True)
     rc = w.run_setup(non_interactive=True)
     assert rc == 0
+
+
+def test_run_setup_non_interactive_fails_on_core_build_failure(hg_home, monkeypatch):
+    import hexgraph.setup_wizard as w
+
+    # Force a plan that builds the core sandbox, and make that build fail.
+    monkeypatch.setattr(w, "_interactive_available", lambda: False)
+    monkeypatch.setattr(w, "_docker_image_exists", lambda tag: False)
+    monkeypatch.setattr(w, "docker_available", lambda: True)
+    monkeypatch.setattr(w, "run_build_step", lambda *a, **k: 7)  # non-zero core build
+    rc = w.run_setup(non_interactive=True)
+    assert rc == 7  # a broken CORE install surfaces as a non-zero exit
+
+
+def test_run_setup_non_interactive_tolerates_optional_build_failure(hg_home, monkeypatch):
+    import hexgraph.setup_wizard as w
+
+    # Pre-enable fuzzing so the optional fuzz image is in the plan; sandbox already built.
+    settings.update_settings({"features.fuzzing.enabled": True})
+    monkeypatch.setattr(w, "_interactive_available", lambda: False)
+    monkeypatch.setattr(w, "docker_available", lambda: True)
+    monkeypatch.setattr(w, "_docker_image_exists",
+                        lambda tag: tag == "hexgraph-sandbox:latest")  # only sandbox built
+
+    def _build(key, **k):
+        return 0 if key in w._CORE_BUILDS else 9  # optional fuzz build fails
+
+    monkeypatch.setattr(w, "run_build_step", _build)
+    rc = w.run_setup(non_interactive=True)
+    assert rc == 0  # optional image failure must NOT fail the bootstrap
 
 
 def test_run_setup_falls_back_when_no_tty(hg_home, monkeypatch):
