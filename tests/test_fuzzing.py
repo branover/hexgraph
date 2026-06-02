@@ -8,7 +8,7 @@ import pytest
 from hexgraph.db.models import Annotation, Finding, Node, Task, TaskStatus
 from hexgraph.db.session import session_scope
 from hexgraph.engine.findings import persist_finding
-from hexgraph.engine.fuzzing import execute_fuzzing, resolve_harness
+from hexgraph.engine.fuzzing import execute_fuzzing, resolve_harness, resolve_target_sources
 from hexgraph.engine.ingest import create_project, ingest_file
 from hexgraph.engine.tasks import create_task
 from hexgraph.models.finding import Evidence, Finding as FModel
@@ -127,6 +127,108 @@ def test_resolve_harness_from_latest_generation(hg_home):
         task = create_task(s, project=p, target_id=t.id, type="fuzzing")
         source, fid, fn = resolve_harness(s, t, task)
         assert source == HARNESS and fn == "cgi_handler" and fid is not None
+
+
+def test_crash_finding_records_fuzz_extra(hg_home):
+    """The new evidence.extra.fuzz envelope rides every crash finding (frozen schema
+    untouched): dedup_key, exploitability, minimized reproducer, coverage flag."""
+    _enable_fuzzing()
+    payload = {"compiled": True, "ran": True, "coverage_instrumented": False, "crashes": [
+        {"kind": "heap-buffer-overflow", "function": "cgi_handler", "summary": "SUMMARY: ... overflow",
+         "reproducer_sha256": "ab12", "reproducer_size": 24, "dedup_key": "deadbeef" * 8,
+         "dupe_count": 3, "exploitability": {"rating": "likely_exploitable", "access": "WRITE"},
+         "minimized_reproducer_sha256": "f00d" * 16, "minimized_reproducer_size": 8,
+         "coverage_instrumented": False},
+    ]}
+    with session_scope() as s:
+        p = create_project(s, name="fx")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        _harness_task(s, p, t)
+        task = create_task(s, project=p, target_id=t.id, type="fuzzing")
+        n = execute_fuzzing(s, p, t, task, FakeRunner(payload))
+        assert n == 1
+        f = s.query(Finding).filter(Finding.task_id == task.id).one()
+        fz = f.evidence_json["extra"]["fuzz"]
+        assert fz["dedup_key"] == "deadbeef" * 8
+        assert fz["exploitability"]["rating"] == "likely_exploitable"
+        assert fz["minimized_reproducer_sha"] == "f00d" * 16
+        assert fz["coverage_instrumented"] is False
+        assert fz["dupe_count"] == 3
+        # the finding's reproducer points at the MINIMIZED input when present
+        assert f.evidence_json["reproducer"] == "f00d" * 16
+        # a coverage-blind run is disclosed in the reasoning, never overstated
+        assert "coverage-blind" in (f.reasoning or "")
+
+
+def test_coverage_instrumented_when_source_mounted(hg_home):
+    """When target sources are present they are mounted as --target-source (coverage-
+    guided), NOT --target-lib, and the finding reports coverage_instrumented=true."""
+    import os, tempfile
+    _enable_fuzzing()
+    fd, src = tempfile.mkstemp(suffix=".c", prefix="tgt-")
+    os.write(fd, b"int add(int a,int b){return a+b;}\n"); os.close(fd)
+    payload = {"compiled": True, "ran": True, "coverage_instrumented": True, "crashes": [
+        {"kind": "stack-buffer-overflow", "function": "add", "summary": "SUMMARY: ... stack",
+         "reproducer_sha256": "11", "reproducer_size": 4, "dedup_key": "a" * 64, "dupe_count": 0,
+         "exploitability": {"rating": "likely_exploitable", "access": "WRITE"},
+         "coverage_instrumented": True},
+    ]}
+    try:
+        with session_scope() as s:
+            p = create_project(s, name="fcov")
+            t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+            t.metadata_json = {"fuzz_target_sources": [src]}
+            _harness_task(s, p, t)
+            task = create_task(s, project=p, target_id=t.id, type="fuzzing")
+            runner = FakeRunner(payload)
+            n = execute_fuzzing(s, p, t, task, runner)
+            assert n == 1
+            args = runner.calls[0]["extra_args"]
+            assert any(a.startswith("--target-source=") for a in args)
+            assert not any(a.startswith("--target-lib=") for a in args)
+            f = s.query(Finding).filter(Finding.task_id == task.id).one()
+            assert f.evidence_json["extra"]["fuzz"]["coverage_instrumented"] is True
+            assert "coverage-blind" not in (f.reasoning or "")
+    finally:
+        os.unlink(src)
+
+
+def test_seed_corpus_mounted(hg_home):
+    """A `seeds` task param mounts each existing seed file and passes --seed= to the probe."""
+    import os, tempfile
+    _enable_fuzzing()
+    fd, s0 = tempfile.mkstemp(prefix="seed-"); os.write(fd, b"FUZZ"); os.close(fd)
+    payload = {"compiled": True, "ran": True, "coverage_instrumented": False, "crashes": []}
+    try:
+        with session_scope() as s:
+            p = create_project(s, name="seed")
+            t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+            _harness_task(s, p, t)
+            task = create_task(s, project=p, target_id=t.id, type="fuzzing",
+                               params={"seeds": [s0, "/missing/seed"]})
+            runner = FakeRunner(payload)
+            execute_fuzzing(s, p, t, task, runner)
+            args = runner.calls[0]["extra_args"]
+            mounts = runner.calls[0]["mounts"] or []
+            assert sum(a.startswith("--seed=") for a in args) == 1  # only the existing seed
+            assert any(host == s0 for host, _ in mounts)
+    finally:
+        os.unlink(s0)
+
+
+def test_resolve_target_sources(hg_home):
+    import os, tempfile
+    fd, real = tempfile.mkstemp(suffix=".c"); os.close(fd)
+    try:
+        with session_scope() as s:
+            p = create_project(s, name="rts")
+            t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+            task = create_task(s, project=p, target_id=t.id, type="fuzzing",
+                               params={"target_sources": [real, "/does/not/exist.c"]})
+            # only the existing file survives; the bogus path is dropped (no overstating)
+            assert resolve_target_sources(t, task) == [real]
+    finally:
+        os.unlink(real)
 
 
 def test_capabilities_gate_on_setting(hg_home):

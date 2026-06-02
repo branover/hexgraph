@@ -175,20 +175,31 @@ def search(project_id: str, q: str) -> dict:
 def list_findings(project_id: str) -> list[dict]:
     """Existing findings, so the agent doesn't re-report what's already known. Each row
     carries `verified` and, for a PoC that ran, a compact `verification` summary
-    {verified, detail} so you can see at a glance whether it confirmed — call
-    get_finding(id) for the full evidence (incl. the PoC spec in evidence.extra)."""
+    {verified, detail}; a fuzz_crash carries a compact `fuzz` summary
+    {exploitability, coverage_instrumented, dupe_count} so you can triage at a glance —
+    call get_finding(id) for the full evidence (incl. the PoC/fuzz detail in
+    evidence.extra)."""
     with session_scope() as s:
         rows = s.query(Finding).filter(Finding.project_id == project_id).all()
         out = []
         for f in rows:
             ev = f.evidence_json or {}
+            extra = ev.get("extra") or {}
             row = {"id": f.id, "title": f.title, "severity": f.severity, "category": f.category,
                    "status": f.status, "finding_type": f.finding_type,
                    "verified": is_verified(ev), "target_id": f.target_id,
                    "function": ev.get("function")}
-            ver = ((ev.get("extra") or {}).get("verification"))
+            ver = extra.get("verification")
             if ver:
                 row["verification"] = {"verified": bool(ver.get("verified")), "detail": ver.get("detail")}
+            fz = extra.get("fuzz")
+            if fz:
+                # coverage_instrumented=False ⇒ a black-box run; don't over-trust dedup.
+                row["fuzz"] = {
+                    "exploitability": (fz.get("exploitability") or {}).get("rating"),
+                    "coverage_instrumented": fz.get("coverage_instrumented"),
+                    "dupe_count": fz.get("dupe_count"),
+                }
             out.append(row)
         return out
 

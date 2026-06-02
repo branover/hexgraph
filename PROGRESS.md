@@ -71,9 +71,14 @@ then run the resume verifier, then continue at the next unchecked task.
 - **Optional features (settings-driven, `settings.py` + `/api/settings` + `hexgraph config`; secrets status-only):**
   **Ghidra** (headless `WITH_GHIDRA=1` / bridge / enrich_recon), and **Fuzzing** (`fuzzing` task, off by
   default — the one thing that relaxes static-only, via the policy seam: libFuzzer+ASan on a generated
-  harness, finding-per-crash, optional LLM triage). **Target soft-removal** (archive subtree, restore on
-  re-add) and **firmware filesystem browser** (persisted unpacked tree, add any file as a child target;
-  library exports → nodes; function nodes launch tasks).
+  harness, finding-per-crash, optional LLM triage). **Fuzzing Phase 0 DONE** (`docs/design-fuzzing-and-source.md`
+  §7): now **coverage-guided** — the target's own source (task param `target_sources` /
+  `metadata.fuzz_target_sources`) is compiled WITH the harness under SanCov+ASan for real coverage
+  feedback (uninstrumented `.so` → coverage-blind, flagged honestly); crashes deduped by a normalized
+  stack-hash (one finding/root cause + dupe_count), reproducer minimized (libFuzzer `-minimize_crash`),
+  deterministic exploitability rating — all on `evidence.extra.fuzz` (no schema change). **Target
+  soft-removal** (archive subtree, restore on re-add) and **firmware filesystem browser** (persisted
+  unpacked tree, add any file as a child target; library exports → nodes; function nodes launch tasks).
 - **Entity removal (`engine/removal.py`, migration 0011 `node.archived`):** nodes **soft-archive** —
   `archive_node` hides the node *and* the edges touching it (the graph already skips edges to hidden
   endpoints); re-adding the same node (`get_or_create_node`) or `restore_node` brings it and its edges
@@ -311,6 +316,29 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-01: **Fuzzing Phase 0 — coverage-guided target instrumentation + real crash triage**
+  ([`docs/design-fuzzing-and-source.md`](docs/design-fuzzing-and-source.md) §7 Phase 0, branch
+  `build/fuzz-phase0`). The headline fix: today's `-fsanitize=fuzzer` only instrumented the harness,
+  so a `--target-lib`-linked `.so` was fuzzed coverage-BLIND. Now when the target's own SOURCE is
+  available (`fuzz_probe --target-source=…`, resolved by `engine.fuzzing.resolve_target_sources` from
+  the task param `target_sources` or `target.metadata_json.fuzz_target_sources`) the target is compiled
+  under `-fsanitize=fuzzer-no-link,address` and linked into the libFuzzer harness → SanCov+ASan in the
+  target's OWN objects → real coverage feedback. With only an uninstrumented `.so` it still runs but
+  records `coverage_instrumented=false` (no overstatement). Crash dedup replaced `(kind, frame0)` with a
+  deterministic **normalized stack-hash** `dedup_key` (top-N ASan frames, addresses/offsets/build-paths/
+  line:col/anon-ns+template/interceptor frames stripped, stopped at program entry); one finding per
+  bucket + `dupe_count`. Reproducers minimized via libFuzzer `-minimize_crash` (no AFL++ in the existing
+  image). A deterministic **exploitability classifier** (READ/WRITE, UAF/double-free, SEGV near-PC,
+  recursion DoS, OOM/leak/timeout → `{rating, access, signals}`) refines severity. All new structure on
+  `evidence.extra.fuzz` — **frozen schema untouched, no migration**; `derive_fuzz_assurance()` unchanged.
+  MCP `list_findings` gained a compact `fuzz` summary; `get_finding` already returns full `evidence.extra`.
+  README fuzzing card + SKILL (`agent_setup.py`) updated; the `coverage_instrumented=false` "don't
+  overstate a black-box run" caveat is called out for the agent. Tests: new `test_fuzz_triage.py` (pure
+  dedup/classifier/severity), extended `test_fuzzing.py`, Docker-gated `test_fuzz_e2e.py` (instrumented
+  build finds+classifies a planted heap-write). `just test` green (448 pass, 2 non-fuzz Docker skips
+  offline); e2e verified with Docker+the sandbox image. **Known limit:** the base image has no
+  `llvm-symbolizer`, so ASan frames are module+offset at runtime (within-run dedup deterministic;
+  symbolized cross-build dedup/function attribution awaits the dedicated `hexgraph-fuzz` image, Phase 3+).
 - 2026-06-01: **Verification oracles Phase 2 — the DoS `liveness`/`unavailable` oracle**
   ([`docs/design-verification-oracles.md`](docs/design-verification-oracles.md) §4, branch
   `build/dos-liveness`). New `verify_liveness` in `engine/oracles.py` (dispatched from
