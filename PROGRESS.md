@@ -522,6 +522,7 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+<<<<<<< HEAD
 - 2026-06-02: **build: reproducible screenshot showcase + captures** (branch `build/showcase`).
   A deterministic, $0/offline **showcase** project for the README hero shots + per-feature doc
   captures. `scripts/seed_showcase.py` (`just showcase [--reset]`) seeds ONE rich engagement on
@@ -540,6 +541,38 @@ then run the resume verifier, then continue at the next unchecked task.
   (offline) asserts the seed stays rich. Counts at seed: 7 targets · 27 nodes · 58 edges · 7 findings ·
   1 campaign. README.md untouched (owned by the separate README-overhaul effort — this produces the
   images + manifest it consumes).
+- 2026-06-02: **build: launch-and-join for LOCAL-service network fuzzing** (branch `build/loopback-fuzz`,
+  design §5.6 / new §5.8b — Decision 1 / Option B). A fuzz container runs `--network bridge`, whose
+  loopback is the container's OWN — so a boofuzz campaign could not reach a service on the host's bare
+  `127.0.0.1` (only the rehost `net_container` netns-join could reach a private service). **Fix:** for a
+  service HexGraph can LAUNCH itself (a `service`/binary target carrying a server ELF, no externally-
+  reachable host), HexGraph now (a) starts the service in its OWN detached, hardened sandbox container
+  (`sandbox/probes/service_launch_probe.py` — same `--read-only`/`--cap-drop ALL`/`--no-new-privileges`/
+  `--user`/resource caps; `--network none`; foreign-arch under qemu-user + the parent firmware rootfs
+  sysroot) listening on that container's loopback, then (b) launches the fuzzer with
+  `net_container=<service-container>` so the SHARED netns makes `127.0.0.1:port` reachable **WITHOUT
+  `--network host`** — same isolation, no host networking. Generalizes the rehost netns-join from "an
+  emulator container" to "a service container HexGraph launched." **Gating — NO new gate, nothing relaxed
+  outside `policy.py`:** the service launch EXECUTES the target → the EXISTING exec tier
+  (`features.poc`/`fuzzing`, asserted in `_launch_network`/`_launch_service` + the runner's
+  `requires_execution=True`); the fuzz egress stays `features.network` + `local_tcp_scope` + audited to
+  `EgressEvent` (refuses any non-loopback/private host). The **reaper / stop / serve-restart tear down BOTH
+  containers** (the service container name is recorded on `fuzz_campaign.config_json["service_container"]`).
+  Trigger: a campaign/spec `launch` flag (auto-detected for a launchable target with a loopback/unset host;
+  a reachable PRIVATE host is honoured directly, no launch). New `FuzzCampaignSpec`/`PreparedFuzz`/API
+  (`CampaignNet`)/MCP (`start_fuzz_campaign`) `launch`/`launch_binary`/`launch_command` fields — all carried
+  through resume. **Documented the already-running-host-service workaround** (README + agent_setup SKILL +
+  design §5.8b): bind it to a reachable private IP (`192.168`/`10.x`); `--network host` is deliberately not
+  offered. No migration (rides `config_json` + the String surface/engine columns); frozen schema untouched.
+  Tests: `tests/test_fuzz_loopback.py` (11 offline — launchable-local classification, prepare carries the
+  launch fields, auto-enable vs. honour-reachable-private, the two-container launch wiring + the exec/egress
+  gate mapping, non-local refusal, reaper + stop teardown of BOTH, spec round-trip, + a startup-grace probe
+  test). **PR-review fix (#68):** launch-and-join started the service then immediately the fuzzer, and the
+  boofuzz probe did a single `_alive()` check — a slow-binding service was spuriously "not reachable at
+  start" (0 execs). Added a bounded startup grace (`_wait_alive`; 15s for a just-launched service vs. 2s
+  for an already-up host) + a foreground-only caveat in the service probe docstring. `just test` green
+  offline (695 passed, 2 skipped; the 1 remaining failure is the pre-existing remote `DOCKER_HOST` phase6
+  test — environmental, out of scope, fails identically on pristine main).
 - 2026-06-02: **build: interactive `hexgraph setup` wizard** (branch `build/setup-wizard`).
   `just setup` now bootstraps (venv + deps + SPA) then launches a polished, sequential TUI wizard
   (**Rich** panels/tables/progress + **questionary** checkboxes/selects/confirms; added to `[server]`

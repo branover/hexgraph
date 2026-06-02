@@ -84,6 +84,17 @@ class FuzzCampaignSpec:
     protocol: str = "tcp"                # tcp | udp (transport for boofuzz)
     proto_spec: dict | None = None       # the boofuzz request/state spec (generational) — see net fuzzers
     net_container: str | None = None     # an emulator container netns to join (rehosted device)
+    # ── launch-and-join (the loopback-reachable LOCAL service path) — §5.8b ──────────
+    # When HexGraph can LAUNCH the service itself (a `service`/binary target carrying a
+    # server ELF) and there is no externally-reachable host, it starts the service in its
+    # OWN detached hardened container (listening on that container's loopback) and points
+    # the fuzzer at it via `net_container=<service-container>` — the shared netns makes
+    # `127.0.0.1:port` reachable WITHOUT --network host, preserving isolation. `launch_binary`
+    # is the host path to the server ELF; `launch_command` overrides the in-container argv.
+    # `launch` forces the path on; None auto-detects (a launchable local loopback service).
+    launch: bool | None = None
+    launch_binary: str | None = None          # host path to the server ELF HexGraph launches
+    launch_command: list[str] | None = None   # optional argv override (in-container)
     structured: bool = False             # file_format: enable the structure-aware/grammar hook
     # ── remote fuzz environment (Phase 6) — WHERE the container runs ─────────────────
     # The selected fuzz environment id ("local" / None → the host daemon; a remote env →
@@ -103,6 +114,8 @@ class FuzzCampaignSpec:
             "target_binary": self.target_binary, "sysroot": self.sysroot,
             "host": self.host, "port": self.port, "protocol": self.protocol,
             "proto_spec": self.proto_spec, "net_container": self.net_container,
+            "launch": self.launch, "launch_binary": self.launch_binary,
+            "launch_command": list(self.launch_command) if self.launch_command else None,
             "structured": self.structured, "environment_id": self.environment_id,
             # harness_source is bytes, not recorded in config_json (it lives on the
             # managed harness node / parent finding; resolved at prepare time).
@@ -144,6 +157,14 @@ class PreparedFuzz:
     egress_host: str | None = None               # the live device host (for the scope + audit)
     egress_port: int | None = None
     net_container: str | None = None             # join this container's netns (rehosted device)
+    # ── launch-and-join (§5.8b): HexGraph LAUNCHES a local loopback service itself ───
+    # When set, the campaign engine first starts the server binary in its OWN detached
+    # hardened container (executes the target → exec tier), then points the fuzzer at it
+    # via `net_container=<that container>` so the shared netns makes 127.0.0.1:port
+    # reachable WITHOUT --network host. `launch_binary` is the host path to the server ELF.
+    launch_binary: str | None = None             # the server ELF HexGraph launches in a service container
+    launch_command: list[str] | None = None      # optional in-container argv override
+    launch_sysroot: str | None = None            # foreign-arch firmware rootfs (qemu `-L`)
 
 
 @runtime_checkable

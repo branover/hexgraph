@@ -48,10 +48,22 @@ class BoofuzzFuzzer(Fuzzer):
 
     def prepare(self, spec: FuzzCampaignSpec, project, target) -> PreparedFuzz:
         host, port = spec.host, spec.port
-        if not host or not port:
+        # The launch-and-join path (§5.8b): HexGraph LAUNCHES the service itself in a
+        # detached container, so the fuzzer reaches it on the SHARED netns loopback —
+        # the host is `127.0.0.1` by construction. A bare port + a launchable server
+        # binary is enough; the live host is that service container's loopback.
+        launch_on = bool(spec.launch) and bool(spec.launch_binary)
+        if not port:
             raise ValueError(
-                "network fuzzing needs the live service host+port (a rehosted device IP / "
-                "local service); none resolved from the target")
+                "network fuzzing needs the service port (a rehosted device IP / local "
+                "service); none resolved from the target")
+        if not host and not launch_on:
+            raise ValueError(
+                "network fuzzing needs the live service host (a rehosted device IP / local "
+                "service); none resolved from the target — for a service HexGraph can start "
+                "itself, use the launch-and-join path (a launchable server binary)")
+        if launch_on and not host:
+            host = "127.0.0.1"  # the launched service listens on the shared-netns loopback
 
         # The protocol spec (blocks/checksum/state). Default: a single mutable request
         # block seeded from the dictionary/seed (so even a bare port is fuzzed). The
@@ -68,6 +80,11 @@ class BoofuzzFuzzer(Fuzzer):
             # The ONLY place a campaign relaxes --network none: bounded, scoped, audited.
             requires_egress=True, egress_host=host, egress_port=int(port),
             net_container=spec.net_container,
+            # When launch-and-join is on, the campaign engine starts this server ELF in
+            # its OWN service container FIRST and joins the fuzzer to its netns.
+            launch_binary=spec.launch_binary if launch_on else None,
+            launch_command=spec.launch_command if launch_on else None,
+            launch_sysroot=spec.sysroot if launch_on else None,
         )
 
 

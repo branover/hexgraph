@@ -114,6 +114,53 @@ def resolve_surface_inputs(session, project, target, spec) -> None:
                                   .get("rehost") or {}).get("container")
         if not spec.port:
             spec.port = _device_port(target)
+        # Launch-and-join (§5.8b): a service HexGraph can START itself. Resolve the server
+        # binary (explicit, the target's own ELF path, or a channel launch hint), then
+        # AUTO-ENABLE the path when there's no externally-reachable host to fuzz: no live
+        # device host (or only a loopback one HexGraph isn't already hosting) AND no rehost
+        # netns. The launched service listens on its OWN container loopback; the fuzzer
+        # joins its netns, so 127.0.0.1:port is reachable without --network host.
+        if not spec.launch_binary:
+            spec.launch_binary = (target.path or None) or (
+                ((target.metadata_json or {}).get("channel") or {}).get("launch_binary"))
+        if not spec.launch_command:
+            spec.launch_command = (((target.metadata_json or {}).get("channel") or {})
+                                   .get("launch_command")) or None
+        # Resolve the foreign-arch firmware sysroot for the launched binary (REUSE the
+        # binary_only/poc path) so a dynamically-linked MIPS/ARM server finds its libs.
+        if spec.launch_binary and not spec.sysroot and target.parent_id:
+            try:
+                from hexgraph.engine.filesystem import host_root
+                from hexgraph.engine.poc import _find_sysroot
+                fw = session.get(Target, target.parent_id)
+                if fw is not None and (fw.metadata_json or {}).get("filesystem"):
+                    root = _find_sysroot(host_root(project, fw))
+                    if root is not None and Path(str(root)).is_dir():
+                        spec.sysroot = str(root)
+            except Exception:  # noqa: BLE001 — sysroot is best-effort
+                pass
+        if spec.launch is None:
+            no_external = (not spec.net_container) and _host_is_launchable_local(spec.host)
+            spec.launch = bool(spec.launch_binary) and no_external
+        # When launch-and-join is on, the fuzzer talks to the service's container loopback.
+        if spec.launch and spec.launch_binary:
+            spec.host = "127.0.0.1"
+
+
+def _host_is_launchable_local(host: str | None) -> bool:
+    """True when there is no host a bridged fuzzer container could reach on its own —
+    i.e. the launch-and-join path applies. That's an UNSET host, or a bare loopback
+    (`127.0.0.0/8` / `localhost` / `::1`): a fuzz container's bridge loopback is its OWN,
+    so it can't reach a service on the HOST's `127.0.0.1` — HexGraph must start the service
+    itself and share its netns. A reachable PRIVATE address (192.168/10.x — e.g. a rehosted
+    device or a service the user bound to a bridgeable IP) is NOT launchable-local: the user
+    pointed us at something we can already reach, so we honour it (no launch)."""
+    if not (host or "").strip():
+        return True
+    h = host.strip().lower()
+    if h in ("localhost", "::1", "ip6-localhost"):
+        return True
+    return h.startswith("127.")
 
 
 def _device_host(target) -> str | None:
@@ -329,15 +376,28 @@ def start_campaign(session: Session, project: Project, target: Target, *,
 
 def _launch_network(session, project, target, row, prepared, spec, *, executor, outdir,
                     resources, container_name):
-    """Launch a boofuzz network-fuzz campaign on the bounded-egress path (design §5.6).
+    """Launch a boofuzz network-fuzz campaign on the bounded-egress path (design §5.6/§5.8b).
 
     The host:port MUST be loopback/private (local_tcp_scope refuses anything else — the
     EXISTING local-network tier, NO new gate); assert_allows_egress checks features.network
     + the per-run allowlist; EVERY launch is audited to EgressEvent (allow OR deny). The
-    detached container joins the rehosted device's netns when `net_container` is set."""
+    detached fuzzer container joins a netns via `net_container`:
+      • a REHOSTED device's emulator container (set on the spec), OR
+      • a service container HexGraph LAUNCHES itself (launch-and-join, §5.8b): when
+        `prepared.launch_binary` is set, we first start the server ELF in its own detached,
+        hardened container (which EXECUTES the target → the EXISTING exec tier) listening on
+        that container's loopback, then join the fuzzer to its netns so `127.0.0.1:port` is
+        reachable WITHOUT --network host. Both containers are torn down by the reaper/stop.
+    """
     from hexgraph.engine.audit import record_egress
-    from hexgraph.policy import (PolicyViolation, assert_allows_egress, current_policy,
-                                 local_tcp_scope)
+    from hexgraph.policy import (PolicyViolation, assert_allows_egress, assert_allows_execution,
+                                 current_policy, local_tcp_scope)
+
+    # Launch-and-join (§5.8b) EXECUTES the service binary → assert the EXISTING exec tier
+    # BEFORE we audit any egress, so a fail-closed exec gate never leaves a misleading
+    # ALLOW audit (and no service container is launched). NO new gate.
+    if prepared.launch_binary:
+        assert_allows_execution()
 
     host, port = prepared.egress_host, int(prepared.egress_port or 0)
     scope = local_tcp_scope(host, port)  # raises if the host isn't loopback/private
@@ -352,20 +412,68 @@ def _launch_network(session, project, target, row, prepared, spec, *, executor, 
     record_egress(session, project_id=project.id, target_id=target.id, task_id=row.task_id,
                   dest=dest, allowed=True, tool="boofuzz", detail=scope.rationale)
 
+    # Launch-and-join: start the service container FIRST, then join the fuzzer to its netns.
+    net_container = prepared.net_container
+    if prepared.launch_binary:
+        svc_name = _launch_service(session, project, target, row, prepared, port,
+                                   executor=executor, resources=resources)
+        net_container = svc_name
+        # Record the service container on the durable row so the reaper / stop / a serve
+        # restart tear it down alongside the fuzzer (crash-safe cleanup).
+        row.config_json = {**(row.config_json or {}), "service_container": svc_name}
+        session.flush()
+
     from hexgraph import settings
     timeout = int(settings.get("features.network.timeout", 30) or 30)
+    # A launch-and-join service was started an instant ago in its own container; `docker
+    # run -d` returns before the server binds its port, so give the fuzzer a longer
+    # startup grace to wait for the bind (an already-up rehosted/private host needs none).
+    startup_grace = 15 if prepared.launch_binary else 2
     channel = {"host": host, "port": port, "protocol": spec.protocol,
                "allow": sorted(scope.allow), "timeout": timeout, "outdir": "/out",
-               "max_total_time": spec.max_total_time, "max_crashes": spec.max_crashes}
+               "max_total_time": spec.max_total_time, "max_crashes": spec.max_crashes,
+               "startup_grace": startup_grace}
     args = [*prepared.extra_args, "--channel", json.dumps(channel)]
-    # requires_execution=False: a live-socket boofuzz campaign runs NO target bytes locally
-    # (it's a network client) — it's gated by the egress assert above, not the exec gate.
+    # requires_execution=False: the boofuzz container itself runs NO target bytes (it's a
+    # network client) — it's gated by the egress assert above. The launched SERVICE (which
+    # does execute the target) was gated by the exec tier in _launch_service.
     return executor.start_detached(
         prepared.probe, prepared.artifact, name=container_name, outdir=outdir,
         image=prepared.image, extra_args=args, requires_execution=False,
         extra_ro_mounts=prepared.extra_ro_mounts, resources=resources,
-        allow_network=True, net_container=prepared.net_container,
+        allow_network=True, net_container=net_container,
     )
+
+
+def _launch_service(session, project, target, row, prepared, port, *, executor, resources) -> str:
+    """Launch the server ELF in its OWN detached, hardened container (launch-and-join,
+    §5.8b) and return the container name. The service EXECUTES the (hostile) target binary,
+    so it is gated by the EXISTING exec tier (assert_allows_execution + requires_execution
+    on the detached launch — defense in depth; NO new gate). It listens on its container
+    loopback; the fuzzer joins this container's netns to reach `127.0.0.1:port`. The
+    container keeps the SAME hardening as every probe (--read-only/--cap-drop ALL/
+    --no-new-privileges/--user/caps); --network none holds for the service itself (it only
+    binds its own loopback — the fuzzer reaches it via the SHARED netns, not egress)."""
+    from hexgraph.policy import assert_allows_execution
+
+    assert_allows_execution()  # launch-and-join executes the target — the EXISTING exec gate
+    svc_name = f"hexgraph-svc-{uuid.uuid4().hex[:12]}"
+    svc_outdir = str(Path(row.outdir) / "service")
+    Path(svc_outdir).mkdir(parents=True, exist_ok=True)
+    svc_args = [f"--port={int(port)}"]
+    if prepared.launch_sysroot:
+        svc_args.append("--sysroot=/sysroot")
+    if prepared.launch_command:
+        svc_args.append("--cmd=" + json.dumps(list(prepared.launch_command)))
+    mounts: list[tuple[str, str]] = []
+    if prepared.launch_sysroot and Path(prepared.launch_sysroot).is_dir():
+        mounts.append((prepared.launch_sysroot, "/sysroot"))
+    handle = executor.start_detached(
+        "service_launch_probe.py", prepared.launch_binary, name=svc_name, outdir=svc_outdir,
+        image=prepared.image, extra_args=svc_args, requires_execution=True,
+        extra_ro_mounts=mounts, resources=resources,
+    )
+    return handle.name
 
 
 def _launch_mock(row: FuzzCampaign, prepared, spec: FuzzCampaignSpec) -> None:
@@ -505,6 +613,9 @@ def reap_campaign(session: Session, row: FuzzCampaign, *, executor=None) -> int:
         row.finished_at = _now()
         if row.container_name and not is_mock:
             executor.stop_detached(row.container_name, remove=True)
+        # Launch-and-join (§5.8b): tear down the service container we started too, so the
+        # launched server never outlives its fuzzer (the reaper owns BOTH containers).
+        _stop_service_container(row, executor, is_mock)
         from hexgraph.engine.runs import record_run
         if row.task_id:
             t = session.get(Task, row.task_id)
@@ -681,10 +792,25 @@ def stop_campaign(session: Session, row: FuzzCampaign, *, executor=None) -> Fuzz
     _snapshot_corpus(session, session.get(Project, row.project_id), row)
     if row.container_name:
         executor.stop_detached(row.container_name, remove=True)
+    # Launch-and-join (§5.8b): tear down the service container we started too.
+    _stop_service_container(row, executor, row.engine == "mock")
     row.status = "stopped"
     row.finished_at = _now()
     session.flush()
     return row
+
+
+def _stop_service_container(row: FuzzCampaign, executor, is_mock: bool) -> None:
+    """Tear down the launch-and-join SERVICE container (§5.8b) recorded on the row's config,
+    if any. Best-effort + idempotent (a missing container is fine — already reaped, or this
+    campaign never launched one). The service container is reachable by its durable name, so
+    the reaper / stop / a serve-restart all clean it up the same way as the fuzzer."""
+    svc = (row.config_json or {}).get("service_container")
+    if svc and not is_mock:
+        try:
+            executor.stop_detached(svc, remove=True)
+        except Exception:  # noqa: BLE001 — best-effort teardown, never strand the row
+            pass
 
 
 def resume_campaign(session: Session, row: FuzzCampaign, *, executor=None) -> FuzzCampaign:
@@ -759,6 +885,11 @@ def _spec_from_config(session, project, target, row, cfg) -> FuzzCampaignSpec:
         host=cfg.get("host"), port=cfg.get("port"),
         protocol=cfg.get("protocol") or "tcp", proto_spec=cfg.get("proto_spec"),
         net_container=cfg.get("net_container"),
+        # Carry the launch-and-join fields (§5.8b) so a resumed campaign re-launches its
+        # OWN service container. NOT `service_container` (that's the prior run's name — a
+        # fresh one is created on resume); just the inputs needed to relaunch.
+        launch=cfg.get("launch"), launch_binary=cfg.get("launch_binary"),
+        launch_command=cfg.get("launch_command"), sysroot=cfg.get("sysroot"),
     )
 
 
