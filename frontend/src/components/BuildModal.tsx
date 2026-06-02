@@ -38,8 +38,9 @@ export default function BuildModal({ projectId, tree, fetchEnabled, onClose, onB
     source_tree_id: tree.id,
     instrumentation: { sanitizers, coverage: coverage ? ["sancov"] : [], engine },
     artifacts: artifacts.split(/[\n,]/).map((s) => s.trim()).filter(Boolean),
-    // Each non-empty line is one recorded shell step (verbatim in the sandbox).
-    ...(phaseLines().length ? { phases: phaseLines().map((cmd) => ({ argv: [cmd], shell: true })) } : {}),
+    // Each non-empty line is one recorded step: `sh -c "<line>"` (the probe runs the argv
+    // directly; shell:true is reserved for a recorded script PATH, not an inline command).
+    ...(phaseLines().length ? { phases: phaseLines().map((cmd) => ({ argv: ["sh", "-c", cmd], shell: false })) } : {}),
     arch, network,
   });
 
