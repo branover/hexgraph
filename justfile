@@ -215,6 +215,15 @@ demo:
 showcase *args:
     HEXGRAPH_FUZZER=mock {{py}} scripts/seed_showcase.py {{args}}
 
+# Seed the four GRAPH-PRESENTATION complexity tiers (SMALL/MEDIUM/LARGE/PATHOLOGICAL) into
+# HEXGRAPH_HOME — the reusable A/B fixture for the graph redesign's before/after Playwright
+# captures (docs/design-graph-presentation.md §9). Mock, offline, $0, deterministic. `--reset`
+# rebuilds; `--tier large` seeds one. Then `just serve` and open each "Graph tier — …" project.
+[group('demo')]
+[private]
+graph-tiers *args:
+    HEXGRAPH_FUZZER=mock {{py}} scripts/seed_graph_tiers.py {{args}}
+
 # Regenerate the committed docs/images/*.png from the showcase project (Playwright, dark
 # theme, 1440x900). Seeds the showcase into a throwaway HEXGRAPH_HOME, serves it on a spare
 # port, captures the hero + per-feature shots, and tears down. Needs the dev-only Playwright

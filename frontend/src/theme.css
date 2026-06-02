@@ -168,11 +168,27 @@ select.sel:focus, .settings select.sel:focus { outline: none; border-color: var(
 .graph-controls { position: absolute; right: 12px; bottom: 12px; display: flex; flex-direction: column; gap: 6px; z-index: 5; }
 .graph-controls .btn { background: rgba(22,26,38,.85); backdrop-filter: blur(6px); }
 .graph-meta { position: absolute; left: 12px; bottom: 12px; z-index: 5; }
-.legend { display: flex; gap: 12px; flex-wrap: wrap; padding: 9px 13px; border-top: 1px solid var(--border); font-size: 11px; color: var(--fg-dim); }
+.legend { display: flex; gap: 10px; flex-wrap: wrap; padding: 9px 13px; border-top: 1px solid var(--border); font-size: 11px; color: var(--fg-dim); }
 .legend .it { display: inline-flex; align-items: center; gap: 6px; }
-.legend .sw { width: 10px; height: 10px; border-radius: 3px; }
-.legend .ln { width: 14px; height: 3px; border-radius: 2px; }
+.legend .sw { width: 11px; height: 11px; flex: none; }
+.legend .ln { width: 14px; height: 3px; border-radius: 2px; flex: none; }
 .legend .it.sep { width: 1px; height: 12px; background: var(--border); margin: 0 2px; padding: 0; }
+/* Interactive chips: hover previews a type in the graph, click pins the isolation. */
+.legend .chip { cursor: pointer; padding: 2px 7px 2px 5px; border-radius: 999px;
+  border: 1px solid transparent; transition: background .12s, border-color .12s, color .12s; }
+.legend .chip:hover { background: var(--surface-3); color: var(--fg); }
+.legend .chip.pinned { background: rgba(106,163,255,.16); border-color: rgba(106,163,255,.5); color: var(--fg); }
+/* Legend shape swatches — teach the shape+color pairing GraphView uses (a redundant channel). */
+.legend .sw.shape-circle, .legend .sw.shape-ellipse { border-radius: 50%; }
+.legend .sw.shape-rrect, .legend .sw.shape-round-rectangle { border-radius: 3px; }
+.legend .sw.shape-round-tag { border-radius: 3px 7px 7px 3px; }
+.legend .sw.shape-diamond, .legend .sw.shape-round-diamond { border-radius: 2px; transform: rotate(45deg); width: 9px; height: 9px; }
+.legend .sw.shape-hexagon { clip-path: polygon(25% 0,75% 0,100% 50%,75% 100%,25% 100%,0 50%); }
+.legend .sw.shape-triangle { clip-path: polygon(50% 0,100% 100%,0 100%); }
+.legend .sw.shape-vee { clip-path: polygon(50% 60%,100% 0,80% 0,50% 32%,20% 0,0 0); }
+.legend .sw.shape-tag { clip-path: polygon(0 0,72% 0,100% 50%,72% 100%,0 100%); }
+.legend .sw.shape-barrel { border-radius: 40% / 18%; }
+.legend .sw.shape-pentagon { clip-path: polygon(50% 0,100% 38%,82% 100%,18% 100%,0 38%); }
 
 /* findings */
 .fbar { display: flex; gap: 6px; align-items: center; padding: 9px 11px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
