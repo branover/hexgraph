@@ -22,6 +22,7 @@ from hexgraph.api.loopback import assert_loopback, host_allowed
 from hexgraph.api.routers import (
     annotations,
     build,
+    campaigns,
     capabilities,
     findings,
     ghidra,
@@ -104,6 +105,7 @@ def create_app() -> FastAPI:
     app.include_router(settings.router)
     app.include_router(source.router)
     app.include_router(build.router)
+    app.include_router(campaigns.router)
     app.include_router(tasks_runs.router)
     app.include_router(capabilities.router)
     app.include_router(ghidra.router)

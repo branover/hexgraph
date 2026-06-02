@@ -18,6 +18,7 @@ host           := env_var_or_default("HEXGRAPH_HOST", "127.0.0.1")  # loopback o
 port           := env_var_or_default("HEXGRAPH_PORT", "8765")       # API/UI port (ambient HEXGRAPH_PORT or `just port=… serve` wins)
 sandbox_image  := "hexgraph-sandbox:latest"   # analysis sandbox image tag
 build_image    := env_var_or_default("HEXGRAPH_BUILD_IMAGE", "hexgraph-build:latest")  # build-from-source image tag
+fuzz_image     := env_var_or_default("HEXGRAPH_FUZZ_IMAGE", "hexgraph-fuzz:latest")    # coverage-guided fuzz image tag
 firmae_image   := "hexgraph-firmae:latest"    # FirmAE rehosting image tag
 qemu_image     := "hexgraph-qemu:latest"      # qemu+KVM rehosting image tag
 iotgoat_url    := "https://github.com/OWASP/IoTGoat/releases/download/v1.0/IoTGoat-x86.img.gz"
@@ -94,6 +95,18 @@ sandbox-build with_ghidra="0":
 [group('build')]
 build-image with_cross="0":
     docker build -f Dockerfile.build --build-arg WITH_CROSS={{with_cross}} -t {{build_image}} .
+
+# OPT-IN, gated by features.fuzzing/poc. REBUILD WHEN you change Dockerfile.fuzz or the
+# fuzz toolchain — NOT when you edit fuzz_probe.py / afl_probe.py (probes are mounted
+# from the install at runtime). This DEDICATED image (AFL++ LTO/CmpLog + libFuzzer +
+# llvm-symbolizer + afl-cov/llvm-cov + gdb + qemu-user) is what a coverage-guided fuzz
+# CAMPAIGN runs in; it is NOT the shared sandbox image. WORKTREE DISCIPLINE: build a
+# PRIVATE tag and point HEXGRAPH_FUZZ_IMAGE at it — never clobber a shared tag:
+#   `HEXGRAPH_FUZZ_IMAGE=hexgraph-fuzz:wt-<topic> just fuzz-build`.
+# Build the coverage-guided fuzz image (needs Docker; AFL++ + libFuzzer + llvm-symbolizer).
+[group('build')]
+fuzz-build:
+    docker build -f Dockerfile.fuzz -t {{fuzz_image}} .
 
 # ===========================================================================
 # test — the offline suites (mock backend, $0)

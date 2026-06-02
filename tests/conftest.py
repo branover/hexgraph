@@ -41,6 +41,21 @@ def _build_image_ready() -> bool:
 BUILD_IMAGE_READY = _build_image_ready()
 
 
+def _fuzz_image_ready() -> bool:
+    """True if Docker is up AND the hexgraph-fuzz image is present (the dedicated
+    coverage-guided fuzz image; HEXGRAPH_FUZZ_IMAGE overrides the tag for worktrees)."""
+    from hexgraph.sandbox.runner import docker_available
+
+    if not docker_available():
+        return False
+    image = os.environ.get("HEXGRAPH_FUZZ_IMAGE", "hexgraph-fuzz:latest")
+    r = subprocess.run(["docker", "image", "inspect", image], capture_output=True)
+    return r.returncode == 0
+
+
+FUZZ_IMAGE_READY = _fuzz_image_ready()
+
+
 @pytest.fixture(autouse=True)
 def _restore_socket_guard():
     """The egress probes' `_egress.install_socket_guard` monkeypatches global stdlib socket

@@ -153,19 +153,29 @@ def resolve_target_sources(target: Target, task: Task) -> list[str]:
     return out
 
 
-def _crash_finding(crash: dict, function: str | None, target_name: str,
-                   *, coverage_instrumented: bool) -> Finding:
+def crash_finding(crash: dict, function: str | None, target_name: str,
+                  *, coverage_instrumented: bool, engine: str = "libfuzzer",
+                  campaign_id: str | None = None, reproducer_ref: str | None = None) -> Finding:
+    """Build a `fuzz_crash` finding from a probe crash dict. Shared by the single-pass
+    `fuzzing` task and the Phase-3 detached campaign reaper (so the envelope is
+    identical regardless of engine). `engine`/`campaign_id`/`reproducer_ref` thread the
+    campaign provenance + the CAS reproducer (re-runnable via verify_poc) into
+    `evidence.extra.fuzz`. The frozen Finding schema is untouched."""
     kind = crash.get("kind", "crash")
     expl = crash.get("exploitability") or {}
     sev = _severity_for(kind, expl)
     where = function or crash.get("function") or "the harness"
     dupes = int(crash.get("dupe_count") or 0)
+    engine_label = "AFL++" if engine == "afl" else "libFuzzer"
 
     # The fuzz envelope — all new structure rides evidence.extra.fuzz (frozen schema
     # untouched). `coverage_instrumented=false` is the honest black-box flag: with no
-    # source, libFuzzer mutated against no coverage from the code under test.
+    # source, the fuzzer mutated against no coverage from the code under test.
+    # `reproducer_ref` is the CAS sha of the minimized reproducer BYTES — the
+    # one-click-re-verifiable handle wired into verify_poc(reproducer_ref).
     fuzz_extra = {
-        "engine": "libfuzzer",
+        "engine": engine,
+        "campaign_id": campaign_id,
         "crash_kind": kind,
         "dedup_key": crash.get("dedup_key"),
         "dupe_count": dupes,
@@ -175,6 +185,7 @@ def _crash_finding(crash: dict, function: str | None, target_name: str,
         "reproducer_size": crash.get("reproducer_size"),
         "minimized_reproducer_sha": crash.get("minimized_reproducer_sha256"),
         "minimized_reproducer_size": crash.get("minimized_reproducer_size"),
+        "reproducer_ref": reproducer_ref,
     }
     rating = expl.get("rating")
     cov_note = ("" if coverage_instrumented
@@ -187,7 +198,7 @@ def _crash_finding(crash: dict, function: str | None, target_name: str,
         severity=sev,
         confidence="high",  # a reproduced crash is concrete evidence
         category="memory-safety",
-        summary=(f"libFuzzer reproduced a {kind} while fuzzing {target_name} via the generated harness"
+        summary=(f"{engine_label} reproduced a {kind} while fuzzing {target_name} via the generated harness"
                  f"{' (coverage-guided, instrumented target)' if coverage_instrumented else ''}."),
         reasoning=((crash.get("summary") or f"AddressSanitizer reported {kind}.")
                    + (f" Deterministic exploitability triage: {rating}." if rating else "")
@@ -199,7 +210,7 @@ def _crash_finding(crash: dict, function: str | None, target_name: str,
             # LAB-CONFIRMED: the harness fired the bug in isolation (code_present/dynamic) — proven
             # real, but the harness feeds the function directly, so the production input path is NOT
             # established. See engine/assurance.py + docs/design-verification-oracles.md.
-            extra={"engine": "libfuzzer", "crash_kind": kind,
+            extra={"engine": engine, "crash_kind": kind,
                    "reproducer_size": crash.get("reproducer_size"),
                    "faulting_function": crash.get("function"),
                    "fuzz": fuzz_extra,
@@ -213,6 +224,10 @@ def _crash_finding(crash: dict, function: str | None, target_name: str,
             )
         ],
     )
+
+
+# Back-compat alias (the single-pass path used the private name).
+_crash_finding = crash_finding
 
 
 def execute_fuzzing(
@@ -234,50 +249,36 @@ def execute_fuzzing(
 
     cfg = fuzz_config(task)
     crash_dir = tempfile.mkdtemp(prefix="hexgraph-fuzz-out-")
-    fd, src_path = tempfile.mkstemp(suffix=".c", prefix="hexgraph-harness-")
-    with os.fdopen(fd, "w") as fh:
-        fh.write(source)
 
-    extra_args = [
-        f"--max-total-time={cfg['max_total_time']}",
-        f"--max-len={cfg['max_len']}",
-        f"--max-crashes={cfg['max_crashes']}",
-    ]
-    mounts: list[tuple[str, str]] = []
+    # Resolve the SAME libFuzzer inputs through the Fuzzer seam (LibFuzzerFuzzer) — a
+    # strict superset of the Phase-0 behaviour: identical harness/source/lib/seed
+    # resolution + identical fuzz_probe.py invocation, so the single-pass path is byte-
+    # for-byte unchanged. (The seam dispatches by SURFACE; the single-pass task pins
+    # libfuzzer to preserve behaviour.) The detached campaign path uses the same seam.
+    from hexgraph.engine.fuzzers import FuzzCampaignSpec, get_fuzzer
 
-    # Prefer COVERAGE-GUIDED fuzzing: when the target's own SOURCE is available, mount
-    # it and let the probe compile it under -fsanitize=fuzzer-no-link,address so SanCov
-    # + ASan live in the target's objects (real coverage feedback). Only when no source
-    # is available do we fall back to linking the prebuilt (uninstrumented) .so — a
-    # coverage-BLIND run the finding reports honestly (coverage_instrumented=false).
     target_sources = resolve_target_sources(target, task)
-    if target_sources:
-        for i, ts in enumerate(target_sources):
-            guest = f"/src/target_{i}{os.path.splitext(ts)[1] or '.c'}"
-            mounts.append((ts, guest))
-            extra_args.append(f"--target-source={guest}")
-    elif target.kind == TargetKind.shared_library and target.path and os.path.isfile(target.path):
-        # No source — link the real library so the harness resolves its exports.
-        mounts.append((target.path, "/target.so"))
-        extra_args.append("--target-lib=/target.so")
-
-    # Optional seed corpus (task param `seeds`: host paths) to jump-start the fuzzer
-    # past trivial input gates. Each existing file is mounted read-only and fed in.
+    target_lib = (target.path if target.kind == TargetKind.shared_library
+                  and target.path and os.path.isfile(target.path) else None)
     sp = (task.params_json or {}).get("seeds")
     seed_paths = [str(x) for x in sp] if isinstance(sp, (list, tuple)) else ([str(sp)] if sp else [])
-    for i, s in enumerate(seed_paths):
-        if s and os.path.isfile(s):
-            guest = f"/seeds/seed_{i}"
-            mounts.append((s, guest))
-            extra_args.append(f"--seed={guest}")
-
+    spec = FuzzCampaignSpec(
+        target_id=target.id, surface="source_lib", engine="libfuzzer",
+        harness_source=source, function=function, target_sources=target_sources,
+        target_lib=target_lib, seeds=seed_paths,
+        max_total_time=cfg["max_total_time"], max_len=cfg["max_len"],
+        max_crashes=cfg["max_crashes"],
+    )
+    prepared = get_fuzzer("source_lib", "libfuzzer").prepare(spec, project, target)
+    src_path = prepared.artifact
     try:
         result = runner.run_json_probe(
-            "fuzz_probe.py", src_path, outdir=crash_dir, extra_args=extra_args,
-            requires_execution=True, extra_ro_mounts=mounts or None,
+            prepared.probe, src_path, outdir=crash_dir, extra_args=prepared.extra_args,
+            requires_execution=True, extra_ro_mounts=prepared.extra_ro_mounts or None,
         )
     finally:
-        os.unlink(src_path)
+        if src_path:
+            os.unlink(src_path)
 
     write_trace(task, "fuzz.json", {"config": cfg, "function": function,
                                     "coverage_instrumented": bool(target_sources), "result": result})

@@ -31,6 +31,7 @@ WE compiled, never the original target as-is.
 
 from __future__ import annotations
 
+import base64
 import glob
 import hashlib
 import json
@@ -302,9 +303,22 @@ def _flag_all(args: list[str], name: str) -> list[str]:
     return [a.split("=", 1)[1] for a in args if a.startswith(name + "=")]
 
 
-def _emit(obj: dict) -> int:
+def _emit(obj: dict, *, outdir: str | None = None) -> int:
+    """Print the result JSON to stdout (the single-pass `fuzzing` task reads stdout).
+    When `outdir` is given (a detached campaign), ALSO write it to `<outdir>/status.json`
+    + a `DONE` marker so the reaper ingests it — the same shape from either path."""
     obj.setdefault("tool", "fuzz_probe")
     obj.setdefault("engine", "libfuzzer")
+    if outdir:
+        try:
+            tmp = os.path.join(outdir, "status.json.tmp")
+            with open(tmp, "w") as fh:
+                json.dump(obj, fh)
+            os.replace(tmp, os.path.join(outdir, "status.json"))
+            with open(os.path.join(outdir, "DONE"), "w") as fh:
+                fh.write("libfuzzer")
+        except OSError:
+            pass
     print(json.dumps(obj))
     return 0
 
@@ -325,7 +339,8 @@ def main() -> int:
     clang = shutil.which("clang")
     if not clang:
         return _emit({"compiled": False, "ran": False,
-                      "error": "clang+libFuzzer not in sandbox image (rebuild with fuzzing toolchain)"})
+                      "error": "clang+libFuzzer not in sandbox image (rebuild with fuzzing toolchain)"},
+                     outdir=outdir)
 
     # Build + run the fuzzer in the /out bind-mount: the tmpfs /scratch can be
     # noexec / not writable for an output executable, whereas /out is a host bind
@@ -350,7 +365,7 @@ def main() -> int:
             if tbuild.returncode != 0:
                 return _emit({"compiled": False, "ran": False, "returncode": tbuild.returncode,
                               "stage": "target-source", "coverage_instrumented": False,
-                              "stderr": (tbuild.stderr or "")[:2000]})
+                              "stderr": (tbuild.stderr or "")[:2000]}, outdir=outdir)
             obj_files.append(obj)
         coverage_instrumented = True
 
@@ -367,7 +382,7 @@ def main() -> int:
     if build.returncode != 0:
         return _emit({"compiled": False, "ran": False, "returncode": build.returncode,
                       "stage": "harness-link", "coverage_instrumented": coverage_instrumented,
-                      "stderr": (build.stderr or "")[:2000]})
+                      "stderr": (build.stderr or "")[:2000]}, outdir=outdir)
 
     # A seed corpus (optional) jump-starts the fuzzer past trivial input gates — copied
     # into a corpus dir libFuzzer reads from and grows. Standard, deterministic kick.
@@ -444,11 +459,15 @@ def main() -> int:
         expl = classify_exploitability(report, info["kind"])
         remaining = minimize_deadline - time.monotonic()
         if remaining >= 5:
-            min_sha, min_size = _minimize(FUZZER, path, outdir, minimize_runs,
-                                          timeout=min(120, int(remaining)))
+            min_sha, min_size, min_bytes = _minimize(FUZZER, path, outdir, minimize_runs,
+                                                     timeout=min(120, int(remaining)))
         else:
-            min_sha, min_size = None, None  # budget exhausted — keep the crash, skip minimize
+            min_sha, min_size, min_bytes = None, None, None  # budget exhausted — skip minimize
         seen[key] = len(crashes)
+        # The (minimized) reproducer BYTES, base64'd, so the detached-campaign reaper can
+        # store them in CAS for one-click re-verify (verify_poc(reproducer_ref)). Bounded
+        # to keep the JSON small — a minimized reproducer is tiny by construction.
+        repro_bytes = min_bytes if min_bytes is not None else data
         crashes.append({
             **info,
             "reproducer_sha256": sha,
@@ -458,21 +477,23 @@ def main() -> int:
             "exploitability": expl,
             "minimized_reproducer_sha256": min_sha,
             "minimized_reproducer_size": min_size,
+            "reproducer_b64": base64.b64encode(repro_bytes[:65536]).decode(),
             "coverage_instrumented": coverage_instrumented,
         })
 
     return _emit({"compiled": True, "ran": True, "executions": execs,
-                  "coverage_instrumented": coverage_instrumented,
-                  "max_total_time": max_total_time, "crash_count": len(crashes), "crashes": crashes})
+                  "coverage_instrumented": coverage_instrumented, "done": True,
+                  "max_total_time": max_total_time, "crash_count": len(crashes), "crashes": crashes},
+                 outdir=outdir)
 
 
 def _minimize(fuzzer: str, crash_path: str, outdir: str, runs: int,
-              *, timeout: int = 120) -> tuple[str | None, int | None]:
+              *, timeout: int = 120) -> tuple[str | None, int | None, bytes | None]:
     """Shrink a crashing input with libFuzzer's own `-minimize_crash=1 -runs=R`
     (no AFL++ needed). libFuzzer writes a successively smaller input to the
-    `-exact_artifact_path`; we return the sha256 + size of the result when it
-    actually shrank, else (None, None) (best-effort, never fatal). `timeout` bounds
-    this single minimize so the cumulative triage stays under the sandbox wall-clock."""
+    `-exact_artifact_path`; we return (sha256, size, bytes) of the result when it
+    actually shrank, else (None, None, None) (best-effort, never fatal). `timeout`
+    bounds this single minimize so the cumulative triage stays under the wall-clock."""
     try:
         exact = os.path.join(outdir, "minimized-current")
         before = set(glob.glob(os.path.join(outdir, "minimized-from-*")))
@@ -487,16 +508,16 @@ def _minimize(fuzzer: str, crash_path: str, outdir: str, runs: int,
         if os.path.isfile(exact):
             candidates.append(exact)
         if not candidates:
-            return None, None
+            return None, None, None
         best = min(candidates, key=lambda p: os.path.getsize(p))
         orig_size = os.path.getsize(crash_path)
         # Only report the minimized form if it actually shrank the input.
         if os.path.getsize(best) >= orig_size:
-            return None, None
+            return None, None, None
         data = open(best, "rb").read()
-        return hashlib.sha256(data).hexdigest(), len(data)
+        return hashlib.sha256(data).hexdigest(), len(data), data
     except Exception:  # noqa: BLE001 — minimization is best-effort
-        return None, None
+        return None, None, None
 
 
 if __name__ == "__main__":

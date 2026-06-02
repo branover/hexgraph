@@ -102,15 +102,21 @@ class EdgeType(str, enum.Enum):
     harnesses = "harnesses"    # a harness exercises a target/function (node[harness] → target|node)
     instrumented_build_of = "instrumented_build_of"  # a derived (instrumented) target → the original target it was rebuilt from
     builds = "builds"          # a build_spec produces a target/artifact (build_spec → target, attrs={build_id})
+    fuzzed_by = "fuzzed_by"    # a target/harness is fuzzed by a campaign (target|node → fuzz_campaign)
+    produced_artifact = "produced_artifact"  # a campaign produced a crash artifact/finding (fuzz_campaign → finding, attrs={kind,dedup_key})
+    reproduces = "reproduces"  # a reproducer/finding reproduces a crash (finding → fuzz_campaign|finding)
+    covers = "covers"          # a campaign reached a function (fuzz_campaign → node[function], coverage)
     related_to = "related_to"  # generic fallback (kept for back-compat)
 
 
 # Edge endpoint kinds + provenance origins (plain strings in the DB).
-# `source_tree`/`build_spec` are polymorphic endpoint kinds for SQL entities that
-# are NOT graph nodes (design §4.1/§4.5 D1): `built_from` (target → source_tree),
-# `builds` (build_spec → target). Source FILES are `node`s (node_type=source_file),
-# so a finding→source_file `located_in` edge uses the existing `node` kind, not these.
-EDGE_KINDS = ("target", "node", "finding", "task", "source_tree", "build_spec")
+# `source_tree`/`build_spec`/`fuzz_campaign` are polymorphic endpoint kinds for SQL
+# entities that are NOT graph nodes (design §4.1/§4.5 D1/D7): `built_from`
+# (target → source_tree), `builds` (build_spec → target), `fuzzed_by`
+# (target|node → fuzz_campaign), `produced_artifact`/`covers` (fuzz_campaign → …).
+# Source FILES are `node`s (node_type=source_file), so a finding→source_file
+# `located_in` edge uses the existing `node` kind, not these.
+EDGE_KINDS = ("target", "node", "finding", "task", "source_tree", "build_spec", "fuzz_campaign")
 EDGE_ORIGINS = ("tool", "llm", "human", "derived")
 
 
@@ -269,6 +275,92 @@ class Build(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     # The derived target this build registered (the instrumented rebuild), if any.
     derived_target_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class FuzzCampaign(Base):
+    """A long-lived fuzzing campaign — the durable identity that makes fuzzing
+    *progressive* (design §4.5 D7, §5.5). A campaign OUTLIVES a single task tick: it
+    is start/stop/resume-able and accumulates corpus/coverage/dedup across runs. A
+    detached, hardened sandbox container (owned by `container_name`) runs the fuzzer
+    in continuous mode, streaming artifacts/stats to `/out`; a periodic reaper polls
+    + ingests them. The launching `task` records `campaign_id`; status polling reads
+    this row. Crash-safe: because the container is detached and this row durable, a
+    `serve` restart re-attaches the reaper by `container_name`.
+
+    `resources_json` carries the per-campaign ResourceSpec ceilings (mem/cpu/pids/
+    tmpfs/timeout/unconstrained) — a RESOURCE knob, never a policy/gate relaxation."""
+
+    __tablename__ = "fuzz_campaign"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("project.id"), index=True)
+    # The (usually instrumented, derived) target under test.
+    target_id: Mapped[str] = mapped_column(String(36), index=True)
+    name: Mapped[str] = mapped_column(String(300), default="campaign")
+    # source_lib | binary_only | network | file_format (the attack SURFACE, design §2.3).
+    surface: Mapped[str] = mapped_column(String(20), default="source_lib")
+    # libfuzzer | afl (the engine selected for the surface; never branched on in task code).
+    engine: Mapped[str] = mapped_column(String(20), default="libfuzzer")
+    # The managed harness node (source_file role=harness), if any.
+    harness_node_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # The build_spec whose instrumented rebuild this campaign fuzzes, if any.
+    build_spec_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # The launching task (for provenance / re-attach).
+    task_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # The detached container's durable name — the re-attach handle (crash-safe).
+    container_name: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    # The host bind-mount the reaper polls for streamed artifacts/stats.
+    outdir: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Stop parameters, instrumentation flags, seeds/dict refs, etc. (the campaign config).
+    config_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # The per-campaign ResourceSpec (mem/cpu/pids/tmpfs/timeout/unconstrained).
+    resources_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # CAS refs for the preserved corpus / dictionary / coverage report (resumable).
+    corpus_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    dictionary_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    coverage_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # queued | building | running | paused | stopped | completed | failed
+    status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
+    # Live stats the reaper updates: {execs, edges_covered, crash_count, peak_rss, last_run_at}.
+    stats_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # AFL++ master + N secondaries (host-cores, capped). 1 for libFuzzer.
+    instances: Mapped[int] = mapped_column(default=1)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    archived: Mapped[bool] = mapped_column(default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class FuzzArtifact(Base):
+    """One deduplicated artifact a campaign produced — a crash/hang/leak/oom/corpus
+    (design §4.5 D8). The reproducer BYTES live in CAS (`content_cas`), not here; this
+    row is the queryable lifecycle record. `dedup_key` is the normalized stack hash
+    (Phase-0), `UNIQUE(campaign_id, dedup_key)` so a campaign keeps ONE representative
+    per bucket (the UI shows '1 representative + N dupes'). A crash artifact streams to
+    a `fuzz_crash` finding (`finding_id`) whose minimized reproducer is re-runnable via
+    the existing `verify_poc(reproducer_ref)` path."""
+
+    __tablename__ = "fuzz_artifact"
+    __table_args__ = (
+        Index("ix_fuzz_artifact_campaign_dedup", "campaign_id", "dedup_key", unique=True),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("project.id"), index=True)
+    campaign_id: Mapped[str] = mapped_column(String(36), index=True)
+    # crash | hang | leak | oom | corpus
+    kind: Mapped[str] = mapped_column(String(16), default="crash")
+    # The (minimized) reproducer's CAS sha — the bytes, content-addressed (re-runnable).
+    content_cas: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    size: Mapped[int] = mapped_column(default=0)
+    sanitizer: Mapped[str | None] = mapped_column(String(40), nullable=True)   # the ASan crash kind
+    dedup_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    dupe_count: Mapped[int] = mapped_column(default=0)
+    faulting_function: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    exploitability_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # The fuzz_crash finding this artifact produced (nullable for a corpus artifact).
+    finding_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
