@@ -25,8 +25,10 @@ def _load_seed():
 
 @pytest.fixture
 def _mock_fuzzer(monkeypatch):
-    # The campaign runs via the offline MockFuzzer (no Docker, deterministic).
+    # The campaign runs via the offline MockFuzzer and the instrumented rebuild via the
+    # offline MockBuilder (no Docker, deterministic, $0).
     monkeypatch.setenv("HEXGRAPH_FUZZER", "mock")
+    monkeypatch.setenv("HEXGRAPH_BUILDER", "mock")
 
 
 def test_seed_showcase_runs_clean_and_is_rich(hg_home, _mock_fuzzer):
@@ -36,7 +38,8 @@ def test_seed_showcase_runs_clean_and_is_rich(hg_home, _mock_fuzzer):
     )
     from hexgraph.db.session import session_scope
 
-    st.update_settings({"features.fuzzing.enabled": True, "features.poc.enabled": True})
+    st.update_settings({"features.fuzzing.enabled": True, "features.poc.enabled": True,
+                        "features.build.enabled": True})
     seed = _load_seed()
 
     with session_scope() as s:
@@ -61,7 +64,9 @@ def test_seed_showcase_runs_clean_and_is_rich(hg_home, _mock_fuzzer):
         edge_types = {e.type for e in s.query(Edge).filter(Edge.project_id == pid).all()}
         for required in ("contains", "calls", "routes_to", "listens_on", "connects_to",
                          "built_from", "located_in", "instrumented_build_of", "links_against",
-                         "taints", "about", "fuzzed_by", "produced_artifact"):
+                         "taints", "about", "fuzzed_by", "produced_artifact",
+                         # The REAL build flow wires these (a from-source instrumented rebuild):
+                         "builds", "harnesses"):
             assert required in edge_types, f"missing edge type {required!r}"
 
         # ── Typed nodes: functions, a sink, sockets, endpoints/params ──────────────────
@@ -107,12 +112,35 @@ def test_seed_showcase_runs_clean_and_is_rich(hg_home, _mock_fuzzer):
         cov = C.coverage_for(s, camp)
         assert cov["available"] and cov["files"]
 
+        # ── RUNNABILITY: the instrumented target is a REAL build, so "Start a fuzz
+        # campaign" actually works (the seeded-row version 400'd "no fuzz harness
+        # available"). It must carry a recorded build + a resolvable harness + on-disk
+        # target sources — exactly what resolve_harness / resolve_target_sources need.
+        import os as _os
+
+        from hexgraph.db.models import Task
+        from hexgraph.engine.fuzzing import resolve_harness, resolve_target_sources
+
+        instr = next(t for t in targets if "instrumented" in t.name)
+        imeta = instr.metadata_json or {}
+        assert imeta.get("instrumented") is True
+        assert imeta.get("build_id"), "the instrumented target must come from a recorded build"
+        assert imeta.get("sanitizers"), "the instrumented build should record its sanitizers"
+        fake = Task(project_id=pid, target_id=instr.id, type="fuzzing", params_json={})
+        harness, _fid, _fn = resolve_harness(s, instr, fake)
+        assert harness, "a promoted fuzz harness must resolve for the instrumented target"
+        srcs = resolve_target_sources(instr, fake)
+        assert srcs and all(_os.path.isfile(p) for p in srcs), \
+            "fuzz_target_sources must be REAL on-disk files (a real campaign recompiles them)"
+        assert C.infer_surface(instr) == "source_lib", \
+            "the instrumented target must fuzz as coverage-guided source_lib"
+
 
 def test_seed_showcase_is_idempotent(hg_home, _mock_fuzzer):
     from hexgraph import settings as st
     from hexgraph.db.session import session_scope
 
-    st.update_settings({"features.fuzzing.enabled": True})
+    st.update_settings({"features.fuzzing.enabled": True, "features.build.enabled": True})
     seed = _load_seed()
     with session_scope() as s:
         first = seed.seed(s, reset=True)
