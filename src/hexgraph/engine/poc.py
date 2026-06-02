@@ -326,8 +326,12 @@ def verify_reproducer(session: Session, project: Project, target: Target, *,
     # The reproducer bytes drive the target directly. A compiled fuzzer/harness reads
     # its input from stdin in our harness template; the `crash` oracle (signal/ASan
     # abort) is unforgeable — the process really died on this input.
+    import base64
     spec = {
-        "stdin": raw.decode("latin-1"),  # exact bytes, round-trips through subprocess input
+        # BYTE-FAITHFUL: the raw reproducer bytes, base64'd — the probe feeds them on stdin
+        # in byte mode (0x00/0xff preserved exactly). A text `stdin` field is UTF-8 re-encoded
+        # by the subprocess and would corrupt a binary reproducer (battle-test GAP).
+        "stdin_b64": base64.b64encode(raw).decode(),
         "oracle": {"type": "crash"},
         "scope": "harness",  # an isolated reproducer replay → code_present/dynamic
     }

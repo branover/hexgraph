@@ -290,6 +290,28 @@ def worst_rating(*ratings: str) -> str:
     return max((r for r in ratings if r), key=lambda r: _RATING_ORDER.get(r, 0), default="unknown")
 
 
+def symbolizer_env(base: dict | None = None) -> dict:
+    """An env that forces ASan to SYMBOLIZE its backtraces to `func file:line:col`.
+
+    ASan only emits module+offset frames (unsymbolized) unless it can find
+    llvm-symbolizer; the base sandbox image lacks it, but the dedicated `hexgraph-fuzz`
+    image HAS it (Dockerfile.fuzz). We point ASAN_SYMBOLIZER_PATH at it explicitly +
+    `symbolize=1` so the crash replay produces source-mapped frames (battle-test H — the
+    headline 'frame → source jump' + symbolized stack). Best-effort: if no symbolizer is
+    on PATH the env is harmless (ASan falls back to module+offset, as before)."""
+    env = dict(base if base is not None else os.environ)
+    sym = (shutil.which("llvm-symbolizer") or shutil.which("llvm-symbolizer-19")
+           or shutil.which("llvm-symbolizer-18") or shutil.which("llvm-symbolizer-16")
+           or shutil.which("addr2line"))
+    opts = "abort_on_error=1:symbolize=1:detect_leaks=0"
+    if sym:
+        env["ASAN_SYMBOLIZER_PATH"] = sym
+        opts += f":external_symbolizer_path={sym}"
+    env["ASAN_OPTIONS"] = opts
+    env.setdefault("UBSAN_OPTIONS", "symbolize=1:print_stacktrace=1")
+    return env
+
+
 def _flag(args: list[str], name: str, default):
     for a in args:
         if a.startswith(name + "="):
@@ -334,6 +356,10 @@ def main() -> int:
     minimize_runs = _flag(args, "--minimize-runs", 2000)
     target_lib = _flag(args, "--target-lib", None)
     target_sources = [p for p in _flag_all(args, "--target-source") if os.path.isfile(p)]
+    # Include dirs (`-I`) so a target source that `#include`s its own header / a sibling
+    # header compiles (the sources are mounted preserving their directory layout).
+    include_dirs = [d for d in _flag_all(args, "--include-dir") if os.path.isdir(d)]
+    inc_flags = [f"-I{d}" for d in include_dirs]
     seeds = [p for p in _flag_all(args, "--seed") if os.path.isfile(p)]
 
     clang = shutil.which("clang")
@@ -360,7 +386,8 @@ def main() -> int:
             obj = os.path.join(outdir, f"target_{i}.o")
             is_cxx = ts.endswith((".cc", ".cpp", ".cxx", ".C", ".c++"))
             cc = shutil.which("clang++") if (is_cxx and shutil.which("clang++")) else clang
-            tcmd = [cc, "-g", "-O1", "-w", "-fsanitize=fuzzer-no-link,address", "-c", ts, "-o", obj]
+            tcmd = [cc, "-g", "-O1", "-w", "-fsanitize=fuzzer-no-link,address",
+                    *inc_flags, "-c", ts, "-o", obj]
             tbuild = subprocess.run(tcmd, capture_output=True, text=True)
             if tbuild.returncode != 0:
                 return _emit({"compiled": False, "ran": False, "returncode": tbuild.returncode,
@@ -371,7 +398,7 @@ def main() -> int:
 
     # The harness is mounted at /artifact (no extension), so tell clang it's C —
     # otherwise ld treats the extensionless input as a linker script and fails.
-    cmd = [clang, "-g", "-O1", "-w", "-fsanitize=fuzzer,address", "-x", "c", src,
+    cmd = [clang, "-g", "-O1", "-w", "-fsanitize=fuzzer,address", *inc_flags, "-x", "c", src,
            "-x", "none", "-o", FUZZER]
     cmd.extend(obj_files)
     # A prebuilt .so is only linked when we have NO instrumented source — linking both
@@ -402,10 +429,19 @@ def main() -> int:
         capture_output=True, text=True, cwd=outdir,
     )
     out = (run.stdout or "") + "\n" + (run.stderr or "")
+    # Total executions. Single-process libFuzzer ends with `#N DONE` /
+    # `stat::number_of_executed_units: N`; FORK mode (-fork=1, our default) never prints
+    # those — its progress lines are `#NNN: cov: .. exec/s ..` and the LAST `#NNN:` is the
+    # cumulative exec count. Parse all three so a fork-mode run reports real execs (else the
+    # campaign was wrongly finalized `degraded` as a 0-exec no-op — battle-test live-stats).
     execs = None
     em = re.search(r"#(\d+)\s+DONE", out) or re.search(r"stat::number_of_executed_units:\s*(\d+)", out)
     if em:
         execs = int(em.group(1))
+    else:
+        fork_counts = re.findall(r"^#(\d+):\s+cov:", out, re.MULTILINE)
+        if fork_counts:
+            execs = max(int(c) for c in fork_counts)
 
     # Each saved artifact is a crashing input; reproduce it for its report, then
     # bucket by the normalized stack-hash (keeping one representative per bucket) and
@@ -436,7 +472,7 @@ def main() -> int:
         sha = hashlib.sha256(data).hexdigest()
         try:
             repro = subprocess.run([FUZZER, path], capture_output=True, text=True, cwd=outdir,
-                                   timeout=60)
+                                   timeout=60, env=symbolizer_env())
         except subprocess.TimeoutExpired:
             # A single input that hangs the replay is a finding (a hang/DoS), but we
             # can't symbolize it; treat it as a timeout crash so it's not lost, and
@@ -479,12 +515,141 @@ def main() -> int:
             "minimized_reproducer_size": min_size,
             "reproducer_b64": base64.b64encode(repro_bytes[:65536]).decode(),
             "coverage_instrumented": coverage_instrumented,
+            # The symbolized ASan report — the reaper parses source-mapped stack frames
+            # (`func file:line`) from this for the clickable triage stack (battle-test H).
+            "_report": report[:8000],
         })
 
-    return _emit({"compiled": True, "ran": True, "executions": execs,
-                  "coverage_instrumented": coverage_instrumented, "done": True,
-                  "max_total_time": max_total_time, "crash_count": len(crashes), "crashes": crashes},
-                 outdir=outdir)
+    # Per-line source coverage map (battle-test H — the Source viewer's line shading +
+    # coverage_for). Best-effort: a separate PGO-coverage build replayed over the corpus,
+    # exported via llvm-cov. Only when we have the target SOURCE (coverage-guided run).
+    coverage_percent = None
+    if coverage_instrumented and target_sources:
+        cov = _collect_coverage(clang, src, target_sources, inc_flags, corpus_dir, outdir)
+        if cov is not None:
+            coverage_percent = cov.get("percent")
+
+    # Exec floor: libFuzzer's -fork=1 wrapper can occasionally exit before printing a
+    # parseable final stats line (its child forkserver is fragile under the hardened
+    # sandbox) — but if the run grew the corpus or saved crashing inputs, fuzzing DID
+    # happen. Floor execs to that evidence so the campaign is NOT mis-finalized as a
+    # `degraded` zero-exec no-op when it actually ran (battle-test live-stats robustness).
+    if not execs:
+        corpus_n = len(glob.glob(os.path.join(corpus_dir, "*")))
+        crash_n = len(glob.glob(os.path.join(outdir, "crash-*")))
+        if corpus_n > 1 or crash_n > 0 or coverage_percent:
+            execs = max(execs or 0, corpus_n + crash_n, 1)
+
+    out_obj = {"compiled": True, "ran": True, "executions": execs,
+               "coverage_instrumented": coverage_instrumented, "done": True,
+               "max_total_time": max_total_time, "crash_count": len(crashes), "crashes": crashes}
+    if coverage_percent is not None:
+        out_obj["coverage_percent"] = coverage_percent
+    return _emit(out_obj, outdir=outdir)
+
+
+def _collect_coverage(clang: str, harness: str, target_sources: list[str], inc_flags: list[str],
+                      corpus_dir: str, outdir: str) -> dict | None:
+    """Build a clang source-based-coverage variant of the harness + target sources
+    (`-fprofile-instr-generate -fcoverage-mapping`), replay the corpus through it, and
+    export a per-line coverage map to `<outdir>/coverage.json` in HexGraph's shape
+    ({percent, files:{rel:{covered:[lines], uncovered:[lines], total}}}). Best-effort —
+    returns the parsed map or None (no shading, reported honestly). Skips quietly when
+    llvm-cov/llvm-profdata aren't present. NEVER fatal — coverage is an extra, not the run."""
+    profdata_tool = shutil.which("llvm-profdata")
+    cov_tool = shutil.which("llvm-cov")
+    if not (profdata_tool and cov_tool):
+        return None
+    try:
+        covbin = os.path.join(outdir, "coverage_bin")
+        # libFuzzer driver supplies main; instrument the harness + target sources for
+        # source-based coverage. -fsanitize=fuzzer gives us the corpus-replay entry point.
+        build = subprocess.run(
+            [clang, "-g", "-O0", "-w", "-fsanitize=fuzzer",
+             "-fprofile-instr-generate", "-fcoverage-mapping", *inc_flags,
+             "-x", "c", harness, "-x", "none", *target_sources, "-o", covbin],
+            capture_output=True, text=True, timeout=180)
+        if build.returncode != 0 or not os.path.isfile(covbin):
+            return None
+        # Replay the corpus PER FILE (each in its own process) rather than `-runs=0` over
+        # the whole dir: a single crashing input (e.g. a copied seed that crashes) would
+        # otherwise abort the one-shot replay and truncate the profile, suppressing the whole
+        # map. Per-file `%m`-merge-pool profraws are robust to a mid-corpus crash — a
+        # crashing input contributes whatever it covered and the rest still run.
+        corpus_files = [p for p in glob.glob(os.path.join(corpus_dir, "*")) if os.path.isfile(p)]
+        if not corpus_files:
+            return None
+        profpat = os.path.join(outdir, "cov-%m.profraw")
+        deadline = time.monotonic() + 100
+        for cf in corpus_files:
+            if time.monotonic() > deadline:
+                break
+            try:
+                subprocess.run([covbin, "-runs=1", cf], capture_output=True, cwd=outdir,
+                               timeout=20, env={**os.environ, "LLVM_PROFILE_FILE": profpat})
+            except subprocess.TimeoutExpired:
+                continue  # a hang on one input must not suppress coverage of the rest
+        profraws = glob.glob(os.path.join(outdir, "cov-*.profraw"))
+        if not profraws:
+            return None
+        profdata = os.path.join(outdir, "cov.profdata")
+        merge = subprocess.run([profdata_tool, "merge", "-sparse", *profraws, "-o", profdata],
+                               capture_output=True, text=True, timeout=60)
+        if merge.returncode != 0 or not os.path.isfile(profdata):
+            return None
+        exp = subprocess.run(
+            [cov_tool, "export", covbin, f"-instr-profile={profdata}", "-format=text",
+             *target_sources],
+            capture_output=True, text=True, timeout=60)
+        if exp.returncode != 0 or not exp.stdout:
+            return None
+        cov_map = _llvm_cov_to_linemap(exp.stdout)
+        if cov_map is None:
+            return None
+        with open(os.path.join(outdir, "coverage.json"), "w") as fh:
+            json.dump(cov_map, fh)
+        return cov_map
+    except Exception:  # noqa: BLE001 — coverage is best-effort
+        return None
+
+
+def _llvm_cov_to_linemap(export_json: str) -> dict | None:
+    """Convert `llvm-cov export -format=text` JSON into HexGraph's per-line map. We read the
+    per-function `segments` (each `[line, col, count, hasCount, isRegionEntry, …]`): a line
+    with count>0 is covered, count==0 is uncovered. Keyed by the source BASENAME (the Source
+    viewer matches on rel/basename suffix). Returns {percent, files:{...}} or None."""
+    try:
+        data = json.loads(export_json)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    files: dict[str, dict] = {}
+    total_lines = 0
+    total_covered = 0
+    for export in data.get("data", []):
+        for f in export.get("files", []):
+            rel = os.path.basename(f.get("filename") or "")
+            if not rel:
+                continue
+            covered: set[int] = set()
+            uncovered: set[int] = set()
+            for seg in f.get("segments", []):
+                # segment: [line, col, count, hasCount, isRegionEntry, isGapRegion]
+                if len(seg) < 4 or not seg[3]:
+                    continue
+                line, count = int(seg[0]), int(seg[2])
+                (covered if count > 0 else uncovered).add(line)
+            uncovered -= covered
+            if not (covered or uncovered):
+                continue
+            tot = len(covered | uncovered)
+            files[rel] = {"covered": sorted(covered), "uncovered": sorted(uncovered),
+                          "total": tot}
+            total_lines += tot
+            total_covered += len(covered)
+    if not files:
+        return None
+    pct = round(100.0 * total_covered / total_lines, 1) if total_lines else 0.0
+    return {"percent": pct, "files": files}
 
 
 def _minimize(fuzzer: str, crash_path: str, outdir: str, runs: int,
@@ -509,13 +674,25 @@ def _minimize(fuzzer: str, crash_path: str, outdir: str, runs: int,
             candidates.append(exact)
         if not candidates:
             return None, None, None
-        best = min(candidates, key=lambda p: os.path.getsize(p))
         orig_size = os.path.getsize(crash_path)
-        # Only report the minimized form if it actually shrank the input.
-        if os.path.getsize(best) >= orig_size:
-            return None, None, None
-        data = open(best, "rb").read()
-        return hashlib.sha256(data).hexdigest(), len(data), data
+        # Smallest-first, but ONLY accept a minimized form that (a) actually shrank AND
+        # (b) STILL CRASHES when replayed. libFuzzer's -minimize_crash can, under a flaky
+        # forkserver, emit a "minimized" file that no longer reproduces — storing that as the
+        # reproducer would make one-click re-verify spuriously fail (the crash bytes must
+        # always re-crash). We verify each candidate and fall back to the original crash
+        # bytes (which DID crash) rather than ship a non-reproducing reproducer.
+        for best in sorted(candidates, key=lambda p: os.path.getsize(p)):
+            if os.path.getsize(best) >= orig_size:
+                continue
+            try:
+                rc = subprocess.run([fuzzer, best], capture_output=True, cwd=outdir,
+                                    timeout=30).returncode
+            except subprocess.TimeoutExpired:
+                rc = 1  # a hang is still a crash/finding
+            if rc != 0:
+                data = open(best, "rb").read()
+                return hashlib.sha256(data).hexdigest(), len(data), data
+        return None, None, None
     except Exception:  # noqa: BLE001 — minimization is best-effort
         return None, None, None
 

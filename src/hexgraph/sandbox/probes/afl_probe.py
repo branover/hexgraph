@@ -80,6 +80,8 @@ def main() -> int:
     max_crashes = _flag(args, "--max-crashes", 10)
     instances = max(1, int(_flag(args, "--instances", 1)))
     target_sources = [p for p in _flag_all(args, "--target-source") if os.path.isfile(p)]
+    include_dirs = [d for d in _flag_all(args, "--include-dir") if os.path.isdir(d)]
+    inc_flags = [f"-I{d}" for d in include_dirs]
     seeds = [p for p in _flag_all(args, "--seed") if os.path.isfile(p)]
     dict_raw = _flag(args, "--dict", None)
 
@@ -102,8 +104,8 @@ def main() -> int:
     # main), so link AFL++'s libFuzzer-compatible driver (`-fsanitize=fuzzer`) to supply
     # `main` + the persistent loop, while afl-clang-fast bakes SanCov+ASan into the
     # TARGET's own objects (real coverage). This runs under afl-fuzz in persistent mode.
-    base_cmd = [ccx, "-g", "-O1", "-w", "-fsanitize=fuzzer,address", "-x", "c", src, "-x", "none",
-                *target_sources, "-o", fuzzer]
+    base_cmd = [ccx, "-g", "-O1", "-w", "-fsanitize=fuzzer,address", *inc_flags,
+                "-x", "c", src, "-x", "none", *target_sources, "-o", fuzzer]
     benv = {**os.environ, "AFL_USE_ASAN": "1"}
     build = subprocess.run(base_cmd, capture_output=True, text=True, env=benv)
     if build.returncode != 0:
@@ -118,7 +120,7 @@ def main() -> int:
     # __AFL_FUZZ harness), it can default on. Best-effort either way.
     cmplog_ok = False
     if os.environ.get("AFL_HG_CMPLOG") == "1":
-        cl = subprocess.run([ccx, "-g", "-O1", "-w", "-fsanitize=fuzzer", "-x", "c", src,
+        cl = subprocess.run([ccx, "-g", "-O1", "-w", "-fsanitize=fuzzer", *inc_flags, "-x", "c", src,
                              "-x", "none", *target_sources, "-o", cmplog],
                             capture_output=True, text=True,
                             env={**os.environ, "AFL_LLVM_CMPLOG": "1"})
@@ -311,8 +313,7 @@ def _collect(outdir, work, fuzzer, max_crashes, *, done, coverage_instrumented):
             continue
         try:
             repro = subprocess.run([fuzzer, path], capture_output=True, text=True,
-                                   cwd=outdir, timeout=30,
-                                   env={**os.environ, "ASAN_OPTIONS": "abort_on_error=1:symbolize=1"})
+                                   cwd=outdir, timeout=30, env=fuzz_probe.symbolizer_env())
             report = (repro.stdout or "") + (repro.stderr or "")
             rc = repro.returncode
         except subprocess.TimeoutExpired:
@@ -337,6 +338,7 @@ def _collect(outdir, work, fuzzer, max_crashes, *, done, coverage_instrumented):
             "minimized_reproducer_sha256": min_sha, "minimized_reproducer_size": min_size,
             "reproducer_b64": base64.b64encode(repro_bytes).decode(),
             "coverage_instrumented": coverage_instrumented,
+            "_report": report[:8000],
         })
     return {"compiled": True, "ran": True, "engine": "afl", "done": done,
             "coverage_instrumented": coverage_instrumented, "executions": execs,

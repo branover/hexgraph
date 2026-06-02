@@ -336,7 +336,8 @@ def _register_derived_target(session, project: Project, tree: SourceTree, build:
             "source_tree_id": tree.id,
             "artifact_cas": artifacts_cas.get(rel),
             # The source files HexGraph rebuilt — Phase-3 fuzzing reads these to compile
-            # the target's own objects with SanCov+ASan (coverage-guided).
+            # the target's own objects with SanCov+ASan (coverage-guided). Populated below
+            # (after the derived row exists) from the instrumented tree's code sources.
             "fuzz_target_sources": [],
         },
     )
@@ -354,8 +355,15 @@ def _register_derived_target(session, project: Project, tree: SourceTree, build:
     meta = dict(derived.metadata_json or {})
     meta["size"] = dst.stat().st_size if dst.is_file() else 0
     meta["artifacts"] = artifacts_cas
+    # ── Build→fuzz handoff (§3.3): record the TARGET sources HexGraph instrumented +
+    # promote the harness so a subsequent start_fuzz_campaign infers source_lib and runs
+    # COVERAGE-GUIDED (not binary_only/qemu on a relocatable .o). Without this the
+    # documented happy path silently no-ops (battle-test C). Both are best-effort: when no
+    # source/harness is resolvable the campaign degrades honestly, never falsely.
+    meta["fuzz_target_sources"] = _instrumented_target_sources(project, tree, spec)
     derived.metadata_json = meta
     session.flush()
+    _promote_build_harness(session, project, tree, derived)
 
     # Graph wiring: the derived target is an instrumented rebuild OF the original.
     if origin is not None:
@@ -368,6 +376,59 @@ def _register_derived_target(session, project: Project, tree: SourceTree, build:
              dst=("target", derived.id), type=EdgeType.builds, origin="tool",
              confidence=1.0, created_by_tool="build", attrs={"build_id": build.id})
     return derived
+
+
+# C/C++ translation units we can compile under SanCov+ASan for coverage-guided fuzzing.
+_C_SOURCE_EXT = (".c", ".cc", ".cpp", ".cxx", ".c++", ".C")
+
+
+def _instrumented_target_sources(project: Project, tree: SourceTree, spec: BuildSpec) -> list[str]:
+    """The HOST paths of the target's OWN translation units that were instrumented in
+    this build — what Phase-3 coverage-guided fuzzing recompiles with
+    `-fsanitize=fuzzer-no-link,address` and links into the harness. We take every
+    code-role C/C++ source in the tree EXCEPT the harness/poc/script files (those aren't
+    "the library under test"): a harness defines `LLVMFuzzerTestOneInput`, not the API
+    being fuzzed, and compiling it as a target source would double-define the entry point.
+    Returns existing host paths only (a missing file is dropped — resolve_target_sources
+    degrades to a coverage-blind run rather than over-claim instrumentation)."""
+    root = host_root(project, tree)
+    out: list[str] = []
+    for f in (tree.manifest_json or {}).get("files") or []:
+        rel = f.get("rel")
+        role = f.get("role", "code")
+        if not rel or role in ("harness", "poc", "script", "build_recipe"):
+            continue
+        if not str(rel).endswith(_C_SOURCE_EXT):
+            continue
+        host = root / rel
+        if host.is_file():
+            out.append(str(host))
+    return out
+
+
+def _promote_build_harness(session, project: Project, tree: SourceTree, derived: Target) -> None:
+    """Promote a harness in the built tree to a managed `source_file(role=harness)` + a
+    `harness` node `harnesses`→ the DERIVED (instrumented) target, so a subsequent
+    start_fuzz_campaign resolves it (resolve_harness → resolve_managed_harness reads the
+    `harnesses` edge). Idempotent (promote_harness keys on target+function+finding).
+    Best-effort: a tree with no harness-role file is left as-is (the campaign then reports
+    'no fuzz harness available' honestly instead of false-greening). Picks the first
+    harness-role file in the manifest; ignores a read failure."""
+    from hexgraph.engine.harness_promote import promote_harness
+    from hexgraph.engine.source import read_source_file
+
+    harness_rel = next((f.get("rel") for f in (tree.manifest_json or {}).get("files") or []
+                        if f.get("role") == "harness" and f.get("rel")), None)
+    if not harness_rel:
+        return
+    try:
+        text = read_source_file(project, tree, harness_rel)
+    except Exception:  # noqa: BLE001 — a harness we can't read just isn't promoted
+        return
+    if text.get("encoding") != "text" or not text.get("content"):
+        return
+    promote_harness(session, project, derived.id, text["content"],
+                    function=Path(harness_rel).stem)
 
 
 # ── Read helpers (API/MCP) ──────────────────────────────────────────────────────

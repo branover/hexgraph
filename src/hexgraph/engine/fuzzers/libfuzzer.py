@@ -13,7 +13,7 @@ import os
 import tempfile
 
 from hexgraph.engine.fuzzers.base import FuzzCampaignSpec, Fuzzer, PreparedFuzz
-from hexgraph.engine.fuzzers.shared import fuzz_image
+from hexgraph.engine.fuzzers.shared import fuzz_image, target_source_mounts
 
 
 class LibFuzzerFuzzer(Fuzzer):
@@ -42,11 +42,15 @@ class LibFuzzerFuzzer(Fuzzer):
         # .so — a coverage-blind run reported honestly. IDENTICAL to execute_fuzzing.
         coverage_instrumented = False
         if spec.target_sources:
-            for i, ts in enumerate(spec.target_sources):
-                guest = f"/src/target_{i}{os.path.splitext(ts)[1] or '.c'}"
-                mounts.append((ts, guest))
+            # Mount each source's directory (preserving layout) so a self-including header
+            # compiles, and add each dir to the include path (battle-test L).
+            src_mounts, guest_sources, include_dirs = target_source_mounts(spec.target_sources)
+            mounts.extend(src_mounts)
+            for guest in guest_sources:
                 extra_args.append(f"--target-source={guest}")
-            coverage_instrumented = True
+            for inc in include_dirs:
+                extra_args.append(f"--include-dir={inc}")
+            coverage_instrumented = bool(guest_sources)
         elif spec.target_lib and os.path.isfile(spec.target_lib):
             mounts.append((spec.target_lib, "/target.so"))
             extra_args.append("--target-lib=/target.so")

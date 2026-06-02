@@ -7,7 +7,8 @@ The spec describes how to run the target and how to know the PoC worked:
   {
     "argv":  ["..."],                 # extra args after the program (optional)
     "env":   {"QUERY_STRING": "..."}, # environment for the run (optional)
-    "stdin": "...",                   # stdin to feed (optional)
+    "stdin": "...",                   # stdin to feed as text (optional)
+    "stdin_b64": "...",               # stdin to feed as RAW BYTES, base64'd (optional, byte-faithful)
     "timeout": 20,                    # wall-clock seconds (optional)
     "oracle": {"type": "output_contains"|"exit_code"|"exit_nonzero"|"crash", "value": ...}
   }
@@ -121,10 +122,28 @@ def main() -> int:
     cmd = [*prefix, target, *[str(a) for a in (spec.get("argv") or [])]]
     timeout = int(spec.get("timeout", 20))
 
+    # stdin: prefer the BYTE-FAITHFUL `stdin_b64` (raw bytes — 0x00/0xff preserved exactly,
+    # never text-encoded; the fix for replaying a binary fuzz reproducer over stdin). Falls
+    # back to the text `stdin` field. Byte-mode subprocess (text=False) when bytes are given.
+    stdin_b64 = spec.get("stdin_b64")
+    stdin_bytes = None
+    if stdin_b64 is not None:
+        import base64
+        try:
+            stdin_bytes = base64.b64decode(stdin_b64)
+        except Exception:  # noqa: BLE001 — a malformed b64 just yields no stdin
+            stdin_bytes = b""
     try:
-        proc = subprocess.run(cmd, env=env, cwd=outdir, capture_output=True, text=True,
-                              input=spec.get("stdin"), timeout=timeout)
-        rc, out = proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+        if stdin_bytes is not None:
+            proc = subprocess.run(cmd, env=env, cwd=outdir, capture_output=True,
+                                  input=stdin_bytes, timeout=timeout)
+            rc = proc.returncode
+            out = (proc.stdout or b"").decode("utf-8", "replace") + \
+                  (proc.stderr or b"").decode("utf-8", "replace")
+        else:
+            proc = subprocess.run(cmd, env=env, cwd=outdir, capture_output=True, text=True,
+                                  input=spec.get("stdin"), timeout=timeout)
+            rc, out = proc.returncode, (proc.stdout or "") + (proc.stderr or "")
     except subprocess.TimeoutExpired as exc:
         rc, out = 124, (exc.output or "") if isinstance(exc.output, str) else ""
     except OSError as exc:
