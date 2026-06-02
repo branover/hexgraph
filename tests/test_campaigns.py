@@ -122,6 +122,39 @@ def test_hardening_mounts_dev_shm_data_only():
     assert "--read-only" in args and "--cap-drop" in args and "1000:1000" in args
 
 
+def test_disable_aslr_swaps_minimal_seccomp_and_keeps_hardening():
+    """The ASLR-disable path (ASan source fuzz) adds the MINIMAL custom seccomp profile so
+    `setarch -R` (personality(ADDR_NO_RANDOMIZE)) is permitted, and NOTHING else relaxes.
+    Default (disable_aslr=False) carries NO `seccomp=` opt (uses docker's default)."""
+    import json
+
+    from hexgraph.sandbox.runner import SECCOMP_ASLR_PROFILE, SandboxRunner
+
+    r = SandboxRunner()
+    base = r._hardening_args(allow_network=False, net_container=None,
+                             resources=ResourceSpec(), secret=False)
+    assert not any(a.startswith("seccomp=") for a in base), "default must use docker's seccomp"
+
+    on = r._hardening_args(allow_network=False, net_container=None,
+                           resources=ResourceSpec(), secret=False, disable_aslr=True)
+    secopts = [on[i + 1] for i, a in enumerate(on) if a == "--security-opt"]
+    seccomp = [s for s in secopts if s.startswith("seccomp=")]
+    assert len(seccomp) == 1, "disable_aslr must add exactly one custom seccomp profile"
+    assert "no-new-privileges" in secopts  # NOT dropped — still hardened
+    # Every other security flag is byte-identical to the default path (only seccomp added).
+    assert "--network" in on and on[on.index("--network") + 1] == "none"
+    assert "--read-only" in on and "--cap-drop" in on and "ALL" in on
+    assert "--user" in on and "1000:1000" in on
+
+    # The profile is the minimal one: docker's deny-by-errno default + a SINGLE extra rule
+    # allowing ONLY personality(ADDR_NO_RANDOMIZE=0x40000). It must not be unconfined.
+    prof = json.loads(SECCOMP_ASLR_PROFILE.read_text())
+    assert prof["defaultAction"] == "SCMP_ACT_ERRNO"  # deny-by-default, NOT unconfined
+    persona = [s for s in prof["syscalls"] if "personality" in s.get("names", [])]
+    vals = {a["value"] for s in persona for a in s.get("args", [])}
+    assert 0x40000 in vals, "must allow personality(ADDR_NO_RANDOMIZE)"
+
+
 def test_resolve_resources_merges_settings_default_and_override(hg_home):
     st.update_settings({"features.fuzzing.resources.mem": "4g"})
     rs = C.resolve_resources({"unconstrained": True})
@@ -185,7 +218,7 @@ def test_reap_is_idempotent(hg_home, monkeypatch):
 @pytest.mark.parametrize("scenario,expect_note", [
     ("unreachable", "not reachable"),       # boofuzz: service down → ran:False
     ("noexec", "0 execution"),              # ran but did no work
-    ("unstable", "AFL persistent mode"),    # engine flagged instability
+    ("unstable", "reported instability"),   # engine flagged instability
 ])
 def test_degraded_campaign_status_and_warning(hg_home, monkeypatch, scenario, expect_note):
     """A campaign that did 0 work or hit engine degradation finalizes as `degraded`
@@ -208,7 +241,7 @@ def test_degraded_campaign_status_and_warning(hg_home, monkeypatch, scenario, ex
         assert d["warning"], "a degraded campaign must carry a human warning reason"
         assert expect_note.lower() in d["warning"].lower()
         if scenario == "unstable":
-            assert d["engine_note"] and "AFL persistent" in d["engine_note"]
+            assert d["engine_note"] and "reported instability" in d["engine_note"]
 
 
 def test_clean_campaign_is_not_degraded(hg_home, monkeypatch):

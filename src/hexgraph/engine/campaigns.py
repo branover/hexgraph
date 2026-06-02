@@ -304,7 +304,7 @@ def start_campaign(session: Session, project: Project, target: Target, *,
                 prepared.probe, prepared.artifact, name=container_name, outdir=outdir,
                 image=prepared.image, extra_args=prepared.extra_args,
                 requires_execution=True, extra_ro_mounts=prepared.extra_ro_mounts,
-                resources=res,
+                resources=res, disable_aslr=prepared.disable_aslr,
             )
             row.container_name = handle.name
     except Exception as exc:  # noqa: BLE001 — a failed launch fails the campaign cleanly
@@ -394,8 +394,8 @@ def _launch_mock(row: FuzzCampaign, prepared, spec: FuzzCampaignSpec) -> None:
             degraded.update({"ran": True, "executions": 0})
         else:  # unstable
             degraded.update({"ran": True, "executions": 1000,
-                             "engine_note": "AFL persistent mode unstable on this host — "
-                                            "ran in non-persistent mode (reduced throughput)"})
+                             "engine_note": "AFL engine reported instability on this host — "
+                                            "results may be incomplete (reduced throughput)"})
         (outdir / "status.json").write_text(json.dumps(degraded))
         (outdir / "DONE").write_text("mock")
         return
@@ -626,7 +626,7 @@ def _finalize_status(row: FuzzCampaign, status: dict | None) -> str:
 
       • the probe reported `ran: False` (e.g. boofuzz: the service was unreachable), OR
       • it ran zero executions (no fuzzing actually happened), OR
-      • the engine flagged instability (`engine_note` — e.g. AFL persistent mode unstable).
+      • the engine flagged instability (`engine_note` — e.g. the AFL engine reported instability).
 
     Otherwise `completed`. `campaign_warning()` derives the human reason for the serializer.
     The status column is a plain String — a new value is zero-migration."""

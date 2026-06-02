@@ -714,16 +714,68 @@ still finds the planted crash). The `afl_probe.py` invocation also gained a gene
 `-t` and `AFL_FORKSRV_INIT_TMOUT` (timing budgets, not security flags) so a slow first
 instrumented exec doesn't trip AFL's 1 s dry-run calibration on a constrained host.
 
-**Residual host-kernel caveat (honest fallback).** On some kernels (observed on WSL2 6.6.x)
-AFL++ **persistent/SHM-fuzzing** mode is itself unstable — the forkserver still crashes
-intermittently *or* the dry-run calibration deadlocks — *independent of the sandbox* (it
-reproduces with zero hardening). When that happens, `afl_probe.py` no longer reports a silent
-zero-crash "success": it detects that no exec ran, surfaces a loud `afl_note` (e.g. "AFL++
-persistent mode unstable on this host kernel"), and the engine threads it onto
-`campaign.stats_json.engine_note`. The Docker-gated source-fuzz e2e (`tests/test_campaign_e2e.py`)
-asserts the full crash→dedup→classify→verify chain on a capable host and **skips with that
-exact reason** when the host kernel can't calibrate — so it's a true result on CI, never a
-false green or a hard flake. On a normal Linux kernel the `/dev/shm` fix is the complete fix.
+**Residual host-kernel caveat — RESOLVED (fix/afl-aslr).** The `/dev/shm` fix above cleared
+the SHM-sizing forkserver crash, but on high-ASLR-entropy kernels (`vm.mmap_rnd_bits=32` —
+WSL2 6.6.x, Ubuntu 23.10+, GitHub CI runners) two further failures remained, both now fixed —
+see the next section. The probe still surfaces a loud `afl_note` → `campaign.stats_json.engine_note`
+if a campaign genuinely manages **zero** executions, but that now signals a real residual
+fault, not a known-host limitation; the source-fuzz e2e (`tests/test_campaign_e2e.py`) now
+**PASSES on these kernels** (it asserts the full crash→dedup→classify→verify chain and no
+longer skips-with-reason on the ASLR case).
+
+### AFL++ source-fuzz on high-ASLR-entropy kernels (fix/afl-aslr)
+
+After the `/dev/shm` fix, the AFL++ source path still failed on WSL2 6.6.x with two distinct,
+intertwined symptoms: (a) intermittent (~30%) **`Fork server crashed with signal 11`** with
+0 executions, and (b) a 100% **`test case results in a timeout` → `All test cases time out,
+giving up`** dry-run abort. Both reproduce with *zero* sandbox hardening, so neither is a
+sandbox or WSL bug — they are host-kernel/toolchain interactions.
+
+**Root cause (a) — ASan ✕ high-entropy ASLR.** The harness + target are compiled with ASan.
+On a kernel with `vm.mmap_rnd_bits=32` (maximum ASLR entropy), ASan's `mmap(MAP_FIXED)`
+**shadow-memory reservation intermittently collides** with a randomly-placed mapping and the
+process **SIGSEGVs during ASan init** — *before* AFL's forkserver handshake completes. (clang
+≥ 17 auto-re-execs with reduced entropy to dodge this; the `hexgraph-fuzz` image ships clang
+14, so it does not.) Refs: microsoft/WSL#40168, actions/runner-images#9515,
+google/sanitizers#1614, llbit.github.io/programming/2024/03/19/aslr-asan-problem.html.
+*Confirmed locally*: the instrumented binary run directly SIGSEGVs ~4/15 with ASLR on, **0/30
+with ASLR off**.
+
+**Root cause (b) — AFL persistent/SHM driver hang.** The path linked AFL++'s libFuzzer-compat
+**persistent** driver (`-fsanitize=fuzzer` → `aflpp_driver` + `__AFL_LOOP` + a shared-memory
+test-case region). On this kernel the persistent loop's first dry-run exec **wedges** (the SHM
+handshake never returns), so afl reports the input as a timeout and gives up — *even without
+ASan*. `afl-showmap` (classic forkserver, no persistent SHM) on the same binary works 8/8.
+
+**Fix (minimal, hardening-preserving).**
+1. **Run the target with ASLR off via `setarch -R`** (= `personality(ADDR_NO_RANDOMIZE)`):
+   `afl_probe.py` prefixes the `afl-fuzz` invocation with `setarch <machine> -R`, so afl and
+   its forked children (which inherit the personality) run with a deterministic address space
+   and ASan's `MAP_FIXED` shadow can't collide. Docker's **default seccomp profile filters out
+   exactly that one `personality` arg value** (it allows the other persona values, just not
+   `ADDR_NO_RANDOMIZE=0x40000`), so the ASan source-fuzz container is launched with a **minimal
+   custom seccomp profile = Docker's default + one rule allowing `personality(0x40000)`**
+   (`src/hexgraph/sandbox/seccomp/fuzz-aslr.json`, wired via `PreparedFuzz.disable_aslr` →
+   `runner._hardening_args`). This is the **single, narrow, documented** relaxation: it reduces
+   only the *target's own* address-space randomization — `personality(ADDR_NO_RANDOMIZE)` is not
+   a sandbox-escape primitive — and **every other hardening flag is untouched** (`--network
+   none`, `--read-only`, `--cap-drop ALL`, `--no-new-privileges`, `--user 1000`). Only this ASan
+   source path opts in; libFuzzer/qemu/desock/boofuzz containers keep Docker's default profile.
+2. **Switch from the persistent libFuzzer driver to a CLASSIC AFL forkserver harness.** The
+   probe compiles the `LLVMFuzzerTestOneInput` harness with a tiny one-shot `main()` shim +
+   `-fsanitize=address -fsanitize-coverage=trace-pc-guard` (so afl-clang-fast injects its
+   *classic* forkserver, full edge coverage + ASan, no `__AFL_LOOP`/SHM), and feeds the test
+   case via the `@@` file. We trade persistent-mode throughput for reliability — correctness
+   over speed. CmpLog (`-c`) is left **opt-in** (`AFL_HG_CMPLOG=1`): under ASan its auxiliary
+   forkserver is flaky on this kernel (observed: 0 crashes with `-c`, crashes found without it).
+3. **Belt-and-suspenders core-dump suppression** (`ASAN_OPTIONS=...:disable_coredump=1` +
+   `RLIMIT_CORE=0` on afl and its children): on a kernel whose `core_pattern` pipes to a host
+   helper absent in the container (WSL2's `|/wsl-capture-crash`), a crashing child would block
+   in-kernel trying to dump a core — which afl misreads as a hang.
+
+*Verified*: the source-fuzz e2e (`tests/test_campaign_e2e.py`) now finds the planted heap
+overflow, dedups/classifies/minimizes it, and re-verifies — green **10/10 consecutively** on
+WSL2 6.6.x, at ~80–120k execs / 45 s with real coverage. The other fuzzers are unaffected.
 
 ---
 

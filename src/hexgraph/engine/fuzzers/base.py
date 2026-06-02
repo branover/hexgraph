@@ -121,6 +121,19 @@ class PreparedFuzz:
     extra_ro_mounts: list[tuple[str, str]] = field(default_factory=list)
     coverage_instrumented: bool = False
     engine: str = "libfuzzer"
+    # ── ASLR-disable for ASan source fuzzing (the ONLY seccomp relaxation) ───────────
+    # The AFL++ source path compiles the target with ASan. On high-ASLR-entropy kernels
+    # (vm.mmap_rnd_bits=32 — WSL2 6.6.x, Ubuntu 23.10+, GitHub CI runners) ASan's
+    # MAP_FIXED shadow reservation intermittently collides with a randomized mapping and
+    # the target SIGSEGVs during ASan init, before AFL's forkserver handshake — so afl
+    # reports "Fork server crashed with signal 11" / 0 execs. The fix is to run the
+    # target with ASLR off (`setarch -R` = personality(ADDR_NO_RANDOMIZE)); that one
+    # personality arg is filtered by Docker's default seccomp profile, so a container
+    # that sets this flag swaps in a MINIMAL profile (default + that one personality
+    # value). It reduces ONLY the target's own address-space randomization — NOT a
+    # sandbox-escape primitive; --network none / --cap-drop ALL / --no-new-privileges /
+    # --read-only / --user all stay. Only the ASan source fuzzer sets it.
+    disable_aslr: bool = False
     # ── Network-fuzz launch (the ONLY place the campaign relaxes --network none) ─────
     # `requires_egress` flips the detached launch onto the bounded-egress path: the
     # campaign engine asserts assert_allows_egress(dest, local_tcp_scope(host,port)) +

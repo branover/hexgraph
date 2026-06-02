@@ -182,8 +182,8 @@ def test_api_campaign_degraded_status_surfaced(hg_home, monkeypatch):
                       json={"target_id": tid, "function": "unstable"}).json()
         d = c.get(f"/api/campaigns/{camp['id']}").json()  # reap-on-read finalizes
         assert d["status"] == "degraded"
-        assert d["warning"] and "AFL persistent" in d["warning"]
-        assert d["engine_note"] and "AFL persistent" in d["engine_note"]
+        assert d["warning"] and "reported instability" in d["warning"]
+        assert d["engine_note"] and "reported instability" in d["engine_note"]
         # And a clean run is still `completed` with no warning.
         ok = c.post(f"/api/projects/{pid}/campaigns",
                     json={"target_id": tid, "function": "clean"}).json()

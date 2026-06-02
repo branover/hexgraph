@@ -66,6 +66,9 @@ hexgraph = [
     "web/dist/index.html",
     "web/dist/assets/*",
     "sandbox/probes/*.py",
+    # Minimal seccomp profile (default + personality(ADDR_NO_RANDOMIZE)) for the ASan
+    # source-fuzz ASLR-off launch; resolved by runner.py relative to the package.
+    "sandbox/seccomp/*.json",
     # Canonical Finding schema + mock-LLM fixtures ship inside the package
     # (resolved by paths.py relative to the package, not a repo-root folder).
     "schemas/*.json",

@@ -100,28 +100,56 @@ def main() -> int:
 
     is_cxx = any(s.endswith((".cc", ".cpp", ".cxx", ".C", ".c++")) for s in target_sources)
     ccx = (shutil.which("afl-clang-fast++") or cc) if is_cxx else cc
-    # Build the instrumented fuzzer: the harness exposes LLVMFuzzerTestOneInput (no
-    # main), so link AFL++'s libFuzzer-compatible driver (`-fsanitize=fuzzer`) to supply
-    # `main` + the persistent loop, while afl-clang-fast bakes SanCov+ASan into the
-    # TARGET's own objects (real coverage). This runs under afl-fuzz in persistent mode.
-    base_cmd = [ccx, "-g", "-O1", "-w", "-fsanitize=fuzzer,address", *inc_flags,
-                "-x", "c", src, "-x", "none", *target_sources, "-o", fuzzer]
+    # A tiny CLASSIC-forkserver `main` shim. The harness exposes LLVMFuzzerTestOneInput
+    # (no main); rather than link AFL++'s libFuzzer-compatible PERSISTENT driver
+    # (`-fsanitize=fuzzer` + __AFL_LOOP + a shared-memory testcase region), we supply our
+    # own one-shot `main` that reads the AFL testcase from the `@@` file (or stdin) and
+    # calls the harness ONCE per process. afl-clang-fast then injects the CLASSIC
+    # fork-server + SanitizerCoverage; ASan instruments the target's objects (real
+    # coverage). WHY: the persistent libFuzzer-driver loop hangs on the FIRST dry-run
+    # exec on some kernels (reproducible on WSL2 6.6.x — the persistent SHM handshake
+    # wedges, so afl reports "test case results in a timeout" and 0 execs), whereas the
+    # classic forkserver runs reliably. We lose persistent-mode throughput but keep full
+    # edge coverage + ASan; correctness over speed.
+    shim = os.path.join(outdir, "_afl_main.c")
+    with open(shim, "w") as fh:
+        fh.write(
+            "#include <stdint.h>\n#include <stddef.h>\n#include <stdio.h>\n"
+            "#include <stdlib.h>\n"
+            "int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);\n"
+            "__attribute__((weak)) int LLVMFuzzerInitialize(int *argc, char ***argv);\n"
+            "int main(int argc, char **argv) {\n"
+            "  if (LLVMFuzzerInitialize) LLVMFuzzerInitialize(&argc, &argv);\n"
+            "  static unsigned char buf[1 << 20];\n"
+            "  FILE *f = (argc > 1) ? fopen(argv[1], \"rb\") : stdin;\n"
+            "  if (!f) return 0;\n"
+            "  size_t n = fread(buf, 1, sizeof buf, f);\n"
+            "  if (argc > 1) fclose(f);\n"
+            "  LLVMFuzzerTestOneInput(buf, n);\n"
+            "  return 0;\n}\n")
+    # Build the instrumented classic-forkserver fuzzer: SanitizerCoverage (trace-pc-guard)
+    # for edge feedback + ASan in the harness/shim/target objects. afl-clang-fast adds its
+    # forkserver automatically.
+    cov_flags = ["-fsanitize=address", "-fsanitize-coverage=trace-pc-guard"]
+    base_cmd = [ccx, "-g", "-O1", "-w", *cov_flags, *inc_flags,
+                "-x", "c", src, shim, "-x", "none", *target_sources, "-o", fuzzer]
     benv = {**os.environ, "AFL_USE_ASAN": "1"}
     build = subprocess.run(base_cmd, capture_output=True, text=True, env=benv)
     if build.returncode != 0:
         return _emit({"compiled": False, "ran": False, "coverage_instrumented": False,
                       "stage": "instrumented-build", "stderr": (build.stderr or "")[:2000]})
 
-    # CmpLog binary (magic-byte / memcmp gating). We build it, but CmpLog's auxiliary
-    # forkserver is unstable when the harness `main` comes from the libFuzzer-compat
-    # driver (`-fsanitize=fuzzer`) under ASan — it can crash AFL's `-c` forkserver. So
-    # CmpLog is OPT-IN via AFL_HG_CMPLOG=1 here (the coverage-guided afl-clang-fast run
-    # is already strong); when CmpLog gets its own AFL-instrumented `main` (a future
-    # __AFL_FUZZ harness), it can default on. Best-effort either way.
+    # CmpLog binary (magic-byte / memcmp gating) — same classic-forkserver shim, built
+    # with AFL_LLVM_CMPLOG=1 for the `-c` auxiliary forkserver. CmpLog is OPT-IN via
+    # AFL_HG_CMPLOG=1: under ASan its auxiliary `-c` forkserver is flaky on some kernels
+    # (it can stop afl from ever saving a crash — observed on WSL2 6.6.x: 0 crashes with
+    # `-c`, crashes found without it), and the SanitizerCoverage-guided run is already
+    # strong, so we leave it off by default. Best-effort: if it fails to build we skip it.
     cmplog_ok = False
     if os.environ.get("AFL_HG_CMPLOG") == "1":
-        cl = subprocess.run([ccx, "-g", "-O1", "-w", "-fsanitize=fuzzer", *inc_flags, "-x", "c", src,
-                             "-x", "none", *target_sources, "-o", cmplog],
+        cl = subprocess.run([ccx, "-g", "-O1", "-w", "-fsanitize-coverage=trace-pc-guard",
+                             *inc_flags, "-x", "c", src, shim, "-x", "none", *target_sources,
+                             "-o", cmplog],
                             capture_output=True, text=True,
                             env={**os.environ, "AFL_LLVM_CMPLOG": "1"})
         cmplog_ok = cl.returncode == 0
@@ -166,8 +194,8 @@ def main() -> int:
                # miss crashes: ASan aborts the child (abort_on_error=1) so AFL sees the
                # crash via waitpid, and we re-run + symbolize every saved input anyway.
                "AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES": "1",
-               "AFL_SKIP_BIN_CHECK": "1",  # the libFuzzer-driver binary isn't afl-cc-shaped
-               # Give the forkserver a generous handshake budget. The FIRST persistent-mode
+               "AFL_SKIP_BIN_CHECK": "1",  # the afl-clang-fast binary isn't afl-cc-shaped to afl's check
+               # Give the forkserver a generous handshake budget. The FIRST instrumented
                # exec under ASan+SanCov is heavy (the sanitizer runtime initialises lazily)
                # and on slow / heavily-constrained hosts can exceed AFL's default forkserver
                # init timeout — which AFL reports as "the fork server never came up". This
@@ -176,7 +204,35 @@ def main() -> int:
                "AFL_FORKSRV_INIT_TMOUT": os.environ.get("AFL_FORKSRV_INIT_TMOUT", "60000"),
                # AFL++ REQUIRES symbolize=0 for the fuzzed child (it parses raw ASan
                # output); we symbolize later, at the reproduce stage, with symbolize=1.
-               "ASAN_OPTIONS": "abort_on_error=1:symbolize=0:detect_leaks=0"}
+               # disable_coredump=1 belt-and-suspenders with the RLIMIT_CORE=0 below: on a
+               # kernel whose core_pattern is a PIPE to a host helper absent in the
+               # container (e.g. WSL2's `|/wsl-capture-crash`), a crashing child would
+               # otherwise block in the kernel trying to dump a core to a dead pipe — which
+               # AFL misreads as a hang ("test case results in a timeout").
+               "ASAN_OPTIONS": "abort_on_error=1:symbolize=0:detect_leaks=0:disable_coredump=1"}
+
+    # setarch -R = personality(ADDR_NO_RANDOMIZE): run afl-fuzz (and so its forked target
+    # children, which inherit the personality) with ASLR OFF. On high-ASLR-entropy kernels
+    # (vm.mmap_rnd_bits=32 — WSL2 6.6.x / Ubuntu 23.10+ / CI runners) ASan's MAP_FIXED
+    # shadow reservation otherwise intermittently collides with a randomized mapping and the
+    # target SIGSEGVs during ASan init, before the forkserver handshake ("Fork server
+    # crashed with signal 11", 0 execs, ~30% of runs). ASLR-off makes the address space
+    # deterministic so the shadow always fits. The container is launched with the minimal
+    # default+personality seccomp profile (PreparedFuzz.disable_aslr → runner) so this is
+    # permitted under --no-new-privileges. If setarch isn't present we fall through to a
+    # bare invocation (the bug is then latent but the campaign still attempts to run).
+    setarch = shutil.which("setarch")
+    machine = os.uname().machine
+    aslr_off = [setarch, machine, "-R"] if setarch else []
+
+    def _no_core():
+        # Disable core dumps for afl-fuzz and every child it forks (RLIMIT_CORE=0) so a
+        # crashing target can't wedge on a piped core_pattern (see ASAN_OPTIONS above).
+        try:
+            import resource
+            resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+        except Exception:  # noqa: BLE001 — best-effort; ASan disable_coredump also covers it
+            pass
     procs = []
     # afl-fuzz's stdout/stderr carry the forkserver/dry-run diagnostics; capture them to a
     # log so we can DISTINGUISH "couldn't even calibrate" (handshake/dry-run abort) from
@@ -187,25 +243,29 @@ def main() -> int:
     # cap would kill (fork-server signal 11). The container's --memory cap (the
     # ResourceSpec) is the real RSS bound; AFL's per-exec vsize cap must be off for ASan.
     # `-t`: the per-exec timeout. The default is 1000 ms, but the FIRST instrumented
-    # persistent exec (sanitizer init) can exceed that on a constrained box and trip AFL's
-    # dry-run calibration ("test case results in a timeout"), aborting the whole campaign.
-    # A generous fixed `-t` (overridable via AFL_HG_EXEC_TMOUT) clears that without masking
+    # exec (sanitizer init) can exceed that on a constrained box and trip AFL's dry-run
+    # calibration ("test case results in a timeout"), aborting the whole campaign. A
+    # generous fixed `-t` (overridable via AFL_HG_EXEC_TMOUT) clears that without masking
     # real hangs — a genuinely wedged input still times out, just at a saner bound. Like
     # AFL_FORKSRV_INIT_TMOUT this is a timing budget, not a sandbox relaxation.
     exec_tmout = os.environ.get("AFL_HG_EXEC_TMOUT", "10000")
-    common = [afl, "-i", seed_dir, "-o", work, "-m", "none", "-t", exec_tmout,
+    common = [*aslr_off, afl, "-i", seed_dir, "-o", work, "-m", "none", "-t", exec_tmout,
               "-V", str(max_total_time), *dict_args]
     if cmplog_ok:
         common += ["-c", cmplog]
-    # Master (-M) + secondaries (-S) for >1 instance.
+    # The classic-forkserver fuzzer reads the AFL testcase from the `@@` file (our main
+    # shim), NOT a persistent shared-memory region — `@@` is appended after the target.
     if instances <= 1:
-        procs.append(subprocess.Popen([*common, "--", fuzzer],
+        procs.append(subprocess.Popen([*common, "--", fuzzer, "@@"], preexec_fn=_no_core,
                                       stdout=logfh, stderr=subprocess.STDOUT, env=afl_env))
     else:
-        procs.append(subprocess.Popen([*common, "-M", "fuzzer00", "--", fuzzer],
+        # Master (-M) + secondaries (-S) for >1 instance.
+        procs.append(subprocess.Popen([*common, "-M", "fuzzer00", "--", fuzzer, "@@"],
+                                      preexec_fn=_no_core,
                                       stdout=logfh, stderr=subprocess.STDOUT, env=afl_env))
         for i in range(1, instances):
-            procs.append(subprocess.Popen([*common, "-S", f"fuzzer{i:02d}", "--", fuzzer],
+            procs.append(subprocess.Popen([*common, "-S", f"fuzzer{i:02d}", "--", fuzzer, "@@"],
+                                          preexec_fn=_no_core,
                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                           env=afl_env))
 
@@ -228,10 +288,13 @@ def main() -> int:
 
     final = _collect(outdir, work, fuzzer, max_crashes, done=True, coverage_instrumented=True)
     # If afl-fuzz never managed a single exec (the forkserver handshake failed or the
-    # dry-run calibration aborted — e.g. a host kernel where AFL++ persistent mode is
-    # unstable), say so LOUDLY rather than passing off "0 crashes" as a clean run. The
-    # campaign stays a real result (compiled=true, coverage_instrumented=true) but carries
-    # an explicit diagnostic the engine/UI surface, so a maintainer isn't misled.
+    # dry-run calibration aborted), say so LOUDLY rather than passing off "0 crashes" as a
+    # clean run. NOTE: the historical 0-exec cause on high-ASLR kernels (the ASan
+    # MAP_FIXED-shadow SIGSEGV) is FIXED by the `setarch -R` ASLR-off launch above, and the
+    # persistent-mode dry-run hang is FIXED by the classic-forkserver harness — so a
+    # 0-exec result now signals a GENUINE residual problem (a real build/forkserver fault),
+    # not the old known-host-kernel case. The campaign stays a real result (compiled=true,
+    # coverage_instrumented=true) but carries an explicit diagnostic the engine/UI surface.
     if final.get("executions", 0) == 0:
         note = _afl_failure_note(afl_log)
         if note:
@@ -245,14 +308,18 @@ def main() -> int:
 
 # Signatures of an afl-fuzz launch that never reached steady-state fuzzing — the
 # forkserver handshake or the dry-run calibration aborted. Reported, never swallowed.
+# The old known cause (ASan MAP_FIXED-shadow SIGSEGV on high-ASLR kernels) is fixed by the
+# `setarch -R` launch + classic-forkserver harness, so these now flag a GENUINE residual
+# fault (e.g. a target that legitimately crashes on the seed, or a real forkserver bug) —
+# NOT a "host kernel limitation" to be shrugged off.
 _AFL_FAIL_SIGNATURES = (
-    ("Fork server crashed", "afl-fuzz forkserver crashed during the handshake (AFL++ "
-                            "persistent mode may be unstable on this host kernel)"),
+    ("Fork server crashed", "afl-fuzz forkserver crashed during the handshake "
+                            "(the instrumented target faulted before fuzzing began)"),
     ("Unable to communicate with fork server", "afl-fuzz forkserver did not come up"),
-    ("All test cases time out", "afl-fuzz could not calibrate any seed (slow/unstable "
-                                "persistent-mode forkserver on this host kernel)"),
-    ("results in a timeout", "afl-fuzz dry-run calibration timed out (slow first exec — "
-                             "AFL++ persistent mode may be unstable on this host kernel)"),
+    ("All test cases time out", "afl-fuzz could not calibrate any seed "
+                                "(every seed timed out or crashed on the first exec)"),
+    ("results in a timeout", "afl-fuzz dry-run calibration timed out "
+                             "(the instrumented target hung on the seed's first exec)"),
     ("PROGRAM ABORT", "afl-fuzz aborted before fuzzing began"),
 )
 
