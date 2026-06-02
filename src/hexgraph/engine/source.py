@@ -149,9 +149,11 @@ def write_source_file(
     author. Returns the manifest entry."""
     if role not in SOURCE_ROLES:
         raise SourceError(f"role must be one of {SOURCE_ROLES}")
-    if not tree.editable and tree.origin in ("extracted", "git", "archive", "upload"):
-        # imported/extracted source is read-only for reproducibility / trust; only
-        # editable (scratch / HexGraph-authored) trees accept writes in Phase 1.
+    if not tree.editable:
+        # `editable` is the single source of truth for writability: imported/extracted
+        # source is read-only (reproducibility / untrusted bytes), only HexGraph-authored
+        # scratch trees accept writes in Phase 1. (Origin sets the default editable in
+        # create_source_tree; this just enforces whatever it resolved to.)
         raise SourceError(f"source tree {tree.id} is read-only (origin={tree.origin})")
     path = _safe_path(project, tree, rel)
     path.parent.mkdir(parents=True, exist_ok=True)
