@@ -7,663 +7,203 @@ SQLite-backed **typed graph** — targets, functions, sockets, hypotheses, and f
 typed, attributed edges. A loopback-only web UI browses the graph, launches tasks, and triages
 findings; the same operations are exposed to a coding agent over MCP.
 
+![The typed knowledge graph of a firmware engagement](docs/images/graph.png)
+
 Three principles are non-negotiable:
 
 - **Local-only.** The API/UI bind to `127.0.0.1`. Nothing calls a HexGraph-operated server; no
   telemetry, no auto-update pings.
 - **Bring-your-own-key, or none at all.** Model access is via your Anthropic API key, a local
   Claude Code session, or the built-in **mock** backend. The mock is the default and needs **no key
-  and no network**, so you can run the entire loop for free.
+  and no network** — you can run the entire loop for **$0**.
 - **Targets are hostile.** All parsing/unpacking/analysis of target bytes happens inside a disposable
   Docker container with no network and strict resource limits. HexGraph is **static/RE by default**;
-  the *only* way the target is ever executed is the opt-in, policy-gated PoC/fuzzing path — and even
-  then it runs inside that same locked-down sandbox (foreign architectures via qemu-user). **The LLM
-  never sees raw target bytes** — only tool output (decompilation, strings, imports).
+  executing the target, reaching the network, or rehosting firmware are each a separate **opt-in,
+  policy-gated** capability — and even then run inside that same locked-down sandbox. **The LLM never
+  sees raw target bytes** — only tool output (decompilation, strings, imports).
 
-> ### Project status — pre-1.0
-> The core loop works end-to-end (ingest → recon → AI analysis → structured finding → graph → spawn
-> follow-up), including real vendor-firmware extraction, cross-binary n-day linking, and
-> **verified, executable PoCs** (incl. foreign-arch MIPS/ARM via qemu). Still pre-1.0 — expect rough
-> edges. Phase-by-phase status lives in [`PROGRESS.md`](PROGRESS.md).
-
----
-
-## Two ways to drive HexGraph
-
-Both populate the **same graph** and both keep target bytes inside the sandbox — use either or both.
-
-1. **The web UI (you direct; HexGraph's LLM does the work).** `hexgraph serve` → open
-   `http://127.0.0.1:8765`. Pick a target, launch a task (recon / static analysis / RE / pattern
-   sweep / harness gen / fuzzing / PoC), and HexGraph runs an **agent loop** behind your chosen
-   backend: the model requests sandboxed tools (decompile, strings, imports, xrefs, fuzz) and
-   HexGraph executes them, looping until it emits findings. You triage results, then one-click a
-   suggested follow-up. Works on the free mock backend, or your own key/Claude Code.
-
-2. **Claude Code (or Codex / gemini-cli) as the driver, over MCP.** Run `hexgraph mcp install` to
-   register HexGraph as an MCP server; your coding agent then inspects targets and **populates the
-   graph autonomously** — recording findings, functions, sockets, edges, hypotheses, verifying PoCs —
-   all through HexGraph's sandboxed tools (no shell on the target). Everything it writes shows up in
-   the UI live (shared WAL-mode DB). You can also have **HexGraph drive the agent** headless via an
-   `agent_delegate` task from the Run menu.
-
-The model only ever *directs*; HexGraph runs the tools in the sandbox. A plain API key is enough —
-no external coding agent is required (it's an alternative driver, not a dependency).
+> **Status — pre-1.0.** The core loop works end-to-end (ingest → recon → AI analysis → structured
+> finding → graph → spawn follow-up), including real vendor-firmware extraction, cross-binary n-day
+> linking, coverage-guided fuzzing, and **verified, executable PoCs** (incl. foreign-arch MIPS/ARM via
+> qemu). Expect rough edges. Phase-by-phase status lives in [`PROGRESS.md`](PROGRESS.md).
 
 ---
 
-## Requirements
+## Install
 
-- **Python 3.11+**
-- **Docker**, runnable by your user (`docker run --rm hello-world` should work). The analysis sandbox
-  runs in a container; required for ingest/recon, decompilation, firmware unpack, and PoC/fuzzing.
-- **[`just`](https://just.systems)** — the task runner for the recipes below. Install without sudo:
-  `curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to ~/.local/bin`
-  (then ensure `~/.local/bin` is on your `PATH`), or `snap install just`. Run `just` to see all recipes.
-- Linux or macOS.
-
-No API key is required — the default mock backend is fully offline.
-
----
-
-## Setup
+**Requirements:** Python 3.11+, **Docker** runnable by your user (`docker run --rm hello-world`
+works), [`just`](https://just.systems), Linux or macOS. No API key required — the default mock
+backend is fully offline.
 
 ```bash
 git clone <your-fork-or-path> hexgraph && cd hexgraph
-just setup          # bootstrap (venv + deps + SPA), then the interactive setup wizard
+just setup          # venv + deps + web UI, then the interactive setup wizard
 just serve          # → http://127.0.0.1:8765
 ```
 
-`just setup` runs the bootstrap and then launches an **interactive setup wizard** (`hexgraph setup`):
-it walks you through which optional features to enable — each policy-relaxing one (executing the
-target, network egress, rehosting, remote devices, …) shown with its **security implication** and an
-explicit confirmation — plus non-secret config (the loopback-only bind, LLM backend, Ghidra mode),
-then writes your settings and builds the images you chose. **HexGraph never prompts for or stores a
-secret:** API keys / SSH / remote-Docker credentials live only in your environment or
-`~/.hexgraph/config.toml` (the wizard only shows whether one is present). The default leaves the
-**static-only** posture intact — you opt in to everything else, informed.
+`just setup` bootstraps the install and launches an **interactive setup wizard** that walks you
+through which optional, policy-relaxing features to enable (each shown with its security implication
+and an explicit confirmation) and builds the images you chose. The default leaves the **static-only**
+posture intact — you opt in to everything else, informed. See **[docs/setup.md](docs/setup.md)** for
+the wizard, the manual step-by-step, non-interactive/CI mode, and Ghidra.
 
-> **Non-interactive / CI:** with no TTY, or `just setup yes=1` (or `hexgraph setup --non-interactive`),
-> the wizard applies the static-only baseline + the sandbox image **without prompting**, so an
-> unattended `just setup` never hangs. Re-run `hexgraph setup` any time to change features;
-> `hexgraph config list` shows the current settings.
-
-If you prefer the individual steps (or want Ghidra — see below):
-
-```bash
-just install                     # create .venv and install the hexgraph CLI + dev extras
-just ui                          # build the React SPA into src/hexgraph/web/dist
-just sandbox-build               # build the analysis sandbox image (hexgraph-sandbox:latest)
-.venv/bin/hexgraph serve
-```
-
-**Ghidra (optional, larger image).** The default sandbox uses radare2. To also bundle headless
-Ghidra (adds a JDK + ~400 MB) build with:
-
-```bash
-just sandbox-build with_ghidra=1
-```
-
-The sandbox image also bundles **firmware extractors** (sasquatch / jefferson / ubi_reader / binwalk)
-and **qemu-user** (MIPS/ARM/PPC/…), so real vendor firmware extracts and foreign-arch PoCs run with no
-extra setup.
+> Install `just` without sudo:
+> `curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to ~/.local/bin`
+> (ensure `~/.local/bin` is on `PATH`), or `snap install just`. Run `just` for the full recipe menu.
 
 ---
 
-## Quickstart (mock backend — no key, no network)
+## The core loop
 
-Run the whole loop on the bundled test targets and exit 0:
+HexGraph proves one loop: **target → task → structured finding → graph → spawn next task.**
 
 ```bash
-just demo
+just demo        # run the whole loop on the bundled targets, offline, $0 — exits 0
 ```
 
-Or drive it yourself:
+Or drive it yourself: ingest a target (recon runs automatically and unpacks firmware into child
+targets), then launch tasks from the UI and triage the findings they emit.
 
 ```bash
-# Ingest the bundled firmware. Recon runs automatically (zero model calls) and
-# unpacks it into child targets (sbin/httpd + usr/lib/libupnp.so) joined by contains edges.
 .venv/bin/hexgraph ingest tests/fixtures/synthetic_fw.bin --name demo
-.venv/bin/hexgraph serve            # → http://127.0.0.1:8765
+.venv/bin/hexgraph serve          # → http://127.0.0.1:8765
 ```
 
-Open **http://127.0.0.1:8765**, click your project, and use the per-target task launcher.
+**Two ways to drive it**, both populating the **same graph** and both keeping target bytes in the
+sandbox:
+
+1. **The web UI** — pick a target, launch a task (recon / static analysis / RE / pattern sweep /
+   harness gen / fuzzing / PoC). HexGraph runs an **agent loop** behind your chosen backend: the
+   model requests sandboxed tools (decompile, strings, imports, xrefs, fuzz) and HexGraph executes
+   them, looping until it emits findings. You triage results and one-click a suggested follow-up.
+2. **A coding agent over MCP** — `hexgraph mcp install` registers HexGraph as an MCP server; Claude
+   Code / Codex / gemini-cli then inspects targets and populates the graph autonomously through the
+   same sandboxed tools. See **[docs/mcp.md](docs/mcp.md)**.
+
+The model only ever *directs*; HexGraph runs the tools. A plain API key is enough — no external
+coding agent is required.
+
+| Backend | Select with | Notes |
+|---|---|---|
+| `mock` (default) | — | Deterministic, schema-valid findings from fixtures. No key, no network. Dev/CI/`just demo`. |
+| `anthropic` | `--backend anthropic` / `HEXGRAPH_LLM_BACKEND=anthropic` | BYOK via `ANTHROPIC_API_KEY` (env or `config.toml`). Real token cost. `pip install -e ".[byok]"`. |
+| `claude_code` | `--backend claude_code` | Uses your local `claude` CLI (headless). |
+
+HexGraph **never logs or stores your API key.**
 
 ---
 
-## The web UI
+## Features
 
-Three panes:
+Every capability below the static-only baseline is **off by default** and toggled in **Settings**
+(or `hexgraph config set <key> <value>`). Each policy-relaxing one is a separate, explicit opt-in.
 
-- **Left — target tree.** The ingested target and any firmware children. Each has a launcher: pick a
-  **task type** and (for the mock) a **scenario**, then **Run**. Firmware targets show a browsable
-  unpacked filesystem; any file can be added as a child target.
-- **Center — graph ⇆ source.** A segmented control switches the center pane between the **Graph**
-  (targets, functions, **sockets**, hypotheses, harnesses, and findings as typed nodes, joined by typed
-  edges — `contains` / `calls` / `taints` / `listens_on` / `built_from` / `located_in` / `harnesses` / …;
-  rendered offline with Cytoscape.js) and a read-only **Source** view (an in-browser IDE over the
-  project's managed source trees — see below). Click an edge to see its attributes (call sites, ports,
-  addresses).
-- **Right — findings.** Every finding, typed (vulnerability / poc / recon / harness / fuzz_crash / …)
-  and filterable; click one for its evidence, reasoning, verification, and suggested follow-ups.
+| Feature | What it adds | Doc |
+|---|---|---|
+| **Typed graph + findings** | Targets, functions, sockets, endpoints, hypotheses and findings as typed nodes joined by typed, attributed edges; browse/launch/triage in a three-pane UI. | [graph-ui.md](docs/graph-ui.md) |
+| **Verification & the assurance ladder** | Every finding carries an assurance level (`code_present`/`input_reachable` × `static`/`dynamic`); opt-in **PoC verification** executes the target against an unforgeable `{{NONCE}}` oracle (foreign-arch via qemu-user). | [verification-assurance.md](docs/verification-assurance.md) |
+| **Fuzzing** | Coverage-guided, surface-aware, campaign-driven (AFL++ / libFuzzer / qemu-mode / boofuzz / desock), detached + crash-safe, with live triage, dedup, minimization, and one-click re-verification. Optional **remote fuzz environments** run a campaign on a beefier host you own. | [fuzzing.md](docs/fuzzing.md) |
+| **Build from source** | Compile a managed source tree into an **instrumented, reproducible artifact** via a recorded recipe HexGraph runs in the sandbox; the build→fuzz handoff is automatic. Editable in-browser **Source / IDE tab** with coverage shading. | [build-from-source.md](docs/build-from-source.md) |
+| **Dynamic surfaces, rehosting & remote** | Model a running web service or raw-TCP daemon as a first-class **surface**; **rehost** a whole firmware image under full-system emulation; assess a physical **remote** device over SSH/telnet — all with bounded, audited egress. | [dynamic-surfaces-rehosting-remote.md](docs/dynamic-surfaces-rehosting-remote.md) |
+| **Coding-agent integration (MCP)** | Drive HexGraph from Claude Code / Codex / gemini-cli, or have HexGraph drive a headless agent (delegate mode) — both restricted to HexGraph's sandboxed tools. | [mcp.md](docs/mcp.md) |
 
-Click a finding's **suggested follow-up** to open a pre-filled launch modal for the next task. Use
-**Confirm / Dismiss** to triage. The **Add node / Add edge** tools let you author functions, sockets,
-hypotheses, and typed edges by hand. **Removing things is reversible by default:** archive a node or a
-whole target subtree to declutter the graph (re-adding the same entity restores it), while individual
-edges and whole projects are hard deletes.
+### The opt-in policy tiers, in one sentence
 
-**Mock scenarios** (mock backend) on `sbin/httpd`: `static_analysis/critical_overflow` (critical
-overflow + `related_to` edge to `libupnp.so`), `/no_findings`, `/malformed_then_valid` (JSON-repair
-retry), `reverse_engineering`, `pattern_sweep` (sibling match), `error_rate_limit` / `error_timeout`
-(graceful failure), and a default always-success scenario.
-
-### Source trees & the Source tab (the editable IDE)
-
-A project holds **trusted source** separately from its (hostile) targets: one or more **source
-trees** — an imported library's source, or the harnesses/PoCs/build-scripts HexGraph itself
-produces. A tree can be linked to a target (a `built_from` edge), and a project may hold several.
-Files live on disk under the project data dir indexed by a manifest; a `source_file` graph node is
-materialized **lazily** when something references it (so a 70k-file tree never explodes the graph).
-
-The center pane's **Source** mode is an in-browser IDE: a dropdown switches between the project's
-source trees, a file explorer browses each, and a code viewer shows a file with line numbers. A
-finding that maps to source gets an **"Open in source"** button (Inspector → Evidence) that jumps
-straight to the file and line; a fuzz crash's symbolized **stack frame** jumps the same way (click
-the top frame in the Artifacts view). With **fuzzing** enabled, the viewer adds **coverage
-shading** — pick a campaign and covered lines tint green / uncovered amber, so you see exactly
-where the fuzzer is stuck (the single most useful harness-improvement signal). With **build**
-enabled, a **Build (instrumented)** button compiles the tree via a recorded recipe (below).
-**Harnesses, PoCs, and scripts are all `source_file`s** (role-tagged) — a generated harness becomes
-a managed file you can read in the tab, and a **Backfill harnesses** action (API/MCP) promotes
-older transient harnesses. With **`features.source.edit`** enabled, the viewer becomes an **editable
-IDE** for HexGraph-authored files (harness/PoC/script + scratch): an **Edit → Save** creates a **new
-revision** (never an in-place mutation — content in CAS + a diff), the file shows its **revision
-history** (with one-click **revert**, append-only), and a build can be launched **rebuild-from-a-
-revision**. Imported / extracted / vendor source (`origin=git|archive|extracted|upload`) stays
-**read-only** regardless — editing it would break the reproducible build's content hash. Firmware-
-*extracted* files are marked `extracted` (untrusted; displayed, never run or parsed outside the
-sandbox). Over MCP: `list_source_trees` / `read_source_file` (read), `import_source_tree` /
-`link_finding_to_source` / `save_source_revision` (write).
-
-### Fuzz campaigns & crash triage
-
-With **fuzzing** enabled, a **Campaigns** tab and a per-target **Fuzz** button appear. The **Fuzz
-modal** is surface-aware: it shows the engines the *server advertises* for the target's attack
-surface (`GET /api/fuzz/engines` — the UI never hardcodes the engine list), lets you **pick the
-target** to fuzz (a launch from the Campaigns tab defaults to the best surface — an instrumented
-or live target, not the raw ingested root), and exposes the surface-relevant inputs: **network**
-host/port/protocol + an optional binary-protocol `proto_spec`, optional **seeds** (corpus paths)
-and a **dictionary** (auto-derived when omitted), a **focus function** (binary/source), and the
-per-campaign **`ResourceSpec`** (mem/cpus/pids + an *unconstrained* toggle), defaulting from
-Settings. (A `custom` source tree's build phases can be authored right in the **Build modal** —
-one shell step per line.) Starting a campaign is non-blocking; the **Campaigns** tab shows a
-**live row** per campaign (status, execs/s, edges covered, crash count, coverage %) over a
-**Server-Sent Events** stream with polling fallback, plus Stop/Resume. A campaign that did **0
-work** (service unreachable / 0 executions) or hit **engine instability** finalizes in a distinct
-**`degraded`** state with an amber **warning badge** explaining why — never a silent zero-crash
-"completed". Every outbound action against a live target is recorded in the **egress audit log**,
-viewable from the **Audit** toolbar button (allowed/denied · destination · tool · reason).
-
-**Network-fuzzing a LOCAL service — launch-and-join.** A fuzz container runs on `--network bridge`,
-whose loopback is the *container's own* — so it **cannot reach a service bound to the host's bare
-`127.0.0.1`**. For a service HexGraph can **start itself** (a launchable server binary, no
-externally-reachable host), HexGraph uses **launch-and-join**: it boots the service in its **own**
-hardened sandbox container and joins the fuzzer to that container's network namespace, so
-`127.0.0.1:port` is reachable **without `--network host`** — the sandbox isolation is preserved
-(both containers keep `--cap-drop ALL`/`--no-new-privileges`/`--read-only`/non-root; the service
-runs `--network none`, the fuzzer reaches it over the *shared* netns, every send still audited).
-The service launch executes the target (the **PoC/fuzzing** tier); the fuzz egress rides
-**`features.network`** + the bounded local-network tier. It is auto-selected for a launchable target
-with a loopback/unset host and can be forced (`launch`/`launch_binary`). **To fuzz a service that is
-already running on your host** (one HexGraph cannot start), **bind it to a reachable private address**
-(a `192.168.x.x`/`10.x.x.x` interface, or a container HexGraph can bridge to) and point the campaign
-at that host — the fuzz container's bridge cannot reach the host's bare `127.0.0.1`. (`--network host`
-is deliberately not offered: it would dissolve the network isolation.)
-
-Selecting a campaign opens the **Artifacts / triage** view: crashes **grouped by dedup bucket**
-(one representative + a dupe count), each with an **assurance chip** (the two-standards ladder —
-`code_present`/`input_reachable` × `static`/`dynamic`), the deterministic exploitability rating,
-and a **source-mapped stack** (symbolized frames → jump to the IDE line; ASan frames are symbolized
-at runtime via `llvm-symbolizer`, a binary-only `abort` is addr2line'd to its sink). Per crash:
-**Reproduce** and **Minimize** re-run the stored reproducer **byte-faithfully** against the
-instrumented harness binary (LLM-free, the unforgeable `crash` oracle — the MCP verb is
-`verify_fuzz_artifact`); **Promote** confirms it as a tracked finding;
-**Promote → PoC** seeds a reproducer-backed PoC the one-click **Re-verify** path re-proves. Every
-entity (finding, source line, campaign, artifact, node) is addressable through a single `reveal()`
-navigation primitive and **deep-linkable** by URL (`?view=source&file=…&line=…`,
-`?tab=campaigns&campaign=…`), so a view is shareable and restored on reload.
-
-### Remote fuzz environments — run a campaign on beefier hardware (`features.fuzz_remote`)
-
-Fuzzing is the one genuinely resource-hungry workload, so a campaign can run on a **Docker host you
-own** instead of your laptop — beefier or unconstrained compute. A **fuzz environment** is a
-registered place a campaign's container runs: `local` (the host daemon, the default) plus N remote
-Docker endpoints. Because the Builder and Fuzzer call HexGraph's **Executor seam**, *building and
-fuzzing run on the remote with no analysis change* — the `RemoteDockerExecutor` stages the build
-context + seed corpus to the remote over `DOCKER_HOST` (CAS-content-addressed, via a named volume)
-and streams crashes/coverage/stats back into your **local graph**, exactly as for a local campaign.
-
-**Trust model — the control plane stays loopback.** The API/UI never leave `127.0.0.1`; the remote
-is *purely a compute backend you own and explicitly authorize* (the same posture as `features.remote`
-for live devices). The **same sandbox boundary applies on the remote** — every container there still
-runs `--network none` (except the gated net-fuzz tier), `--cap-drop ALL`, `--no-new-privileges`,
-`--read-only`, `--user 1000`, and the resource caps. A host you chose is not a weaker box; hostile
-target bytes only ever materialize inside the container. Each remote launch is **audited**
-(`EgressEvent`). Running a campaign on a remote endpoint is gated *only* by `features.fuzz_remote`
-(off by default, fail-closed) — the single place the policy is consulted.
-
-**Register one** in Settings → *Remote fuzz environments* (or `POST /api/fuzz/environments`): give it
-a name (its id is a slug of the name), a transport (`ssh`/`tcp`), and a non-secret descriptor. The
-**connection details are a secret** — read at connect time from env or `config.toml`, **never stored
-in the DB or logged**, shown presence-only:
-
-```bash
-# env (preferred) — keyed by the environment id (e.g. id "fuzzbox"):
-export HEXGRAPH_FUZZ_REMOTE_FUZZBOX_DOCKER_HOST="ssh://you@beefybox"     # SSH control socket
-# or tcp:// + TLS client certs:
-#   HEXGRAPH_FUZZ_REMOTE_FUZZBOX_DOCKER_HOST="tcp://10.0.0.5:2376"
-#   HEXGRAPH_FUZZ_REMOTE_FUZZBOX_TLS_VERIFY=1   HEXGRAPH_FUZZ_REMOTE_FUZZBOX_CERT_PATH=~/.docker/fuzzbox
-hexgraph config set features.fuzz_remote.enabled true
-```
-```toml
-# …or config.toml
-[fuzz_remote.fuzzbox]
-docker_host = "ssh://you@beefybox"
-```
-
-A one-click **Health-check** verifies the endpoint is reachable + authorized and has the
-`hexgraph-fuzz` image present (a one-time remote `docker pull`/build). Then pick the environment in
-the **Fuzz modal** (it appears when `features.fuzz_remote` is on; defaults to `local`), or pass
-`environment` to `start_fuzz_campaign` (MCP) / the campaign API. Each environment also carries a
-per-environment **`ResourceSpec` ceiling** the campaign inherits. (A heavier dedicated fuzz-worker /
-k8s job executor remains a later drop-in behind the same seam.)
-
-### Build from source — instrumented, reproducible, build-as-API (`features.build`)
-
-With **`features.build`** enabled, HexGraph can compile a managed source tree into an **instrumented
-artifact** via a **recorded, reproducible recipe** the API runs in the sandbox — *you never run a
-compiler by hand*. You author/approve a `BuildSpec` (`system`, ordered explicit-argv `phases`, an
-`instrumentation` profile, `artifacts` to capture, NON-secret `env`) and request the build; HexGraph
-**injects the toolchain** (`CC`/`CXX`/`CFLAGS`/`SANITIZER`/`FUZZING_ENGINE` per the base-image
-contract), so the *same* phases yield an ASan+SanCov, an AFL++, or a plain build by swapping only the
-profile. Building runs **untrusted third-party code**, so it has its own fail-closed gate (separate
-from executing the target — you can build-and-inspect without permitting the binary to run). If the
-tree is `built_from` a target, the rebuild registers an **instrumented derived target** (wired
-`instrumented_build_of`→ the original) — ready for coverage-guided fuzzing. **The build→fuzz handoff
-is automatic:** the build records the instrumented target sources on the derived target
-(`metadata_json.fuzz_target_sources`, the harness excluded) and **promotes any `role=harness` file**
-to a `harnesses`→ edge, so a subsequent `start_fuzz_campaign` on the derived target infers
-`source_lib` and runs coverage-guided with no manual wiring. **Reproducibility is the
-contract:** `recipe_sha` + the source byte-content hash + the toolchain digest (+ a lockfile) make a
-build replayable; a **reproducibility badge** shows when all are recorded, and a **cache-key hit**
-reuses the prior artifact and skips the rebuild (`SOURCE_DATE_EPOCH` + ccache make rebuilds
-deterministic + incremental).
-
-- **The compile phase ALWAYS runs `--network none`.** Vendored / offline is the default and the
-  recommendation — fully offline-reproducible. Source is mounted read-only, output only to `/out`,
-  non-root, ephemeral; a malicious `configure` can burn CPU and exit — it cannot persist or exfiltrate.
-- **Bounded dependency fetch (`features.build_fetch`, default off, the highest residual supply-chain
-  risk).** When a build genuinely needs to fetch deps, enabling this raises a **separate, audited,
-  ALLOWLISTED** fetch phase: a distinct sandbox container with network ON but bounded to a **registry
-  allowlist** (crates.io / pypi.org / github.com / distro mirror — operator-extendable, *never* "any
-  host"; enforced by a can't-forget egress backstop that drops any off-list connect), which produces a
-  **hash-pinned lockfile** + an **SBOM-lite**. HexGraph then **drops the network** and runs the compile
-  `--network none` against the snapshotted deps — **fetch-then-offline**. The fetch and compile are
-  *different containers*, so a fetched dep can be recorded but never run during compile. Every fetch is
-  audited (`EgressEvent`, `tool="build_fetch"`). This is its **own** gate — never folded into
-  `features.network`.
-- **Cross-compile for firmware (`arch` on the recipe, `WITH_CROSS=1` image).** clang is the
-  cross-compiler: pass a firmware arch (`mips`/`mipsel`/`arm`/`armhf`/`aarch64`) and HexGraph injects
-  `--target=<triple>` + the **parent firmware's extracted rootfs as `--sysroot`**, so the instrumented
-  binary is binary-compatible with the device userland (runs under qemu-user — the proven PoC path). A
-  cross-build failure **degrades gracefully** to qemu-mode binary-only fuzzing of the original binary.
-- **OSS-Fuzz `build.sh` import.** Paste an OSS-Fuzz-style `build.sh` (`POST .../builds/import-oss-fuzz`
-  or the `import_oss_fuzz` MCP tool): it's stored as a `role=script` source file, mapped to HexGraph's
-  `$CC/$CXX/$CFLAGS/$LIB_FUZZING_ENGINE/$SRC/$OUT` contract, and runs essentially unchanged via a single
-  shell phase — so existing OSS-Fuzz targets build with minimal hand-authoring.
-
-In the UI: a capability-gated **Build modal** (Source tab) shows a **read-only recorded-recipe
-preview** (no free-text command box) with instrumentation toggles, an **arch** selector (cross), a
-**dependency posture** (vendored / fetch — the allowlisted tier shown only when `features.build_fetch`
-is on), and the injected env + `recipe_sha`; the Builds list shows **reproducible / cached / locked /
-instrumented** badges. Over MCP: `build_target` (run — with `network`/`fetch_phases`/`arch`/
-`source_revision_id`), `import_oss_fuzz` / `save_source_revision` (write), `list_builds` /
-`coverage_diff` (read). **Run-to-run coverage diff** (`coverage_diff` MCP tool /
-`/api/campaigns/{id}/coverage-diff`) compares two campaigns' per-line coverage — *what new edges did
-this run reach?* — to judge whether a harness/corpus/engine change actually improved reach.
+Static-only with `--network none` is the **enforced default**; `features.poc`/`features.fuzzing`
+(sandboxed execution), `features.build` (compile a source tree), `features.build_fetch` (a separate
+audited, allowlisted dependency fetch), `features.network` (bounded loopback/private egress),
+`features.rehost` (full-system emulation), `features.remote` (one authorized live device), and
+`features.fuzz_remote` (a user-owned remote compute host) each raise a higher tier behind **its own
+gate** — and nothing relaxes anywhere except the single [policy seam](docs/verification-assurance.md).
 
 ---
 
-## Dynamic web surfaces & firmware rehosting
-
-HexGraph models a target as any **reachable surface**, not just a file on disk. Alongside byte
-targets there are **`web_app` targets**: a running web surface reached over a Channel (a `base_url`),
-holding **no bytes** of its own. A `surface_recon` task crawls one into `endpoint` and `param` nodes,
-and — where it can identify the code behind a route — draws a **`routes_to`** edge from the endpoint
-to its handler `function`. That edge is the **bridge between the static and dynamic views**: the same
-graph holds both the binary you reversed and the live service it serves.
-
-A device exposes more than the web, so a bare **non-HTTP network service** — a bind shell, a vendor
-binary control protocol, a custom daemon on some high port — is a first-class surface too:
-a **`service` target** reached over a raw TCP/UDP Channel `{kind, host, port}`, with **no bytes and no
-credentials** (a protocol endpoint you talk to, not a box you log into). Register one with
-`register_socket(project_id, host, port, transport="tcp")` (MCP) or `POST
-/api/projects/{id}/targets/socket`; it links to the shared `socket` graph node via a `listens_on` edge
-(the network-map endpoint), and HexGraph infers the **`network` surface** for it — so `start_fuzz_campaign`
-points **boofuzz** straight at `host:port` and `tcp_request`/`verify_poc` probe and prove it, all on the
-bounded local-network tier below. (Use this instead of misusing a `remote`/telnet target for a bare
-protocol — `remote` carries SSH/telnet **shell** semantics a socket service doesn't have.)
-
-**Live assessment is gated by `features.network`** (off by default). With it on, HexGraph can actually
-talk to the surface: an `http_request` tool (with a `session` cookie jar that persists across calls)
-and a **web-flavoured `verify_poc`** whose oracle is the same unforgeable `{{NONCE}}` token used for
-binary PoCs, plus `body_contains` / `status` checks. Egress is **bounded**: a per-target deny-all
-allowlist that permits only loopback/private hosts (never a public address), and every outbound
-request is audited to an `EgressEvent`.
-
-**Firmware rehosting** (`features.rehost`, also off by default) boots a whole firmware image under
-full-system emulation and registers the device's live web UI as a `web_app` child target — so you can
-reverse the firmware *and* drive its running web server in one graph:
-
-```bash
-hexgraph config set features.rehost.enabled true    # to boot
-hexgraph config set features.network.enabled true   # to then assess the running device
-just iotgoat                                         # fetch + rehost + register IoTGoat
-# or, by hand:
-hexgraph rehost <firmware-target> [--brand <hint>]
-```
-
-`rehost` **auto-selects the emulator** by image type: qemu+KVM for a full-OS disk image (e.g. IoTGoat's
-x86 OpenWrt `.img`), FirmAE for a vendor blob (squashfs/cramfs/…). Booting needs `features.rehost`;
-assessing the running device with `surface_recon` / `http_request` / `verify_poc` needs
-`features.network`. Build the rehosting images first with `just firmae-build` / `just qemu-build`.
-`just vulnrouter` stands up a live vulnrouter web target + project for a guided engagement; worked
-examples live in `docs/engagement-vulnrouter.md` and `docs/engagement-rehosted.md`.
-
----
-
-## CLI reference
+## CLI
 
 `.venv/bin/hexgraph <command>` (or `hexgraph` with the venv active):
 
 ```text
-hexgraph init                              Initialize HexGraph (DB + ~/.hexgraph) — optional;
-                                           ingest/serve auto-initialize on first use
-hexgraph ingest <path> [--name N]          Ingest a binary/firmware; runs recon (auto-unpacks firmware)
-                 [--project ID]            …add to an existing project
-                 [--no-recon]              …register without analysis
-                 [--backend B]             …mock | anthropic | claude_code (default: mock)
-hexgraph targets <project>                 List targets in a project
-hexgraph run <target> --type T             Run an analysis task (see task types below)
-             [--objective TEXT] [--function F]
-             [--model M] [--backend B] [--mock-scenario S]
-hexgraph rehost <target> [--brand HINT]    Boot a firmware target under full-system emulation and
-                                           register its live web UI as a web_app surface
-                                           (needs features.rehost)
-hexgraph findings <project> [--status S]   List findings (filter new|accepted|dismissed)
-                 [--export FILE]           …or write findings as JSON
-hexgraph graph <project> --export FILE     Export the project graph as JSON (nodes + edges)
-hexgraph config list | get K | set K V     Read/write managed settings (optional-feature toggles, prefs)
-hexgraph mcp [--tools read,write,run]      Run the MCP server for a coding agent (stdio)
-hexgraph mcp install [--agent A]           Print how to register HexGraph with claude|codex|gemini
-             [--write-skill DIR]           …also install the VR skill into a skills dir (e.g. .claude/skills)
-             [--print-skill]               …print the VR skill markdown to stdout
-hexgraph mcp --check                       List the MCP tools and exit
-hexgraph serve [--host H] [--port P]       Start the loopback-only API/UI (default 127.0.0.1:8765)
+hexgraph ingest <path> [--name N] [--project ID] [--no-recon] [--backend B]
+hexgraph targets <project>
+hexgraph run <target> --type T [--objective TEXT] [--function F] [--backend B] [--mock-scenario S]
+hexgraph rehost <target> [--brand HINT]      # boot firmware under emulation (needs features.rehost)
+hexgraph findings <project> [--status S] [--export FILE]
+hexgraph graph <project> --export FILE
+hexgraph config list | get K | set K V       # managed settings + optional-feature toggles
+hexgraph mcp [--tools read,write,run] | mcp install [--agent A] | mcp --check
+hexgraph serve [--host H] [--port P]          # loopback-only API/UI (default 127.0.0.1:8765)
 ```
 
 Task types: `recon`, `static_analysis`, `reverse_engineering`, `pattern_sweep`, `harness_generation`
-(plus `fuzzing`, `poc`, and `agent_delegate` when enabled in Settings). For web surfaces:
-`surface_recon` / `web_recon` (live assessment needs `features.network`).
-
-### Coding-agent integration (MCP)
-
-```bash
-.venv/bin/pip install "mcp"     # the MCP SDK (one-time)
-.venv/bin/hexgraph mcp install  # prints the exact registration command for your agent
-```
-
-The MCP server speaks JSON-RPC over **stdio**; your agent spawns it on demand. Run by hand it prints a
-"ready" line to stderr and blocks (correct) — confirm with `hexgraph mcp --check`. The **web UI and
-the MCP server run at the same time** (separate processes sharing the WAL-mode SQLite DB), so an
-agent's findings appear in the UI on reload and vice versa.
-
-Tools are grouped **read / write / run** and gated by `features.mcp.{read,write,run}` (Settings →
-Coding-agent tools, or `--tools`) so the agent's context stays small. The agent can read the graph
-(`list_*`, `get_node`, `get_finding`, `xrefs`, `list_sockets`), write to it (`record_finding`,
-`create_node`, `create_edge`, `create_socket`, `create_hypothesis`, `link_same_code`,
-`propagate_finding`, …), and run sandboxed work (`ingest`, `run_task`, `verify_poc`). Call
-`get_schemas` first — it advertises the Finding shape, node/edge vocab, per-type node-attribute schemas
-(with the sink-vs-symbol rule), edge-attribute schemas, socket kinds, and the active decompiler. New
-read tools also browse a firmware's unpacked filesystem (`list_filesystem` / `read_file`) and remove
-entities (`archive_node` / `restore_node` / `delete_edge` / `archive_target` / `restore_target`).
-
----
-
-## Model backends
-
-Selected by `HEXGRAPH_LLM_BACKEND` (default `mock`) or per-task with `--backend`. Task code is
-identical across backends — only the backend boundary changes. LLM tasks run a **tool-use agent loop**
-over whichever backend you pick.
-
-| Backend | Status | Notes |
-|---|---|---|
-| `mock` | ✅ | Deterministic, schema-valid findings from fixtures. No key, no network. Default for dev, CI, `just demo`. |
-| `anthropic` | ✅ | BYOK via `ANTHROPIC_API_KEY` (env or config). Real token usage + cost. Install with `pip install -e ".[byok]"`. |
-| `claude_code` | ✅ | Uses your local `claude` CLI (headless); fails clearly if absent. |
-
-HexGraph **never logs or stores your API key.**
-
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-hexgraph run <target> --type static_analysis --backend anthropic --function cgi_handler
-```
-
----
-
-## Optional features (all off by default — nothing hidden)
-
-Toggle in **Settings** in the UI, or from the CLI: `hexgraph config set <key> <value>`. The
-static-only/local defaults hold unless you opt in.
-
-| Feature | Enable | What it adds |
-|---|---|---|
-| **Ghidra** | `hexgraph config set features.ghidra.enabled true` (needs `just sandbox-build with_ghidra=1`) | Headless-Ghidra decompiler + optional recon enrichment; can also connect to a running Ghidra (`features.ghidra.mode bridge`). Degrades to radare2 when off. |
-| **Fuzzing** | `hexgraph config set features.fuzzing.enabled true` (needs `just fuzz-build`) | **Coverage-guided, first-class, multi-surface, campaign-driven.** The `Fuzzer` seam picks the engine by **attack surface** (never branched on in task code): **source_lib** (instrumented derived target, with source) → **AFL++** (`afl-clang-lto` + CmpLog + persistent mode) = real coverage; **binary_only** (a stripped ELF, NO source) → **AFL++ qemu-mode** (`-Q`, full edge coverage via QEMU TCG; **frida-mode** the opt-in alt) — a foreign-arch MIPS/ARM firmware binary runs under qemu-user with the parent firmware rootfs as the `-L` sysroot, the proven PoC path; **network** (a live/rehosted service) → **boofuzz** (generational, over a real socket) — or **desock+AFL++** to coverage-fuzz a LOCAL server binary with `--network none` (LD_PRELOAD turns its socket into stdin); **file_format** → AFL++/libFuzzer + an auto-dictionary. **Campaigns are detached + crash-safe**: each launches a hardened `docker run -d` container owned by a durable `fuzz_campaign` row; a periodic reaper streams crashes → `fuzz_crash` findings as they happen, dedups by a normalized stack-hash, minimizes the reproducer, classifies exploitability, and **survives a `serve` restart**. **Start/stop/resume** preserves the corpus in CAS. A crash's reproducer is **re-verifiable in one click** (LLM-free) — climbing the assurance ladder: a binary-only crash is `code_present/dynamic`, a **network service-death is `input_reachable/dynamic`** (reached + triggered end-to-end through the live input boundary; its crashing message replays over the socket). **Network fuzzing rides the EXISTING local-network tier** (`features.network` — see below — bounded to loopback/private, every send audited to an `EgressEvent`, joining a rehosted device's emulator netns), **NOT a new gate**; binary/source/desock fuzzing rides the **exec** tier (this `features.fuzzing`). Resource ceilings are a user-tunable **`ResourceSpec`** (`unconstrained` lifts mem/cpu/pids ONLY — **never a security relaxation**). Runs in the dedicated `hexgraph-fuzz` image. All new structure rides `evidence.extra.fuzz` + the `fuzz_campaign`/`fuzz_artifact` tables. **Composes with rehost** (fuzz a rehosted device's service via its netns) **and remote** (`features.remote` — blind network-fuzz of a physical device is **OFF by default + loud-warned**, destructive; prefer replay/PoC). |
-| **PoC verification** | `hexgraph config set features.poc.enabled true` | The `poc` task + `verify_poc`: **executes the target** with an attacker input and confirms exploitation via an unforgeable `{{NONCE}}` oracle. Foreign-arch (MIPS/ARM/…) runs under qemu-user with the firmware rootfs as sysroot. Also policy-gated. |
-| **Build from source** | `hexgraph config set features.build.enabled true` (needs `just build-image`) | **Build-as-API:** compile a managed source tree into an **instrumented artifact** via a *recorded, reproducible recipe* HexGraph runs in the sandbox (the `Builder` seam — you/the agent author a `BuildSpec`, never run a compiler). Instrumentation (SanCov+ASan/UBSan, libFuzzer/AFL++) is injected as CC/CXX/CFLAGS per the base-image contract, so the same recipe yields different profiles. A build of a source tree linked (`built_from`) to a target registers an **instrumented derived target** (`instrumented_build_of`→ the original) — the fuzzable twin, unlocking coverage-guided fuzzing. Reproducible: `recipe_sha = hash{phases,env,base_image,instrumentation,arch}`. **Its own policy gate** (`assert_allows_build`, separate from executing the target — you can build-and-inspect without running). **Vendored/offline only** (the build runs `--network none`; the audited fetch tier is a later phase). Uses the dedicated `hexgraph-build` image (`just build-image`). |
-| **Network** | `hexgraph config set features.network.enabled true` | Bounded **local-network egress** for live web assessment (`http_request` + web `verify_poc`). Raises the policy from `--network none`; a per-target deny-all-but-loopback/private allowlist (no public hosts), every request audited to an `EgressEvent`. |
-| **Rehost** | `hexgraph config set features.rehost.enabled true` | Boots a firmware image under **full-system emulation** (qemu+KVM for full-OS disk images, FirmAE for vendor blobs) and registers its live web UI as a `web_app` surface. Separate policy gate (`assert_allows_rehost`); pair with **Network** to assess the running device. Needs `just firmae-build` / `just qemu-build`. |
-| **Remote fuzz environments** | `hexgraph config set features.fuzz_remote.enabled true` + register an environment (Settings) + set its secret `HEXGRAPH_FUZZ_REMOTE_<ID>_DOCKER_HOST` | Run a whole fuzz **campaign** on a **user-owned remote Docker host** (beefier/unconstrained compute) — the `RemoteDockerExecutor` behind the Executor seam targets `DOCKER_HOST` (ssh:// or tcp:// + TLS), so building + fuzzing run on the remote with **no fuzzer/builder change**; build context + corpus stage there via CAS, crashes/coverage stream back into the local graph. **The control plane stays loopback**; the remote is purely compute and the **same sandbox boundary** applies there. Connection details are a **secret** (env/`config.toml`, never DB/logged, presence-only); each launch is **audited**. Its own fail-closed gate (`assert_allows_fuzz_remote`) — the *only* place. A registered environment carries a `ResourceSpec` ceiling; a campaign selects one (defaulting `local`). |
-| **Coding-agent (MCP)** | `features.mcp.{read,write,run}` + `hexgraph mcp install` | Drive HexGraph from Claude Code/Codex/gemini-cli (above). |
-| **Delegate** | `hexgraph config set features.agent.enabled true` | The `agent_delegate` task: HexGraph launches your agent headless, restricted to its sandboxed tools. |
-
-Configuration layers as **env > `settings.json` (managed) > `config.toml` (hand-authored, BYOK
-secret) > defaults**. Secrets live only in env or `config.toml` and are never written to
-`settings.json` or returned by the API.
-
-### Enabling execution (PoC / fuzzing) — end to end
-
-By default the target is never run. To turn on verified PoCs:
-
-```bash
-hexgraph config set features.poc.enabled true     # flips the policy to allow sandboxed execution
-# then either: launch a `poc` task on a target from the UI Run menu,
-# or, driving over MCP, call verify_poc(target_id, poc, finding_id=...) with a
-# spec like {"stdin": "...{{NONCE}}...", "oracle": {"type": "output_contains", "value": "{{NONCE}}"}}
-```
-
-A confirmed PoC is surfaced as a `verified` finding. Foreign-arch (MIPS/ARM/…) firmware binaries run
-under qemu-user automatically, with the parent firmware's extracted rootfs as the sysroot — no extra
-setup. `features.fuzzing.enabled true` works the same way for the `fuzzing` task.
-
-To use Ghidra instead of radare2: `just sandbox-build with_ghidra=1`, then
-`hexgraph config set features.ghidra.enabled true` and re-run a decompile/recon task.
-
----
-
-## Configuration
-
-```toml
-# ~/.hexgraph/config.toml   (HexGraph never rewrites this file)
-[llm]
-backend = "mock"        # mock | anthropic | claude_code
-model   = ""
-
-[api]
-host = "127.0.0.1"
-port = 8765
-
-[anthropic]
-# api_key = "sk-ant-..."   # BYOK; prefer the ANTHROPIC_API_KEY env var. Never logged or stored.
-```
-
-### Environment variables
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `HEXGRAPH_LLM_BACKEND` | `mock` | Backend selection. |
-| `HEXGRAPH_MODEL` | — | Default model. |
-| `HEXGRAPH_HOST` / `HEXGRAPH_PORT` | `127.0.0.1` / `8765` | API/UI bind address. |
-| `HEXGRAPH_HOME` | `~/.hexgraph` | Root for the DB and per-project artifacts. |
-| `HEXGRAPH_DB_PATH` | `$HEXGRAPH_HOME/hexgraph.db` | SQLite database path. |
-| `HEXGRAPH_MOCK_SCENARIO` | — | Force a mock scenario for all tasks. |
-| `HEXGRAPH_SANDBOX_IMAGE` | `hexgraph-sandbox:latest` | Analysis sandbox image. |
-| `HEXGRAPH_BUILD_IMAGE` | `hexgraph-build:latest` | Build-from-source image (`features.build`). The recorded `base_image` of a BuildSpec; point at a private tag in a worktree. |
-| `HEXGRAPH_BUILDER` | `sandbox` | Override the Builder seam (`sandbox` \| `mock`). |
-| `HEXGRAPH_FUZZ_IMAGE` | `hexgraph-fuzz:latest` | Coverage-guided fuzz image (`features.fuzzing` campaigns; AFL++ LLVM/qemu/frida modes + libFuzzer + preeny/desock + boofuzz + llvm-symbolizer). Point at a private tag in a worktree — never clobber the shared tag. |
-| `HEXGRAPH_FUZZER` | _(by surface)_ | Force the Fuzzer seam to the offline `mock` engine (tests/$0); otherwise the seam picks the engine by attack surface (source_lib→AFL++/libFuzzer, binary_only→qemu/frida, network→boofuzz/desock). |
-| `HEXGRAPH_EXECUTOR` | `local_docker` | The Executor seam (`local_docker` \| `remote_docker`). `remote_docker` runs containers on the host in the ambient `DOCKER_HOST` (gated by `features.fuzz_remote`); normally a remote is selected *per-campaign* via a registered fuzz environment instead. |
-| `HEXGRAPH_FUZZ_REMOTE_<ID>_DOCKER_HOST` | — | **Secret.** The remote fuzz environment `<ID>`'s Docker endpoint (`ssh://…` or `tcp://…`). Read on demand; never logged or stored in the DB. `…_<ID>_TLS_VERIFY` / `…_<ID>_CERT_PATH` add TLS for a `tcp://` endpoint. |
-| `HEXGRAPH_SANDBOX_NO_MOUNT` | — | `1` to use the image's baked-in probes instead of mounting the local copies (probes mount by default, so editing one needs no rebuild). |
-| `HEXGRAPH_DECOMPILER` | `r2` | Override the decompiler seam (`r2` \| `ghidra`). |
-| `HEXGRAPH_DISABLE_DECOMPILE` | — | `1` to skip decompilation in LLM tasks (offline/no-Docker dev + tests). |
-| `HEXGRAPH_DISABLE_SANDBOX_BUILD` | — | `1` to skip the harness-compile sandbox step (dev/tests). |
-| `HEXGRAPH_I_KNOW_WHAT_IM_DOING` | — | `1` to allow a non-loopback bind (warns loudly; not recommended). |
-| `ANTHROPIC_API_KEY` | — | Your key for the `anthropic` backend. Read on demand; never logged or stored. |
+(plus `fuzzing`, `poc`, `agent_delegate` when enabled). For web surfaces: `surface_recon` /
+`web_recon`. Full configuration (env vars, `config.toml`, the layering rules) is in
+**[docs/setup.md](docs/setup.md)**.
 
 ---
 
 ## Security model
 
-- **Loopback only.** The server refuses a non-loopback bind unless `HEXGRAPH_I_KNOW_WHAT_IM_DOING=1`
-  (which still warns).
+- **Loopback only.** The server refuses a non-loopback bind unless `HEXGRAPH_I_KNOW_WHAT_IM_DOING=1`.
 - **Hostile-target isolation.** Every operation on target bytes runs in a fresh container with
-  `--network none`, a read-only root filesystem, a tmpfs scratch (incl. a sized, `noexec` tmpfs at
-  `/dev/shm` for POSIX shared memory — AFL++'s coverage bitmap needs more than docker's default
-  64 MiB, but it stays data-only), memory/CPU/PID limits, and a wall-clock timeout. Only HexGraph's
-  probe scripts run there.
-- **Static by default; capability is opt-in and graduated.** Each tier is a separate, explicit
-  opt-in flipping the single **policy seam** (`policy.current_policy()`), and nothing relaxes anywhere
-  else:
-  - **static-only** (default) — no execution, `--network none`;
-  - **build from source** — `features.build` permits compiling a source tree into an instrumented
-    artifact in the same `--network none`, capped, RO-source, non-root sandbox (`assert_allows_build`);
-    a sub-capability of sandboxed-exec but its own gate, so you can build-and-inspect *without*
-    permitting the target to run (running the built artifact still needs the exec gate);
-  - **bounded dependency fetch** — `features.build_fetch` (its own fail-closed gate,
-    `assert_allows_build_fetch`; *never* `features.network`) raises a **separate, audited, ALLOWLISTED**
-    fetch phase: a distinct sandbox container reaches only a registry allowlist (never "any host",
-    enforced by an egress backstop), hash-pins a lockfile, then HexGraph **drops the network** and runs
-    the compile `--network none` — fetch-then-offline, so a fetched dep can be recorded but never run
-    during compile or exfiltrate. Every fetch is audited (`EgressEvent`);
-  - **sandboxed execution** — `features.poc` / `features.fuzzing` allow running the target inside the
-    same capped, timed, `--network none` sandbox (foreign-arch via qemu-user), never on the host;
-  - **bounded local-network** — `features.network` permits egress only to loopback/private hosts via a
-    **per-target deny-all-but-this allowlist** (no public addresses), every request audited to an
-    `EgressEvent`;
-  - **rehost** — a separate gate (`assert_allows_rehost`) that boots a firmware image under
-    full-system emulation.
-  - **remote fuzz environment** — a separate gate (`assert_allows_fuzz_remote`, `features.fuzz_remote`)
-    that lets a campaign's container run on a *user-owned* remote Docker host. This governs **where**
-    compute runs, not **what** the sandbox may do — the same hardening applies on the remote, the
-    control plane stays loopback, and the connection is a secret + audited. Resource ceilings (the
-    `ResourceSpec`/`unconstrained` knob) are likewise **never** a policy relaxation — they only lift
-    mem/cpu/pids, never a security flag.
-- **The editable IDE is confined + reversible.** `features.source.edit` makes only HexGraph-authored
-  files (harness/PoC/script + scratch) editable; an edit creates a **new revision** (never an in-place
-  mutation, content-addressed + diffed), and imported/extracted/vendor source stays **read-only** (the
-  write path enforces per-tree editability) so a reproducible build's content hash can't be silently
-  broken.
+  `--network none`, a read-only root filesystem, a tmpfs scratch, memory/CPU/PID limits, and a
+  wall-clock timeout. Only HexGraph's probe scripts run there.
+- **Static by default; capability is opt-in and graduated.** Each tier is a separate explicit opt-in
+  flipping the single policy seam, and nothing relaxes elsewhere. The same sandbox hardening holds for
+  every tier (foreign-arch via qemu-user, never on the host). Full ladder:
+  [docs/verification-assurance.md](docs/verification-assurance.md).
 - **The LLM never sees raw target bytes** — only tool output.
-- **Secrets are never persisted or logged.** Your API key lives only in env/config, read on demand.
+- **Secrets are never persisted or logged.** Your API key (and SSH / remote-Docker credentials) live
+  only in env or `config.toml`, read on demand, reported presence-only.
 
 ---
 
 ## How it works
 
-The whole system proves one loop: **target → task → structured finding → graph → spawn next task.**
-Built around clean seams — change behavior by swapping behind a seam, never by branching on backend /
-tier / executor:
+Built around clean **seams** — change behavior by swapping behind a seam, never by branching on
+backend / tier / executor:
 
-- **`LLMBackend`** — `mock` / `anthropic` / `claude_code` are interchangeable; task code never knows
-  which it talks to. LLM tasks run an agent loop that calls sandboxed tools.
-- **Executor** — the single container boundary for all target-byte handling (a remote/dynamic executor
-  drops in here).
+- **`LLMBackend`** — `mock` / `anthropic` / `claude_code` interchangeable; task code never knows which.
+- **Executor** — the single container boundary for all target-byte handling (local or remote Docker).
 - **Decompiler** — radare2 by default; Ghidra behind the same seam.
-- **Rehoster** — full-system firmware emulation; FirmAE (vendor blobs) and qemu+KVM (full-OS disk
-  images) drop in behind it, auto-selected by image type.
-- **Policy** — the one place the static-only invariant is relaxed (sandboxed execution via PoC/fuzzing,
-  bounded local-network via network, and rehosting — each its own opt-in gate).
+- **Rehoster** — full-system firmware emulation; FirmAE (vendor blobs) and qemu+KVM (disk images).
+- **Policy** — the one place the static-only invariant is relaxed.
 
 **The Finding is the heart of the product.** Every task and backend emits the same frozen schema
-(`src/hexgraph/schemas/finding.schema.json`); `finding_type` (DB envelope) classifies it for triage.
+(`src/hexgraph/schemas/finding.schema.json`); `finding_type` (a DB envelope) classifies it for triage.
 
-### Data model
+**Data model** — SQLite via SQLAlchemy (UUID ids), WAL mode so the UI and an agent's MCP server share
+it concurrently: `project`, `target` (a self-referential tree of reachable surfaces), `node` (typed
+sub-file/conceptual entities), polymorphic **typed, attributed** `edge`, `task`, `finding`. The graph
+is relational — **Neo4j is out of scope.** Details in [docs/graph-ui.md](docs/graph-ui.md).
 
-SQLite via SQLAlchemy, UUID ids:
-
-- `project`, `target` (self-referential `parent_id` tree of artifacts).
-- `node` — typed sub-file/conceptual entities: `function`, `symbol`, `string`, `struct`,
-  `hypothesis`, `pattern`, `input`, `sink`, **`socket`** (a network/IPC endpoint shared across
-  binaries).
-- `edge` — one polymorphic, **typed, attributed** relationship between any two entities
-  (target | node | finding | task): `contains`, `links_against`, `calls`, `reads`/`writes`, `taints`,
-  `bypasses`, `listens_on`/`connects_to`, `similar_to`, `derived_from`, `about`, … Edges carry
-  type-specific attributes (a `calls` edge's `call_sites`/`arg_constraints`, a `listens_on` edge's
-  `address`/`port`); list attributes merge on repeat.
-- `task`, `finding`.
-
-Artifacts live under `~/.hexgraph/projects/<id>/`. The graph is relational — **Neo4j is out of
-scope.** SQLite runs in WAL mode so the UI and an agent's MCP server share it concurrently.
-
-### Bundled test targets
-
-Under `tests/fixtures/` (regenerate with `just fixtures`): `vuln_httpd` (unbounded `strcpy` in a fake
-CGI handler), `libupnp.so` (same sink in `ssdp_recv`, a pattern-sweep sibling), and `synthetic_fw.bin`
-(a squashfs firmware that unpacks into both). Escalating, obfuscated, CVE-class challenge targets live
-under `tests/fixtures/challenges/` (`./build.sh` to rebuild; `README.md` there is the answer key).
+**Bundled test targets** under `tests/fixtures/` (regenerate with `just fixtures`): `vuln_httpd`
+(unbounded `strcpy`), `libupnp.so` (a pattern-sweep sibling), and `synthetic_fw.bin` (a squashfs
+firmware that unpacks into both). Escalating CVE-class challenge targets live under
+`tests/fixtures/challenges/`.
 
 ---
 
 ## Development
 
 ```bash
-just                 # list all recipes, grouped (setup / run / build / test / demo / rehosting / maintenance)
+just                 # list all recipes, grouped
 just test            # full suite (mock backend; sandbox/Docker tests auto-skip without the image)
 just demo            # the full offline loop, exits 0 — doubles as a smoke test
-just fixtures        # rebuild the bundled test targets
-just sandbox-build [with_ghidra=1]   # rebuild the analysis sandbox image (only after a Dockerfile/toolchain change)
-just build-image [with_cross=1]      # build the dedicated build-from-source image (features.build; with_cross=1 adds cross toolchains + qemu-user for firmware cross-compile)
-just fuzz-build                      # build the dedicated coverage-guided fuzz image (features.fuzzing campaigns; AFL++ + libFuzzer)
 just ui              # rebuild the SPA (after any frontend/ change)
-just serve           # start the server from the venv
+just showcase --reset && just capture   # regenerate the doc screenshots (see docs/images/README.md)
 ```
 
-Source (`src/hexgraph/`): `models/` (Finding), `llm/` (backend seam + mock + agent runner),
-`db/` (SQLAlchemy models), `sandbox/` (runner + executor + decompiler + probe scripts),
-`engine/` (ingest, recon, unpack, nodes, edges, edge_schemas, context, findings, poc, fuzzing,
-campaigns, fuzzers/ [the Fuzzer seam], build, crosstarget, hypotheses, mcp_tools, …), `api/`
-(FastAPI + loopback guard + SPA), `cli.py`,
-`mcp_server.py`. Build progress: [`PROGRESS.md`](PROGRESS.md).
+Source is under `src/hexgraph/` (`models/`, `llm/`, `db/`, `sandbox/`, `engine/`, `api/`, `cli.py`,
+`mcp_server.py`). See [`CLAUDE.md`](CLAUDE.md) for the working agreement, the seam rule, and the
+worktree/PR discipline. Build progress: [`PROGRESS.md`](PROGRESS.md).
 
 ---
 
 ## Out of scope (by design)
 
 Accounts / multi-user, cloud/hosted compute, exploit *generation*, Neo4j, Kubernetes. Dynamic
-execution exists only as the opt-in, policy-gated, sandboxed PoC/fuzzing path described above — never
-unsandboxed, never on the host.
+execution exists only as the opt-in, policy-gated, sandboxed path described above — never unsandboxed,
+never on the host.
 
 ---
 
@@ -671,5 +211,5 @@ unsandboxed, never on the host.
 
 **[AGPL-3.0](LICENSE).** HexGraph is free and open — use, run, study, and modify it freely. The
 copyleft terms mean any modified version you distribute *or offer over a network* must also be released
-under the AGPL-3.0, so the project (and improvements to it) stay open: no one can ship a closed,
-proprietary fork. No license gates, no paid tiers.
+under the AGPL-3.0, so the project stays open: no closed, proprietary fork. No license gates, no paid
+tiers.

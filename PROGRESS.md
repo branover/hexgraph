@@ -522,6 +522,25 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-02: **docs: README + per-feature docs overhaul, single-folder screenshots** (branch
+  `docs/readme-overhaul`). Docs/tooling only (no behavior change beyond the two showcase scripts).
+  Slimmed `README.md` from ~680 lines to a lean overview — one-paragraph what-it-is + the graph hero
+  shot, `just setup`→`just serve` install, a feature **matrix** (one line each, linking out), the core
+  target→task→finding→graph→spawn loop + the mock/$0 default + the opt-in policy tiers in a sentence,
+  and a tight security/how-it-works/dev section. Moved the reference detail into focused **per-feature
+  docs** under `docs/` — `setup.md`, `graph-ui.md`, `verification-assurance.md`, `fuzzing.md`,
+  `build-from-source.md`, `dynamic-surfaces-rehosting-remote.md`, `mcp.md` — each embedding its
+  screenshot from `docs/images/` by stable name and linking (not duplicating) the existing `design-*`
+  docs. **Single canonical screenshot folder is now `docs/images/`:** retired `docs/ui-shots/` (folded
+  its one still-useful shot — the network fuzz modal — into `scripts/capture_screenshots.py` as
+  `fuzz-modal-network.png`; deleted the rest + the folder). **Fixed the sparse hero-3
+  (`artifacts-triage.png`):** the showcase seed now writes a populated multi-bucket crash inbox (4
+  distinct dedup buckets, varied kind/function/exploitability + dupe counts, ASan reports that
+  symbolize to source frames + realistic 1.89M-exec / 318-edge campaign stats) onto the SAME single
+  campaign before reaping, so the triage detail pane reads dense + inviting. Guard
+  (`test_showcase_seed.py`) updated to require ≥3 crash buckets + dupe counts; re-ran `just showcase`
+  + `just capture` (13 PNGs) and judged the heroes by eye. `just test` green (700 passed, 2 Docker
+  skips). ui-backlog + this log updated.
 - 2026-06-02: **build: modernize `just demo` to the current headline loop** (branch `build/demo-modernize`).
   Replaced the MVP-era `demo.py` (ingest→recon→static_analysis→pattern_sweep, hard 2/2/3 counts, stale
   SPEC §10/M4 docstring) with a narrated, asserting, $0/offline arc that exercises the current product:
