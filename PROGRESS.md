@@ -532,6 +532,24 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-02: **build: resizable + collapsible workspace panels** (branch `build/resizable-panels`).
+  Frontend-only (plus docs). `Workspace.tsx` 3-pane layout is now user-adjustable so the center graph
+  can claim room. (1) **Drag-to-resize** both vertical dividers (left↔center, center↔right) via a
+  hand-rolled pointer-drag splitter in a new `frontend/src/hooks/useWorkspaceLayout.ts` — **no new
+  deps** — with min/max clamps (left 180–480px, right 280–680px) and a global col-resize cursor +
+  selection-lock during drag. (2) **Collapse/restore** each SIDE pane to a thin clickable edge (header
+  chevron collapses; double-clicking a divider also collapses that side; the edge restores) so the
+  graph goes near full-width. (3) **DETAIL-section drag** — a row-resize handle on the right pane's
+  `DETAIL` divider trades space between the findings/tasks/campaigns list and the detail pane (clamped
+  18–85%). (4) **Persisted** to `localStorage` (`hexgraph.ws.layout.v1`) — widths + collapsed flags +
+  detail fraction survive reload, no DB/settings migration; corrupt/absent storage falls back to the
+  prior defaults (268 / 392 / 0.46). `.workspace` became flex (skeleton loader keeps the even
+  3-column look via `.skel-grid`). Rebased onto #88 (skeleton-first load) — both preserved: the
+  skeleton-first `load()`/`expandRoom` lives inside the now-resizable center pane. **Playwright-verified**
+  (`scripts/ws_layout_shot.py`): left drag 268→388, right drag grows center, detail drag works, both
+  collapsed grows the graph, and sizes + collapsed state persist across a reload. `just ui` tsc-clean;
+  `just test`: 707 passed, 2 skipped, 1 failed (the known Docker qemu-mode fuzz flake `test_fuzz_phase5_e2e`,
+  unrelated to this frontend change). UI-backlog entry added. Reviewed + merged via PR #85.
 - 2026-06-02: **build: graph at REAL firmware scale — skeleton-first loading** (branch
   `build/graph-scale`; `docs/design/design-graph-presentation.md` §1/§8-Phase-3 + the §8 scoped-graph
   endpoint note, D1). The Phase 1–5 redesign was validated against a ~500-node synthetic tier — ~25× too

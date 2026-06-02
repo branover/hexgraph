@@ -100,8 +100,52 @@ code { font-family: var(--mono); }
 .stat b { font-size: 15px; }
 
 /* ---- Workspace ---- */
-.workspace { display: grid; grid-template-columns: 268px 1fr 392px; gap: 12px; height: calc(100vh - 56px); padding: 12px; }
-.pane { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); display: flex; flex-direction: column; overflow: hidden; position: relative; }
+.workspace { display: flex; gap: 0; height: calc(100vh - 56px); padding: 12px; }
+/* Skeleton-loader fallback keeps the old even 3-column look. */
+.workspace.skel-grid { display: grid; grid-template-columns: 268px 1fr 392px; gap: 12px; }
+.pane { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); display: flex; flex-direction: column; overflow: hidden; position: relative; min-width: 0; }
+.pane.side { flex: 0 0 auto; }
+.pane.center { flex: 1 1 auto; min-width: 0; }
+
+/* ---- Resizable splitter handles ---- */
+/* Vertical divider between two horizontally-adjacent panes. The thin visible bar sits in
+   the 12px gutter; the hit area is wider than the bar for an easy grab. */
+.wsplit { flex: 0 0 12px; align-self: stretch; position: relative; cursor: col-resize;
+  display: flex; align-items: center; justify-content: center; touch-action: none; }
+.wsplit::before { content: ""; width: 2px; height: 100%; background: var(--border);
+  border-radius: 2px; transition: background .12s, width .12s; }
+.wsplit:hover::before, .wsplit.dragging::before { width: 4px; background: var(--accent); }
+/* grip dots so the handle is discoverable */
+.wsplit .grip { position: absolute; display: flex; flex-direction: column; gap: 3px;
+  opacity: 0; transition: opacity .12s; pointer-events: none; }
+.wsplit:hover .grip, .wsplit.dragging .grip { opacity: .7; }
+.wsplit .grip i { width: 3px; height: 3px; border-radius: 50%; background: var(--fg-dim); }
+
+/* Collapsed side pane: a thin clickable edge that restores the pane on click. */
+.pane-edge { flex: 0 0 26px; align-self: stretch; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; justify-content: space-between;
+  padding: 10px 0; position: relative; overflow: hidden; transition: background .12s, border-color .12s; }
+.pane-edge:hover { background: var(--surface-2); border-color: var(--border-strong); }
+.pane-edge .lbl { writing-mode: vertical-rl; text-orientation: mixed; font-size: 10px;
+  text-transform: uppercase; letter-spacing: .12em; color: var(--muted); font-weight: 700; }
+.pane-edge .arrow { color: var(--muted); }
+.pane-edge:hover .arrow { color: var(--fg); }
+
+/* The collapse toggle pinned in a side pane's header. */
+.pane-collapse { color: var(--muted); }
+.pane-collapse:hover { color: var(--fg); }
+
+/* Horizontal divider for the DETAIL section drag inside the right pane. */
+.dsplit { position: relative; cursor: row-resize; touch-action: none; height: 6px;
+  display: flex; align-items: center; justify-content: center; flex: 0 0 6px;
+  border-top: 1px solid var(--border); }
+.dsplit::after { content: ""; position: absolute; left: 0; right: 0; top: -3px; bottom: -3px; }
+.dsplit .grip { display: flex; gap: 3px; opacity: 0; transition: opacity .12s; }
+.dsplit:hover .grip, .dsplit.dragging .grip { opacity: .7; }
+.dsplit:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.dsplit.dragging { background: color-mix(in srgb, var(--accent) 28%, transparent); }
+.dsplit .grip i { width: 3px; height: 3px; border-radius: 50%; background: var(--fg-dim); }
 .pane::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 2px; background: var(--accent-grad); opacity: .5; }
 .pane-h { display: flex; align-items: center; gap: 8px; padding: 11px 13px; border-bottom: 1px solid var(--border); }
 .pane-h .ttl { font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); font-weight: 700; }
