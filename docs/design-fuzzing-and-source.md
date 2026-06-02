@@ -690,6 +690,41 @@ Each phase is independently shippable through the worktree→PR-review-subagent�
 > layout (multi-target `$OUT` projects build, but per-target capture is heuristic); the editable
 > IDE viewer is a plain textarea (no Monaco — the long-standing deferral).
 
+### AFL++ source-fuzz forkserver in the hardened sandbox (fix/afl-forkserver)
+
+The Phase-3 AFL++ **source** path (a `-fsanitize=fuzzer` aflpp_driver run under `afl-fuzz`
+in the hardened container) failed to complete its forkserver handshake: `afl-fuzz` aborted
+with **`Fork server crashed with signal 11`** (`afl_fsrv_start()`), while every *other*
+fuzzer (libFuzzer standalone, AFL++ qemu-mode, desock+AFL, boofuzz) worked in the same box.
+
+**Root cause.** AFL++ maps its coverage bitmap and (in persistent/SHM-fuzzing mode) the
+test-case region in **`/dev/shm`**. Docker gives a `--read-only` container a fixed **64 MiB**
+`/dev/shm` by default; that is too small for the instrumented target's SHM allocation, so the
+forkserver child segfaults *before* the handshake completes. The other fuzzers don't hit this:
+libFuzzer is in-process (no forkserver), qemu-/desock-mode allocate their map differently.
+
+**Fix (minimal, security-preserving).** The sandbox runner now mounts a writable, adequately
+sized tmpfs at `/dev/shm` (`runner.py _hardening_args`): `--tmpfs /dev/shm:rw,noexec,nosuid,
+nodev,mode=1777,size=<tmpfs>` (the same size ceiling as `/scratch`/`/tmp`, governed by the
+`ResourceSpec`). This is **not** a sandbox relaxation: the container already had a writable
+`/dev/shm`; we only *resize* it and add `noexec,nosuid,nodev` (data-only — stricter than
+docker's default). `--read-only`, `--cap-drop ALL`, `--no-new-privileges`, `--user 1000`, and
+`--network none` are all untouched, and the other fuzzers are unaffected (verified: libFuzzer
+still finds the planted crash). The `afl_probe.py` invocation also gained a generous per-exec
+`-t` and `AFL_FORKSRV_INIT_TMOUT` (timing budgets, not security flags) so a slow first
+instrumented exec doesn't trip AFL's 1 s dry-run calibration on a constrained host.
+
+**Residual host-kernel caveat (honest fallback).** On some kernels (observed on WSL2 6.6.x)
+AFL++ **persistent/SHM-fuzzing** mode is itself unstable — the forkserver still crashes
+intermittently *or* the dry-run calibration deadlocks — *independent of the sandbox* (it
+reproduces with zero hardening). When that happens, `afl_probe.py` no longer reports a silent
+zero-crash "success": it detects that no exec ran, surfaces a loud `afl_note` (e.g. "AFL++
+persistent mode unstable on this host kernel"), and the engine threads it onto
+`campaign.stats_json.engine_note`. The Docker-gated source-fuzz e2e (`tests/test_campaign_e2e.py`)
+asserts the full crash→dedup→classify→verify chain on a capable host and **skips with that
+exact reason** when the host kernel can't calibrate — so it's a true result on CI, never a
+false green or a hard flake. On a normal Linux kernel the `/dev/shm` fix is the complete fix.
+
 ---
 
 ## 8. Risks & invariant audit

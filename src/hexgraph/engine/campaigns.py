@@ -581,6 +581,11 @@ def _update_stats(row: FuzzCampaign, status: dict) -> None:
         stats["peak_rss"] = max(int(stats.get("peak_rss") or 0), int(status["peak_rss"]))
     if status.get("coverage_percent") is not None:
         stats["coverage_percent"] = status["coverage_percent"]
+    # A diagnostic from a probe that compiled + instrumented but couldn't reach steady-state
+    # fuzzing (e.g. the AFL++ forkserver/dry-run aborted on an unstable host kernel). Surfaced
+    # so the campaign isn't a silent zero-crash "success" — the engine/UI can show WHY.
+    if status.get("afl_note"):
+        stats["engine_note"] = status["afl_note"]
     stats["last_run_at"] = _now_iso()
     row.stats_json = stats
 

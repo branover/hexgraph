@@ -506,6 +506,26 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-02: **fix: AFL++ source-fuzz forkserver in the hardened sandbox** (branch
+  `fix/afl-forkserver`). The Phase-3 AFL++ **source** path (`-fsanitize=fuzzer` aflpp_driver under
+  `afl-fuzz`, hardened box) aborted with `Fork server crashed with signal 11` while every other
+  fuzzer worked. **Root cause:** AFL++ maps its coverage bitmap in `/dev/shm`, but docker gives a
+  `--read-only` container only a fixed **64 MiB** `/dev/shm` — too small, so the forkserver child
+  segfaults before the handshake. **Fix (minimal, security-preserving):** `runner.py
+  _hardening_args` now mounts a sized `--tmpfs /dev/shm:rw,noexec,nosuid,nodev,mode=1777,size=<tmpfs>`
+  (ResourceSpec-governed). NOT a relaxation — the container already had a writable `/dev/shm`; we
+  resize it and ADD `noexec,nosuid,nodev` (data-only, stricter than default). `--read-only`/
+  `--cap-drop ALL`/`--no-new-privileges`/`--user`/`--network none` untouched; libFuzzer/qemu/desock/
+  boofuzz unaffected (verified). `afl_probe.py` also got a generous `-t` + `AFL_FORKSRV_INIT_TMOUT`
+  (timing budgets, not security flags) so a slow first instrumented exec doesn't trip the 1 s dry-run
+  calibration. **Residual host-kernel caveat (honest fallback):** on some kernels (WSL2 6.6.x) AFL++
+  PERSISTENT mode is itself unstable independent of the sandbox (reproduces with zero hardening) — the
+  probe now reports a loud `afl_note` (→ `campaign.stats_json.engine_note`) instead of a silent
+  zero-crash "success", and the Docker-gated source e2e (`tests/test_campaign_e2e.py`) proves the full
+  crash→dedup→verify chain on a capable host and **skips with that reason** when the kernel can't
+  calibrate (no false green, no hard flake). Docs: `docs/design-fuzzing-and-source.md` §7 + README
+  hostile-target-isolation note. `just test` green (609); `just demo` exits 0. No migration (no model
+  change), no `Dockerfile.fuzz` change (probes mounted at runtime).
 - 2026-06-02: **Fuzzing+source Phase 7 — supply-chain + cross-compile + editable IDE (EPIC COMPLETE)**
   ([`docs/design-fuzzing-and-source.md`](docs/design-fuzzing-and-source.md) §7 Phase 7, branch
   `build/fuzz-phase7`). The FINAL feature phase — closes Phases 0–7. **Bounded audited dependency

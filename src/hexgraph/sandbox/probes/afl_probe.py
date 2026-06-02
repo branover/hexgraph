@@ -165,25 +165,43 @@ def main() -> int:
                # crash via waitpid, and we re-run + symbolize every saved input anyway.
                "AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES": "1",
                "AFL_SKIP_BIN_CHECK": "1",  # the libFuzzer-driver binary isn't afl-cc-shaped
+               # Give the forkserver a generous handshake budget. The FIRST persistent-mode
+               # exec under ASan+SanCov is heavy (the sanitizer runtime initialises lazily)
+               # and on slow / heavily-constrained hosts can exceed AFL's default forkserver
+               # init timeout — which AFL reports as "the fork server never came up". This
+               # is a TIMING ceiling, NOT a security flag (it does not touch --network/caps/
+               # read-only/--user); it only lets a slow-but-legitimate first exec complete.
+               "AFL_FORKSRV_INIT_TMOUT": os.environ.get("AFL_FORKSRV_INIT_TMOUT", "60000"),
                # AFL++ REQUIRES symbolize=0 for the fuzzed child (it parses raw ASan
                # output); we symbolize later, at the reproduce stage, with symbolize=1.
                "ASAN_OPTIONS": "abort_on_error=1:symbolize=0:detect_leaks=0"}
     procs = []
+    # afl-fuzz's stdout/stderr carry the forkserver/dry-run diagnostics; capture them to a
+    # log so we can DISTINGUISH "couldn't even calibrate" (handshake/dry-run abort) from
+    # "ran but found nothing" and report it loudly (vs. silently emitting zero crashes).
+    afl_log = os.path.join(outdir, "afl.log")
+    logfh = open(afl_log, "wb")
     # `-m none`: ASan reserves a huge virtual address space, which AFL's default memory
     # cap would kill (fork-server signal 11). The container's --memory cap (the
     # ResourceSpec) is the real RSS bound; AFL's per-exec vsize cap must be off for ASan.
-    common = [afl, "-i", seed_dir, "-o", work, "-m", "none", "-V", str(max_total_time), *dict_args]
+    # `-t`: the per-exec timeout. The default is 1000 ms, but the FIRST instrumented
+    # persistent exec (sanitizer init) can exceed that on a constrained box and trip AFL's
+    # dry-run calibration ("test case results in a timeout"), aborting the whole campaign.
+    # A generous fixed `-t` (overridable via AFL_HG_EXEC_TMOUT) clears that without masking
+    # real hangs — a genuinely wedged input still times out, just at a saner bound. Like
+    # AFL_FORKSRV_INIT_TMOUT this is a timing budget, not a sandbox relaxation.
+    exec_tmout = os.environ.get("AFL_HG_EXEC_TMOUT", "10000")
+    common = [afl, "-i", seed_dir, "-o", work, "-m", "none", "-t", exec_tmout,
+              "-V", str(max_total_time), *dict_args]
     if cmplog_ok:
         common += ["-c", cmplog]
     # Master (-M) + secondaries (-S) for >1 instance.
     if instances <= 1:
         procs.append(subprocess.Popen([*common, "--", fuzzer],
-                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                      env=afl_env))
+                                      stdout=logfh, stderr=subprocess.STDOUT, env=afl_env))
     else:
         procs.append(subprocess.Popen([*common, "-M", "fuzzer00", "--", fuzzer],
-                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                      env=afl_env))
+                                      stdout=logfh, stderr=subprocess.STDOUT, env=afl_env))
         for i in range(1, instances):
             procs.append(subprocess.Popen([*common, "-S", f"fuzzer{i:02d}", "--", fuzzer],
                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -204,12 +222,51 @@ def main() -> int:
             p.wait(timeout=15)
         except subprocess.TimeoutExpired:
             p.kill()
+    logfh.close()
 
     final = _collect(outdir, work, fuzzer, max_crashes, done=True, coverage_instrumented=True)
+    # If afl-fuzz never managed a single exec (the forkserver handshake failed or the
+    # dry-run calibration aborted — e.g. a host kernel where AFL++ persistent mode is
+    # unstable), say so LOUDLY rather than passing off "0 crashes" as a clean run. The
+    # campaign stays a real result (compiled=true, coverage_instrumented=true) but carries
+    # an explicit diagnostic the engine/UI surface, so a maintainer isn't misled.
+    if final.get("executions", 0) == 0:
+        note = _afl_failure_note(afl_log)
+        if note:
+            final["afl_note"] = note
+            final["ran"] = False
     _write_status(outdir, final)
     with open(os.path.join(outdir, "DONE"), "w") as fh:
         fh.write("afl")
     return _emit(final)
+
+
+# Signatures of an afl-fuzz launch that never reached steady-state fuzzing — the
+# forkserver handshake or the dry-run calibration aborted. Reported, never swallowed.
+_AFL_FAIL_SIGNATURES = (
+    ("Fork server crashed", "afl-fuzz forkserver crashed during the handshake (AFL++ "
+                            "persistent mode may be unstable on this host kernel)"),
+    ("Unable to communicate with fork server", "afl-fuzz forkserver did not come up"),
+    ("All test cases time out", "afl-fuzz could not calibrate any seed (slow/unstable "
+                                "persistent-mode forkserver on this host kernel)"),
+    ("results in a timeout", "afl-fuzz dry-run calibration timed out (slow first exec — "
+                             "AFL++ persistent mode may be unstable on this host kernel)"),
+    ("PROGRAM ABORT", "afl-fuzz aborted before fuzzing began"),
+)
+
+
+def _afl_failure_note(afl_log: str) -> str | None:
+    """Extract a human-readable reason from afl-fuzz's captured output when no exec ran.
+    Returns None if the log doesn't match a known early-abort signature."""
+    try:
+        with open(afl_log, "rb") as fh:
+            text = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return None
+    for needle, msg in _AFL_FAIL_SIGNATURES:
+        if needle in text:
+            return msg
+    return None
 
 
 def _afl_crash_files(work):

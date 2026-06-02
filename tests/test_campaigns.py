@@ -101,6 +101,27 @@ def test_unconstrained_keeps_all_security_flags():
     assert "--user" in args and "1000:1000" in args
 
 
+def test_hardening_mounts_dev_shm_data_only():
+    """AFL++ maps its coverage bitmap in /dev/shm; docker's --read-only default is a fixed
+    64 MiB, too small → the forkserver child segfaults before the handshake. The runner
+    therefore mounts a SIZED tmpfs at /dev/shm. It must stay DATA-ONLY (noexec,nosuid,nodev)
+    — that's a resource/IPC fix, NOT a security relaxation (it's stricter than docker's
+    writable default)."""
+    from hexgraph.sandbox.runner import SandboxRunner
+
+    r = SandboxRunner()
+    args = r._hardening_args(allow_network=False, net_container=None,
+                             resources=ResourceSpec(), secret=False)
+    shm = [args[i + 1] for i, a in enumerate(args)
+           if a == "--tmpfs" and args[i + 1].startswith("/dev/shm:")]
+    assert shm, "/dev/shm tmpfs must be mounted for AFL++ coverage SHM"
+    spec = shm[0]
+    assert "noexec" in spec and "nosuid" in spec and "nodev" in spec  # data-only, hardened
+    assert "exec" not in spec.split(",")  # never executable — only /scratch + /tmp are
+    # The security flags are still all present alongside it.
+    assert "--read-only" in args and "--cap-drop" in args and "1000:1000" in args
+
+
 def test_resolve_resources_merges_settings_default_and_override(hg_home):
     st.update_settings({"features.fuzzing.resources.mem": "4g"})
     rs = C.resolve_resources({"unconstrained": True})
