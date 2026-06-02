@@ -465,7 +465,12 @@ export default function Workspace() {
               <span className={"it chip" + (pinType === key ? " pinned" : "") + (extraClass ? " " + extraClass : "")}
                     key={extraClass + "-" + key}
                     onMouseEnter={() => setHoverType(key)} onMouseLeave={() => setHoverType(null)}
-                    onClick={() => setPinType((p) => (p === key ? null : key))}
+                    onClick={() => setPinType((p) => {
+                      // Un-pinning must visibly clear NOW — otherwise the still-hovered chip's
+                      // hoverType keeps the same type isolated until the pointer leaves.
+                      if (p === key) { setHoverType(null); return null; }
+                      return key;
+                    })}
                     title={pinType === key ? "Click to show all types" : `Isolate ${key} (click)`}>
                 {content}
               </span>
