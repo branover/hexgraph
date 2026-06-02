@@ -522,6 +522,31 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-02: **build: modernize `just demo` to the current headline loop** (branch `build/demo-modernize`).
+  Replaced the MVP-era `demo.py` (ingest→recon→static_analysis→pattern_sweep, hard 2/2/3 counts, stale
+  SPEC §10/M4 docstring) with a narrated, asserting, $0/offline arc that exercises the current product:
+  **(1)** ingest firmware → recon → unpack into child targets + `contains` edges (the real-sandbox stage,
+  base image only); **(2)** author a source tree (C lib + libFuzzer harness) and **build-from-source WITH
+  INSTRUMENTATION** via the offline **MockBuilder** (`builds.run_build`, `HEXGRAPH_BUILDER=mock`) → an
+  instrumented derived target wired **`instrumented_build_of`** → the shipped httpd, with a reproducible
+  badge (recipe_sha + source content_hash + toolchain_digest); **(3)** a **coverage-guided fuzz campaign**
+  on the instrumented target via the offline **MockFuzzer** (`campaigns.start_campaign`/`reap_campaign`,
+  `HEXGRAPH_FUZZER=mock`) → a `fuzz_crash` finding with dedup/exploitability/coverage + a minimized
+  reproducer (`fuzzed_by`/`produced_artifact` edges); **(4)** a **`poc` task** that executes a standalone
+  ELF in the sandbox with an unforgeable `{{NONCE}}` oracle → a **verified PoC + assurance triple**, printing
+  the {standard, method, precondition} ladder (lands `code_present/dynamic`); **(5)** **spawn** the PoC's
+  suggested follow-up (the target→task→finding→graph→spawn loop); **(6)** build the graph + print the
+  node/edge-type variety. Each step asserts its outcome (replacing the brittle hard counts); needs only the
+  base sandbox image + mock seams (no fuzz/build Docker images, no key, no network). Distinct from
+  `just showcase` (which SEEDS rows; demo RUNS the pipeline). justfile demo doc-comment + `test_demo.py`
+  docstring refreshed. No migration (no model change), frozen finding schema untouched. `just demo` exits 0
+  with the new narrated arc (5 targets · 117 nodes · 118 edges · 7 findings).
+  **PR-review fix:** the demo was leaking `HEXGRAPH_BUILDER/_FUZZER=mock` into the process env (`main()` set
+  them unconditionally, restored only `HEXGRAPH_HOME`), which steered 16 later full-suite tests onto the mock
+  seam (the "pre-existing failures" were actually this regression). Now `main()` snapshots + restores the
+  mutated env keys in a `finally` (body in `_run()`); `test_demo` asserts no leak. Full offline suite: 1
+  remaining failure (`test_fuzz_phase6::test_full_campaign_via_local_daemon_as_remote`) is pre-existing —
+  passes standalone, flaky only under full-suite Docker contention (the `remote-fuzz-e2e` sibling's domain).
 - 2026-06-02: **build: reproducible screenshot showcase + captures** (branch `build/showcase`).
   A deterministic, $0/offline **showcase** project for the README hero shots + per-feature doc
   captures. `scripts/seed_showcase.py` (`just showcase [--reset]`) seeds ONE rich engagement on
