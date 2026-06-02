@@ -175,6 +175,33 @@ def test_config_reads_from_toml(hg_home, monkeypatch):
     assert conn["tls_env"]["DOCKER_CERT_PATH"] == "/tmp/certs"
 
 
+def test_dashed_env_name_resolves_connection(hg_home, monkeypatch):
+    """A REAL user's env name very often contains dashes ('my-remote-box'). Its id is the
+    SLUG (dashes preserved) and the secret env-var key normalizes dashes→underscores — so the
+    env-var key is HEXGRAPH_FUZZ_REMOTE_MY_REMOTE_BOX_DOCKER_HOST and the config.toml table is
+    [fuzz_remote.my-remote-box]. Registration (slug) and lookup (config) MUST agree on both
+    sides, or a dashed-name env can never find its connection. (Regression guard for the
+    slug↔connection-key normalization: the rest of the suite only exercises single-word
+    names, so a regression here would otherwise go unnoticed.)"""
+    # env-var path: dashes→underscores in the key.
+    monkeypatch.setenv("HEXGRAPH_FUZZ_REMOTE_MY_REMOTE_BOX_DOCKER_HOST", "tcp://10.0.0.9:2376")
+    config._load_toml.cache_clear()
+    with session_scope() as s:
+        env = FE.register_environment(s, name="my-remote-box", transport="tcp",
+                                      host_descriptor="ssh://beefybox")
+        assert env.id == "my-remote-box"
+        assert config.fuzz_remote_has_connection(env.id) is True
+        assert config.fuzz_remote_connection(env.id)["docker_host"] == "tcp://10.0.0.9:2376"
+    # config.toml path: the table key keeps the dashed slug verbatim.
+    monkeypatch.delenv("HEXGRAPH_FUZZ_REMOTE_MY_REMOTE_BOX_DOCKER_HOST", raising=False)
+    home = config.hexgraph_home()
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.toml").write_text(
+        '[fuzz_remote.my-remote-box]\ndocker_host = "ssh://user@beefybox"\n')
+    config._load_toml.cache_clear()
+    assert config.fuzz_remote_connection("my-remote-box")["docker_host"] == "ssh://user@beefybox"
+
+
 # ── Environment registration + health-check ───────────────────────────────────────
 
 def test_register_validates_transport(hg_home):
@@ -507,20 +534,24 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) { return target_par
 """
 
 
-@pytest.mark.skipif(not FUZZ_IMAGE_READY,
-                    reason="requires Docker + the hexgraph-fuzz image (just fuzz-build)")
-def test_full_campaign_via_local_daemon_as_remote(hg_home, monkeypatch, tmp_path):
-    """A WHOLE coverage-guided campaign running via the RemoteDockerExecutor with the LOCAL
-    daemon acting as the remote endpoint: build + fuzz happen 'on the remote', crashes
-    stream BACK over the same connection into the LOCAL graph, dedup/classify/minimize, and
-    the reproducer re-verifies — the entire Phase-6 loop, gated by features.fuzz_remote, no
-    fuzzer/builder change (the seam routes the executor). Skips without the fuzz image."""
+def test_full_campaign_via_local_daemon_as_remote(hg_home, monkeypatch, tmp_path, dind_remote):
+    """A WHOLE coverage-guided campaign running via the RemoteDockerExecutor against a
+    GENUINELY SEPARATE Docker daemon (the `dind_remote` fixture stands up docker-in-docker on
+    a loopback TCP port — its own image store + filesystem, so bind-mounts truly cannot cross):
+    build + fuzz happen ON the remote, crashes stream BACK over the same connection into the
+    LOCAL graph, dedup/classify/minimize, and the reproducer re-verifies — the entire Phase-6
+    loop, gated by features.fuzz_remote, no fuzzer/builder change (the seam routes the
+    executor). SELF-PROVISIONING: the fixture spins up + tears down the simulated remote, so
+    this is no longer a permanent skip — it runs green locally whenever Docker + the fuzz
+    image are present (and skips cleanly otherwise)."""
     import time
 
     st.update_settings({"features.fuzzing.enabled": True, "features.poc.enabled": True,
                         "features.fuzz_remote.enabled": True})
-    dh = os.environ.get("DOCKER_HOST") or "unix:///var/run/docker.sock"
-    monkeypatch.setenv("HEXGRAPH_FUZZ_REMOTE_LOCALASREMOTE_DOCKER_HOST", dh)
+    # The SECRET connection points at the dind daemon (loopback tcp://). The env-var key is
+    # HEXGRAPH_FUZZ_REMOTE_<ID>_DOCKER_HOST where <ID> is the env-name SLUG uppercased with
+    # dashes→underscores — so a single-word env name keeps the key unambiguous.
+    monkeypatch.setenv("HEXGRAPH_FUZZ_REMOTE_DINDREMOTE_DOCKER_HOST", dind_remote)
     config._load_toml.cache_clear()
 
     th = tmp_path / "src"; th.mkdir()
@@ -531,9 +562,11 @@ def test_full_campaign_via_local_daemon_as_remote(hg_home, monkeypatch, tmp_path
         p, t = _project_with_target(s)
         t.metadata_json = {"instrumented": True, "fuzz_target_sources": [str(th / "target.c")]}
         s.flush()
-        env = FE.register_environment(s, name="local-as-remote", transport="ssh",
-                                      host_descriptor="local docker as remote")
+        env = FE.register_environment(s, name="dindremote", transport="tcp",
+                                      host_descriptor="dind on loopback tcp")
         eid = env.id
+        assert config.fuzz_remote_has_connection(eid), \
+            "the dind DOCKER_HOST secret must resolve for the registered env id"
         spec = FuzzCampaignSpec(
             target_id=t.id, surface="source_lib", engine="afl",
             harness_source=_HARNESS_C, function="target_parse",

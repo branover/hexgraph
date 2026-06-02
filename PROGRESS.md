@@ -522,7 +522,6 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
-<<<<<<< HEAD
 - 2026-06-02: **build: reproducible screenshot showcase + captures** (branch `build/showcase`).
   A deterministic, $0/offline **showcase** project for the README hero shots + per-feature doc
   captures. `scripts/seed_showcase.py` (`just showcase [--reset]`) seeds ONE rich engagement on
@@ -573,6 +572,35 @@ then run the resume verifier, then continue at the next unchecked task.
   for an already-up host) + a foreground-only caveat in the service probe docstring. `just test` green
   offline (695 passed, 2 skipped; the 1 remaining failure is the pre-existing remote `DOCKER_HOST` phase6
   test — environmental, out of scope, fails identically on pristine main).
+- 2026-06-02: **fix+test: make the Phase-6 remote-fuzz e2e self-provisioning** (branch
+  `build/remote-fuzz-e2e`). Validated the `RemoteDockerExecutor` plumbing (design §5.8b) end-to-end by
+  simulating a remote Docker host locally, and made `tests/test_fuzz_phase6.py::test_full_campaign_via_local_daemon_as_remote`
+  actually runnable. **Bug fixed:** the test set `HEXGRAPH_FUZZ_REMOTE_LOCALASREMOTE_DOCKER_HOST` but the
+  env id was the SLUG of `"local-as-remote"` = `local-as-remote`, whose secret-connection env key is
+  `..._LOCAL_AS_REMOTE_...` (dashes→underscores in `config.fuzz_remote_connection`) — so the connection
+  never resolved and the test raised `FuzzEnvError` (never green). **Self-provisioning:** a new
+  session-scoped `dind_remote` conftest fixture stands up a **genuinely separate** Docker daemon
+  (docker-in-docker on a loopback TCP port — its own image store, so bind-mounts truly can't cross,
+  the highest-fidelity proof the CAS named-VOLUME stage-in + `docker cp` stream-back path is exercised),
+  loads the fuzz image into it, yields the `tcp://127.0.0.1:<port>` DOCKER_HOST, and tears down; gated on
+  Docker + the fuzz image (skips cleanly otherwise). The e2e now runs green locally (~94s) with NO
+  hand-configured DOCKER_HOST. **Validated all 7 plumbing points** against the separate dind daemon:
+  (1) connection+health-check; (2) CAS stage-in to a REMOTE named volume (present on dind, absent on host);
+  (3) detached fuzz container runs ON the remote (verified via remote `docker ps`); (4) `/out` streamed
+  back via `docker cp` + crashes ingested into the LOCAL graph as `fuzz_artifact`s, reproducer re-verified;
+  (5) reaper re-attach by label from a fresh executor (post-`serve`-restart); (6) secret never in the
+  sqlite DB / scrubbed from errors / presence-only + control plane loopback; (7) `features.fuzz_remote`
+  fail-closed when off + every remote launch audited to `EgressEvent(tool="fuzz_remote")` (no secret in
+  the audit). The `RemoteDockerExecutor`/`fuzz_env`/`policy` code needed **no changes** — only the test's
+  env-var name was wrong (a typo, NOT a runtime defect: a real dashed env name like `my-remote-box`
+  resolves its secret on both the env-var and config.toml paths — `slug()` and
+  `config.fuzz_remote_connection` agree). Offline suite green (645 passed); the lone Docker-gated failure
+  (`test_desock_afl_fuzzes_local_server_no_network`) is pre-existing on `main` (desock/preeny env-dependent
+  on this WSL2 kernel), unrelated. **PR #70 review fixes:** (a) the `dind_remote` teardown now
+  `docker rm -f -v` so the anonymous `/var/lib/docker` volume (the dind daemon's whole image store, GBs)
+  is reaped instead of leaking every run; (b) added `test_dashed_env_name_resolves_connection` — the e2e
+  uses a single-word env name, so nothing otherwise exercised the slug↔key dash→underscore normalization
+  (regression guard, no runtime change).
 - 2026-06-02: **build: interactive `hexgraph setup` wizard** (branch `build/setup-wizard`).
   `just setup` now bootstraps (venv + deps + SPA) then launches a polished, sequential TUI wizard
   (**Rich** panels/tables/progress + **questionary** checkboxes/selects/confirms; added to `[server]`
