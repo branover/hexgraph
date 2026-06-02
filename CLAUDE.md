@@ -110,7 +110,8 @@ tests/                         # pytest; fixtures under tests/fixtures (built by
                                #   Aria Router blind pair), scripts/engagement-{vulnrouter,rehosted}.md
 docs/                          # USER-FACING feature docs only: setup.md, graph-ui.md, fuzzing.md,
                                #   build-from-source.md, verification-assurance.md,
-                               #   dynamic-surfaces-rehosting-remote.md, mcp.md + images/ + ui-backlog.md.
+                               #   dynamic-surfaces-rehosting-remote.md, mcp.md + images/ + design/;
+                               #   dev/ holds internal ledgers (dev/ui-backlog.md).
                                #   design/ subdir holds the reference/design docs (design-vision.md,
                                #   implementation-plan.md, mock-llm-provider.md, design-*.md).
 ```
@@ -181,7 +182,7 @@ No browser MCP here and `WebFetch` can't reach `127.0.0.1`; the UI is JS-driven,
 .venv/bin/pip install playwright && .venv/bin/playwright install chromium
 ```
 
-Seed data + serve on a spare port with an isolated `HEXGRAPH_HOME`, then screenshot in Python (`p.chromium.launch(args=["--no-sandbox"])`, `goto(..., wait_until="networkidle")` + a short `wait_for_timeout` so Cytoscape/fetches settle, then `page.screenshot(...)`). **View the PNGs with the Read tool** (it renders images). Kill the backgrounded `serve` PID when done. Record UI findings in `docs/ui-backlog.md`.
+Seed data + serve on a spare port with an isolated `HEXGRAPH_HOME`, then screenshot in Python (`p.chromium.launch(args=["--no-sandbox"])`, `goto(..., wait_until="networkidle")` + a short `wait_for_timeout` so Cytoscape/fetches settle, then `page.screenshot(...)`). **View the PNGs with the Read tool** (it renders images). Kill the backgrounded `serve` PID when done. Record UI findings in `docs/dev/ui-backlog.md`.
 ```python
 b = await p.chromium.launch(args=["--no-sandbox"])
 pg = await b.new_page(viewport={"width": 1440, "height": 900})

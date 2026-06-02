@@ -383,7 +383,7 @@ confirms no merge quietly de-colors the graph.
 
 Each phase is **independently shippable as an atomic, reviewed merge**, ordered
 lowest-risk/highest-value first. Each phase carries before/after Playwright captures (§9) and a
-`docs/ui-backlog.md` entry, and lands behind the merge gate (review subagent + `just test`). All
+`docs/dev/ui-backlog.md` entry, and lands behind the merge gate (review subagent + `just test`). All
 phases are client-side (`frontend/`) over the existing `/graph` payload unless noted.
 
 **Phase 1 — Visual legibility (no structural change).** Edge-ink recede (structural vs semantic),
@@ -428,7 +428,7 @@ Per CLAUDE.md "Assessing the UI visually": Playwright + headless Chromium
 (`p.chromium.launch(args=["--no-sandbox"])`, `goto(..., wait_until="networkidle")` + a short
 `wait_for_timeout` so Cytoscape/fcose settle), an **isolated `HEXGRAPH_HOME`** + spare
 `HEXGRAPH_PORT`, mock backend, offline. **View the PNGs with the Read tool** and judge **as a
-human, not a parser.** Record every result + before/after pair in `docs/ui-backlog.md`.
+human, not a parser.** Record every result + before/after pair in `docs/dev/ui-backlog.md`.
 
 ### 9.1 Complexity tiers (the fixtures)
 
