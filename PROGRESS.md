@@ -532,6 +532,22 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-02: **fix: byte recon never runs on a path-less surface target** (branch `fix/recon-surface`,
+  PR #84). A generic `recon` task on a `web_app`/`service`/`remote` SURFACE target (no bytes, `path=""`)
+  resolved the empty path to the cwd and crashed with a baffling `artifact not found: <repo root>`. Two
+  layers: (1) `engine/worker.py` `_dispatch` routes a `recon` task whose target is a `SURFACE_KIND`
+  (new `db/models.py` `SURFACE_KINDS` frozenset, a zero-migration Python constant) — or any path-less
+  target — to `_dispatch_surface_recon`, which sends a `web_app` to the offline deterministic
+  `run_surface_recon` and fails a `service`/`remote` with a clear, actionable `NotImplementedError`
+  naming the kind + the right tool. (2) Defense-in-depth: `sandbox/runner.py` (`run_probe` +
+  `start_detached`) refuses an empty/whitespace artifact with a clear "no byte artifact — Channel-reached
+  surface" `SandboxError` BEFORE `Path("").resolve()` → cwd — backstopping the `pipeline.run_recon` path
+  that bypasses `_dispatch`. Byte recon on a real file target is unchanged. Tests: `tests/test_surfaces.py`
+  +3 (web_app→surface recon, socket surface→clean error, runner refuses empty artifact). Known separate
+  caveat: LLM tasks on a surface still go through the decompiler over `target.path` (Run-menu kind-valid
+  offering is PR #86); this PR doesn't worsen that and the runner guard broadly protects the byte-sandbox
+  crash class. Reviewed offline (583 passed / 2 skipped on the offline suite; relevant modules 58 passed);
+  Docker-gated subset left to the sibling fuzz/graph-scale agents' runs.
 - 2026-06-02: **build: make `just showcase` genuinely RUNNABLE** (branch `build/showcase-runnable`).
   The showcase project stays a "show off every feature" swiss-army knife for the UI/screenshots, but
   the common **Run actions now WORK against it** instead of dead-ending on seeded rows:
