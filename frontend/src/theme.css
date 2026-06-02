@@ -299,7 +299,7 @@ select.sel:focus, .settings select.sel:focus { outline: none; border-color: var(
 .codeview .cl > .ln { color: #4b566b; text-align: right; padding: 0 14px 0 0; user-select: none;
   -webkit-user-select: none; flex: none; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .codeview .cl > .src { white-space: pre; padding: 0 18px 0 6px; color: var(--fg); }
-.codeview .scrollx { overflow-x: auto; }
+.scrollx { overflow-x: auto; overflow-y: visible; }
 /* coverage shading — a subtle tint + a left accent rail, never a per-line BOX */
 .codeview .cl.cov-y { background: rgba(46,160,67,.10); border-left-color: #2ea043; }
 .codeview .cl.cov-n { background: rgba(210,153,34,.09); border-left-color: #d29922; }
