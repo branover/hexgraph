@@ -151,16 +151,41 @@ produces. A tree can be linked to a target (a `built_from` edge), and a project 
 Files live on disk under the project data dir indexed by a manifest; a `source_file` graph node is
 materialized **lazily** when something references it (so a 70k-file tree never explodes the graph).
 
-The center pane's **Source** mode is an in-browser, **read-only** IDE: a dropdown switches between
-the project's source trees, a file explorer browses each, and a code viewer shows a file with line
-numbers. A finding that maps to source gets an **"Open in source"** button (Inspector → Evidence)
-that jumps straight to the file and line. **Harnesses, PoCs, and scripts are all `source_file`s**
-(role-tagged) — a generated harness becomes a managed file you can read in the tab, and a
-**Backfill harnesses** action (API/MCP) promotes any older transient harnesses. *Editing source,
-and building/fuzzing from it, are later phases* — for now the Source tab is browse + jump only.
-Firmware-*extracted* files added as source are marked `extracted` (untrusted; displayed, never run
-or parsed outside the sandbox). Over MCP: `list_source_trees` / `read_source_file` (read),
-`import_source_tree` / `link_finding_to_source` (write).
+The center pane's **Source** mode is an in-browser IDE: a dropdown switches between the project's
+source trees, a file explorer browses each, and a code viewer shows a file with line numbers. A
+finding that maps to source gets an **"Open in source"** button (Inspector → Evidence) that jumps
+straight to the file and line; a fuzz crash's symbolized **stack frame** jumps the same way (click
+the top frame in the Artifacts view). With **fuzzing** enabled, the viewer adds **coverage
+shading** — pick a campaign and covered lines tint green / uncovered amber, so you see exactly
+where the fuzzer is stuck (the single most useful harness-improvement signal). With **build**
+enabled, a **Build (instrumented)** button compiles the tree via a recorded recipe (below).
+**Harnesses, PoCs, and scripts are all `source_file`s** (role-tagged) — a generated harness becomes
+a managed file you can read in the tab, and a **Backfill harnesses** action (API/MCP) promotes
+older transient harnesses. *In-browser editing of source is a later phase* — the viewer is
+read-only. Firmware-*extracted* files added as source are marked `extracted` (untrusted; displayed,
+never run or parsed outside the sandbox). Over MCP: `list_source_trees` / `read_source_file`
+(read), `import_source_tree` / `link_finding_to_source` (write).
+
+### Fuzz campaigns & crash triage
+
+With **fuzzing** enabled, a **Campaigns** tab and a per-target **Fuzz** button appear. The **Fuzz
+modal** is surface-aware: it shows the engines the *server advertises* for the target's attack
+surface (`GET /api/fuzz/engines` — the UI never hardcodes the engine list) and lets you set the
+per-campaign **`ResourceSpec`** (mem/cpus/pids + an *unconstrained* toggle to use the whole
+machine), defaulting from Settings. Starting a campaign is non-blocking; the **Campaigns** tab
+shows a **live row** per campaign (status, execs/s, edges covered, crash count, coverage %) updated
+over a **Server-Sent Events** stream with automatic fallback to polling, plus Stop/Resume.
+
+Selecting a campaign opens the **Artifacts / triage** view: crashes **grouped by dedup bucket**
+(one representative + a dupe count), each with an **assurance chip** (the two-standards ladder —
+`code_present`/`input_reachable` × `static`/`dynamic`), the deterministic exploitability rating,
+and a **source-mapped stack** (symbolized frames → jump to the IDE line). Per crash: **Reproduce**
+and **Minimize** re-run the stored, minimized reproducer against the instrumented harness binary
+(LLM-free, the unforgeable `crash` oracle); **Promote** confirms it as a tracked finding;
+**Promote → PoC** seeds a reproducer-backed PoC the one-click **Re-verify** path re-proves. Every
+entity (finding, source line, campaign, artifact, node) is addressable through a single `reveal()`
+navigation primitive and **deep-linkable** by URL (`?view=source&file=…&line=…`,
+`?tab=campaigns&campaign=…`), so a view is shareable and restored on reload.
 
 ---
 

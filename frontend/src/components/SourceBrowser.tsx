@@ -26,11 +26,12 @@ function buildTree(files: SourceFileEntry[]): TreeNode {
 
 const fmtSize = (n?: number) => (n == null ? "" : n < 1024 ? `${n} B` : n < 1e6 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1e6).toFixed(1)} MB`);
 
-export default function SourceBrowser({ projectId, open, onPickedTarget, buildEnabled, onChanged }: {
+export default function SourceBrowser({ projectId, open, onPickedTarget, buildEnabled, fuzzEnabled, onChanged }: {
   projectId: string;
   open?: { treeId?: string; rel?: string; line?: number } | null;
   onPickedTarget?: (targetIds: string[]) => void;
   buildEnabled?: boolean;
+  fuzzEnabled?: boolean;
   onChanged?: () => void;
 }) {
   const [trees, setTrees] = useState<SourceTreeRow[] | null>(null);
@@ -38,6 +39,10 @@ export default function SourceBrowser({ projectId, open, onPickedTarget, buildEn
   const [files, setFiles] = useState<SourceFileEntry[] | null>(null);
   const [view, setView] = useState<{ rel: string; loading: boolean; role?: string; origin?: string; encoding?: "text" | "binary"; content?: string; truncated?: boolean; err?: string } | null>(null);
   const [line, setLine] = useState<number | undefined>();
+  // Coverage shading: pick a campaign whose coverage map shades the open file (design §6.3).
+  const [campaigns, setCampaigns] = useState<{ id: string; name: string; status: string }[]>([]);
+  const [covCampaign, setCovCampaign] = useState<string>("");
+  const [coverage, setCoverage] = useState<import("../api").Coverage | null>(null);
   const [showBuild, setShowBuild] = useState(false);
   const [builds, setBuilds] = useState<BuildRow[]>([]);
   const lineRef = useRef<HTMLDivElement>(null);
@@ -50,6 +55,22 @@ export default function SourceBrowser({ projectId, open, onPickedTarget, buildEn
     api.builds(projectId, treeId).then((r) => setBuilds(r.builds)).catch(() => setBuilds([]));
   };
   useEffect(() => { loadBuilds(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [treeId, projectId]);
+
+  // Load campaigns that expose coverage (for the shading picker).
+  useEffect(() => {
+    if (!fuzzEnabled) return;
+    api.campaigns(projectId).then((r) => {
+      const cs = r.campaigns.map((c) => ({ id: c.id, name: c.name, status: c.status }));
+      setCampaigns(cs);
+      setCovCampaign((cur) => cur || (cs[0]?.id ?? ""));
+    }).catch(() => setCampaigns([]));
+  }, [projectId, fuzzEnabled]);
+
+  // Fetch the selected campaign's coverage map.
+  useEffect(() => {
+    if (!covCampaign) { setCoverage(null); return; }
+    api.campaignCoverage(covCampaign).then(setCoverage).catch(() => setCoverage(null));
+  }, [covCampaign]);
 
   // pick a tree (deep-link, else the first)
   useEffect(() => {
@@ -95,6 +116,19 @@ export default function SourceBrowser({ projectId, open, onPickedTarget, buildEn
   const tree = treeId ? trees.find((t) => t.id === treeId) : undefined;
   const fileTree = files ? buildTree(files) : null;
 
+  // Coverage line sets for the open file (match by exact rel or basename suffix, since a
+  // campaign's coverage map may be rooted differently than the tree).
+  const covFiles = coverage?.available ? coverage.files : null;
+  const fileCov = (() => {
+    if (!covFiles || !view?.rel) return null;
+    if (covFiles[view.rel]) return covFiles[view.rel];
+    const base = view.rel.split("/").pop();
+    const key = Object.keys(covFiles).find((k) => k === base || k.endsWith("/" + base) || (base && base.endsWith("/" + k)));
+    return key ? covFiles[key] : null;
+  })();
+  const covered = new Set(fileCov?.covered || []);
+  const uncovered = new Set(fileCov?.uncovered || []);
+
   const Row = ({ node, depth }: { node: TreeNode; depth: number }) => {
     const kids = Object.values(node.children).sort((a, b) => Number(b.dir) - Number(a.dir) || a.name.localeCompare(b.name));
     if (node.dir && node.name) {
@@ -136,6 +170,25 @@ export default function SourceBrowser({ projectId, open, onPickedTarget, buildEn
             {tree.editable ? "editable" : "read-only"}
             {tree.origin === "extracted" && " · extracted (untrusted)"}
             {tree.target_ids.length > 0 && " · linked to a target"}
+          </div>
+        )}
+        {fuzzEnabled && campaigns.length > 0 && (
+          <div style={{ padding: "0 8px 6px" }}>
+            <div className="sec-label" style={{ fontSize: 10 }}>Coverage shading</div>
+            <select value={covCampaign} onChange={(e) => setCovCampaign(e.target.value)}
+                    style={{ width: "100%", background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, fontSize: 11, padding: "2px 4px" }}>
+              <option value="">(off)</option>
+              {campaigns.map((c) => <option key={c.id} value={c.id}>{c.name} · {c.status}</option>)}
+            </select>
+            {covCampaign && coverage && !coverage.available && (
+              <div className="muted" style={{ fontSize: 10, marginTop: 3 }}>no per-line coverage map from this campaign</div>
+            )}
+            {fileCov && (
+              <div style={{ fontSize: 10, marginTop: 3, display: "flex", gap: 8, alignItems: "center" }}>
+                <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }}><span style={{ width: 9, height: 9, background: "rgba(46,160,67,0.5)", borderRadius: 2 }} /> covered</span>
+                <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }}><span style={{ width: 9, height: 9, background: "rgba(210,153,34,0.35)", borderRadius: 2 }} /> uncovered</span>
+              </div>
+            )}
           </div>
         )}
         {buildEnabled && tree && (
@@ -187,10 +240,15 @@ export default function SourceBrowser({ projectId, open, onPickedTarget, buildEn
                 {(view.content || "").split("\n").map((l, i) => {
                   const n = i + 1;
                   const hot = line === n;
+                  // Coverage shading: covered (green) / uncovered (amber) per the
+                  // selected campaign's line map. The hot (jump) line wins.
+                  const cov = covered.has(n) ? "rgba(46,160,67,0.18)"
+                            : uncovered.has(n) ? "rgba(210,153,34,0.13)" : undefined;
                   return (
                     <div key={i} ref={hot ? lineRef : undefined}
-                         style={{ display: "flex", background: hot ? "var(--hl, rgba(255,93,108,0.18))" : undefined }}>
-                      <span className="muted" style={{ width: 44, textAlign: "right", paddingRight: 10, userSelect: "none", flex: "none" }}>{n}</span>
+                         style={{ display: "flex", background: hot ? "var(--hl, rgba(255,93,108,0.18))" : cov }}>
+                      <span className="muted" style={{ width: 44, textAlign: "right", paddingRight: 10, userSelect: "none", flex: "none",
+                                   borderLeft: covered.has(n) ? "2px solid #2ea043" : uncovered.has(n) ? "2px solid #d29922" : "2px solid transparent" }}>{n}</span>
                       <pre style={{ margin: 0, whiteSpace: "pre-wrap", flex: 1 }}>{l || " "}</pre>
                     </div>
                   );

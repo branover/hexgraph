@@ -1,5 +1,40 @@
 # UI improvement backlog
 
+## Campaigns / Artifacts triage + Source coverage — Phase 4 (fuzzing+source design §6/§7, 2026-06-02)
+
+**Shipped in `build/fuzz-phase4`:** the full Source/IDE + fuzz-triage UX (the payoff of Phases 1–3).
+- **Campaigns tab** (`CampaignsPanel.tsx`) — a live row per campaign (status pill, execs/s, edges,
+  crash count, coverage %, black-box flag), Stop/Resume, a "New campaign" button. Live status streams
+  over **SSE** (`/api/campaigns/{id}/events`) with **automatic polling fallback** if the EventSource
+  errors. Playwright-verified the list + live stats render and the row selects the triage view.
+- **Artifacts / triage view** (`ArtifactsView.tsx`) — crashes grouped by **dedup bucket**
+  (representative + `+N dupes`), an **assurance chip** (`AssuranceChip.tsx`, the two-standards ladder,
+  green=reachable+dynamic / amber=lab-confirmed / muted=static), the exploitability rating, and a
+  **source-mapped stack** (top frame clickable → Source tab at the line). Per-crash **Reproduce /
+  Minimize / Promote / Promote→PoC** all wired to the API (LLM-free re-verify). Playwright-verified
+  the chips, the stack, and that Promote flips the finding to `confirmed` live.
+- **Coverage shading** in the Source viewer — a campaign picker tints covered lines green / uncovered
+  amber (from `/api/campaigns/{id}/coverage`). Playwright-verified covered/uncovered lines render with
+  the legend, and a frame click lands on the right line with shading visible.
+- **Surface-aware Fuzz modal** (`FuzzModal.tsx`) — engines are **server-advertised**
+  (`/api/fuzz/engines?target_id=`), with the per-campaign **ResourceSpec** (mem/cpus/pids +
+  unconstrained, defaulted from Settings). Playwright-verified the engine options are `afl (default)`
+  / `libfuzzer` for a source_lib target and the ResourceSpec controls render.
+- **`reveal()` + deep-links** — one navigation primitive; `?view=source&file=…&line=…` and
+  `?tab=campaigns&campaign=…` restore the view (verified via the frame-jump URL).
+- **Settings** — a Source & Build card + the default ResourceSpec controls in the Fuzzing card.
+
+**Deferred to later phases (per the design):**
+- [ ] **P5** — real per-line coverage from afl-cov/llvm-cov (the probe must emit `coverage.json`; the
+  serializer + UI already render whatever map a campaign exposes — the mock emits one for the demo).
+- [ ] **P5** — a coverage **heat overview** (per-function % across the tree, not just the open file).
+- [ ] **P7** — Monaco/CodeMirror syntax highlighting in the viewer (still a line-numbered `<pre>`).
+- [ ] **P7** — true afl-tmin re-minimization behind the **Minimize** button (today it shares the
+  verify replay; the probe already minimizes inline at ingest).
+- [ ] Surface a **fuzz_campaign node in the graph** so "reveal in graph" works for a campaign (today
+  campaigns are table rows reached via the Campaigns tab; reveal() handles finding/node/target).
+- [ ] A coverage **sparkline** on the campaign row (the live number is shown; a trend line is nicer).
+
 ## Build modal — Phase 2 (fuzzing+source design §6.3, 2026-06-01)
 
 **Shipped in `build/fuzz-phase2`:** the capability-gated **Build modal** (`BuildModal.tsx`),

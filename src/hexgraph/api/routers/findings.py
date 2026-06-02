@@ -98,21 +98,34 @@ def api_verify_finding(finding_id: str):
         f = s.get(Finding, finding_id)
         if f is None:
             raise HTTPException(404, "finding not found")
-        spec = ((f.evidence_json or {}).get("extra") or {}).get("poc")
-        if not spec:
+        extra0 = (f.evidence_json or {}).get("extra") or {}
+        spec = extra0.get("poc")
+        fuzz = extra0.get("fuzz") or {}
+        # A promoted fuzz crash (or any fuzz_crash) re-verifies by replaying its stored
+        # CAS reproducer against the instrumented harness binary — the LLM-free crash
+        # oracle. Prefer this when the poc spec is a fuzz_reproducer or absent but a
+        # reproducer_ref exists; fall through to the generic verify_poc otherwise.
+        use_reproducer = bool(fuzz.get("reproducer_ref")) and (
+            not spec or spec.get("kind") == "fuzz_reproducer")
+        if not spec and not use_reproducer:
             raise HTTPException(400, "this finding has no stored PoC spec to verify")
         t = s.get(Target, f.target_id)
         try:
-            r = _verify(s, s.get(Project, f.project_id), t, spec)
+            if use_reproducer:
+                from hexgraph.engine.poc import verify_finding_reproducer
+                r = verify_finding_reproducer(s, s.get(Project, f.project_id), f)
+            else:
+                r = _verify(s, s.get(Project, f.project_id), t, spec)
         except PolicyViolation:
-            raise HTTPException(403, "enable features.network (web PoC) or features.poc (binary PoC) to verify")
+            raise HTTPException(403, "enable features.network (web PoC) or features.poc/fuzzing (binary/fuzz PoC) to verify")
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(400, f"verification failed: {exc}")
         ev = dict(f.evidence_json or {})
         extra = dict(ev.get("extra") or {})
         # Preserve the original spec (with {{NONCE}} intact) so re-verify stays
         # repeatable; r.get("spec") is the nonce-substituted copy.
-        extra["poc"] = spec
+        if spec:
+            extra["poc"] = spec
         # Refresh the engine-computed assurance triple at BOTH the canonical
         # evidence.extra.assurance and inside the verification record (matching
         # _poc_finding) — otherwise re-verify would DROP the assurance added by the
@@ -125,11 +138,12 @@ def api_verify_finding(finding_id: str):
                                  "assurance": assurance}
         # Refresh the human-facing reproduction command (the structured spec stays the
         # re-verify source of truth; this is a display rendering only).
-        from hexgraph.engine.poc_repro import repro_command
-        try:
-            extra["repro_command"] = repro_command(spec, t)
-        except Exception:  # noqa: BLE001
-            pass
+        if spec:
+            from hexgraph.engine.poc_repro import repro_command
+            try:
+                extra["repro_command"] = repro_command(spec, t)
+            except Exception:  # noqa: BLE001
+                pass
         ev["extra"] = extra
         f.evidence_json = ev
         return {**finding_dict(f), "verified": bool(r.get("verified")), "detail": r.get("detail")}

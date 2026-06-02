@@ -32,7 +32,8 @@ export interface SettingsView {
     server: { host: string; port: number };
     features: {
       ghidra: { enabled: boolean; mode: string; enrich_recon: boolean; timeout: number; bridge: { host: string; port: number } };
-      fuzzing: { enabled: boolean; max_total_time: number; max_len: number; max_crashes: number; timeout: number };
+      fuzzing: { enabled: boolean; max_total_time: number; max_len: number; max_crashes: number; timeout: number; image?: string; resources?: { mem: string; cpus: number; pids: number; tmpfs: string; timeout: number; unconstrained: boolean } };
+      build: { enabled: boolean; image?: string; timeout?: number };
       poc: { enabled: boolean; timeout: number };
       network: { enabled: boolean; timeout: number };
       mcp: { read: boolean; write: boolean; run: boolean };
@@ -50,6 +51,28 @@ export interface SourceFileEntry { rel: string; size?: number; role: string; nod
 export interface BuildSpecBody { source_tree_id: string; system?: string; phases?: any[]; instrumentation?: { sanitizers?: string[]; coverage?: string[]; engine?: string }; artifacts?: string[]; env?: Record<string, string>; arch?: string; name?: string; }
 export interface BuildPreview { system: string; phases: { argv: string[]; shell?: boolean }[]; instrumentation: any; artifacts: string[]; recipe_sha: string; injected_env: Record<string, string>; base_image: string; arch: string; network: string; }
 export interface BuildRow { id: string; status: string; recipe_sha?: string | null; source_content_hash?: string | null; toolchain_digest?: string | null; artifacts: Record<string, string>; instrumentation: any; returncode?: number | null; duration: number; error?: string | null; derived_target_id?: string | null; source_tree_id: string; created_at?: string | null; }
+// ── Fuzz campaigns / artifacts (Phase 4 triage) ───────────────────────────────
+export interface Assurance { standard: string; method: string; precondition: string; precondition_inferred?: boolean; detail?: string; }
+export interface CampaignStats { execs?: number; edges_covered?: number; crash_count?: number; peak_rss?: number; coverage_percent?: number; last_run_at?: string; }
+export interface Campaign {
+  id: string; project_id: string; target_id: string; name: string; surface: string; engine: string;
+  status: string; instances: number; stats: CampaignStats; resources: Record<string, any>;
+  coverage_instrumented?: boolean | null; build_spec_id?: string | null; task_id?: string | null;
+  corpus_ref?: string | null; coverage_ref?: string | null; error?: string | null;
+  created_at?: string | null; finished_at?: string | null;
+}
+export interface StackFrame { idx: number; func: string; file: string; line: number; col?: number | null; }
+export interface FuzzArtifact {
+  id: string; campaign_id: string; kind: string; content_cas?: string | null; size: number;
+  sanitizer?: string | null; dedup_key?: string | null; dupe_count: number;
+  faulting_function?: string | null; exploitability: { rating?: string; access?: string; signals?: string[] };
+  finding_id?: string | null; created_at?: string | null;
+  finding?: { id: string; title: string; severity: string; status: string; verified: boolean; has_poc: boolean };
+  assurance?: Assurance | null; frames?: StackFrame[]; source_ref?: { tree_id?: string; rel?: string; line?: number } | null;
+}
+export interface Coverage { available: boolean; percent?: number | null; files: Record<string, { covered: number[]; uncovered?: number[]; total?: number }>; }
+export interface FuzzEngines { surface?: string; inferred?: boolean; engines?: string[]; default?: string | null; surfaces?: Record<string, { engines: string[]; default: string | null }>; }
+
 export interface GraphNode { id: string; type: "target" | "node" | "finding"; label: string; [k: string]: any; }
 export interface GraphEdge { id: string; source: string; target: string; type: string; src_kind?: string; dst_kind?: string; origin?: string; confidence?: number | null; attrs?: Record<string, any>; count?: number; }
 export interface Graph { project_id: string; nodes: GraphNode[]; edges: GraphEdge[]; }
@@ -84,7 +107,7 @@ export const api = {
   project: (id: string) => getJSON<ProjectDetail>(`/api/projects/${id}`),
   graph: (id: string) => getJSON<Graph>(`/graph/${id}`),
   finding: (id: string) => getJSON<Finding>(`/api/findings/${id}`),
-  capabilities: () => getJSON<{ target: Record<string, string[]>; node: Record<string, string[]>; edge: Record<string, string[]>; features?: { build?: boolean } }>("/api/capabilities"),
+  capabilities: () => getJSON<{ target: Record<string, string[]>; node: Record<string, string[]>; edge: Record<string, string[]>; features?: { build?: boolean; fuzzing?: boolean; poc?: boolean } }>("/api/capabilities"),
   suggestions: (fid: string) => getJSON<any[]>(`/api/findings/${fid}/suggestions`),
   setStatus: (fid: string, status: string) => postJSON(`/api/findings/${fid}/status`, { status }),
   patchFinding: (fid: string, body: Partial<{ title: string; severity: string; confidence: string; category: string; summary: string; reasoning: string; status: string; human_notes: string; evidence: any }>) => patchJSON<Finding>(`/api/findings/${fid}`, body),
@@ -142,6 +165,24 @@ export const api = {
   createBuild: (pid: string, body: { build_spec_id?: string; spec?: BuildSpecBody }) => postJSON<BuildRow>(`/api/projects/${pid}/builds`, body),
   builds: (pid: string, sourceTreeId?: string) => getJSON<{ builds: BuildRow[] }>(`/api/projects/${pid}/builds${sourceTreeId ? `?source_tree_id=${sourceTreeId}` : ""}`),
   buildLog: (bid: string) => getJSON<{ build_id: string; log: string }>(`/api/builds/${bid}/log`),
+  // Fuzz campaigns + artifacts (Phase 4 triage)
+  campaigns: (pid: string, targetId?: string) => getJSON<{ campaigns: Campaign[] }>(`/api/projects/${pid}/campaigns${targetId ? `?target_id=${targetId}` : ""}`),
+  campaign: (cid: string) => getJSON<Campaign>(`/api/campaigns/${cid}`),
+  startCampaign: (pid: string, body: { target_id: string; surface?: string | null; engine?: string | null; function?: string | null; max_total_time?: number; max_len?: number; max_crashes?: number; instances?: number; build_spec_id?: string | null; resources?: Record<string, any> }) => postJSON<Campaign>(`/api/projects/${pid}/campaigns`, body),
+  stopCampaign: (cid: string) => postJSON<Campaign>(`/api/campaigns/${cid}/stop`, {}),
+  resumeCampaign: (cid: string) => postJSON<Campaign>(`/api/campaigns/${cid}/resume`, {}),
+  campaignArtifacts: (cid: string) => getJSON<{ artifacts: FuzzArtifact[] }>(`/api/campaigns/${cid}/artifacts`),
+  campaignCoverage: (cid: string) => getJSON<Coverage>(`/api/campaigns/${cid}/coverage`),
+  verifyArtifact: (aid: string) => postJSON<{ artifact_id: string; verified: boolean; detail?: string; assurance?: Assurance; output?: string }>(`/api/artifacts/${aid}/verify`, {}),
+  minimizeArtifact: (aid: string) => postJSON<{ artifact_id: string; verified: boolean; detail?: string; assurance?: Assurance }>(`/api/artifacts/${aid}/minimize`, {}),
+  promoteArtifact: (aid: string, toPoc: boolean) => postJSON<{ artifact_id: string; finding_id: string; status: string; to_poc: boolean }>(`/api/artifacts/${aid}/promote`, { to_poc: toPoc }),
+  fuzzEngines: (surface?: string, targetId?: string) => {
+    const qs = new URLSearchParams();
+    if (surface) qs.set("surface", surface);
+    if (targetId) qs.set("target_id", targetId);
+    return getJSON<FuzzEngines>(`/api/fuzz/engines${qs.toString() ? "?" + qs.toString() : ""}`);
+  },
+  campaignEventsUrl: (cid: string) => `/api/campaigns/${cid}/events`,
   createEdge: (pid: string, body: any) => postJSON<any>(`/api/projects/${pid}/edges`, body),
   updateEdge: (eid: string, body: { attrs: Record<string, any>; merge?: boolean }) => patchJSON<any>(`/api/edges/${eid}`, body),
   createSocket: (pid: string, body: { kind?: string; port?: number | string | null; name?: string | null; bind_addr?: string | null; attrs?: any }) => postJSON<any>(`/api/projects/${pid}/sockets`, body),

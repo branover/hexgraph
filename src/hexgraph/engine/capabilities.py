@@ -110,4 +110,4 @@ def capability_table() -> dict:
     # that isn't keyed to a target/node/edge — e.g. the Source-tab Build button
     # (build is anchored on a source_tree, gated by features.build).
     return {"target": targets, "node": nodes, "edge": _EDGE,
-            "features": {"build": _build_enabled()}}
+            "features": {"build": _build_enabled(), "fuzzing": fuzz, "poc": poc}}

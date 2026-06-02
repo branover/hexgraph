@@ -147,6 +147,31 @@ then run the resume verifier, then continue at the next unchecked task.
   `test_migrations.py` (0014 on 0013 round-trip + fresh init_db), Docker-gated `test_campaign_e2e.py`
   (a REAL AFL++ campaign finds a planted bug in an instrumented build with coverage, dedups/classifies/
   minimizes it, and the reproducer re-verifies). The rich Campaigns/Artifacts triage UX is Phase 4.
+  **Fuzzing+source Phase 4 DONE** (`docs/design-fuzzing-and-source.md` §7 Phase 4, branch
+  `build/fuzz-phase4`): the **full Source/IDE tab UX + the Campaigns/Artifacts triage experience** —
+  the user-facing payoff of Phases 1–3 (mostly frontend + thin API/serializer fills, **no
+  migration**, no `policy.py` edit, frozen schema untouched). **Campaigns tab** (`CampaignsPanel.tsx`)
+  with a live row per campaign (status/execs/edges/crashes/coverage) over an **SSE** stream
+  (`GET /api/campaigns/{id}/events`) with **automatic polling fallback**; Stop/Resume. **Artifacts/
+  triage view** (`ArtifactsView.tsx`): crashes grouped by **dedup bucket**, an **assurance chip**
+  (`AssuranceChip.tsx`, the two-standards ladder), exploitability rating, and a **source-mapped
+  stack** (the reaper parses ASan frames → `evidence.extra.fuzz.frames` and **auto-links the top
+  in-project frame** to its source tree; a frame click jumps to the IDE line). Per-crash **Reproduce/
+  Minimize** (replay the stored reproducer, LLM-free), **Promote** (confirm the finding), **Promote→
+  PoC** (`promote_artifact(to_poc)` seeds a reproducer-backed PoC the one-click re-verify re-proves —
+  the verify-finding endpoint branches a fuzz reproducer to `verify_finding_reproducer`). **Coverage
+  shading** in the Source viewer (`coverage_for` serializes a per-file line map, snapshotted to CAS at
+  finalize; covered=green/uncovered=amber + a campaign picker). **Surface-aware Fuzz modal**
+  (`FuzzModal.tsx`): engines **server-advertised** (`GET /api/fuzz/engines?target_id=`, UI never
+  hardcodes), per-campaign **`ResourceSpec`** controls defaulted from Settings. A single **`reveal()`**
+  navigation primitive + **deep-links** (`?view=source&file=…&line=…`, `?tab=campaigns&campaign=…`).
+  **Settings**: a Source & Build card + the default ResourceSpec in the Fuzzing card; the capability
+  table advertises `features.{fuzzing,poc,build}` so the SPA shows/hides Campaigns/Fuzz/Build
+  project-wide. IA is a center-pane mode switch + right-pane tab (D-ia), not a new route. Tests:
+  `tests/test_campaigns_phase4.py` (9 — frame parse + runtime-skip + unsymbolized→empty, ingest
+  frames + auto-link source, promote/promote-to-PoC, coverage serialize incl. CAS snapshot, the
+  engines endpoint, the verify/minimize/promote/coverage API, the `features.fuzzing` cap flag).
+  Full `just test` green (531 passed, 5 Docker-gated skips). Playwright-verified every surface.
   **Target soft-removal** (archive subtree, restore on re-add) and **firmware filesystem browser**
   (persisted unpacked tree, add any file as a child target; library exports → nodes; function nodes
   launch tasks).
@@ -387,6 +412,29 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-02: **Fuzzing+source Phase 4 — the Source/IDE tab full UX + Campaigns/Artifacts triage**
+  ([`docs/design-fuzzing-and-source.md`](docs/design-fuzzing-and-source.md) §7 Phase 4, branch
+  `build/fuzz-phase4`). The user-facing payoff of Phases 1–3 — mostly frontend + thin API/serializer
+  fills, **no migration**, no `policy.py` edit, frozen Finding schema untouched. **Campaigns tab**
+  (live status via SSE `/api/campaigns/{id}/events` with **polling fallback**; Stop/Resume) +
+  **Artifacts/triage view** (crashes grouped by dedup bucket, **assurance chips** [the two-standards
+  ladder], exploitability rating, **source-mapped stacks** → IDE jump; per-crash **Reproduce/
+  Minimize/Promote/Promote→PoC**, LLM-free re-verify). The reaper now parses ASan frames →
+  `evidence.extra.fuzz.frames` + **auto-links the top in-project frame** to its source tree. **Coverage
+  shading** in the Source viewer (`coverage_for` serializer + CAS snapshot via `coverage_ref`).
+  **Surface-aware Fuzz modal** (`GET /api/fuzz/engines` — server-advertised engines, UI never
+  hardcodes; per-campaign `ResourceSpec`). A single **`reveal()`** router + **deep-links** make every
+  entity addressable/restorable. Settings: a Source & Build card + the default ResourceSpec; the
+  capability table advertises `features.{fuzzing,poc,build}`. New: `AssuranceChip.tsx`,
+  `CampaignsPanel.tsx`, `ArtifactsView.tsx`, `FuzzModal.tsx`; new API endpoints (artifact verify/
+  minimize/promote, campaign coverage + SSE events, fuzz engines). Tests:
+  `tests/test_campaigns_phase4.py` (9). `just test` green (531 passed, 5 Docker-gated skips); `just ui`
+  clean; Playwright-verified every surface (Campaigns, Artifacts triage, frame→source jump landing on
+  the right line with coverage shading, Fuzz/Build modals, Settings, deep-links). README + SKILL
+  (`agent_setup.py`) + design-doc §7 Phase-4 DONE + `docs/ui-backlog.md` updated. No new MCP tools
+  (the existing campaign/artifact MCP tools cover it); the new API serializer fields
+  (`artifact.{frames,assurance,source_ref,finding}`, `/api/fuzz/engines`, `/api/campaigns/{id}/
+  coverage`) are UI-facing.
 - 2026-06-02: **Fuzzing+source Phase 3 — coverage-guided fuzzing first-class + the detached
   campaign lifecycle + the `ResourceSpec`** ([`docs/design-fuzzing-and-source.md`](docs/design-fuzzing-and-source.md)
   §7 Phase 3, branch `build/fuzz-phase3`). The `Fuzzer` seam (`engine/fuzzers/`, dispatch by attack
