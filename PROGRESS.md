@@ -532,6 +532,27 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-02: **build: make `just showcase` genuinely RUNNABLE** (branch `build/showcase-runnable`).
+  The showcase project stays a "show off every feature" swiss-army knife for the UI/screenshots, but
+  the common **Run actions now WORK against it** instead of dead-ending on seeded rows:
+  • **Fuzz** — the instrumented rebuild is no longer a hand-stamped row with empty `fuzz_target_sources`
+    and no harness (which made "Start a fuzz campaign" 400 *"no fuzz harness available"*). It's now built
+    by the REAL build flow (`engine.builds.run_build` via the offline **MockBuilder**, $0, no Docker):
+    `_register_derived_target` wires `instrumented_build_of`→httpd + `builds` from the build_spec, sets
+    real on-disk `fuzz_target_sources`, and **promotes the harness** (`harnesses`→ derived target). A
+    live UI "Start campaign" now resolves harness + 3 real sources, infers `source_lib`, and **launches**
+    (engine afl). • **Recon/static** — the firmware children + standalone `acmecfgd` are ingested from
+    REAL fixture bytes (verified: a real `recon` task on `acmecfgd` runs in the sandbox, status succeeded,
+    refines arch x64). Fixed honesty quirks: byte targets are labelled `x86_64` (the fixtures' real arch,
+    so recon confirms not contradicts); `acmecfgd` now uses real *executable* bytes (was a `.so` mislabeled
+    executable). The rich breadth (wide edge variety, all 4 assurance rungs, socket bus, multi-bucket crash
+    inbox, dynamic surfaces) stays curated/seeded. **Degrades gracefully** — no Docker → the visual project
+    still seeds (MockBuilder is offline; recon/fuzz just aren't *triggered* by the seed). Guard test
+    `tests/test_showcase_seed.py` updated: requires `features.build`, the new `builds`/`harnesses` edges,
+    and a RUNNABILITY block (real build_id + a resolvable harness + on-disk sources + `source_lib` surface).
+    `just showcase`/`just capture` (13 PNGs regenerated) + `just demo` green; full suite 707 passed
+    (the one Docker qemu-mode fuzz e2e flaked only under self-induced concurrent-pytest Docker contention —
+    passes clean in isolation here and on main). Only `scripts/seed_showcase.py` + the guard test changed.
 - 2026-06-02: **build: graph presentation Phase 4 — layout-by-context + semantic zoom** (branch
   `build/graph-phase4`; `docs/design/design-graph-presentation.md` §8 Phase 4, §3.2/§3.3/§3.4/D7/D8).
   Frontend-only; builds on the Phase-3 rooms and **fixes the Phase-3 caveat — room labels were only

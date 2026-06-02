@@ -5,6 +5,26 @@ features as possible — for the README hero shots and the per-feature doc captu
 while staying reproducible: a fixed RNG seed + stable structure so a re-seed +
 re-capture reproduces the same screenshots as the UI evolves.
 
+RUNNABLE, not just pretty. The common Run actions WORK against this project, not just
+render as static rows:
+
+  • RECON / static-analysis — the firmware, the two unpacked-FS ELF children, and the
+    standalone daemon are ingested from REAL fixture bytes with real on-disk paths, so
+    clicking "Run → recon" / "static analysis" executes for real in the sandbox (needs
+    Docker + the sandbox image; the seed itself never runs recon, it just lays the bytes).
+  • BUILD (instrumented) — the instrumented rebuild is produced by the REAL build flow
+    (engine.builds.run_build via the offline MockBuilder, $0, no Docker), so it carries a
+    real recorded recipe, the reproducibility triple, a promoted fuzz harness, and
+    on-disk `fuzz_target_sources` — exactly what a from-source build records.
+  • FUZZ — because the instrumented target was built for real (harness promoted + real
+    target sources on disk), "Start a fuzz campaign" actually LAUNCHES instead of
+    returning 400 "no fuzz harness available" (the bug a seeded-row instrumented target hit).
+
+The breadth that is expensive to make real (the wide edge variety, every assurance rung,
+the socket bus, the finished triage inbox) stays curated/seeded so the graph still LOOKS
+comprehensive. Degrades gracefully: with no Docker the visual project still seeds (the
+build uses the offline MockBuilder; recon/fuzz just aren't *triggered* by the seed).
+
 What it builds (a plausible consumer-router engagement):
 
   Targets
@@ -45,9 +65,11 @@ import os
 import sys
 
 # Mock everything, offline, zero token spend. Set BEFORE importing hexgraph so the
-# campaign engine selects the offline MockFuzzer.
+# campaign engine selects the offline MockFuzzer and the offline MockBuilder (no Docker
+# image needed for either — the instrumented rebuild + the seeded campaign are both $0).
 os.environ.setdefault("HEXGRAPH_LLM_BACKEND", "mock")
 os.environ.setdefault("HEXGRAPH_FUZZER", "mock")
+os.environ.setdefault("HEXGRAPH_BUILDER", "mock")
 # The campaign machinery never executes target bytes in mock mode, but the policy
 # gate still wants fuzzing enabled — we flip it in settings below too.
 
@@ -124,6 +146,20 @@ int upnp_control(const char *soap) {
 }
 """
 
+MAKEFILE = """\
+# Minimal recipe so HexGraph detects build system `make` and the instrumented rebuild
+# (engine.builds.run_build) records a real recorded recipe. Instrumentation is injected
+# by the build image's env contract (ASan/SanCov/libFuzzer), so this stays plain.
+CC ?= cc
+all: httpd
+httpd: src/httpd.c src/upnp.c
+\t$(CC) -O0 -o httpd src/httpd.c src/upnp.c
+fuzz_target: fuzz/fuzz_cgi.c src/httpd.c
+\t$(CC) -O0 -o fuzz_target fuzz/fuzz_cgi.c src/httpd.c
+clean:
+\trm -f httpd fuzz_target
+"""
+
 HARNESS_C = """\
 /* fuzz_cgi.c — a libFuzzer/AFL harness driving the CGI parser directly. */
 #include <stddef.h>
@@ -191,8 +227,10 @@ def seed(session, *, reset: bool) -> dict:
         Project, Target,
     )
     from hexgraph.engine import assurance as A
+    from hexgraph.engine import builds as B
     from hexgraph.engine.audit import record_egress
     from hexgraph.engine.authoring import create_edge, create_socket
+    from hexgraph.engine.build import BuildSpec
     from hexgraph.engine.edges import add_edge
     from hexgraph.engine.filesystem import persistent_base, record_manifest
     from hexgraph.engine.findings import persist_finding
@@ -233,7 +271,10 @@ def seed(session, *, reset: bool) -> dict:
     # ── Targets ────────────────────────────────────────────────────────────────────
     _step("Ingest firmware image + unpacked-FS children + standalone binary")
     fw = ingest_file(session, project, str(fw_bytes), name="acme_r7000_v1.0.4.chk")
-    _classify(fw, kind="firmware_image", fmt="TRX/uImage → squashfs", arch="mipsel",
+    # arch reflects the REAL fixture bytes (synthetic_fw.bin is a host-native squashfs of
+    # x86-64 ELFs), so a real "Run → recon" in the sandbox re-confirms this classification
+    # rather than overwriting a contradictory seeded value.
+    _classify(fw, kind="firmware_image", fmt="squashfs (binwalk -eM)", arch="x86_64",
               extra={"vendor": "Acme", "model": "R7000", "version": "1.0.4"})
 
     # The unpacked filesystem (manifest only) so the FS browser renders. Lay the bytes
@@ -246,11 +287,11 @@ def seed(session, *, reset: bool) -> dict:
     shutil.copy2(lib_bytes, fs_root / "lib" / "libupnp.so")
 
     httpd = ingest_file(session, project, str(httpd_bytes), name="sbin/httpd", parent=fw)
-    _classify(httpd, kind="executable", fmt="ELF", arch="mipsel",
+    _classify(httpd, kind="executable", fmt="ELF", arch="x86_64",
               extra={"mitigations": {"nx": True, "pie": False, "canary": False, "relro": "partial"},
                      "imports": ["system", "strcpy", "recv", "snprintf"]})
     lib = ingest_file(session, project, str(lib_bytes), name="lib/libupnp.so", parent=fw)
-    _classify(lib, kind="shared_library", fmt="ELF", arch="mipsel",
+    _classify(lib, kind="shared_library", fmt="ELF", arch="x86_64",
               extra={"mitigations": {"nx": True, "pie": True, "canary": True, "relro": "full"}})
 
     # Record the firmware filesystem manifest, marking the two extracted ELFs as added.
@@ -265,8 +306,9 @@ def seed(session, *, reset: bool) -> dict:
     record_manifest(fw, method="binwalk -eM (squashfs/sasquatch)", root_rel="squashfs-root",
                     files=fs_manifest)
 
-    # A standalone binary root (a config daemon shipped separately).
-    daemon = ingest_file(session, project, str(lib_bytes), name="acmecfgd")
+    # A standalone binary root (a config daemon shipped separately). Real executable bytes
+    # so a "Run → recon"/static-analysis on it executes for real and classifies honestly.
+    daemon = ingest_file(session, project, str(httpd_bytes), name="acmecfgd")
     _classify(daemon, kind="executable", fmt="ELF", arch="x86_64",
               extra={"mitigations": {"nx": True, "pie": True, "canary": True, "relro": "full"}})
 
@@ -280,6 +322,8 @@ def seed(session, *, reset: bool) -> dict:
     # ── Source tree (a small C lib + a harness) ──────────────────────────────────────
     _step("Create source tree (C lib + fuzz harness)")
     tree = create_source_tree(session, project, name="acme-httpd (src)", origin="scratch")
+    # A Makefile so the real build flow detects build system `make` (propose_build_spec).
+    write_source_file(session, project, tree, "Makefile", MAKEFILE, role="code")
     write_source_file(session, project, tree, "src/httpd.c", HTTPD_C, role="code")
     write_source_file(session, project, tree, "src/upnp.c", UPNP_C, role="code")
     write_source_file(session, project, tree, "fuzz/fuzz_cgi.c", HARNESS_C, role="harness")
@@ -488,25 +532,30 @@ def seed(session, *, reset: bool) -> dict:
                               extra={"assurance": A.assurance(A.CODE_PRESENT, A.STATIC, A.UNAUTHENTICATED)})),
         finding_type="vulnerability")
 
-    # ── An instrumented rebuild (derived target) for the coverage-guided campaign ─────
-    _step("Register an instrumented rebuild + run a mock fuzz campaign (offline)")
-    httpd_instr = ingest_file(session, project, str(httpd_bytes), name="sbin/httpd (instrumented)",
-                              parent=fw)
-    _classify(httpd_instr, kind="executable", fmt="ELF", arch="x86_64",
-              extra={"instrumented": True, "fuzz_target_sources": ["/src/httpd.c"],
-                     "sanitizers": ["asan"], "coverage": "sancov"})
-    # instrumented_build_of: the rebuilt target → the original it was rebuilt from.
-    create_edge(session, project, src_kind="target", src_id=httpd_instr.id,
-                dst_kind="target", dst_id=httpd.id, type="instrumented_build_of",
-                attrs={"sanitizers": ["asan"], "coverage": "sancov"})
-    # The instrumented target is built_from the same source tree.
-    create_edge(session, project, src_kind="target", src_id=httpd_instr.id,
-                dst_kind="source_tree", dst_id=tree.id, type="built_from",
-                attrs={"system": "make", "instrumentation": "asan+sancov"})
-
+    # ── A REAL instrumented rebuild (derived target) for the coverage-guided campaign ─
+    # This is the runnable keystone: instead of stamping a seeded "instrumented" row (which
+    # made "Start a fuzz campaign" 400 with "no fuzz harness available"), we run the REAL
+    # build flow via the offline MockBuilder ($0, no Docker). run_build → _register_derived_target
+    # wires `instrumented_build_of` → the shipped httpd + `builds` from the build_spec, sets the
+    # derived target's `instrumented`/`sanitizers`/`coverage`/`fuzz_target_sources` (REAL on-disk
+    # source paths) and PROMOTES the harness (a `harness` node `harnesses`→ the derived target).
+    # So a later UI "Start campaign" resolves the harness + sources and LAUNCHES for real.
+    _step("Build the instrumented rebuild for real (MockBuilder, offline) + run a mock fuzz campaign")
     from hexgraph.engine import campaigns as C
+
+    build_spec = BuildSpec.from_dict({
+        **B.propose_build_spec(tree), "artifacts": ["fuzz_target"],
+        "instrumentation": {"sanitizers": ["address"], "coverage": ["sancov"], "engine": "libfuzzer"},
+    })
+    spec_row = B.create_build_spec(session, project, build_spec)
+    build = B.run_build(session, project, spec_row)  # offline MockBuilder via HEXGRAPH_BUILDER=mock
+    if build.status != "succeeded" or not build.derived_target_id:
+        raise RuntimeError(f"instrumented build failed: {build.error!r} — showcase seed cannot continue")
+    httpd_instr = session.get(Target, build.derived_target_id)
+
     spec = FuzzCampaignSpec(target_id=httpd_instr.id, surface="source_lib", harness_source=HARNESS_C,
-                            function="cgi_handler", target_sources=["/src/httpd.c"],
+                            function="cgi_handler",
+                            target_sources=(httpd_instr.metadata_json or {}).get("fuzz_target_sources") or [],
                             max_total_time=120)
     row = C.start_campaign(session, project, httpd_instr, spec=spec)
 
