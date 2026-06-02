@@ -784,12 +784,13 @@ def coverage_for(session: Session, campaign: FuzzCampaign) -> dict:
     shading) when the campaign exposed no line map (honest: aggregate edge counts are
     not a per-line map). The Source viewer tints covered/uncovered lines from this."""
     data = _read_coverage(session, campaign)
+    stats_pct = (campaign.stats_json or {}).get("coverage_percent")
     if not data:
-        return {"available": False, "percent": (campaign.stats_json or {}).get("coverage_percent"),
-                "files": {}}
+        return {"available": False, "percent": stats_pct, "files": {}}
     files = data.get("files") or {}
-    return {"available": bool(files), "percent": data.get("percent")
-            or (campaign.stats_json or {}).get("coverage_percent"), "files": files}
+    # Prefer the map's own percent; fall back to stats only when truly absent (0.0 is valid).
+    pct = data["percent"] if data.get("percent") is not None else stats_pct
+    return {"available": bool(files), "percent": pct, "files": files}
 
 
 def _read_coverage(session, campaign) -> dict | None:

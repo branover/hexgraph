@@ -509,10 +509,17 @@ function ArtifactsViewLoader({ campaignId, onViewFinding, onOpenSource }: {
   const [c, setC] = useState<import("../api").Campaign | null>(null);
   useEffect(() => {
     let live = true;
-    const tick = () => api.campaign(campaignId).then((x) => { if (live) setC(x); }).catch(() => {});
+    let t: any;
+    // Poll only while the campaign is still live; stop the interval once it finalizes
+    // (the closure read the seed `c`, so gate on the freshly-fetched status instead).
+    const tick = () => api.campaign(campaignId).then((x) => {
+      if (!live) return;
+      setC(x);
+      if (t && !["running", "building"].includes(x.status)) { clearInterval(t); t = undefined; }
+    }).catch(() => {});
     tick();
-    const t = setInterval(() => { if (c?.status === "running" || c?.status === "building" || !c) tick(); }, 3000);
-    return () => { live = false; clearInterval(t); };
+    t = setInterval(tick, 3000);
+    return () => { live = false; if (t) clearInterval(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [campaignId]);
   if (!c) return <div className="muted" style={{ padding: 12, fontSize: 12 }}>loading campaign…</div>;
