@@ -109,7 +109,15 @@ def api_verify_finding(finding_id: str):
             not spec or spec.get("kind") == "fuzz_reproducer")
         if not spec and not use_reproducer:
             raise HTTPException(400, "this finding has no stored PoC spec to verify")
-        t = s.get(Target, f.target_id)
+        # Resolve the PoC's OWN target, not blindly finding.target_id: a PoC may have been
+        # authored/verified against a DIFFERENT target than the finding it's attached to
+        # (e.g. a vuln finding on a parent binary whose exploit fires against a child/live
+        # web surface). verify_poc records that as evidence.extra.poc_target_id. Prefer it;
+        # fall back to finding.target_id when it's absent or the recorded target is gone.
+        poc_target_id = extra0.get("poc_target_id")
+        t = s.get(Target, poc_target_id) if poc_target_id else None
+        if t is None:
+            t = s.get(Target, f.target_id)
         try:
             if use_reproducer:
                 from hexgraph.engine.poc import verify_finding_reproducer
@@ -126,16 +134,19 @@ def api_verify_finding(finding_id: str):
         # repeatable; r.get("spec") is the nonce-substituted copy.
         if spec:
             extra["poc"] = spec
-        # Refresh the engine-computed assurance triple at BOTH the canonical
-        # evidence.extra.assurance and inside the verification record (matching
-        # _poc_finding) — otherwise re-verify would DROP the assurance added by the
-        # PoC-assurance work. The triple is derived by verify_poc, not the caller.
-        assurance = r.get("assurance")
-        extra["assurance"] = assurance
+        # MERGE the engine-computed assurance via the partial order so a re-verify NEVER
+        # DOWNGRADES an already-stronger stored rung: a failed/weaker re-verify (unconfirmed,
+        # or an input_reachable/static argument) must not lower a code_present/dynamic or
+        # input_reachable/dynamic claim. A genuine re-confirmation at the same/higher rung is
+        # fine. (An earlier fix kept assurance from being DROPPED on re-verify; this guards the
+        # related DOWNGRADE.) The triple is engine-derived, not caller-supplied.
+        from hexgraph.engine.assurance import assurance_of, merge_assurance
+        merged = merge_assurance(assurance_of(f.evidence_json), r.get("assurance"))
+        extra["assurance"] = merged
         extra["verification"] = {"verified": bool(r.get("verified")), "detail": r.get("detail"),
                                  "exit_code": r.get("exit_code"), "nonce": r.get("nonce"),
                                  "output": (r.get("output") or "")[:2000],
-                                 "assurance": assurance}
+                                 "assurance": merged}
         # Refresh the human-facing reproduction command (the structured spec stays the
         # re-verify source of truth; this is a display rendering only).
         if spec:

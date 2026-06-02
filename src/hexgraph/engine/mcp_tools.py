@@ -124,23 +124,32 @@ def read_source_file(tree_id: str, rel: str | None = None) -> dict:
 def import_source_tree(project_id: str, name: str, files: list | None = None,
                        origin: str = "scratch") -> dict:
     """Create a managed SOURCE tree and (optionally) populate it with files. `files`
-    is a list of {rel, content, role?} (role in code|harness|poc|script|build_recipe).
-    Use this to bring in a harness/PoC you authored or a small library's source for
-    later building. Trusted text only (NOT target bytes — those are added as targets).
-    Returns {id, name, written}."""
+    is a list of {rel, content, role?} (role in code|harness|poc|script|build_recipe);
+    `path` is accepted as an alias for `rel`. Use this to bring in a harness/PoC you
+    authored or a small library's source for later building. Trusted text only (NOT target
+    bytes — those are added as targets). Returns {id, name, written}; a malformed `files`
+    entry (not an object, or missing both `rel` and `path`) is reported as an ERROR rather
+    than silently skipped, so a wrong-key call never looks like a successful 0-file import."""
     from hexgraph.engine.source import SourceError, create_source_tree, write_source_file
 
     with session_scope() as s:
         p = s.get(Project, project_id)
         if p is None:
             return {"error": "project not found"}
+        # Validate the shape BEFORE creating the tree — surface a wrong key (the common
+        # `path`-instead-of-`rel` slip) as a clear error instead of a silent no-op success.
+        for i, f in enumerate(files or []):
+            if not isinstance(f, dict):
+                return {"error": f"files[{i}] must be an object {{rel, content, role?}}, got {type(f).__name__}"}
+            if not (f.get("rel") or f.get("path")):
+                return {"error": f"files[{i}] is missing `rel` (the relative path); "
+                                 f"got keys {sorted(f.keys())}"}
         try:
             tree = create_source_tree(s, p, name=name, origin=origin, editable=True)
             written = 0
             for f in (files or []):
-                if not isinstance(f, dict) or "rel" not in f:
-                    continue
-                write_source_file(s, p, tree, f["rel"], f.get("content", ""),
+                rel = f.get("rel") or f.get("path")
+                write_source_file(s, p, tree, rel, f.get("content", ""),
                                   role=f.get("role", "code"))
                 written += 1
         except SourceError as exc:
@@ -624,11 +633,15 @@ def search(project_id: str, q: str) -> dict:
 
 def list_findings(project_id: str) -> list[dict]:
     """Existing findings, so the agent doesn't re-report what's already known. Each row
-    carries `verified` and, for a PoC that ran, a compact `verification` summary
+    carries `verified`, the compact `assurance` triple {standard, method, precondition} (the
+    rung — so you see code_present/static vs input_reachable/dynamic at a glance, no
+    per-finding get_finding needed) and, for a PoC that ran, a compact `verification` summary
     {verified, detail}; a fuzz_crash carries a compact `fuzz` summary
     {exploitability, coverage_instrumented, dupe_count} so you can triage at a glance —
     call get_finding(id) for the full evidence (incl. the PoC/fuzz detail in
     evidence.extra)."""
+    from hexgraph.engine.assurance import assurance_of, compact_assurance
+
     with session_scope() as s:
         rows = s.query(Finding).filter(Finding.project_id == project_id).all()
         out = []
@@ -638,7 +651,8 @@ def list_findings(project_id: str) -> list[dict]:
             row = {"id": f.id, "title": f.title, "severity": f.severity, "category": f.category,
                    "status": f.status, "finding_type": f.finding_type,
                    "verified": is_verified(ev), "target_id": f.target_id,
-                   "function": ev.get("function")}
+                   "function": ev.get("function"),
+                   "assurance": compact_assurance(assurance_of(ev))}
             ver = extra.get("verification")
             if ver:
                 row["verification"] = {"verified": bool(ver.get("verified")), "detail": ver.get("detail")}
@@ -1489,6 +1503,9 @@ def verify_poc(target_id: str, poc: dict, finding_id: str | None = None) -> dict
                               "execution not permitted — enable features.poc in Settings to verify PoCs")}
         except Exception as exc:  # noqa: BLE001
             return {"error": f"verification failed: {exc}"}
+        # The rung to report back: when attached, the MERGED (never-downgraded) stored rung;
+        # otherwise the rung this run alone established.
+        out_assurance = r.get("assurance")
         if finding_id:
             f = s.get(Finding, finding_id)
             if f is not None:
@@ -1498,14 +1515,22 @@ def verify_poc(target_id: str, poc: dict, finding_id: str | None = None) -> dict
                 # nonce-substituted copy verify_poc ran — otherwise the placeholder is gone
                 # and a later re-verify carries a stale literal nonce that can never match.
                 extra["poc"] = poc
-                # The engine-computed assurance (standard/method/precondition) at the
-                # canonical extra.assurance AND nested in verification (matching _poc_finding)
-                # — so a confirmed PoC records the right rung; cannot be faked.
-                extra["assurance"] = r.get("assurance")
+                # Record the target the PoC was authored/verified AGAINST so a later one-click
+                # re-verify resolves the PoC's OWN target — which may differ from the finding's
+                # target_id (e.g. a binary finding whose PoC fires against a child/live surface).
+                extra["poc_target_id"] = target_id
+                # The engine-computed assurance (standard/method/precondition) at the canonical
+                # extra.assurance AND nested in verification (matching _poc_finding). MERGE via the
+                # partial order so a write NEVER downgrades an already-stronger stored rung — a
+                # failed/weaker re-verify keeps the prior assurance; a real re-confirmation at the
+                # same/higher rung is fine. The triple is engine-computed and cannot be faked.
+                from hexgraph.engine.assurance import assurance_of, merge_assurance
+                out_assurance = merge_assurance(assurance_of(ev), r.get("assurance"))
+                extra["assurance"] = out_assurance
                 extra["verification"] = {"verified": bool(r.get("verified")), "detail": r.get("detail"),
                                          "exit_code": r.get("exit_code"), "nonce": r.get("nonce"),
                                          "output": (r.get("output") or "")[:2000],
-                                         "assurance": r.get("assurance")}
+                                         "assurance": out_assurance}
                 # A human copy-paste reproduction command (display only; verify uses the spec).
                 from hexgraph.engine.poc_repro import repro_command
                 repro = None
@@ -1518,8 +1543,12 @@ def verify_poc(target_id: str, poc: dict, finding_id: str | None = None) -> dict
                     repro_str = repro if isinstance(repro, str) else (" ".join(repro) if repro else None)
                     ev["reproducer"] = repro_str or json.dumps(poc)
                 f.evidence_json = ev
+        # Surface the engine-computed assurance triple {standard, method, precondition} in the
+        # return so the agent sees the rung WITHOUT a follow-up get_finding.
+        from hexgraph.engine.assurance import compact_assurance
         return {"verified": bool(r.get("verified")), "detail": r.get("detail"),
                 "exit_code": r.get("exit_code"), "output": (r.get("output") or "")[:4000],
+                "assurance": compact_assurance(out_assurance),
                 "attached_to": finding_id if finding_id else None}
 
 
