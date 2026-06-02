@@ -1,5 +1,21 @@
 # UI improvement backlog
 
+## First-class raw-TCP / socket targets — `register_socket` (2026-06-02)
+
+**Shipped in `build/register-socket`** (Playwright-verified). A bare non-HTTP service is now a
+first-class **`service`** target (raw TCP/UDP Channel, no bytes/creds). UI touches were minimal —
+the Fuzz modal already filtered only `firmware_image` and shows the inferred `network` surface
+inputs, so a `service` target was selectable + fuzzable with no modal change:
+- **Graph + target pane** — added `service` to the target-kind color map (`GraphView.tsx` `KIND`,
+  teal-green `#34d399`; also added the previously-missing `remote`) and the kind→icon map
+  (`Icon.tsx` `NODE_ICON`, `service: "plug"`), and `service` to the `bestFuzzTarget` preference
+  (`Workspace.tsx`) so a registered socket target is auto-picked for the Fuzz button.
+- **Verified:** registering two `service` targets (a tcp bindshell + a udp coap-daemon) renders
+  both in the Targets pane (plug icon, `service` label) and in the graph as green `service` nodes
+  each `listens_on`→ its shared pink `socket` node (`tcp:1337`, `udp:5683`) — the
+  target-as-surface vs socket-node-as-annotation distinction is crisp and legible. The Fuzz modal
+  shows the inferred `network` surface with host/port/protocol inputs pre-applicable to it.
+
 ## Battle-test remediation PR-3 — build→fuzz handoff + coverage/symbolization (2026-06-02)
 
 **Shipped in `fix/battletest-buildfuzz`** (Playwright-verified, screenshots judged). These are

@@ -10,7 +10,7 @@ cytoscape.use(edgehandles);
 
 export const SEV: Record<string, string> = { info: "#7d8799", low: "#3fb950", medium: "#e3b341", high: "#f0883e", critical: "#ff5d6c" };
 // Target-kind colors. (red is reserved for severity/findings — never a node fill.)
-export const KIND: Record<string, string> = { firmware_image: "#a371f7", executable: "#6aa3ff", shared_library: "#39c5cf", web_app: "#2dd4bf", unknown: "#7d8799" };
+export const KIND: Record<string, string> = { firmware_image: "#a371f7", executable: "#6aa3ff", shared_library: "#39c5cf", web_app: "#2dd4bf", service: "#34d399", remote: "#f0883e", unknown: "#7d8799" };
 // Sub-file/conceptual node colors — each visually distinct (no two near-identical hues).
 export const NODE_T: Record<string, string> = {
   function: "#7ee787", symbol: "#d2a8ff", string: "#79c0ff", struct: "#ffa657",

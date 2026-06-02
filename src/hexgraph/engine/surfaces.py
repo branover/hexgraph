@@ -54,6 +54,67 @@ def register_web_surface(
     return target
 
 
+def register_socket_target(
+    session: Session, project: Project, host: str, port: int, *,
+    transport: str = "tcp", proto: str | None = None,
+    name: str | None = None, parent: Target | None = None,
+    net_container: str | None = None,
+) -> Target:
+    """Register a bare non-HTTP network service (a raw TCP/UDP listener) as a `service`
+    Target. Like a `web_app`, it has no bytes — it's reached via a Channel
+    `{"kind": "tcp"|"udp", "host", "port"}` in `metadata_json`, with `path=""`. Unlike a
+    `remote` target there are NO shell/credential semantics: a socket service is a protocol
+    endpoint you talk to, not a box you log into.
+
+    This is the first-class home for a bind shell / vendor binary protocol / custom daemon:
+    `infer_surface` resolves it to the `network` surface, so `start_fuzz_campaign` (boofuzz)
+    and `run_tcp_probe`/`verify_poc` Just Work against it — all on the EXISTING bounded local-
+    network tier (`features.network` + `local_tcp_scope`, audited). `net_container` pins the
+    probe to a rehosted device's emulator netns (a service on the device's private IP)."""
+    transport = (transport or "tcp").lower()
+    if transport not in ("tcp", "udp"):
+        raise ValueError("transport must be 'tcp' or 'udp'")
+    if not (host or "").strip():
+        raise ValueError("a socket target needs a host")
+    try:
+        port = int(port)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("a socket target needs an integer port") from exc
+    if not (0 < port < 65536):
+        raise ValueError("port must be in 1..65535")
+    channel = {"kind": transport, "host": host, "port": port}
+    if net_container:
+        channel["net_container"] = net_container
+    meta: dict = {"channel": channel}
+    if proto:
+        meta["proto"] = proto  # an optional app-protocol hint (e.g. "modbus", "mqtt")
+    target = Target(
+        project_id=project.id, parent_id=parent.id if parent else None,
+        name=name or f"{host}:{port} ({transport})",
+        path="",  # a service is reached via its Channel, not a file
+        kind=TargetKind.service,
+        metadata_json=meta,
+    )
+    session.add(target)
+    session.flush()
+
+    # Link the reachable surface (this target) to the SHARED socket NODE — the firmware's
+    # network-map endpoint a server `listens_on` and a client `connects_to`. Target (a
+    # reachable surface) and node (a graph annotation) stay distinct entities; the
+    # `listens_on` edge fuses them so the live service shows up on the same network map a
+    # static binary's bind/listen sites do (identity = (project, kind, port), target_id=None).
+    from hexgraph.engine.nodes import materialize_socket
+
+    sock = materialize_socket(session, project_id=project.id, kind=transport, port=port,
+                              bind_addr=host, created_by="register_socket",
+                              attrs={"proto": proto} if proto else None)
+    add_edge(session, project_id=project.id, src=("target", target.id),
+             dst=("node", sock.id), type=EdgeType.listens_on, origin="tool",
+             confidence=1.0, created_by_tool="register_socket",
+             attrs={"port": port})
+    return target
+
+
 def _find_handler(session: Session, project_id: str, handler: str | None) -> Node | None:
     """Resolve a route's handler to an existing function node (in any binary of the
     project), by normalized name — the static↔dynamic bridge."""

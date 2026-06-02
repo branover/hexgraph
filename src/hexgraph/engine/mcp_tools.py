@@ -1340,6 +1340,47 @@ def rehost(target_id: str, brand: str | None = None) -> dict:
                 "ports": rehost_info.get("ports", [])}
 
 
+def register_socket(project_id: str, host: str, port: int, name: str | None = None,
+                    transport: str = "tcp", proto: str | None = None,
+                    parent_ref: str | None = None) -> dict:
+    """Register a bare NON-HTTP network service (a raw TCP/UDP listener) as a `service`
+    target — the FIRST-CLASS home for a bind shell, a vendor binary control protocol, or a
+    custom daemon on some high port. Reached via a Channel `{kind: tcp|udp, host, port}`, no
+    bytes, NO credentials (a socket service is a protocol endpoint you talk to, not a box you
+    log into — do NOT misuse register_remote(transport=telnet) for this).
+
+    Once registered you can fuzz it directly — start_fuzz_campaign(target) infers the
+    `network` surface and points boofuzz at this host:port — and probe/prove it with
+    tcp_request / verify_poc({transport:"tcp", port, …}). All on the EXISTING bounded local-
+    network tier: loopback/private host only (refused otherwise), features.network-gated,
+    every send audited. `parent_ref` makes it a child of e.g. a rehosted firmware (the probe
+    then reaches the device on its private IP through the emulator netns)."""
+    from hexgraph.engine.surfaces import register_socket_target
+
+    with session_scope() as s:
+        project = s.get(Project, project_id)
+        if project is None:
+            return {"error": "project not found"}
+        parent = None
+        net_container = None
+        if parent_ref:
+            parent = s.get(Target, parent_ref)
+            if parent is None or parent.project_id != project_id:
+                return {"error": "parent target not found in this project"}
+            # Inherit a rehosted parent's emulator netns so the service on the device's
+            # private IP is reachable (mirrors how rehost wires its remote/web children).
+            net_container = (((parent.metadata_json or {}).get("channel") or {})
+                             .get("rehost") or {}).get("container")
+        try:
+            t = register_socket_target(s, project, host, port, transport=transport,
+                                       proto=proto, name=name, parent=parent,
+                                       net_container=net_container)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        return {"id": t.id, "name": t.name, "kind": t.kind.value,
+                "channel": (t.metadata_json or {}).get("channel")}
+
+
 def register_remote(project_id: str, host: str, port: int | None = None, username: str = "root",
                     transport: str = "ssh", name: str | None = None) -> dict:
     """Register a LIVE remote device (a physical box on the bench, or a rehosted device) as a

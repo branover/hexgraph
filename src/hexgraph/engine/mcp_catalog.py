@@ -158,6 +158,8 @@ _CATALOG = [
      {"type": "object", "properties": {"target_id": {"type": "string"}, "tool": {"type": "string"}, "path": {"type": "string"}}, "required": ["target_id", "tool"]}),
     ("run", "register_surface", _t.register_surface, "Register a WEB attack surface (web_app target via an HTTP Channel, no bytes); pass an optional offline route spec, then run_task(surface_recon) to map endpoints/params + routes_to→handler edges. Offline (no egress).",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "base_url": {"type": "string"}, "name": {"type": "string"}, "endpoints": {"type": "array"}}, "required": ["project_id", "base_url"]}),
+    ("run", "register_socket", _t.register_socket, "Register a bare NON-HTTP network service (raw TCP/UDP listener) as a `service` target — a bind shell, vendor binary protocol, or custom daemon. No bytes, NO credentials (don't misuse register_remote(transport=telnet) for this). Then start_fuzz_campaign infers the `network` surface and fuzzes this host:port (boofuzz), and tcp_request/verify_poc probe+prove it. Bounded local-network tier: loopback/private only, features.network, audited.",
+     {"type": "object", "properties": {"project_id": {"type": "string"}, "host": {"type": "string"}, "port": {"type": "integer"}, "name": {"type": "string"}, "transport": {"type": "string"}, "proto": {"type": "string"}, "parent_ref": {"type": "string"}}, "required": ["project_id", "host", "port"]}),
 ]
 
 

@@ -208,12 +208,12 @@ export default function Workspace() {
   const childrenOf = (id: string) => detail.targets.filter((t) => t.parent_id === id);
   // The best DEFAULT fuzz target for the Campaigns-tab launch button: the raw ingested
   // root (roots[0]) is usually the WRONG choice (it's the source, not the live/instrumented
-  // surface). Prefer, in order: an instrumented derived target → a live web_app/remote
+  // surface). Prefer, in order: an instrumented derived target → a live web_app/remote/service
   // surface → a target carrying fuzz_target_sources → the first non-firmware root → roots[0].
   const bestFuzzTarget = (): TargetNode | undefined => {
     const ts = detail.targets;
     return ts.find((t) => t.metadata?.instrumented)
-        || ts.find((t) => t.kind === "web_app" || t.kind === "remote")
+        || ts.find((t) => t.kind === "web_app" || t.kind === "remote" || t.kind === "service")
         || ts.find((t) => (t.metadata?.fuzz_target_sources || []).length > 0)
         || roots.find((t) => t.kind !== "firmware_image")
         || roots[0];

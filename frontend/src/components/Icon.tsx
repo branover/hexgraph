@@ -49,5 +49,5 @@ export const NODE_ICON: Record<string, string> = {
   firmware_image: "chip", executable: "binary", shared_library: "lib", unknown: "binary",
   function: "fn", symbol: "spark", string: "doc", finding: "bug", target: "target",
   hypothesis: "bulb", pattern: "spark", struct: "chip",
-  socket: "plug", endpoint: "globe", web_app: "globe", param: "sliders", input: "arrowin", sink: "drain",
+  socket: "plug", endpoint: "globe", web_app: "globe", service: "plug", param: "sliders", input: "arrowin", sink: "drain",
 };

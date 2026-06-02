@@ -7,6 +7,7 @@ import shutil
 import tempfile
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel
 
 from hexgraph.db.models import Project, Target
 from hexgraph.db.session import session_scope
@@ -61,6 +62,49 @@ def api_add_target(
             return result
     finally:
         os.unlink(tmp)
+
+
+class SocketCreate(BaseModel):
+    """Register a bare non-HTTP network service (raw TCP/UDP) as a first-class `service`
+    target — no bytes, no credentials. Mirrors the register_socket MCP tool."""
+    host: str
+    port: int
+    name: str | None = None
+    transport: str = "tcp"
+    proto: str | None = None
+    parent_ref: str | None = None
+
+
+@router.post("/api/projects/{project_id}/targets/socket")
+def api_register_socket(project_id: str, body: SocketCreate):
+    """Register a bare non-HTTP network service (a raw TCP/UDP listener) as a `service`
+    target, reached via a Channel `{kind: tcp|udp, host, port}` — NO bytes, NO credentials.
+    It's then fuzzable directly (start_campaign infers the `network` surface → boofuzz at
+    this host:port) and probeable via the raw-TCP tools, all on the EXISTING bounded local-
+    network tier (loopback/private only, features.network, audited). The first-class home for
+    a bind shell / vendor binary protocol / custom daemon — distinct from `remote` (no shell)."""
+    from hexgraph.engine.surfaces import register_socket_target
+
+    with session_scope() as s:
+        project = s.get(Project, project_id)
+        if project is None:
+            raise HTTPException(404, "project not found")
+        parent = None
+        net_container = None
+        if body.parent_ref:
+            parent = s.get(Target, body.parent_ref)
+            if parent is None or parent.project_id != project_id:
+                raise HTTPException(404, "parent target not found in this project")
+            net_container = (((parent.metadata_json or {}).get("channel") or {})
+                             .get("rehost") or {}).get("container")
+        try:
+            t = register_socket_target(s, project, body.host, body.port,
+                                       transport=body.transport, proto=body.proto,
+                                       name=body.name, parent=parent, net_container=net_container)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        return {"target_id": t.id, "name": t.name, "kind": t.kind.value,
+                "channel": (t.metadata_json or {}).get("channel")}
 
 
 @router.delete("/api/projects/{project_id}/targets/{target_id}")

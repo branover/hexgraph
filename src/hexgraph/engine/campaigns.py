@@ -60,12 +60,12 @@ class CampaignError(RuntimeError):
 def infer_surface(target: Target) -> str:
     """Derive the attack surface from the target (design §2.3). An instrumented
     derived target (Phase-2 build, has source) → `source_lib` (coverage-guided). A
-    web_app/remote surface → `network`. Else (a plain binary, no source) →
+    web_app/remote/service surface → `network`. Else (a plain binary, no source) →
     `binary_only`. The operator/LLM may override the engine within the surface."""
     meta = target.metadata_json or {}
     if meta.get("instrumented") and meta.get("fuzz_target_sources"):
         return "source_lib"
-    if target.kind in (TargetKind.web_app, TargetKind.remote):
+    if target.kind in (TargetKind.web_app, TargetKind.remote, TargetKind.service):
         return "network"
     if meta.get("fuzz_target_sources"):
         return "source_lib"
