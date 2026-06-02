@@ -260,6 +260,14 @@ reaps a hardened sandbox container.
   whole machine — but it lifts mem/cpu/pids ONLY; it is **NOT** a security relaxation (the sandbox
   still runs `--network none`, cap-drop, no-new-privileges, read-only, non-root). Needs
   **`features.fuzzing`** (or `features.poc`) enabled — the same exec gate, no new permission.
+- **Tell the user where to LOOK.** Everything above is browsable + triageable in the web UI: the
+  **Campaigns** tab shows live campaign status (execs/s, coverage, crashes) and an **Artifacts**
+  view that groups crashes by dedup bucket with assurance chips, a source-mapped stack (click a
+  frame → the **Source** tab at that line, with covered/uncovered **coverage shading**), and
+  per-crash **Reproduce / Minimize / Promote / Promote→PoC** buttons. The user can also start
+  builds + campaigns and re-verify from the UI (a **Build (instrumented)** button in the Source
+  tab, a **Fuzz** button per target). So after you populate the graph, point the analyst at the
+  Campaigns/Artifacts tabs and the Source tab — that's where they triage what you found.
 
 ## 3. Record AS YOU GO — write to the graph BEFORE you've confirmed things
 Capture the moment you have a lead, not after you've proven it. The graph is a

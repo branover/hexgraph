@@ -221,6 +221,13 @@ def _launch_mock(row: FuzzCampaign, prepared, spec: FuzzCampaignSpec) -> None:
               "executions": 1000, "edges_covered": 42, "crash_count": len(crashes),
               "crashes": crashes}
     (outdir / "status.json").write_text(json.dumps(result))
+    # A small deterministic line-coverage map so the Source viewer's coverage shading is
+    # demonstrable offline ($0). Real campaigns emit this from afl-cov/llvm-cov.
+    (outdir / "coverage.json").write_text(json.dumps({
+        "percent": 64.0,
+        "files": {"target.c": {"covered": [1, 2, 3, 5, 8], "uncovered": [4, 6, 7],
+                               "total": 8}},
+    }))
     (outdir / "DONE").write_text("mock")
 
 
@@ -277,6 +284,7 @@ def reap_campaign(session: Session, row: FuzzCampaign, *, executor=None) -> int:
         _enforce_corpus_quota(row)
         # Preserve corpus in CAS (resumable) before tearing down.
         _snapshot_corpus(session, project, row)
+        _snapshot_coverage(session, project, row)
         # Preserve the compiled harness/fuzzer binary in CAS so a stored reproducer is
         # genuinely RE-RUNNABLE (the verify_poc tie-in): the reproducer crashes THAT
         # instrumented binary, not the unrelated shipped target.
@@ -335,8 +343,22 @@ def _ingest_artifacts(session, project, target, row, status: dict) -> int:
                                 target.name, coverage_instrumented=coverage,
                                 engine=row.engine, campaign_id=row.id,
                                 reproducer_ref=content_cas)
+        # Symbolize the ASan report into source-mapped stack frames (best-effort) so the
+        # Artifacts triage UI can render a clickable stack (frame → source line). Frames
+        # ride evidence.extra.fuzz.frames (frozen schema untouched).
+        frames = parse_source_frames(crash.get("_report") or crash.get("summary") or "")
+        if frames:
+            extra = dict(finding.evidence.extra or {})
+            fz = dict(extra.get("fuzz") or {})
+            fz["frames"] = frames
+            extra["fuzz"] = fz
+            finding.evidence.extra = extra
         frow = persist_finding(session, project_id=project.id, target_id=target.id,
                                task_id=row.task_id, finding=finding, finding_type="fuzz_crash")
+        # Auto-wire finding → source for the top in-project source frame so "Open in
+        # source" / "click a symbolized frame" works without manual linking (best-effort).
+        if frow is not None and frames:
+            _autolink_top_frame(session, project, frow.id, frames)
         art = FuzzArtifact(
             project_id=project.id, campaign_id=row.id, kind="crash",
             content_cas=content_cas,
@@ -515,6 +537,21 @@ def _snapshot_fuzzer(session, project, row) -> None:
         pass
 
 
+def _snapshot_coverage(session, project, row) -> None:
+    """Store the campaign's line-coverage map (`<outdir>/coverage.json`) in CAS on the
+    row (`coverage_ref`) so per-line source shading survives container teardown.
+    Best-effort; never fatal."""
+    if not row.outdir or project is None:
+        return
+    p = Path(row.outdir) / "coverage.json"
+    if not p.is_file():
+        return
+    try:
+        row.coverage_ref = cas.put(project, p.read_bytes())
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _restore_corpus(project, row) -> str | None:
     """Extract the CAS corpus snapshot to a temp dir for re-seeding. None if absent."""
     if not row.corpus_ref or project is None:
@@ -630,6 +667,152 @@ def verify_artifact(session: Session, artifact: FuzzArtifact, *, executor=None) 
     return result
 
 
+# ── Source-mapped stack frames (the Artifacts triage stack → IDE jump) ───────────
+
+import re as _re
+
+# ASan/libFuzzer frame: `    #2 0x.. in func /path/to/file.c:42:7` (col optional).
+_FRAME_RE = _re.compile(
+    r"#(?P<idx>\d+)\s+0x[0-9a-fA-F]+\s+in\s+(?P<func>\S+)\s+"
+    r"(?P<file>[^\s:]+):(?P<line>\d+)(?::(?P<col>\d+))?")
+
+
+def parse_source_frames(report: str, *, limit: int = 12) -> list[dict]:
+    """Extract source-mapped stack frames `{idx, func, file, line, col}` from an ASan
+    report (the symbolized `func file:line` form). Returns [] when frames are only
+    module+offset (unsymbolized — e.g. the base sandbox image without llvm-symbolizer).
+    Deterministic, pure — the UI renders these as a clickable stack."""
+    frames: list[dict] = []
+    for m in _FRAME_RE.finditer(report or ""):
+        f = m.group("file")
+        # Skip sanitizer-runtime / interceptor frames (compiler-rt) — not user source.
+        if "compiler-rt" in f or "/sanitizer_common/" in f or f.endswith("interception.h"):
+            continue
+        frames.append({
+            "idx": int(m.group("idx")), "func": m.group("func"),
+            "file": f, "line": int(m.group("line")),
+            "col": int(m.group("col")) if m.group("col") else None,
+        })
+        if len(frames) >= limit:
+            break
+    return frames
+
+
+def _autolink_top_frame(session, project, finding_id: str, frames: list[dict]) -> None:
+    """Best-effort: wire the finding to the topmost frame whose file matches a managed
+    source tree (so the analyst can jump from the crash to its source line). Matches a
+    frame's basename / suffix against a tree's manifest; silent on no match."""
+    from hexgraph.db.models import SourceTree
+    from hexgraph.engine.source import link_finding_to_source
+
+    trees = (session.query(SourceTree)
+             .filter(SourceTree.project_id == project.id, SourceTree.archived.is_(False)).all())
+    if not trees:
+        return
+    for fr in frames:
+        rel_candidates = _rel_candidates(fr["file"])
+        for tree in trees:
+            files = {e.get("rel") for e in (tree.manifest_json or {}).get("files", [])}
+            hit = next((c for c in rel_candidates if c in files), None)
+            if hit is None:
+                # also try basename suffix-match
+                base = rel_candidates[-1]
+                hit = next((r for r in files if r and r.endswith("/" + base)), None)
+            if hit:
+                try:
+                    link_finding_to_source(session, project, finding_id=finding_id,
+                                           tree=tree, rel=hit, line=fr["line"], col=fr.get("col"))
+                except Exception:  # noqa: BLE001 — never fail ingest on a link miss
+                    return
+                return
+
+
+def _rel_candidates(path: str) -> list[str]:
+    """Candidate manifest-rel paths for an absolute build path (`/src/foo/bar.c` →
+    ['src/foo/bar.c', 'foo/bar.c', 'bar.c']) so a frame matches however the tree was
+    rooted."""
+    p = (path or "").lstrip("/")
+    parts = p.split("/")
+    return [("/".join(parts[i:])) for i in range(len(parts))]
+
+
+# ── Promote a crash artifact to a tracked finding / PoC (the triage payoff) ───────
+
+def promote_artifact(session: Session, artifact: FuzzArtifact, *, to_poc: bool = False) -> dict:
+    """Promote a crash artifact into a tracked finding (and optionally seed a PoC spec
+    from its reproducer). A fuzz_crash already persists a finding at ingest; promoting
+    CONFIRMS it (status `confirmed`) so it leaves the triage inbox, and — when
+    `to_poc` — stamps `evidence.extra.poc` with a reproducer-backed spec so the existing
+    one-click verify path (verify_artifact, LLM-free) can re-prove it. No new finding is
+    duplicated; this is the triage → tracked-work transition (design §6.3)."""
+    from hexgraph.db.models import Finding
+
+    if not artifact.finding_id:
+        raise CampaignError("artifact has no linked finding to promote")
+    f = session.get(Finding, artifact.finding_id)
+    if f is None:
+        raise CampaignError("linked finding not found")
+    f.status = "confirmed"
+    if to_poc:
+        ev = dict(f.evidence_json or {})
+        extra = dict(ev.get("extra") or {})
+        # A reproducer-backed PoC spec: the verify path re-runs the stored reproducer
+        # against the instrumented harness binary via the unforgeable `crash` oracle.
+        extra["poc"] = {
+            "kind": "fuzz_reproducer",
+            "reproducer_ref": artifact.content_cas,
+            "campaign_id": artifact.campaign_id,
+            "artifact_id": artifact.id,
+            "oracle": {"type": "crash"},
+            "note": ("Re-runs the campaign's minimized reproducer against the instrumented "
+                     "harness binary; 'verified' = the process really crashed on this input."),
+        }
+        ev["extra"] = extra
+        f.evidence_json = ev
+    session.flush()
+    return {"artifact_id": artifact.id, "finding_id": f.id, "status": f.status,
+            "to_poc": to_poc}
+
+
+# ── Coverage (line-level shading for the Source viewer) ──────────────────────────
+
+def coverage_for(session: Session, campaign: FuzzCampaign) -> dict:
+    """Per-file line coverage for the campaign, for source shading (design §6.3).
+    Best-effort: reads the campaign's `coverage.json` (the afl-cov/llvm-cov line map the
+    fuzz probe writes: `{"files": {rel: {"covered": [..], "total": N}}}`) from the outdir
+    or its CAS snapshot. Returns `{available, percent, files}` — `available=False` (no
+    shading) when the campaign exposed no line map (honest: aggregate edge counts are
+    not a per-line map). The Source viewer tints covered/uncovered lines from this."""
+    data = _read_coverage(session, campaign)
+    stats_pct = (campaign.stats_json or {}).get("coverage_percent")
+    if not data:
+        return {"available": False, "percent": stats_pct, "files": {}}
+    files = data.get("files") or {}
+    # Prefer the map's own percent; fall back to stats only when truly absent (0.0 is valid).
+    pct = data["percent"] if data.get("percent") is not None else stats_pct
+    return {"available": bool(files), "percent": pct, "files": files}
+
+
+def _read_coverage(session, campaign) -> dict | None:
+    # Prefer a live outdir file; fall back to the CAS snapshot ref.
+    if campaign.outdir:
+        p = Path(campaign.outdir) / "coverage.json"
+        if p.is_file():
+            try:
+                return json.loads(p.read_text())
+            except (OSError, json.JSONDecodeError):
+                pass
+    if campaign.coverage_ref:
+        try:
+            project = session.get(Project, campaign.project_id)
+            raw = cas.get(project, campaign.coverage_ref)
+            if raw:
+                return json.loads(raw.decode())
+        except Exception:  # noqa: BLE001
+            return None
+    return None
+
+
 # ── Read helpers (API/MCP) ───────────────────────────────────────────────────────
 
 def campaign_to_dict(row: FuzzCampaign) -> dict:
@@ -647,8 +830,12 @@ def campaign_to_dict(row: FuzzCampaign) -> dict:
     }
 
 
-def artifact_to_dict(a: FuzzArtifact) -> dict:
-    return {
+def artifact_to_dict(a: FuzzArtifact, *, session: Session | None = None) -> dict:
+    """Serialize an artifact for the triage UI. When a `session` is supplied, fold in the
+    linked finding's assurance triple (the two-standards ladder chip), the source-mapped
+    stack frames (clickable → IDE), the finding status (so a promoted/confirmed crash
+    leaves the inbox), and whether it carries a PoC + verification."""
+    d = {
         "id": a.id, "campaign_id": a.campaign_id, "kind": a.kind,
         "content_cas": a.content_cas, "size": a.size, "sanitizer": a.sanitizer,
         "dedup_key": a.dedup_key, "dupe_count": a.dupe_count,
@@ -656,6 +843,22 @@ def artifact_to_dict(a: FuzzArtifact) -> dict:
         "exploitability": a.exploitability_json or {}, "finding_id": a.finding_id,
         "created_at": a.created_at.isoformat() if a.created_at else None,
     }
+    if session is not None and a.finding_id:
+        from hexgraph.db.models import Finding
+
+        f = session.get(Finding, a.finding_id)
+        if f is not None:
+            ev = f.evidence_json or {}
+            extra = ev.get("extra") or {}
+            d["finding"] = {
+                "id": f.id, "title": f.title, "severity": f.severity, "status": f.status,
+                "verified": bool((extra.get("verification") or {}).get("verified")),
+                "has_poc": bool(extra.get("poc")),
+            }
+            d["assurance"] = extra.get("assurance") or (extra.get("verification") or {}).get("assurance")
+            d["frames"] = (extra.get("fuzz") or {}).get("frames") or []
+            d["source_ref"] = extra.get("source_ref")
+    return d
 
 
 def list_campaigns(session: Session, project: Project, *, target_id: str | None = None) -> list[dict]:
@@ -670,4 +873,4 @@ def list_artifacts(session: Session, campaign: FuzzCampaign) -> list[dict]:
     arts = (session.query(FuzzArtifact)
             .filter(FuzzArtifact.campaign_id == campaign.id)
             .order_by(FuzzArtifact.created_at.asc()).all())
-    return [artifact_to_dict(a) for a in arts]
+    return [artifact_to_dict(a, session=session) for a in arts]

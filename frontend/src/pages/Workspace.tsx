@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
-import { api, Finding, Graph, GraphNode, ProjectDetail, TargetNode } from "../api";
+import { api, Finding, Graph, GraphNode, ProjectDetail, SettingsView, TargetNode } from "../api";
 import Header from "../components/Header";
 import GraphView, { NODE_T, EDGE_C, KIND } from "../components/GraphView";
 import FindingsPanel from "../components/FindingsPanel";
@@ -14,21 +14,29 @@ import ReportModal from "../components/ReportModal";
 import RunCompareModal from "../components/RunCompareModal";
 import GhidraImportModal from "../components/GhidraImportModal";
 import SourceBrowser from "../components/SourceBrowser";
+import { CampaignsPanel } from "../components/CampaignsPanel";
+import ArtifactsView from "../components/ArtifactsView";
+import FuzzModal from "../components/FuzzModal";
 import { Icon, NODE_ICON } from "../components/Icon";
 
 export default function Workspace() {
   const { projectId } = useParams();
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [graph, setGraph] = useState<Graph | null>(null);
-  const [caps, setCaps] = useState<{ target?: Record<string, string[]>; node?: Record<string, string[]>; edge?: Record<string, string[]>; features?: { build?: boolean } }>({});
+  const [caps, setCaps] = useState<{ target?: Record<string, string[]>; node?: Record<string, string[]>; edge?: Record<string, string[]>; features?: { build?: boolean; fuzzing?: boolean; poc?: boolean } }>({});
   const [selFinding, setSelFinding] = useState<Finding | null>(null);
   const [selNode, setSelNode] = useState<GraphNode | null>(null);
   const [selEdge, setSelEdge] = useState<any | null>(null);
   const [selGraphId, setSelGraphId] = useState<string>();
   const [busy, setBusy] = useState<string>();
-  const [tab, setTab] = useState<"findings" | "tasks">("findings");
+  const [tab, setTab] = useState<"findings" | "tasks" | "campaigns">(
+    new URLSearchParams(window.location.search).get("tab") === "campaigns" ? "campaigns" : "findings");
   const [tasks, setTasks] = useState<any[]>([]);
   const [selTask, setSelTask] = useState<string>();
+  const [selCampaign, setSelCampaign] = useState<string | undefined>(
+    new URLSearchParams(window.location.search).get("campaign") || undefined);
+  const [settings, setSettings] = useState<SettingsView | null>(null);
+  const [fuzzFor, setFuzzFor] = useState<TargetNode | null>(null);
   const [q, setQ] = useState("");
   const [results, setResults] = useState<any | null>(null);
   const [modal, setModal] = useState<"node" | "edge" | "report" | "compare" | "ghidra" | null>(null);
@@ -59,6 +67,7 @@ export default function Workspace() {
     load();
     api.capabilities().then(setCaps).catch(() => {});
     api.getSettings().then((s) => {
+      setSettings(s);
       const g = s.settings.features.ghidra;
       setGhidraBridge(g.enabled && g.mode === "bridge");
       setFuzzingEnabled(Boolean(s.settings.features.fuzzing?.enabled));
@@ -94,21 +103,44 @@ export default function Workspace() {
     [graph],
   );
 
-  const switchView = (v: "graph" | "source") => {
-    setView(v);
+  // Deep-link sync: every reveal updates the URL so the view is addressable/linkable
+  // and restorable on reload (design §6.3 deep-links).
+  const setUrl = (kv: Record<string, string | undefined>) => {
     const u = new URL(window.location.href);
-    if (v === "source") u.searchParams.set("view", "source"); else u.searchParams.delete("view");
+    for (const [k, v] of Object.entries(kv)) { if (v) u.searchParams.set(k, v); else u.searchParams.delete(k); }
     window.history.replaceState(null, "", u.toString());
   };
+
+  const switchView = (v: "graph" | "source") => {
+    setView(v);
+    setUrl({ view: v === "source" ? "source" : undefined });
+  };
+  const selectCampaign = (id?: string) => {
+    setSelCampaign(id); setTab("campaigns"); setSelTask(undefined); setSelNode(null); setSelFinding(null); setSelEdge(null);
+    setUrl({ tab: "campaigns", campaign: id });
+  };
+  const viewTask = (tid: string) => { setSelTask(tid); setTab("tasks"); setUrl({ tab: undefined }); };
+  const viewFinding = (fid: string) => { setSelTask(undefined); setSelNode(null); setSelCampaign(undefined); api.finding(fid).then((f) => { setSelFinding(f); setSelGraphId(f.id); }); setUrl({ tab: undefined, campaign: undefined }); };
+
   // Finding → source jump: open the file in Source mode at the line (design §6.3).
   const revealSource = (ref: { tree_id?: string; rel?: string; line?: number }) => {
     if (!ref?.tree_id || !ref?.rel) return;
     setOpenSource({ treeId: ref.tree_id, rel: ref.rel, line: ref.line });
     switchView("source");
+    setUrl({ view: "source", file: ref.rel, line: ref.line != null ? String(ref.line) : undefined });
   };
 
-  const viewTask = (tid: string) => { setSelTask(tid); setTab("tasks"); };
-  const viewFinding = (fid: string) => { setSelTask(undefined); setSelNode(null); api.finding(fid).then((f) => { setSelFinding(f); setSelGraphId(f.id); }); };
+  // The single navigation primitive (design §6.3): every entity routes through reveal()
+  // so "reveal in graph" / "open in source" / "show campaign" share one path.
+  const reveal = (kind: "finding" | "node" | "target" | "campaign" | "artifact" | "source",
+                  id: string, extra?: any) => {
+    if (kind === "finding") return viewFinding(id);
+    if (kind === "campaign" || kind === "artifact") return selectCampaign(id);
+    if (kind === "source") return revealSource(extra);
+    // node / target → select in the graph
+    setView("graph"); setSelTask(undefined); setSelCampaign(undefined);
+    onGraphSelect(id, kind === "target" ? "target" : "node");
+  };
   const bulk = async (ids: string[], status: string) => { await api.bulkStatus(ids, status); await load(); };
   const removeTarget = async (t: TargetNode) => {
     if (!projectId) return;
@@ -187,6 +219,12 @@ export default function Workspace() {
           </div>
           <div className="mt">{t.kind}{t.arch ? " · " + t.arch : ""}</div>
           <Launcher allowed={allowed} onChoose={(type) => setLaunchFor({ target: t, type })} />
+          {caps.features?.fuzzing && t.kind !== "firmware_image" && (
+            <button className="btn sm icon ghost" title="Start a detached fuzz campaign on this target"
+                    onClick={(e) => { e.stopPropagation(); setFuzzFor(t); }}>
+              <Icon name="bug" size={12} />
+            </button>
+          )}
           <button className="btn sm icon ghost trash" title="Remove target (hides its nodes/findings)"
                   onClick={(e) => { e.stopPropagation(); removeTarget(t); }}>
             <Icon name="x" size={12} />
@@ -197,14 +235,20 @@ export default function Workspace() {
     );
   };
 
+  const fuzzingFeature = !!caps.features?.fuzzing;
   const renderTabs = () => (
     <div className="pane-h">
-      <button className={"btn sm" + (tab === "findings" ? " primary" : " ghost")} onClick={() => setTab("findings")}>
+      <button className={"btn sm" + (tab === "findings" ? " primary" : " ghost")} onClick={() => { setTab("findings"); setUrl({ tab: undefined }); }}>
         <Icon name="bug" size={12} /> Findings · {detail.findings.length}
       </button>
-      <button className={"btn sm" + (tab === "tasks" ? " primary" : " ghost")} onClick={() => setTab("tasks")}>
+      <button className={"btn sm" + (tab === "tasks" ? " primary" : " ghost")} onClick={() => { setTab("tasks"); setUrl({ tab: undefined }); }}>
         <Icon name="task" size={12} /> Tasks · {tasks.length}
       </button>
+      {fuzzingFeature && (
+        <button className={"btn sm" + (tab === "campaigns" ? " primary" : " ghost")} onClick={() => { setTab("campaigns"); setUrl({ tab: "campaigns" }); }}>
+          <Icon name="bug" size={12} /> Campaigns
+        </button>
+      )}
       <span className="grow" />
       <button className="btn sm icon" title={maxed ? "Restore" : "Expand to full screen"} onClick={() => setMaxed((m) => !m)}>
         <Icon name={maxed ? "minus" : "fit"} size={13} />
@@ -213,7 +257,10 @@ export default function Workspace() {
   );
   const renderList = () => tab === "findings" ? (
     <FindingsPanel findings={detail.findings} targets={detail.targets} selectedId={selFinding?.id} onBulk={bulk}
-                   onSelect={(f) => { setSelTask(undefined); setSelNode(null); setSelFinding(f); setSelGraphId(f.id); }} />
+                   onSelect={(f) => { setSelTask(undefined); setSelNode(null); setSelCampaign(undefined); setSelFinding(f); setSelGraphId(f.id); }} />
+  ) : tab === "campaigns" ? (
+    <CampaignsPanel projectId={projectId!} selectedId={selCampaign} onSelect={(id) => selectCampaign(id)}
+                    onStartCampaign={roots[0] ? () => setFuzzFor(roots[0]) : undefined} />
   ) : (
     <TasksPanel tasks={tasks} selectedId={selTask} onSelect={(id) => setSelTask(id)} onClear={clearTasks} />
   );
@@ -251,6 +298,11 @@ export default function Workspace() {
           </div>
         </div>
       );
+    }
+    if (tab === "campaigns" && selCampaign) {
+      // The Artifacts / triage view for the selected campaign (crash dedup groups,
+      // Reproduce/Minimize/Promote, source-mapped stacks, assurance chips, re-verify).
+      return <ArtifactsViewLoader campaignId={selCampaign} onViewFinding={viewFinding} onOpenSource={revealSource} />;
     }
     if (selTask) return <TaskDetail taskId={selTask} onViewFinding={viewFinding} onRerun={pollThenReload} />;
     if (selNode) {
@@ -346,7 +398,8 @@ export default function Workspace() {
           )}
           {view === "source" ? (
             <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-              <SourceBrowser projectId={projectId!} open={openSource} buildEnabled={!!caps.features?.build} onChanged={() => load()} />
+              <SourceBrowser projectId={projectId!} open={openSource} buildEnabled={!!caps.features?.build}
+                             fuzzEnabled={!!caps.features?.fuzzing} onChanged={() => load()} />
             </div>
           ) : (
           <>
@@ -437,6 +490,38 @@ export default function Workspace() {
                        .map((f) => ({ id: f.id, label: f.title }))}
                      onClose={() => setLaunchFor(null)} onLaunched={pollThenReload} />
       )}
+      {fuzzFor && (
+        <FuzzModal projectId={projectId!} target={fuzzFor} settings={settings}
+                   onClose={() => setFuzzFor(null)}
+                   onStarted={(cid) => { setFuzzFor(null); selectCampaign(cid); }} />
+      )}
     </>
   );
+}
+
+// Loads a campaign by id and renders its Artifacts/triage view. Keeps the campaign
+// fresh (polls while live) so newly-streamed crashes appear.
+function ArtifactsViewLoader({ campaignId, onViewFinding, onOpenSource }: {
+  campaignId: string;
+  onViewFinding?: (fid: string) => void;
+  onOpenSource?: (ref: { tree_id?: string; rel?: string; line?: number }) => void;
+}) {
+  const [c, setC] = useState<import("../api").Campaign | null>(null);
+  useEffect(() => {
+    let live = true;
+    let t: any;
+    // Poll only while the campaign is still live; stop the interval once it finalizes
+    // (the closure read the seed `c`, so gate on the freshly-fetched status instead).
+    const tick = () => api.campaign(campaignId).then((x) => {
+      if (!live) return;
+      setC(x);
+      if (t && !["running", "building"].includes(x.status)) { clearInterval(t); t = undefined; }
+    }).catch(() => {});
+    tick();
+    t = setInterval(tick, 3000);
+    return () => { live = false; if (t) clearInterval(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaignId]);
+  if (!c) return <div className="muted" style={{ padding: 12, fontSize: 12 }}>loading campaign…</div>;
+  return <ArtifactsView campaign={c} onViewFinding={onViewFinding} onOpenSource={onOpenSource} />;
 }

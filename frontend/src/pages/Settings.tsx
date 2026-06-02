@@ -169,6 +169,65 @@ export default function Settings() {
                          onBlur={(e) => patch({ "features.fuzzing.timeout": parseInt(e.target.value) || 300 })} /></div>
               </div>
             )}
+            {v.settings.features.fuzzing.enabled && (
+              <>
+                <div className="sec-label" style={{ marginTop: 12 }}>Default campaign resources (per-container ceilings)</div>
+                <p className="hint" style={{ marginTop: 2 }}>
+                  A campaign inherits these unless its Fuzz modal overrides them. <b>Unconstrained</b> lets a
+                  campaign use the whole machine — it lifts <code>mem/cpu/pids</code> ONLY and is <b>not</b> a
+                  security relaxation (the sandbox stays <code>--network none</code>, cap-dropped, non-root,
+                  read-only regardless).
+                </p>
+                <label className="switch" style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                  <input type="checkbox" checked={Boolean(v.settings.features.fuzzing.resources?.unconstrained)}
+                         onChange={(e) => patch({ "features.fuzzing.resources.unconstrained": e.target.checked })} />
+                  <span>unconstrained (use the whole machine)</span>
+                </label>
+                {!v.settings.features.fuzzing.resources?.unconstrained && (
+                  <div className="grid2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginTop: 8 }}>
+                    <div className="row"><label>memory</label>
+                      <input className="inp" defaultValue={v.settings.features.fuzzing.resources?.mem ?? "2g"}
+                             onBlur={(e) => patch({ "features.fuzzing.resources.mem": e.target.value.trim() || "2g" })} /></div>
+                    <div className="row"><label>cpus</label>
+                      <input className="inp num-input" type="number" step="0.5" defaultValue={v.settings.features.fuzzing.resources?.cpus ?? 2}
+                             onBlur={(e) => patch({ "features.fuzzing.resources.cpus": parseFloat(e.target.value) || 2 })} /></div>
+                    <div className="row"><label>pids</label>
+                      <input className="inp num-input" type="number" defaultValue={v.settings.features.fuzzing.resources?.pids ?? 256}
+                             onBlur={(e) => patch({ "features.fuzzing.resources.pids": parseInt(e.target.value) || 256 })} /></div>
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+
+          {/* Source & Build */}
+          <section className="card2">
+            <div className="h3row">
+              <h3><Icon name="chip" size={15} /> Source &amp; Build <span className="muted">· optional · compiles source</span></h3>
+              <label className="switch">
+                <input type="checkbox" checked={v.settings.features.build.enabled}
+                       onChange={(e) => patch({ "features.build.enabled": e.target.checked })} />
+                <span>{v.settings.features.build.enabled ? "enabled" : "disabled"}</span>
+              </label>
+            </div>
+            <p className="hint">
+              ⚠ Enabling this turns on the <b>build gate</b>: HexGraph may compile a managed source tree into
+              an <b>instrumented artifact</b> (the Builder seam) via a recorded, reproducible recipe inside the
+              sandbox. Building runs untrusted third-party code (<code>configure</code>/<code>make</code>), so it
+              has its OWN gate — separate from executing the target. <b>Vendored / offline only</b> this phase
+              (<code>--network none</code> during compile). With it on, a <b>Build (instrumented)</b> button
+              appears in the Source tab; its instrumented derived target becomes coverage-guided-fuzzable.
+            </p>
+            {v.settings.features.build.enabled && (
+              <div className="grid2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div className="row"><label>build image</label>
+                  <input className="inp" defaultValue={v.settings.features.build.image ?? "hexgraph-build:latest"}
+                         onBlur={(e) => patch({ "features.build.image": e.target.value.trim() || "hexgraph-build:latest" })} /></div>
+                <div className="row"><label>build timeout (s)</label>
+                  <input className="inp num-input" type="number" defaultValue={v.settings.features.build.timeout ?? 1800}
+                         onBlur={(e) => patch({ "features.build.timeout": parseInt(e.target.value) || 1800 })} /></div>
+              </div>
+            )}
           </section>
 
           {/* PoC verification */}

@@ -486,6 +486,53 @@ Each phase is independently shippable through the worktree→PR-review-subagent�
 
 **Phase 4 — The Source/IDE tab full UX + Artifacts/triage.** Campaigns + Artifacts tabs (dedup groups, Reproduce/Minimize/Promote, source-mapped stacks, assurance chips), SSE live status, coverage shading, the surface-aware Fuzz modal (server-advertised engines), the `reveal()` router + deep-links. *Risk:* SSE plumbing — fallback to polling keeps it robust.
 
+> **Shipped (`build/fuzz-phase4`). — ✅ DONE.** The user-facing payoff of Phases 1–3, mostly
+> frontend with thin API/serializer fills. **Campaigns tab** (`CampaignsPanel.tsx`): a live row per
+> campaign (status pill, execs/s, edges, crash count, coverage %), Stop/Resume, plus a **New
+> campaign** button — live status streams over **SSE** (`GET /api/campaigns/{id}/events`, a new
+> `StreamingResponse` that reaps on each tick and emits the campaign dict) with **automatic
+> fallback to interval polling** if the EventSource errors (robust either way; the SSE-vs-polling
+> choice is "SSE preferred, polling fallback"). **Artifacts / triage view** (`ArtifactsView.tsx`):
+> crashes **grouped by dedup bucket** (representative + `+N dupes`), each with an **assurance chip**
+> (`AssuranceChip.tsx`, the two-standards ladder), the deterministic exploitability rating, and a
+> **source-mapped stack** — the reaper now parses the ASan report into `{func,file,line,col}`
+> frames (`campaigns.parse_source_frames`, skipping compiler-rt runtime frames), stores them on
+> `evidence.extra.fuzz.frames`, and **auto-links the top in-project frame to its source tree**
+> (`_autolink_top_frame` → a `located_in` edge + `evidence.extra.source_ref`) so a frame click
+> jumps to the IDE line (reusing the Phase-1 finding→source jump). Per-crash **Reproduce / Minimize**
+> (both replay the stored minimized reproducer against the instrumented harness binary via the
+> unforgeable `crash` oracle — `POST /api/artifacts/{id}/verify|minimize`, LLM-free) · **Promote**
+> (confirms the `fuzz_crash` finding) · **Promote → PoC** (`promote_artifact(to_poc=True)` seeds a
+> reproducer-backed `evidence.extra.poc` the one-click re-verify path re-proves — the verify-finding
+> endpoint now branches a fuzz-reproducer finding to `verify_finding_reproducer`). **Coverage
+> shading** in the Source viewer: `coverage_for(campaign)` serializes a per-file line map (the
+> probe's `coverage.json`, snapshotted to CAS at finalize via `coverage_ref`), and the viewer tints
+> covered lines green / uncovered amber with a campaign picker. **Surface-aware Fuzz modal**
+> (`FuzzModal.tsx`): engines are **server-advertised** (`GET /api/fuzz/engines?target_id=` →
+> surface inferred from the target + the `SURFACE_ENGINES` matrix; the UI never hardcodes the list),
+> with the per-campaign **`ResourceSpec`** (mem/cpus/pids + `unconstrained`, defaulted from
+> Settings). A single **`reveal()`** navigation primitive routes every entity (finding/node/target/
+> campaign/artifact/source) and **deep-links** restore the view (`?view=source&file=…&line=…`,
+> `?tab=campaigns&campaign=…`). **Settings**: a **Source & Build** card (`features.build`) + the
+> default **`ResourceSpec`** controls in the Fuzzing card. The capability table now advertises
+> `features.{fuzzing,poc,build}` so the SPA shows/hides the Campaigns tab, Fuzz button, and Build
+> button project-wide from one toggle. The IA is a **center-pane mode switch + a right-pane tab**
+> (D-ia), not a new route — selection state stays shared so the frame→source jump is instantaneous.
+> Frozen Finding schema untouched (all new data on `evidence.extra` + the existing campaign/artifact
+> tables); **no migration** (a pure UX phase); no `policy.py` edit. Tests: `tests/test_campaigns_phase4.py`
+> (frame parsing incl. runtime-frame skip + unsymbolized→empty, ingest stores frames + auto-links
+> source, promote/promote-to-PoC, coverage serialization incl. the CAS snapshot, the engines
+> endpoint, the artifact verify/minimize/promote/coverage API, the `features.fuzzing` capability
+> flag). Full `just test` green (531 passed, 5 Docker-gated skips offline). Playwright-verified every
+> surface (Campaigns list, Artifacts triage with assurance chips + clickable stacks, the frame→source
+> jump landing on the right line with coverage shading, the Fuzz modal's server-advertised engines +
+> ResourceSpec, the Build modal, Settings, deep-links) — screenshots judged in `docs/ui-backlog.md`.
+> **Known limits:** per-line coverage requires the probe to emit `coverage.json` (the mock does;
+> real afl-cov/llvm-cov line-map wiring is part of Phase 5's binary/network work — aggregate
+> edge/exec stats stream today regardless); "Minimize" shares the verify replay path (the probe
+> already minimizes inline at ingest — distinct button kept for the affordance + future afl-tmin
+> re-minimization); the code viewer is still a plain line-numbered `<pre>` (no Monaco — deferred).
+
 **Phase 5 — Binary-only + network fuzzing.** AFL++ qemu-mode/frida-mode (`binary_only`, foreign-arch via qemu-user sysroot); desock+AFL++ (tier 1) and boofuzz/AFLNet against rehosted/local services (tier 2, `local_tcp_scope`, audited, `net_container` netns join); structure/grammar-aware for parsers. Composes with rehost. *Risk:* network-fuzz egress — bounded + audited at the policy seam.
 
 **Phase 6 — Remote fuzz environments (gated `features.fuzz_remote`).** `RemoteDockerExecutor` behind the Executor seam (`DOCKER_HOST` over SSH/TLS); a registered "fuzz environment" concept in Settings (local + remote endpoints, each with a `ResourceSpec` ceiling) + per-campaign selection; CAS-staged build-context/corpus transfer + artifact stream-back over the same connection; an environment health-check (remote `hexgraph-fuzz:latest` present, reachable, authorized). Endpoint connection details are secrets (env/`config.toml`, never DB/logged); the connection audited. Control plane stays loopback (§5.8b). *Risk:* a new remote trust edge — contained by single-authorized-endpoint pinning, the loopback control-plane invariant, secrets-never-stored, and the unchanged sandbox boundary on the remote. Lands after local coverage-guided fuzzing is proven; it's purely additive behind the seam.
