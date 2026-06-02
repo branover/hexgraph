@@ -506,6 +506,26 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-02: **fix: battle-test remediation PR-2 — assurance correctness + agent visibility** (branch
+  `fix/battletest-assurance`). Four fixes from the poc-tier engagement (`FEEDBACK.md` PR-2 block).
+  **B [BUG] the verify-WRITE path overwrote assurance UNCONDITIONALLY** (a failed/misrouted re-verify
+  DEMOTED a real `code_present/dynamic` → `unconfirmed`): both the MCP `verify_poc(finding_id=…)` write
+  and the REST `api_verify_finding` now MERGE via the partial order through a new pure
+  `assurance.merge_assurance(current, candidate)` (the canonical core `upgrade_if_stronger` also uses) —
+  a weaker/failed re-verify NEVER lowers an already-stronger stored rung; a genuine same/higher
+  re-confirmation still updates. **B-cont [BUG] re-verify resolved the WRONG target** (`finding.target_id`,
+  so a PoC against a child/live surface mis-ran): the MCP write now records the PoC's own
+  `evidence.extra.poc_target_id`, and REST re-verify resolves THAT (falling back to `finding.target_id`
+  when absent/stale). **E [BUG] the assurance triple was invisible** without a per-finding `get_finding`:
+  `list_findings` rows and the `verify_poc` tool return now carry the compact `{standard, method,
+  precondition}` triple (new `assurance.compact_assurance`). **K [BUG] `import_source_tree` silently wrote
+  0 files on a wrong key** (`path` vs `rel`): now accepts `path` as an alias AND errors clearly on a
+  keyless/non-object entry instead of a silent 0-file "success". **No DB migration** (assurance rides
+  `evidence.extra`; the frozen finding schema is untouched). Tests: `tests/test_battletest_assurance.py`
+  (no-downgrade on both MCP+REST paths, PoC-target resolution + fallback, list/verify assurance output,
+  import validation) + `merge_assurance`/`compact_assurance` units in `test_assurance.py`. VR skill
+  (`agent_setup.py`) updated: assurance now in list_findings + verify_poc output; re-verify resolves the
+  PoC's own target and never downgrades. `just test` green.
 - 2026-06-02: **fix: battle-test remediation PR-1 — fuzz UX + dev-ex + campaign status** (branch
   `fix/battletest-fuzzux`). Six fixes from the four VR battle-test engagements (`FEEDBACK.md` PR-1
   block). **A [BUG-HIGH] stale SPA on `just serve`:** `serve` now depends on a new `ui-check` recipe

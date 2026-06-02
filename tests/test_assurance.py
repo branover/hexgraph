@@ -101,6 +101,34 @@ def test_poc_finding_records_assurance_in_evidence():
     assert "input_reachable / dynamic / unauthenticated" in f.reasoning
 
 
+# ── merge_assurance: the partial-order MERGE that never downgrades ──────────────────────
+def test_merge_assurance_never_downgrades():
+    strong = A.assurance(A.CODE_PRESENT, A.DYNAMIC)            # tier 1, lab-confirmed
+    stronger = A.assurance(A.INPUT_REACHABLE, A.DYNAMIC)       # tier 2
+    failed = A.assurance(A.UNCONFIRMED, A.DYNAMIC)             # rank -1
+    static = A.assurance(A.INPUT_REACHABLE, A.STATIC)          # tier 1, incomparable to strong
+    # first record adopts the candidate
+    assert A.merge_assurance(None, strong) == strong
+    # a FAILED re-verify must NOT downgrade a real dynamic claim
+    assert A.merge_assurance(strong, failed) == strong
+    assert A.merge_assurance(stronger, failed) == stronger
+    # a weaker static argument must NOT displace an equal-tier dynamic claim (incomparable)
+    assert A.merge_assurance(strong, static) == strong
+    # a genuine UPGRADE is adopted
+    assert A.merge_assurance(strong, stronger) == stronger
+    # a re-confirmation at the SAME tier keeps current (no spurious change)
+    assert A.merge_assurance(strong, A.assurance(A.CODE_PRESENT, A.DYNAMIC)) == strong
+
+
+def test_compact_assurance_drops_detail_keeps_triple():
+    a = A.assurance(A.INPUT_REACHABLE, A.DYNAMIC, A.UNAUTHENTICATED,
+                    precondition_inferred=True, detail="long prose")
+    c = A.compact_assurance(a)
+    assert c == {"standard": A.INPUT_REACHABLE, "method": A.DYNAMIC,
+                 "precondition": A.UNAUTHENTICATED, "precondition_inferred": True}
+    assert A.compact_assurance(None) is None
+
+
 # ── verify_poc attaches the engine-computed assurance (end-to-end, fake runner) ─────────
 class _FakeRunner:
     def __init__(self, response):

@@ -49,7 +49,9 @@ see where to go next:
 - `list_targets(project_id)`, `target_facts` (note its `dangerous_imports` — start
   there), `read_imports` — scope + recon facts.
 - `list_findings(project_id)` — what's already found, **verified**, confirmed, or
-  **dismissed** (don't re-report dismissed issues).
+  **dismissed** (don't re-report dismissed issues). Each row carries the compact
+  **`assurance`** triple `{standard, method, precondition}` (the rung), so you can read
+  the assurance at a glance without a per-finding `get_finding`.
 - `search(project_id, q)` — locate functions/strings/findings by keyword.
 Let the existing graph and any open findings/hypotheses steer your next move: pick
 up unfinished threads, follow related findings to siblings, and target functions
@@ -365,17 +367,22 @@ is **record → explore → verify → update**:
    `poc`), containing the attacker input/spec you intend to try, marked unverified,
    and `create_edge` it `confirms`→ the vulnerability finding.
 3. **Verify → update in place.** Run `verify_poc(target_id, poc,
-   finding_id=<the PoC finding>)` (it attaches the result to that finding) / or
-   `run_task`. Then update the SAME findings — don't make duplicates: on success
-   `update_finding` the vulnerability to higher confidence/severity and
-   status `confirmed`, and `link_evidence(..., "supports")` so the hypothesis
+   finding_id=<the PoC finding>)` (it attaches the result — and returns the engine-computed
+   **assurance** triple) / or `run_task`. Then update the SAME findings — don't make
+   duplicates: on success `update_finding` the vulnerability to higher confidence/severity
+   and status `confirmed`, and `link_evidence(..., "supports")` so the hypothesis
    flips to supported/confirmed. On failure, `update_finding` to lower confidence
    and `link_evidence(..., "refutes")`.
    **Make the PoC spec SELF-CONTAINED.** A verified PoC is one-click **Re-verifiable** by
    the analyst with NO agent in the loop — HexGraph re-runs the stored `poc` spec as-is.
    So the spec must stand alone: complete `steps`/`argv`/`env`/`stdin`, a real `oracle`,
    and `{{NONCE}}` in BOTH the injected payload AND the oracle value (never a hard-coded
-   nonce). The target is resolved from the finding — don't bake host/path into the spec.
+   nonce). The re-verify resolves the PoC's OWN target (the `target_id` you passed to
+   `verify_poc`, recorded as `evidence.extra.poc_target_id`) — so the PoC may fire against a
+   different target than the finding it documents (e.g. a binary finding whose exploit hits a
+   child/live surface). Re-verify NEVER DOWNGRADES the stored assurance: a failed/weaker
+   re-run preserves an already-stronger rung; only a genuine same-or-higher confirmation
+   updates it. Don't bake host/path into the spec.
    HexGraph also derives a human copy-paste **reproduction command** (curl / nc / the
    binary invocation) and shows it, the steps in plain language, AND the **assurance**
    triple to the user. So in the finding's `summary`/`reasoning` record a short

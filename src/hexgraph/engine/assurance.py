@@ -73,6 +73,19 @@ def default_for(finding_type: str | None) -> dict | None:
     return None
 
 
+def compact_assurance(a: dict | None) -> dict | None:
+    """The compact triple {standard, method, precondition} (+ precondition_inferred when set) for
+    list/return surfaces — so an agent sees the rung without reading the full finding evidence.
+    Drops the verbose `detail` prose. Returns None when there is no assurance."""
+    if not a:
+        return None
+    out = {"standard": a.get("standard"), "method": a.get("method"),
+           "precondition": a.get("precondition")}
+    if a.get("precondition_inferred"):
+        out["precondition_inferred"] = True
+    return out
+
+
 def summary_line(a: dict | None) -> str:
     """One-line `standard / method / precondition` for reasoning text / display."""
     if not a:
@@ -221,6 +234,22 @@ def _strictly_stronger(candidate: dict, current: dict) -> bool:
     only out-rank a tier-0 current, and a tier-2 candidate out-ranks everything below it, a strict
     numeric increase is both necessary and sufficient — the incomparable pair shares a tier."""
     return rank(candidate) > rank(current)
+
+
+def merge_assurance(current: dict | None, candidate: dict | None) -> dict | None:
+    """The partial-order MERGE of an already-stored assurance with an incoming one: return
+    `candidate` ONLY if it is strictly stronger than `current` (a real upgrade, or the first
+    record), otherwise keep `current`. NEVER downgrades — a failed/weaker re-verify
+    (e.g. `unconfirmed/dynamic`, or an `input_reachable/static` argument) must NOT lower an
+    already-stronger stored rung (code_present/dynamic, input_reachable/dynamic). A genuine
+    re-confirmation at the SAME or a HIGHER rung is fine: same-tier keeps `current` (the identical
+    claim, no change), higher-tier adopts `candidate`. This is the pure-function core the re-verify
+    write paths (MCP verify_poc + REST re-verify) and `upgrade_if_stronger` share."""
+    if current is None:
+        return candidate
+    if candidate is not None and _strictly_stronger(candidate, current):
+        return candidate
+    return current
 
 
 def upgrade_if_stronger(evidence: dict | None, candidate: dict) -> dict:
