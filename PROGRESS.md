@@ -522,6 +522,15 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-02: **docs: release-readiness legal files** (branch `docs/disclaimer-notices`). Added two new
+  standalone files: `DISCLAIMER.md` (boilerplate authorized-use / dual-use disclaimer for an offensive
+  security tool — authorized use only, user is responsible for legal compliance, AS-IS / no liability)
+  and `THIRD_PARTY_NOTICES.md` (attribution for bundled/invoked third-party tools — radare2, AFL++,
+  LLVM/clang+libFuzzer, boofuzz, preeny, Ghidra, FirmAE, QEMU, binwalk, sasquatch, Sleuth Kit,
+  jefferson/ubi_reader, paramiko + the key host Python / SPA deps, sourced from the Dockerfiles +
+  pyproject.toml + frontend/package.json), with an aggregation note (tools run as separate processes /
+  in containers → consistent with HexGraph's own AGPL-3.0). License stays AGPL-3.0; README untouched
+  (owned by a concurrent sibling PR). Docs-only — no test impact.
 - 2026-06-02: **build: graph presentation Phase 1 — visual legibility** (branch `build/graph-phase1`;
   `docs/design-graph-presentation.md` §8 Phase 1). Frontend-only, **zero new deps, color-coding
   untouched (D8)**. `GraphView.tsx` + `theme.css`: structural edges recede (opacity ~0.18, arrowheads
