@@ -169,12 +169,29 @@ def main() -> int:
     duration = time.monotonic() - started
 
     # Capture the requested artifacts (rel paths under the build dir → /out/artifacts/<rel>).
+    # Defense-in-depth: an artifact rel is operator/LLM-authored, so refuse absolute paths
+    # and traversal — a build may only capture a file that resolves INSIDE the build dir
+    # (and the kept `rel` key is the contained path, so the engine reading /out/artifacts/
+    # <rel> back agrees). The sandbox already contains this (RO rootfs, no secrets,
+    # --network none), but a build has no business reading outside its own tree.
+    build_root = os.path.realpath(BUILD_DIR)
     captured: dict[str, bool] = {}
     if ok:
         for rel in spec.get("artifacts") or []:
-            srcp = os.path.join(BUILD_DIR, rel)
+            if os.path.isabs(rel):
+                w(f"[build_probe] refusing absolute artifact path: {rel}")
+                continue
+            srcp = os.path.realpath(os.path.join(BUILD_DIR, rel))
+            if not (srcp == build_root or srcp.startswith(build_root + os.sep)):
+                w(f"[build_probe] refusing artifact outside the build dir: {rel}")
+                continue
             if os.path.isfile(srcp):
                 dstp = os.path.join(art_out, rel)
+                # The dst must also stay within /out/artifacts (rel is contained per the
+                # check above, so this holds; keep the guard explicit).
+                if not os.path.realpath(dstp).startswith(os.path.realpath(art_out) + os.sep):
+                    w(f"[build_probe] refusing artifact dst outside /out: {rel}")
+                    continue
                 os.makedirs(os.path.dirname(dstp) or art_out, exist_ok=True)
                 try:
                     shutil.copyfile(srcp, dstp)

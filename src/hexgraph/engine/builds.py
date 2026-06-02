@@ -106,9 +106,10 @@ def create_build_spec(session: Session, project: Project, spec: BuildSpec) -> Bu
     tree = session.get(SourceTree, spec.source_tree_id)
     if tree is None or tree.project_id != project.id:
         raise BuildError("source tree not found in this project")
-    from hexgraph.engine.build import assert_env_nonsecret
+    from hexgraph.engine.build import assert_artifacts_contained, assert_env_nonsecret
 
     assert_env_nonsecret(spec.env)
+    assert_artifacts_contained(spec.artifacts)
     row = BuildSpecRow(
         project_id=project.id, source_tree_id=spec.source_tree_id, name=spec.name,
         system=spec.system, recipe_json=spec.to_dict(),

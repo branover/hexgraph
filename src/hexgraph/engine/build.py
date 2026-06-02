@@ -194,6 +194,21 @@ def assert_env_nonsecret(env: dict[str, str]) -> None:
                 "credentials must never flow through a recorded recipe")
 
 
+def assert_artifacts_contained(artifacts) -> None:
+    """An artifact rel is operator/LLM-authored; reject absolute paths and traversal
+    so a build can only capture a file INSIDE its own build dir (defense-in-depth on
+    top of the probe's own check + the sandbox boundary). The recorded recipe — and
+    so every replay — is then guaranteed contained."""
+    for rel in artifacts or ():
+        r = str(rel)
+        if os.path.isabs(r) or r.startswith("~"):
+            raise BuildError(f"artifact path must be relative to the build dir, not {rel!r}")
+        # Normalize and ensure it stays at/under the root (no leading ../ after norm).
+        norm = os.path.normpath(r)
+        if norm == ".." or norm.startswith(".." + os.sep) or os.path.isabs(norm):
+            raise BuildError(f"artifact path escapes the build dir: {rel!r}")
+
+
 # ── The base-image contract (design §3.1) ───────────────────────────────────────
 # The orchestrator (build_probe) sets CC/CXX/CFLAGS/SANITIZER/FUZZING_ENGINE from
 # the instrumentation profile — NEVER the recipe author. We compute the toolchain
@@ -256,6 +271,7 @@ class SandboxBuilder(Builder):
 
         assert_allows_build()  # opt-in gate — the ONLY place the build gate is relaxed
         assert_env_nonsecret(spec.env)
+        assert_artifacts_contained(spec.artifacts)
         if spec.network != "none":
             raise BuildError("network builds are not permitted this phase (vendored/offline only; "
                              "the audited fetch tier is a later phase)")
@@ -346,6 +362,7 @@ class MockBuilder(Builder):
 
         assert_allows_build()
         assert_env_nonsecret(spec.env)
+        assert_artifacts_contained(spec.artifacts)
         recipe_sha = spec.recipe_sha()
         # A deterministic toolchain digest so the reproducibility triple is stable in tests.
         toolchain = "mock-clang-18.0.0"

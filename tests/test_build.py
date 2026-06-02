@@ -101,6 +101,30 @@ def test_nonsecret_env_passes():
     assert_env_nonsecret({"CFLAGS": "-O2", "PREFIX": "/usr", "V": "1"})  # no raise
 
 
+@pytest.mark.parametrize("rel", ["/etc/passwd", "../../etc/passwd", "~/secret", "a/../../b"])
+def test_artifact_traversal_rejected(rel):
+    from hexgraph.engine.build import assert_artifacts_contained
+
+    with pytest.raises(BuildError):
+        assert_artifacts_contained([rel])
+
+
+def test_artifact_contained_paths_pass():
+    from hexgraph.engine.build import assert_artifacts_contained
+
+    assert_artifacts_contained(["fuzz.o", "build/fuzz_target", "a/b/c.so"])  # no raise
+
+
+def test_build_with_traversal_artifact_fails(hg_home):
+    _enable_build()
+    with session_scope() as s:
+        p = create_project(s, name="trav")
+        tree, _ = _src_tree(s, p)
+        spec = BuildSpec.from_dict({**B.propose_build_spec(tree), "artifacts": ["../../etc/passwd"]})
+        with pytest.raises(BuildError):
+            B.create_build_spec(s, p, spec)
+
+
 # ── the policy gate (fail-closed) ───────────────────────────────────────────────
 
 def test_build_gate_fails_closed_by_default(hg_home):
