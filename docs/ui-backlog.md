@@ -452,6 +452,72 @@ showcase, ~27/58), LARGE (~173/649), PATHOLOGICAL (~494/2144). Guard test
   semantic-zoom LOD to kill the letterbox at LARGE/PATHOLOGICAL (Phase 4); layer panel + filter rail
   + Table/Matrix (Phase 5).
 
+## Graph presentation — Phase 4: layout-by-context + semantic zoom (2026-06-02)
+
+**Shipped in `build/graph-phase4`** (`docs/design/design-graph-presentation.md` §8 Phase 4, §3.2/
+§3.3/§3.4/D7/D8). Builds directly on the Phase-3 compound "rooms" and **fixes the main Phase-3
+caveat: room labels were only readable when zoomed in.** Now the default full-pane frame of a
+LARGE/PATHOLOGICAL target opens as a set of **legible, labeled, countable rooms that fill the
+canvas** — no zoom-in required. **Color-coding untouched (D8)** — none of the type/severity/kind
+maps were edited; LOD only switches label/edge visibility and font size, layout only moves nodes.
+
+Changes:
+- **★ Semantic zoom / LOD (the headline).** A debounced `cy.on('zoom')` handler stamps
+  `lod-far|lod-mid|lod-near` on every element (thresholds z<0.5 / 0.5–1.35 / ≥1.35). FAR + MID:
+  collapsed **room cards get a readable label placed BELOW the card** (26px far / 18px mid, inverse
+  of zoom so rendered size stays legible at the default z≈0.45–0.55) with the `min-zoomed-font-size`
+  cutoff dropped so it never blurs out; interior content + edge labels are suppressed (the
+  collision culprits). NEAR (zoom in): full detail returns — every label, edge labels, `×N`/`@addr`
+  attr hints (today's behaviour). Detail reveals on approach; the resting frame is calm + labeled.
+- **Kill the letterbox / canvas utilization (§3.2).** fcose now runs with `tile: true` +
+  `packComponents` + higher `nodeSeparation`/`nodeRepulsion` so disconnected room islands spread to
+  fill the pane instead of clumping into the upper-center. First open fits **all visible elements**
+  (rooms + bus sockets) at padding 36 (not a fit-per-leaf). A **utilization backstop** re-runs fcose
+  once with more separation if the skeleton used <50% of the pane. Measured utilization: LARGE 0.71,
+  PATHOLOGICAL 0.79 (both in the §3.2 55–80% target; before: a clump in ~⅓ of the pane).
+- **Layout by context (D7).** fcose for the room skeleton; **scoped `dagre LR` re-run inside each
+  expanded LEAF room** (a binary's call graph reads top-down/left-right — verified: an expanded
+  room's interior is wider than tall, xspan≫yspan); **`concentric` for hub focus** (the Phase-2
+  focus model now arranges the anchor's neighbors in proper concentric rings by hop distance via
+  cytoscape's `concentric` layout, replacing the hand-rolled ring math — positions saved/restored so
+  clearing focus restores the resting graph exactly). The firmware grandparent's child *rooms* are
+  deliberately NOT dagre'd (they stay fcose-tiled so the skeleton spreads).
+- **Dead-dep cleanup.** Phase-3's review flagged `cytoscape-expand-collapse` as registered-but-unused
+  (our expand/collapse is React-`expandedRooms`-state-driven, not the extension's imperative API).
+  **Removed** from `package.json` + the registration rather than retrofit a second, conflicting
+  collapse model. **Bundle DROPS: gzip 361.7 kB → 353.65 kB (−8 kB); raw 1166.5 → 1138.8 kB.**
+- **Composes with Phases 1–3.** KEEP color (D8) — no color-map edits; focus/hide/breadcrumb/group-by
+  (target/type/finding/none) + the None flat fallback all still work; LOD/layout don't touch them.
+
+**Before/after human-eyes verdict (Playwright, §9 criteria — judged as a human):**
+- **PATHOLOGICAL default (THE headline pass/fail, ~494n/2144e)** — Before (Phase-3): rooms were
+  present but clumped center-left with **tiny, unreadable labels** and a big empty letterbox margin;
+  labels only resolved on zoom-in (the caveat). **After: PASS.** The rooms spread across the full
+  canvas, each card carries a **readable name+chip label below it** (`sbin/svc_00 27 · 1⚠`) at the
+  default zoom with no interaction, severity rings legible, the socket bus on the edge. The eye lands
+  and reads the rooms immediately. **[Eye lands ✓][Countable rooms ✓][Breathing room ✓][Labels behave ✓][Color kept ✓]**
+- **LARGE default (~173n/649e)** — Before: rooms in the upper-center, labels tiny. **After: PASS.**
+  Cards fill the pane (util 0.71), every room label readable below its card at the default frame.
+- **Zoom sweep (semantic zoom feels natural):** zooming OUT from a room → interior labels/edges drop
+  away cleanly and the big room labels take over (no collision mush); zooming IN → leaf labels +
+  call-edge hints fade back in. Smooth, not janky; `min-zoomed-font-size` keeps text from rendering
+  sub-legibly. **[Labels behave ✓]**
+- **Interior dagre LR (expand a room):** PASS — the expanded binary's functions lay out left-to-right
+  as a call flow (auto-framed, zoom ~1.0 → NEAR detail), siblings stay readable cards. Reads as
+  call-flow, not an fcose scatter (the Phase-3 expanded-interior look).
+- **Hub focus concentric:** PASS, decisively — the amber-ringed anchor sits dead-center in a clean
+  concentric ring of its labeled neighbors with semantic edges radiating; the rest of the firmware is
+  a faint muted backdrop. **[Focus pops ✓]**
+- **SMALL/MEDIUM + None (flat)** — PASS, unregressed. SMALL's single room auto-expands and its
+  functions now read as a clean LR call row (the dagre interior — arguably better than the Phase-3
+  fcose scatter). MEDIUM auto-expands all rooms, readable. **None** reproduces the flat dagre graph
+  verbatim (the regression fallback is intact). **[SMALL/MEDIUM unregressed ✓]**
+
+*Notes / deferred:* at PATHOLOGICAL the cross-room meta-edge ribbons still cross the canvas (low
+opacity, as designed); a packed disconnected sub-component of rooms can sit a touch dense in one
+corner (fcose `packComponents` tiling) — acceptable, the labels stay readable. The Map/Table/Matrix
+complementary views + the layer panel/filter rail are Phase 5.
+
 ## Graph presentation — Phase 3: compound islands + grouping + expand/collapse (2026-06-02)
 
 **Shipped in `build/graph-phase3`** (`docs/design/design-graph-presentation.md` §8 Phase 3, §1/§2.1/

@@ -522,6 +522,25 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-02: **build: graph presentation Phase 4 — layout-by-context + semantic zoom** (branch
+  `build/graph-phase4`; `docs/design/design-graph-presentation.md` §8 Phase 4, §3.2/§3.3/§3.4/D7/D8).
+  Frontend-only; builds on the Phase-3 rooms and **fixes the Phase-3 caveat — room labels were only
+  readable when zoomed in.** `GraphView.tsx`: (1) **★ semantic-zoom LOD** — a debounced `cy.on('zoom')`
+  stamps `lod-far|mid|near`; FAR+MID render a **readable below-card room label** (inverse-of-zoom font,
+  min-font cutoff dropped) while suppressing interior + edge labels, NEAR returns full detail — so the
+  default full-pane LARGE/PATHOLOGICAL frame opens **labeled + legible** with no zoom-in. (2) **letterbox
+  fix** — fcose `tile`+`packComponents`+higher separation spreads islands, first-open fits all visible
+  elements, a utilization backstop re-runs if <50% (measured util LARGE 0.71 / PATH 0.79, in the 55–80%
+  target). (3) **layout by context (D7)** — fcose skeleton, **scoped dagre LR inside an expanded leaf
+  room** (call flow), **concentric for hub focus** (the Phase-2 focus now uses cytoscape `concentric`,
+  positions saved/restored). (4) **dead-dep cleanup** — **removed** `cytoscape-expand-collapse`
+  (registered-but-unused; our collapse is React-state-driven). **Bundle DROPS: gzip 361.7 → 353.65 kB
+  (−8 kB).** **Color-coding untouched (D8)** — no color-map edits. `just test`: 703 passed, 1 failed
+  (the known Docker qemu-mode fuzz flake — `test_fuzz_phase5_e2e`, unrelated to this frontend change),
+  2 skipped. Human-eyes A/B (§9) in `docs/ui-backlog.md`: **PATHOLOGICAL/LARGE default now PASS** — rooms
+  fill the canvas with readable labels at the resting frame; zoom sweep reveals/hides detail smoothly;
+  interior dagre reads as call flow; hub concentric pops; SMALL/MEDIUM + None unregressed. Phase 5
+  (Map/Table/Matrix + layer panel + filter rail) remains.
 - 2026-06-02: **build: graph presentation Phase 3 — compound islands + grouping + expand/collapse**
   (branch `build/graph-phase3`; `docs/design/design-graph-presentation.md` §8 Phase 3, §1/§2.1/§3/
   D1/D6/D7/D8). The **headline structural fix** — the flat node plane becomes collapsible per-target

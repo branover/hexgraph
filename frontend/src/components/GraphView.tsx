@@ -3,15 +3,16 @@ import cytoscape from "cytoscape";
 import dagre from "cytoscape-dagre";
 import edgehandles from "cytoscape-edgehandles";
 import fcose from "cytoscape-fcose";
-import expandCollapse from "cytoscape-expand-collapse";
 import { Graph } from "../api";
 import { Icon } from "./Icon";
 
 cytoscape.use(dagre);
 cytoscape.use(edgehandles);
 cytoscape.use(fcose);
-// expand-collapse registers itself with the passed cytoscape; guard double-register in HMR.
-try { expandCollapse(cytoscape); } catch { /* already registered */ }
+// NOTE: cytoscape-expand-collapse was registered here in Phase 3 but never used — our
+// expand/collapse is React-state-driven (the `expandedRooms` set re-derives the element
+// list + scoped layout), not the extension's imperative collapse API. Phase 4 drops the
+// dead dependency rather than retrofit a second, conflicting collapse model.
 
 export const SEV: Record<string, string> = { info: "#7d8799", low: "#3fb950", medium: "#e3b341", high: "#f0883e", critical: "#ff5d6c" };
 // Target-kind colors. (red is reserved for severity/findings — never a node fill.)
@@ -71,6 +72,21 @@ function glyphDataUri(ch: string): string {
     + `<text x="20" y="21" font-size="24" font-family="sans-serif" text-anchor="middle" `
     + `dominant-baseline="central" fill="#0a0c12">${ch}</text></svg>`;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+// ── Phase 4: semantic-zoom (level-of-detail) thresholds ────────────────────────────────
+// The headline Phase-4 fix: at the DEFAULT full-pane zoom of a LARGE/PATHOLOGICAL graph
+// (~0.5–0.6) the room cards must be READABLE, and the interior clutter must stay hidden.
+// A debounced zoom handler toggles a container LOD class; styles keyed on it switch detail.
+//   FAR  (z < LOD_MID): islands only — readable room cards, no interior labels, no edge labels.
+//   MID  (LOD_MID ≤ z < LOD_NEAR): structure — node shapes + hub/anchor labels, semantic-edge labels.
+//   NEAR (z ≥ LOD_NEAR): full detail — every label, edge labels, attr hints (today's behaviour).
+const LOD_MID = 0.5;
+const LOD_NEAR = 1.35;
+function lodClass(z: number): "lod-far" | "lod-mid" | "lod-near" {
+  if (z < LOD_MID) return "lod-far";
+  if (z < LOD_NEAR) return "lod-mid";
+  return "lod-near";
 }
 
 // A committed focus: the anchor node + the hop radius of neighborhood it pulls into focus.
@@ -566,6 +582,54 @@ export default function GraphView({
         } },
         { selector: "edge.lit", style: { label: "data(elabel)", opacity: 1, width: 2.4, "target-arrow-shape": "triangle", "z-index": 20 } },
 
+        // ── Phase 4: semantic zoom (level-of-detail) ──────────────────────────────────────
+        // A zoom handler stamps `lod-far|lod-mid|lod-near` on EVERY element; these rules then
+        // switch how much competes for the eye. The headline fix is the FAR tier: the room
+        // cards stay readable (big inverse-scaled label, no min-font cutoff) while the interior
+        // clutter and edge labels go quiet — so the DEFAULT full-pane LARGE/PATHOLOGICAL frame
+        // opens as a set of LABELLED, countable rooms, not a smudge that only resolves on zoom-in.
+
+        // FAR: collapsed room cards get a large label placed BELOW the card (so a long
+        // `name · N · M⚠` chip isn't clipped inside a small card) at a size whose RENDERED
+        // height stays legible at the default z≈0.5, with the min-font cutoff dropped so it
+        // never blurs out. This is the headline fix — readable room labels at the default frame.
+        { selector: "node[gtype = 'room'][roomOpen = 0].lod-far", style: {
+            "font-size": "26px", "min-zoomed-font-size": 0, "text-opacity": 1,
+            color: "#e8edf6", "font-weight": 800,
+            "text-valign": "bottom", "text-margin-y": 8, "text-max-width": "320px", "text-wrap": "wrap",
+            "text-background-color": "#0a0c12", "text-background-opacity": 0.7, "text-background-padding": "4px",
+            "text-background-shape": "roundrectangle",
+        } },
+        // FAR: open-room (container) labels also scale up so a firmware grandparent stays named.
+        { selector: "node[gtype = 'room'][roomOpen = 1].lod-far", style: {
+            "font-size": "24px", "min-zoomed-font-size": 0, "text-opacity": 1,
+        } },
+        // FAR: hide interior detail — content node labels off (only rooms speak); the
+        // anchors keep theirs (they ARE the structure) but shrink to fit.
+        { selector: "node[gtype = 'node'].lod-far, node[gtype = 'finding'].lod-far", style: { "text-opacity": 0 } },
+        { selector: "node[bus = 1].lod-far", style: { "text-opacity": 0 } },
+        { selector: "node[tier = 'anchor'].lod-far", style: { "font-size": "22px", "min-zoomed-font-size": 0 } },
+        // FAR: edge labels are the collision culprit — off (incl. the normally-persistent
+        // semantic + meta labels); meta ribbons keep their width/color, just lose the text.
+        { selector: "edge.lod-far", style: { label: "", "min-zoomed-font-size": 0 } },
+
+        // MID: structure — the skeleton's default frame often lands HERE (LARGE), so collapsed
+        // room cards keep a readable below-card label (smaller than FAR since zoom is higher);
+        // hub/anchor labels show, semantic + meta edge labels return, leaf labels stay suppressed.
+        { selector: "node[gtype = 'room'][roomOpen = 0].lod-mid", style: {
+            "font-size": "18px", "min-zoomed-font-size": 0, "text-opacity": 1,
+            color: "#e8edf6", "font-weight": 800,
+            "text-valign": "bottom", "text-margin-y": 7, "text-max-width": "300px", "text-wrap": "wrap",
+            "text-background-color": "#0a0c12", "text-background-opacity": 0.7, "text-background-padding": "3px",
+            "text-background-shape": "roundrectangle",
+        } },
+        { selector: "node[gtype = 'node'].lod-mid", style: { "text-opacity": 0 } },
+        { selector: "node[tier = 'hub'].lod-mid", style: { "text-opacity": 0.9 } },
+        { selector: "node[tier = 'anchor'].lod-mid", style: { "text-opacity": 1 } },
+        { selector: "edge[persist = 1].lod-mid, edge[eclass = 'meta'].lod-mid", style: { "min-zoomed-font-size": 6 } },
+        // NEAR (z ≥ LOD_NEAR): full detail is the base style — every label, edge labels, attr
+        // hints (today's behaviour). The collapsed-room card label sits centered inside again.
+
         // ── Phase 2: the focus model ─────────────────────────────────────────────────────
         { selector: "node.context", style: {
             opacity: 0.16, "background-blacken": 0.4, "text-opacity": 0, "underlay-opacity": 0, events: "no" as any,
@@ -588,11 +652,65 @@ export default function GraphView({
       ],
     });
 
-    // ── Phase 3 layout: fcose (compound-aware, spreads islands) for grouped views, dagre LR
-    // for the flat graph. Both run AFTER the layoutstop handler so the focus model gets final
-    // positions. fcose handles the PATHOLOGICAL skeleton where dagre letterboxes.
+    // ── Phase 4: semantic-zoom (LOD) wiring ──────────────────────────────────────────────
+    // Stamp the current zoom's LOD class onto every element, and keep it current on zoom.
+    let lodNow: "lod-far" | "lod-mid" | "lod-near" | "" = "";
+    const applyLod = () => {
+      const cls = lodClass(cy.zoom());
+      if (cls === lodNow) return;
+      lodNow = cls;
+      cy.batch(() => cy.elements().removeClass("lod-far lod-mid lod-near").addClass(cls));
+    };
+    let lodTimer: any = null;
+    cy.on("zoom", () => { if (lodTimer) return; lodTimer = setTimeout(() => { lodTimer = null; applyLod(); }, 60); });
+
+    // Canvas-utilization backstop (§3.2): after layout, if the skeleton's bounding box uses
+    // too little of the pane, the layout clumped — re-run fcose once with more separation so we
+    // spend the empty canvas on breathing room (target 55–80% utilization) instead of letterbox.
+    const utilization = (): number => {
+      const bb = cy.elements(":visible").boundingBox();
+      const z = cy.zoom();
+      const used = (bb.w * z) * (bb.h * z);
+      return used / (cy.width() * cy.height());
+    };
+
+    // ── Layout by context (D7): fcose for the room SKELETON (compound-aware, tiles disconnected
+    // islands across the pane → kills the letterbox), scoped `dagre LR` re-run INSIDE each
+    // expanded room (a binary's call graph reads top-down/left-right), and dagre LR for the flat
+    // ("none") graph. Both run before the focus model so it gets final positions.
     layoutDone.current = false;
+
+    // Re-lay the interior of every OPEN, non-empty room with dagre LR (scoped to its
+    // descendants) so an expanded binary reads as call flow rather than an fcose scatter.
+    const dagreOpenRooms = () => {
+      if (!compound) return;
+      // Layouts manage their own batching — running one inside cy.batch() suppresses the
+      // position updates, so iterate WITHOUT a wrapping batch.
+      for (const r of cy.nodes("node[gtype = 'room'][roomOpen = 1]")) {
+        const kids = r.children();
+        if (kids.length < 2) continue;                       // nothing to flow
+        // Only flow a room whose children are LEAF CONTENT (a binary's functions) — NOT the
+        // firmware grandparent whose children are themselves room cards (those stay fcose-tiled
+        // so the skeleton spreads; dagre on them would stack the cards and re-letterbox).
+        if (kids.filter("[gtype = 'room']").nonempty()) continue;
+        const inside = kids.union(kids.edgesWith(kids));
+        if (inside.edges().length === 0) continue;           // no interior edges → leave fcose tiling
+        inside.layout({ name: "dagre", rankDir: "LR", nodeSep: 22, rankSep: 55,
+                        fit: false, animate: false } as any).run();
+      }
+    };
+
     cy.one("layoutstop", () => {
+      // Backstop: one re-run if the skeleton clumped (only the heavy compound view can letterbox).
+      if (compound && utilization() < 0.5) {
+        cy.layout({ name: "fcose", quality: "default", randomize: false, animate: false,
+                    nodeSeparation: 220, nodeRepulsion: 24000, idealEdgeLength: 260,
+                    packComponents: true, tile: true, tilingPaddingVertical: 28,
+                    tilingPaddingHorizontal: 28, padding: 30,
+                    nestingFactor: 0.9, gravity: 0.08, gravityCompound: 1.2,
+                    numIter: 1500 } as any).run();
+      }
+      dagreOpenRooms();
       layoutDone.current = true;
       // Auto-frame a freshly-expanded room (scoped, never on a plain rebuild) unless a focus
       // owns the camera. (design §3.4 — auto-zoom fires only on an explicit navigation act.)
@@ -600,15 +718,23 @@ export default function GraphView({
       if (je && !focusValRef.current?.id) {
         const room = cy.getElementById(je);
         if (room.nonempty()) { const inside = room.descendants().union(room); if (inside.length > 1) cy.animate({ fit: { eles: inside, padding: 60 } }, { duration: 340 }); }
+      } else if (!focusValRef.current?.id && !je) {
+        // First open / rebuild with no pending nav: frame ALL visible elements (rooms + the
+        // network-bus sockets + any loose nodes) so nothing is cut off and the default
+        // LARGE/PATHOLOGICAL frame is the full set of labelled cards filling the pane.
+        cy.fit(cy.elements(":visible"), 36);
       }
+      applyLod();
       applyFocusRef.current?.();
     });
     const layout = compound
       ? cy.layout({ name: "fcose", quality: "default", randomize: true, animate: false,
-                    nodeSeparation: 130, idealEdgeLength: (e: any) => (e.data("eclass") === "meta" || e.data("eclass") === "meta-structural" ? 200 : 75),
-                    nodeRepulsion: 14000, edgeElasticity: 0.25,
-                    packComponents: true, tile: false, padding: 30,
-                    nestingFactor: 0.9, gravity: 0.2, gravityCompound: 1.0,
+                    // tile + pack spreads disconnected islands across the pane (the letterbox
+                    // fix); a long ideal edge for cross-room ribbons pushes islands apart.
+                    nodeSeparation: 170, idealEdgeLength: (e: any) => (e.data("eclass") === "meta" || e.data("eclass") === "meta-structural" ? 240 : 80),
+                    nodeRepulsion: 18000, edgeElasticity: 0.2,
+                    packComponents: true, tile: true, tilingPaddingVertical: 24, tilingPaddingHorizontal: 24,
+                    padding: 30, nestingFactor: 0.9, gravity: 0.12, gravityCompound: 1.1,
                     numIter: 2500, samplingType: true } as any)
       : cy.layout({ name: "dagre", rankDir: "LR", nodeSep: 26, rankSep: 72, padding: 24 } as any);
     layout.run();
@@ -754,21 +880,22 @@ export default function GraphView({
       focusEles.addClass("focus");
       anchor.removeClass("focus").addClass("focus focus-anchor");
 
+      // Hub focus → CONCENTRIC (D7): the anchor centered, neighbors ringed by hop distance, so
+      // a high-degree hub's neighbors are placed around it on-screen instead of running off into
+      // the dark. Positions are saved first so clearing focus restores the resting graph exactly
+      // (the rearrange is a reversible live-instance nicety, not a resting-layout change).
       restore();
-      const center = { ...anchor.position() };
-      const byRing = new Map<number, string[]>();
-      ring.forEach((r, id) => { if (r > 0) (byRing.get(r) || byRing.set(r, []).get(r)!).push(id); });
-      cy.batch(() => {
-        focusNodes.forEach((n: any) => savedPos.current.set(n.id(), { ...n.position() }));
-        anchor.position(center);
-        byRing.forEach((ids, r) => {
-          const radius = 150 * r;
-          ids.forEach((id, idx) => {
-            const ang = (2 * Math.PI * idx) / ids.length + r * 0.4;
-            cy.getElementById(id).position({ x: center.x + radius * Math.cos(ang), y: center.y + radius * Math.sin(ang) });
-          });
-        });
-      });
+      cy.batch(() => focusNodes.forEach((n: any) => savedPos.current.set(n.id(), { ...n.position() })));
+      const maxRing = Math.max(1, ...[...ring.values()]);
+      focusNodes.layout({
+        name: "concentric", animate: false, fit: false, padding: 40,
+        // outermost ring = the anchor (level high), inner rings = farther hops, so concentric's
+        // "higher level toward center" rule centers the anchor and rings neighbors by hop.
+        concentric: (n: any) => maxRing + 1 - (ring.get(n.id()) ?? maxRing),
+        levelWidth: () => 1,
+        minNodeSpacing: 26, spacingFactor: 1.1,
+        startAngle: (3 / 2) * Math.PI,
+      } as any).run();
       cy.animate({ fit: { eles: focusNodes, padding: 70 } }, { duration: 340 });
     };
     applyFocusRef.current = apply;
