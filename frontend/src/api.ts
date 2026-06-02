@@ -45,6 +45,8 @@ export interface SettingsView {
 }
 export interface GhidraStatus { enabled: boolean; ok: boolean; detail: string; mode?: string; [k: string]: any; }
 export interface FsEntry { rel: string; size?: number; is_elf?: boolean; child_target_id?: string | null; added?: boolean; }
+export interface SourceTreeRow { id: string; name: string; origin: string; editable: boolean; vcs_rev?: string | null; content_hash?: string | null; file_count: number; archived: boolean; target_ids: string[]; }
+export interface SourceFileEntry { rel: string; size?: number; role: string; node_id?: string | null; is_harness?: boolean; }
 export interface GraphNode { id: string; type: "target" | "node" | "finding"; label: string; [k: string]: any; }
 export interface GraphEdge { id: string; source: string; target: string; type: string; src_kind?: string; dst_kind?: string; origin?: string; confidence?: number | null; attrs?: Record<string, any>; count?: number; }
 export interface Graph { project_id: string; nodes: GraphNode[]; edges: GraphEdge[]; }
@@ -127,6 +129,12 @@ export const api = {
   decompile: (tid: string, fn: string) => postJSON<{ available: boolean; detail?: string; focus?: any; functions?: string[] }>(`/api/targets/${tid}/decompile`, { function: fn }),
   filesystem: (tid: string) => getJSON<{ unpacked: boolean; method?: string; files: FsEntry[] }>(`/api/targets/${tid}/filesystem`),
   addFromFs: (pid: string, fwId: string, rel: string) => postJSON<any>(`/api/projects/${pid}/targets/${fwId}/add-from-fs`, { rel }),
+  // Source trees (Phase 1 — read-only IDE browse)
+  sourceTrees: (pid: string) => getJSON<{ source_trees: SourceTreeRow[] }>(`/api/projects/${pid}/source-trees`),
+  createSourceTree: (pid: string, body: { name: string; origin?: string; target_id?: string }) => postJSON<{ id: string; name: string; origin: string }>(`/api/projects/${pid}/source-trees`, body),
+  sourceFiles: (treeId: string) => getJSON<{ id: string; name: string; origin: string; editable: boolean; files: SourceFileEntry[] }>(`/api/source-trees/${treeId}/files`),
+  sourceFile: (treeId: string, rel: string) => getJSON<{ rel: string; size: number; role: string; origin: string; encoding: "text" | "binary"; content: string; truncated: boolean }>(`/api/source-trees/${treeId}/file?rel=${encodeURIComponent(rel)}`),
+  backfillHarnesses: (pid: string) => postJSON<{ promoted: number; scanned: number }>(`/api/projects/${pid}/backfill-harnesses`, {}),
   createEdge: (pid: string, body: any) => postJSON<any>(`/api/projects/${pid}/edges`, body),
   updateEdge: (eid: string, body: { attrs: Record<string, any>; merge?: boolean }) => patchJSON<any>(`/api/edges/${eid}`, body),
   createSocket: (pid: string, body: { kind?: string; port?: number | string | null; name?: string | null; bind_addr?: string | null; attrs?: any }) => postJSON<any>(`/api/projects/${pid}/sockets`, body),

@@ -13,6 +13,7 @@ import { AddNodeModal, AddEdgeModal } from "../components/Author";
 import ReportModal from "../components/ReportModal";
 import RunCompareModal from "../components/RunCompareModal";
 import GhidraImportModal from "../components/GhidraImportModal";
+import SourceBrowser from "../components/SourceBrowser";
 import { Icon, NODE_ICON } from "../components/Icon";
 
 export default function Workspace() {
@@ -37,6 +38,11 @@ export default function Workspace() {
   const [launchFor, setLaunchFor] = useState<{ target: TargetNode; type: string; objective?: string; params?: any; parentFindingId?: string; anchorKind?: string; anchorId?: string } | null>(null);
   const [maxed, setMaxed] = useState(false);
   const [detailBig, setDetailBig] = useState(false);
+  // Center-pane mode switch (Graph ⇆ Source) — a mode, not a route, so selection
+  // state is shared and finding→source jump is instantaneous (design §6.1).
+  const [view, setView] = useState<"graph" | "source">(
+    new URLSearchParams(window.location.search).get("view") === "source" ? "source" : "graph");
+  const [openSource, setOpenSource] = useState<{ treeId?: string; rel?: string; line?: number } | null>(null);
   const searchTimer = useRef<any>();
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -87,6 +93,19 @@ export default function Workspace() {
       .map((n) => ({ id: n.id, statement: (n.attrs?.statement as string) || n.label })),
     [graph],
   );
+
+  const switchView = (v: "graph" | "source") => {
+    setView(v);
+    const u = new URL(window.location.href);
+    if (v === "source") u.searchParams.set("view", "source"); else u.searchParams.delete("view");
+    window.history.replaceState(null, "", u.toString());
+  };
+  // Finding → source jump: open the file in Source mode at the line (design §6.3).
+  const revealSource = (ref: { tree_id?: string; rel?: string; line?: number }) => {
+    if (!ref?.tree_id || !ref?.rel) return;
+    setOpenSource({ treeId: ref.tree_id, rel: ref.rel, line: ref.line });
+    switchView("source");
+  };
 
   const viewTask = (tid: string) => { setSelTask(tid); setTab("tasks"); };
   const viewFinding = (fid: string) => { setSelTask(undefined); setSelNode(null); api.finding(fid).then((f) => { setSelFinding(f); setSelGraphId(f.id); }); };
@@ -252,7 +271,7 @@ export default function Workspace() {
     }
     return <Inspector finding={selFinding} projectId={projectId} hypotheses={hypotheses} onChanged={load}
                       onLaunch={pollThenReload} onOpenLaunch={openLaunchForFinding} onViewTask={viewTask}
-                      fuzzingEnabled={fuzzingEnabled}
+                      fuzzingEnabled={fuzzingEnabled} onOpenSource={revealSource}
                       onHighlight={(ids) => ids[0] && setSelGraphId(ids[0])} />;
   };
 
@@ -280,6 +299,14 @@ export default function Workspace() {
 
         <section className="pane">
           <div className="toolbar">
+            <div className="seg" style={{ display: "flex", gap: 2, border: "1px solid var(--border)", borderRadius: 6, padding: 2 }}>
+              <button className={"btn sm" + (view === "graph" ? " primary" : " ghost")} title="Graph view" onClick={() => switchView("graph")}>
+                <Icon name="hex" size={12} /> Graph
+              </button>
+              <button className={"btn sm" + (view === "source" ? " primary" : " ghost")} title="Source / IDE view (read-only)" onClick={() => switchView("source")}>
+                <Icon name="doc" size={12} /> Source
+              </button>
+            </div>
             <div className="input" style={{ flex: 1 }}>
               <Icon name="search" size={14} />
               <input placeholder="Search functions, strings, findings…" value={q} onChange={(e) => doSearch(e.target.value)} />
@@ -317,6 +344,12 @@ export default function Workspace() {
               <div className="cov">{results.coverage?.note}</div>
             </div>
           )}
+          {view === "source" ? (
+            <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+              <SourceBrowser projectId={projectId!} open={openSource} />
+            </div>
+          ) : (
+          <>
           <GraphView graph={graph} selectedId={selGraphId} onSelect={onGraphSelect}
                      onEdgeSelect={(e) => { setSelEdge(e); if (e) { setSelNode(null); setSelFinding(null); setSelTask(undefined); } }}
                      onDrawEdge={(src, dst) => { setEdgePrefill({ src, dst }); setModal("edge"); }} />
@@ -349,6 +382,8 @@ export default function Workspace() {
               </div>
             );
           })()}
+          </>
+          )}
         </section>
 
         {!maxed && (

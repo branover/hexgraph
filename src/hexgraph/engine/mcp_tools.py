@@ -83,6 +83,95 @@ def read_file(target_id: str, path: str) -> dict:
             return {"error": str(exc)}
 
 
+def list_source_trees(project_id: str) -> dict:
+    """List the project's managed SOURCE trees (trusted source we possess/build —
+    NOT the hostile target; harnesses/PoCs/scripts live here as role-tagged
+    source_files). Returns {source_trees:[{id,name,origin,editable,file_count,
+    target_ids}]}. Use read_source_file to view one tree's files."""
+    from hexgraph.engine.source import list_source_trees as _ls
+
+    with session_scope() as s:
+        p = s.get(Project, project_id)
+        if p is None:
+            return {"error": "project not found"}
+        return {"source_trees": _ls(s, p)}
+
+
+def read_source_file(tree_id: str, rel: str | None = None) -> dict:
+    """Browse/read a managed SOURCE tree. Omit `rel` to LIST the tree's files
+    (rel/size/role); pass `rel` to READ one file's text (bounded, traversal-safe;
+    binary as hex). This is trusted source text (a harness/PoC/build recipe or
+    imported library source) — distinct from read_file (a firmware's hostile
+    unpacked bytes). Returns the file listing or {rel,size,role,encoding,content}."""
+    from hexgraph.engine.source import (
+        SourceError, list_source_files, read_source_file as _read,
+    )
+    from hexgraph.db.models import SourceTree
+
+    with session_scope() as s:
+        tree = s.get(SourceTree, tree_id)
+        if tree is None:
+            return {"error": "source tree not found"}
+        p = s.get(Project, tree.project_id)
+        if rel is None:
+            return list_source_files(s, p, tree)
+        try:
+            return _read(p, tree, rel)
+        except SourceError as exc:
+            return {"error": str(exc)}
+
+
+def import_source_tree(project_id: str, name: str, files: list | None = None,
+                       origin: str = "scratch") -> dict:
+    """Create a managed SOURCE tree and (optionally) populate it with files. `files`
+    is a list of {rel, content, role?} (role in code|harness|poc|script|build_recipe).
+    Use this to bring in a harness/PoC you authored or a small library's source for
+    later building. Trusted text only (NOT target bytes — those are added as targets).
+    Returns {id, name, written}."""
+    from hexgraph.engine.source import SourceError, create_source_tree, write_source_file
+
+    with session_scope() as s:
+        p = s.get(Project, project_id)
+        if p is None:
+            return {"error": "project not found"}
+        try:
+            tree = create_source_tree(s, p, name=name, origin=origin, editable=True)
+            written = 0
+            for f in (files or []):
+                if not isinstance(f, dict) or "rel" not in f:
+                    continue
+                write_source_file(s, p, tree, f["rel"], f.get("content", ""),
+                                  role=f.get("role", "code"))
+                written += 1
+        except SourceError as exc:
+            return {"error": str(exc)}
+        return {"id": tree.id, "name": tree.name, "written": written}
+
+
+def link_finding_to_source(finding_id: str, tree_id: str, rel: str,
+                            line: int | None = None, col: int | None = None) -> dict:
+    """Link a finding to its location in a managed source file (a `located_in` edge
+    + evidence.extra.source_ref) — the jump-from-finding-to-source link, so the IDE
+    opens the file at the line. `tree_id`/`rel` from list_source_trees/read_source_file.
+    Use this when a vuln/harness corresponds to known source. Returns {node_id,rel}."""
+    from hexgraph.db.models import Finding, SourceTree
+    from hexgraph.engine.source import SourceError, link_finding_to_source as _link
+
+    with session_scope() as s:
+        f = s.get(Finding, finding_id)
+        if f is None:
+            return {"error": "finding not found"}
+        tree = s.get(SourceTree, tree_id)
+        if tree is None or tree.project_id != f.project_id:
+            return {"error": "source tree not found in this project"}
+        try:
+            node = _link(s, s.get(Project, f.project_id), finding_id=finding_id,
+                         tree=tree, rel=rel, line=line, col=col)
+        except SourceError as exc:
+            return {"error": str(exc)}
+        return {"node_id": node.id, "tree_id": tree_id, "rel": rel}
+
+
 def _tool(target_id: str, name: str, args: dict) -> str:
     """Run a sandboxed inspection tool (decompile/strings/…) via the shared registry."""
     from hexgraph.engine.agent_tools import ToolContext, run_tool

@@ -28,6 +28,7 @@ from hexgraph.api.routers import (
     hypotheses,
     projects,
     settings,
+    source,
     targets,
     tasks_runs,
 )
@@ -100,6 +101,7 @@ def create_app() -> FastAPI:
     app.include_router(hypotheses.router)
     app.include_router(annotations.router)
     app.include_router(settings.router)
+    app.include_router(source.router)
     app.include_router(tasks_runs.router)
     app.include_router(capabilities.router)
     app.include_router(ghidra.router)

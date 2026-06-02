@@ -76,9 +76,22 @@ then run the resume verifier, then continue at the next unchecked task.
   `metadata.fuzz_target_sources`) is compiled WITH the harness under SanCov+ASan for real coverage
   feedback (uninstrumented `.so` → coverage-blind, flagged honestly); crashes deduped by a normalized
   stack-hash (one finding/root cause + dupe_count), reproducer minimized (libFuzzer `-minimize_crash`),
-  deterministic exploitability rating — all on `evidence.extra.fuzz` (no schema change). **Target
-  soft-removal** (archive subtree, restore on re-add) and **firmware filesystem browser** (persisted
-  unpacked tree, add any file as a child target; library exports → nodes; function nodes launch tasks).
+  deterministic exploitability rating — all on `evidence.extra.fuzz` (no schema change).
+  **Fuzzing+source Phase 1 DONE** (`docs/design-fuzzing-and-source.md` §7 Phase 1, branch
+  `build/fuzz-phase1`): the **source-tree foundation + a read-only in-browser Source/IDE tab**, no
+  exec / no new gate. `source_tree` is a new SQL entity (**migration 0012**) — a project holds
+  multiple trees, each optionally `built_from`-linked to a target; files live on disk + a manifest,
+  with `source_file` graph nodes materialized **lazily** (`engine/source.py`, mirrors
+  `engine/filesystem.py`). Harnesses/PoCs/scripts unify as role-tagged `source_file`s
+  (`engine/harness_promote.py` — promotes the transient `evidence.decompiled_snippet`; back-compat
+  read path kept). New zero-migration vocab: node types `source_file`/`harness`, edge types
+  `built_from`/`located_in`/`harnesses` (+ a surgical `EDGE_KINDS`/`authoring` widening to admit
+  `source_tree` as a polymorphic endpoint). Read-only **Graph⇆Source** mode switch + finding→source
+  jump (`evidence.extra.source_ref`). MCP read `list_source_trees`/`read_source_file`, write
+  `import_source_tree`/`link_finding_to_source`. Frozen schema untouched; no `policy.py` edit.
+  **Target soft-removal** (archive subtree, restore on re-add) and **firmware filesystem browser**
+  (persisted unpacked tree, add any file as a child target; library exports → nodes; function nodes
+  launch tasks).
 - **Entity removal (`engine/removal.py`, migration 0011 `node.archived`):** nodes **soft-archive** —
   `archive_node` hides the node *and* the edges touching it (the graph already skips edges to hidden
   endpoints); re-adding the same node (`get_or_create_node`) or `restore_node` brings it and its edges
@@ -316,6 +329,40 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-01: **Fuzzing+source Phase 1 — source-tree foundation + read-only Source/IDE tab**
+  ([`docs/design-fuzzing-and-source.md`](docs/design-fuzzing-and-source.md) §7 Phase 1, branch
+  `build/fuzz-phase1`). NO exec, NO new policy gate — pure data-model + read-only browse + graph
+  wiring. **`source_tree`** is a new SQL entity (**migration 0012**, `down_revision=0011`, applies
+  clean on 0011 and round-trips; fresh `init_db()` create_all still works) — a project holds
+  multiple trees, each optionally linked to a target via a `built_from` edge (**D1**: a SQL entity,
+  surfaced through its own Source pane, NOT a `TargetKind`, so recon/ingest don't branch). Storage
+  is **filesystem + manifest + lazy nodes** (**D2**, `engine/source.py` mirrors
+  `engine/filesystem.py`): files under `<data_dir>/source/<tree_id>/`, a flat `manifest_json` on
+  the row, `source_file` nodes materialized only on reference (`fq_name=<tree_id>:<rel>`,
+  `target_id=None`). Reads bounded + path-traversal-safe (the `filesystem` containment guard);
+  `origin=extracted` marks untrusted firmware bytes (display only). Harnesses/PoCs/scripts unify as
+  **role-tagged `source_file`** (**D3**, `engine/harness_promote.py`): `promote_harness` /
+  `backfill_harnesses` move a `harness_generation` finding's transient `evidence.decompiled_snippet`
+  into a managed `source_file(role=harness)` + a `harness` node `harnesses`→ the target;
+  `fuzzing.resolve_harness` prefers the managed file but **falls back to the legacy snippet** (old
+  findings still fuzz). Zero-migration vocab: node types `source_file`/`harness`; edge types
+  `built_from`/`located_in`/`harnesses`. The riskiest touch — `source_tree` as a polymorphic edge
+  endpoint — is a surgical `EDGE_KINDS`-tuple + `authoring._entity_exists` widening (the `add_edge`
+  validator already reads the tuple), tested both ways. **Read-only Source tab**: a Graph⇆Source
+  segmented control (`?view=source`, a mode not a route), `SourceBrowser.tsx` (multi-tree dropdown +
+  `<FileTree>` + line-numbered viewer), and the finding→source jump (Inspector "Open in source
+  (line N)" reads `evidence.extra.source_ref`). REST `…/source-trees(/{id}/files|file)`,
+  `…/findings/link-source`, `…/backfill-harnesses`; MCP read `list_source_trees`/`read_source_file`,
+  write `import_source_tree`/`link_finding_to_source` (grouped + `features.mcp.*`-gated).
+  `merge_duplicates` folds `source_file` dupes via its default key. Frozen Finding schema untouched
+  (everything rides `evidence.extra` / the new table); no `policy.py` edit. Verified: migration
+  round-trip; `tests/test_source.py` (19 cases — model, lazy materialization + dedup, the three
+  edges + endpoint-validator widening, harness backfill + back-compat resolve, API/MCP read tools,
+  path-traversal); full `just test` green (468 passed, 2 skipped); `just ui` + a Playwright check
+  of the Graph⇆Source switch, a file open, and the finding→source jump (line highlighted). README +
+  SKILL (`agent_setup.py` §2f) + design-doc §7 Phase-1 DONE + `docs/ui-backlog.md` updated. Known
+  limits: no "Sources" section in the left tree yet (the dropdown is the only picker); plain `<pre>`
+  viewer (no Monaco) — deferred per ui-backlog.
 - 2026-06-01: **Fuzzing Phase 0 — coverage-guided target instrumentation + real crash triage**
   ([`docs/design-fuzzing-and-source.md`](docs/design-fuzzing-and-source.md) §7 Phase 0, branch
   `build/fuzz-phase0`). The headline fix: today's `-fsanitize=fuzzer` only instrumented the harness,

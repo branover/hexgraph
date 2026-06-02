@@ -123,9 +123,12 @@ Three panes:
 - **Left — target tree.** The ingested target and any firmware children. Each has a launcher: pick a
   **task type** and (for the mock) a **scenario**, then **Run**. Firmware targets show a browsable
   unpacked filesystem; any file can be added as a child target.
-- **Center — graph.** Targets, functions, **sockets**, hypotheses, and findings as typed nodes, joined
-  by typed edges (`contains` / `calls` / `taints` / `listens_on` / `connects_to` / `similar_to` / …).
-  Click an edge to see its attributes (call sites, ports, addresses). Rendered offline with Cytoscape.js.
+- **Center — graph ⇆ source.** A segmented control switches the center pane between the **Graph**
+  (targets, functions, **sockets**, hypotheses, harnesses, and findings as typed nodes, joined by typed
+  edges — `contains` / `calls` / `taints` / `listens_on` / `built_from` / `located_in` / `harnesses` / …;
+  rendered offline with Cytoscape.js) and a read-only **Source** view (an in-browser IDE over the
+  project's managed source trees — see below). Click an edge to see its attributes (call sites, ports,
+  addresses).
 - **Right — findings.** Every finding, typed (vulnerability / poc / recon / harness / fuzz_crash / …)
   and filterable; click one for its evidence, reasoning, verification, and suggested follow-ups.
 
@@ -139,6 +142,25 @@ edges and whole projects are hard deletes.
 overflow + `related_to` edge to `libupnp.so`), `/no_findings`, `/malformed_then_valid` (JSON-repair
 retry), `reverse_engineering`, `pattern_sweep` (sibling match), `error_rate_limit` / `error_timeout`
 (graceful failure), and a default always-success scenario.
+
+### Source trees & the Source tab (read-only)
+
+A project holds **trusted source** separately from its (hostile) targets: one or more **source
+trees** — an imported library's source, or the harnesses/PoCs/build-scripts HexGraph itself
+produces. A tree can be linked to a target (a `built_from` edge), and a project may hold several.
+Files live on disk under the project data dir indexed by a manifest; a `source_file` graph node is
+materialized **lazily** when something references it (so a 70k-file tree never explodes the graph).
+
+The center pane's **Source** mode is an in-browser, **read-only** IDE: a dropdown switches between
+the project's source trees, a file explorer browses each, and a code viewer shows a file with line
+numbers. A finding that maps to source gets an **"Open in source"** button (Inspector → Evidence)
+that jumps straight to the file and line. **Harnesses, PoCs, and scripts are all `source_file`s**
+(role-tagged) — a generated harness becomes a managed file you can read in the tab, and a
+**Backfill harnesses** action (API/MCP) promotes any older transient harnesses. *Editing source,
+and building/fuzzing from it, are later phases* — for now the Source tab is browse + jump only.
+Firmware-*extracted* files added as source are marked `extracted` (untrusted; displayed, never run
+or parsed outside the sandbox). Over MCP: `list_source_trees` / `read_source_file` (read),
+`import_source_tree` / `link_finding_to_source` (write).
 
 ---
 

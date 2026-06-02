@@ -129,6 +129,33 @@ NODE_ATTRIBUTE_SCHEMAS: dict[str, dict[str, Any]] = {
         "use_when": "Generalizing a bug shape to sweep other binaries for it.",
         "attributes": {"signature": _a("what defines the pattern", recommended=True)},
     },
+    "source_file": {
+        "description": "A file in a managed source_tree (trusted source we possess — NOT a "
+                       "hostile target). Materialized lazily on reference; harnesses/PoCs/"
+                       "scripts are role-tagged source_files.",
+        "identity": "(project, fq_name=`<tree_id>:<rel>`) — one node per file path in a tree.",
+        "use_when": "Don't hand-create these — they're materialized when you link a finding to "
+                    "source (link_finding_to_source) or import a tree. Browse with read_source_file.",
+        "attributes": {
+            "tree_id": _a("the source_tree this file belongs to", recommended=True),
+            "rel": _a("path relative to the tree root", recommended=True),
+            "role": _a("code | harness | poc | script | build_recipe | dictionary | corpus_seed",
+                       recommended=True),
+            "origin": _a("the tree's origin (upload|git|archive|extracted|scratch)"),
+        },
+    },
+    "harness": {
+        "description": "A fuzz harness — a logical harness backed by a source_file(role=harness) "
+                       "and `harnesses`→ the target/function it exercises (supersedes the transient "
+                       "evidence.decompiled_snippet).",
+        "identity": "(project, fq_name=`harness:<tree_id>:<rel>`).",
+        "use_when": "Created by harness_generation/promotion; reference it to drive fuzzing.",
+        "attributes": {
+            "tree_id": _a("the source_tree holding the harness source", recommended=True),
+            "rel": _a("path of the harness source within the tree", recommended=True),
+            "function": _a("the focused function the harness drives, if any", recommended=True),
+        },
+    },
 }
 
 

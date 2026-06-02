@@ -186,6 +186,27 @@ These are DYNAMIC: fired through a live web/tcp/remote surface ⇒ `input_reacha
 binary/harness ⇒ `code_present` (lab-confirmed). Record the verified PoC as a `poc` finding
 `confirms`→ the vuln, same rhythm as the cmdi flow above.
 
+## 2f. Source trees (managed, trusted source — NOT the target's hostile bytes)
+A project can hold one or more **source trees**: trusted source we possess (an imported
+library, or HexGraph-authored harnesses/PoCs/scripts). They are SEPARATE from targets (which
+are hostile bytes) — browse them, don't fear them.
+- **`list_source_trees(project_id)`** — what source trees exist (id/name/origin/file_count + the
+  `target_ids` each is `built_from`). **`read_source_file(tree_id)`** lists a tree's files; with
+  `rel` it reads ONE file's text (bounded, traversal-safe). This is trusted source text — distinct
+  from `read_file` (a firmware's hostile unpacked bytes).
+- **Harnesses, PoCs, and build/run scripts are now `source_file`s** (role-tagged
+  `harness|poc|script|build_recipe|…`) — a `harness_generation` task's harness is promoted to a
+  managed `source_file(role=harness)` + a `harness` node that `harnesses`→ the target, instead of
+  living only in `evidence.decompiled_snippet` (which still works for back-compat). To bring in
+  your own harness/PoC or a small library's source, **`import_source_tree(project_id, name,
+  files=[{rel,content,role?}])`** (trusted text only — never target bytes; those are ingested as
+  targets).
+- **Link a finding/node to its source location** so the analyst can jump from the finding to the
+  exact line: **`link_finding_to_source(finding_id, tree_id, rel, line?)`** records a `located_in`
+  edge + `evidence.extra.source_ref` (the UI's "Open in source" button). Do this whenever a vuln
+  corresponds to known source — it's the source↔graph link the workbench is built on. (Building
+  and fuzzing from source are later phases; for now source is read-only.)
+
 ## 3. Record AS YOU GO — write to the graph BEFORE you've confirmed things
 Capture the moment you have a lead, not after you've proven it. The graph is a
 live worklog: a suspicion recorded early is visible to the analyst and other

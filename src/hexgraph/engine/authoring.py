@@ -21,7 +21,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import (
-    EDGE_KINDS, Edge, EdgeType, Finding, Node, NodeType, Project, Target, Task,
+    EDGE_KINDS, Edge, EdgeType, Finding, Node, NodeType, Project, SourceTree, Target, Task,
 )
 from hexgraph.engine.edges import add_edge
 from hexgraph.engine.nodes import get_or_create_node
@@ -39,7 +39,11 @@ class InvariantError(ValueError):
 
 
 def _entity_exists(session: Session, project_id: str, kind: str, id_: str) -> bool:
-    model = {"target": Target, "node": Node, "finding": Finding, "task": Task}.get(kind)
+    # `source_tree` is a polymorphic edge endpoint (built_from / depends_on) — a SQL
+    # entity, not a node — so it joins the existence check alongside target/node/
+    # finding/task (design §4.5 D-edge widening).
+    model = {"target": Target, "node": Node, "finding": Finding, "task": Task,
+             "source_tree": SourceTree}.get(kind)
     if model is None:
         return False
     row = session.get(model, id_)
