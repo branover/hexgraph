@@ -9,12 +9,13 @@ def test_demo_main_exits_zero(sandbox):
     from hexgraph import demo
     from hexgraph.db.session import reset_engine_for_tests
 
-    saved_home = os.environ.get("HEXGRAPH_HOME")
+    # The demo mutates env to drive the offline mock seams; it MUST restore it so calling
+    # main() in-process (here, in the full suite) leaks nothing onto later tests — a leaked
+    # HEXGRAPH_FUZZER/_BUILDER=mock would silently steer real-toolchain tests onto the mock.
+    keys = ("HEXGRAPH_HOME", "HEXGRAPH_LLM_BACKEND", "HEXGRAPH_BUILDER", "HEXGRAPH_FUZZER")
+    before = {k: os.environ.get(k) for k in keys}
     try:
         assert demo.main() == 0
+        assert {k: os.environ.get(k) for k in keys} == before, "demo leaked env into the caller"
     finally:
-        if saved_home is not None:
-            os.environ["HEXGRAPH_HOME"] = saved_home
-        else:
-            os.environ.pop("HEXGRAPH_HOME", None)
         reset_engine_for_tests()

@@ -94,6 +94,24 @@ def main() -> int:
             print(f"missing fixture {name}; run tests/fixtures/build.sh first.", file=sys.stderr)
             return 1
 
+    # Snapshot the env we mutate so calling main() (e.g. from the smoke test, in-process)
+    # NEVER leaks the mock seams into the caller's environment — a leaked HEXGRAPH_FUZZER/
+    # _BUILDER would silently steer later tests onto the mock seam (real-toolchain assertions
+    # then break). Restored in the finally below.
+    _ENV_KEYS = ("HEXGRAPH_HOME", "HEXGRAPH_LLM_BACKEND", "HEXGRAPH_BUILDER", "HEXGRAPH_FUZZER")
+    _saved_env = {k: os.environ.get(k) for k in _ENV_KEYS}
+    try:
+        return _run()
+    finally:
+        for k, v in _saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def _run() -> int:
+    fixtures = _fixtures()
     # Isolated, throwaway home so the demo is repeatable and offline.
     os.environ["HEXGRAPH_HOME"] = tempfile.mkdtemp(prefix="hexgraph-demo-")
     os.environ.setdefault("HEXGRAPH_LLM_BACKEND", "mock")
