@@ -101,16 +101,18 @@ def test_aflplusplus_campaign_finds_dedups_classifies_and_reverifies(hg_home, mo
         assert c.status in ("running", "completed"), c.error
         assert (c.config_json or {}).get("coverage_instrumented") is True   # real coverage
 
-        # The forkserver fix (writable /dev/shm) means the campaign machinery ran end to
-        # end. On a healthy host AFL++ then fuzzes and finds the planted crash; on a host
-        # kernel where AFL++ PERSISTENT mode is unstable (the forkserver crashes / the
-        # dry-run calibration times out — reproducible even with the /dev/shm fix on e.g.
-        # some WSL2 kernels) the probe reports a LOUD diagnostic instead of silently
-        # claiming a clean zero-crash run. We must NOT silently pass in that case — skip
-        # with the captured reason so it's visible, while still proving the machinery.
-        note = (c.stats_json or {}).get("engine_note")
-        if note and not s.query(FuzzArtifact).filter(FuzzArtifact.campaign_id == cid).count():
-            pytest.skip(f"AFL++ could not fuzz on this host kernel: {note}")
+        # The three host-kernel failure modes that used to make this test skip-with-reason
+        # are now FIXED (fix/afl-aslr): the writable /dev/shm cleared the SHM forkserver
+        # crash, `setarch -R` (ASLR off) cleared ASan's MAP_FIXED-shadow SIGSEGV on
+        # high-entropy-ASLR kernels (WSL2 6.6.x / Ubuntu 23.10+ / CI runners), and the
+        # classic-forkserver harness cleared the persistent-mode dry-run hang. So the
+        # campaign now fuzzes reliably on these kernels — we DELIBERATELY no longer skip on
+        # an `engine_note`: a 0-exec / engine_note outcome here is a genuine regression of
+        # the fix and MUST fail the test loudly, not be papered over as a host limitation.
+        assert not (c.stats_json or {}).get("engine_note"), (
+            "AFL++ reported instability — the ASLR/forkserver fix has regressed: "
+            f"{(c.stats_json or {}).get('engine_note')}")
+        assert (c.stats_json or {}).get("execs", 0) > 0, "AFL++ ran zero executions"
 
         arts = s.query(FuzzArtifact).filter(FuzzArtifact.campaign_id == cid).all()
         assert arts, "AFL++ found no crash in the instrumented build"

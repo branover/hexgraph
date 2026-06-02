@@ -69,4 +69,11 @@ class AflPlusPlusFuzzer(Fuzzer):
             probe="afl_probe.py", image=fuzz_image(), artifact=src_path,
             extra_args=extra_args, extra_ro_mounts=mounts,
             coverage_instrumented=True, engine="afl",
+            # The harness + target are compiled with ASan; on high-ASLR-entropy kernels
+            # ASan's MAP_FIXED shadow reservation can collide with a randomized mapping
+            # and SIGSEGV during init (before AFL's forkserver handshake). The probe runs
+            # the target under `setarch -R` (ASLR off); that needs the minimal seccomp
+            # relaxation (default + personality(ADDR_NO_RANDOMIZE)), so opt the container
+            # into it here. Only this ASan source path sets it.
+            disable_aslr=True,
         )

@@ -28,6 +28,21 @@ DEFAULT_IMAGE = "hexgraph-sandbox:latest"
 DEFAULT_TIMEOUT = 300  # seconds
 PROBES_DIR = Path(__file__).resolve().parent / "probes"
 CONTAINER_PROBES = "/opt/hexgraph"
+# A minimal seccomp profile: byte-for-byte Docker's default deny-by-errno profile PLUS a
+# single extra rule allowing `personality(ADDR_NO_RANDOMIZE)`. Used ONLY by the ASan
+# source-fuzz path (disable_aslr) so `setarch -R` can turn ASLR off for the instrumented
+# target (Docker's default profile filters out exactly that one personality arg value).
+# Provenance: github.com/moby/profiles seccomp/default.json + the one personality rule.
+SECCOMP_ASLR_PROFILE = Path(__file__).resolve().parent / "seccomp" / "fuzz-aslr.json"
+
+
+def _seccomp_aslr_profile() -> str:
+    """Absolute path to the minimal ASLR-disable seccomp profile (default + one
+    personality allow). Fails loudly if it's missing — better than silently running
+    seccomp=unconfined."""
+    if not SECCOMP_ASLR_PROFILE.is_file():
+        raise SandboxError(f"seccomp profile not found: {SECCOMP_ASLR_PROFILE}")
+    return str(SECCOMP_ASLR_PROFILE)
 
 
 class SandboxError(RuntimeError):
@@ -92,14 +107,26 @@ class SandboxRunner:
 
     # ── Shared hardening: the docker flags EVERY container gets ────────────────────
     def _hardening_args(self, *, allow_network: bool, net_container: str | None,
-                        resources: ResourceSpec, secret: bool) -> list[str]:
+                        resources: ResourceSpec, secret: bool,
+                        disable_aslr: bool = False) -> list[str]:
         """The security + resource docker flags shared by run_probe and start_detached.
 
         The SECURITY flags (`--network none` unless an already-gated network tier,
         `--read-only`, `--cap-drop ALL`, `--no-new-privileges`, `--user 1000`) are
         UNCONDITIONAL — a ResourceSpec NEVER relaxes them. Only the resource ceilings
         (`--memory`/`--cpus`/`--pids-limit`) come from `resources` and are dropped under
-        `unconstrained` (a resource decision, not a security one — design §5.8a)."""
+        `unconstrained` (a resource decision, not a security one — design §5.8a).
+
+        `disable_aslr` (set ONLY by the ASan source-fuzz path, via PreparedFuzz) swaps
+        Docker's default seccomp profile for a MINIMAL one that is the default PLUS a
+        single extra rule allowing `personality(ADDR_NO_RANDOMIZE)`. AFL wraps the
+        instrumented target in `setarch -R` to turn ASLR off so ASan's MAP_FIXED shadow
+        reservation cannot collide with a randomized mapping (the SIGSEGV-in-ASan-init
+        bug on high-`vm.mmap_rnd_bits` kernels — WSL2 6.6.x / Ubuntu 23.10+ / CI runners);
+        that one `personality` arg value is the only thing Docker's default profile
+        filters out. The relaxation reduces ONLY the target's own address-space
+        randomization — it is NOT a sandbox-escape primitive, and every OTHER hardening
+        flag below is untouched."""
         tmpfs = resources.tmpfs_arg()
         return [
             # Egress is OFF by default; `allow_network` (policy-checked by the caller)
@@ -111,6 +138,10 @@ class SandboxRunner:
             # no privilege escalation, pin the unprivileged uid. UNCONDITIONAL.
             "--cap-drop", "ALL",
             "--security-opt", "no-new-privileges",
+            # Default seccomp UNLESS the ASan source-fuzz path needs ASLR off; then a
+            # minimal profile = Docker's default + ONE personality(ADDR_NO_RANDOMIZE)
+            # allow (see _seccomp_aslr_profile). The single, narrow, documented relaxation.
+            *(["--security-opt", f"seccomp={_seccomp_aslr_profile()}"] if disable_aslr else []),
             "--user", "1000:1000",
             # Resource ceilings — the ONLY flags a ResourceSpec governs (empty under
             # `unconstrained`, so the container can use the whole host).
@@ -309,9 +340,12 @@ class SandboxRunner:
         resources: ResourceSpec | None = None,
         allow_network: bool = False,
         net_container: str | None = None,
+        disable_aslr: bool = False,
     ) -> DetachedHandle:
         """Launch a probe as a DETACHED, long-lived container (`docker run -d`), same
-        hardening as run_probe. The launcher returns IMMEDIATELY with a handle whose
+        hardening as run_probe. `disable_aslr` (the ASan source-fuzz path only) swaps in
+        the minimal default+personality seccomp profile so `setarch -R` can disable ASLR
+        for the instrumented target — see `_hardening_args`. The launcher returns IMMEDIATELY with a handle whose
         `name` is durable, so the reaper (a periodic worker job) and a `serve`-restart
         re-attach by name (crash-safe). The container streams artifacts/stats to the
         `/out` bind-mount as it runs; nothing blocks a worker thread.
@@ -346,7 +380,7 @@ class SandboxRunner:
             # NOT --rm: a detached campaign container is reaped explicitly so its exit
             # status is observable. The reaper `docker rm`s it on finalize.
             *self._hardening_args(allow_network=allow_network, net_container=net_container,
-                                  resources=resources, secret=False),
+                                  resources=resources, secret=False, disable_aslr=disable_aslr),
             *(["-v", f"{artifact}:/artifact:ro"] if artifact is not None else []),
             "-v", f"{outdir}:/out:rw",
         ]

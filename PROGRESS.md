@@ -605,6 +605,37 @@ then run the resume verifier, then continue at the next unchecked task.
   calibrate (no false green, no hard flake). Docs: `docs/design-fuzzing-and-source.md` §7 + README
   hostile-target-isolation note. `just test` green (609); `just demo` exits 0. No migration (no model
   change), no `Dockerfile.fuzz` change (probes mounted at runtime).
+- 2026-06-02: **fix: AFL++ source-fuzz on high-ASLR-entropy kernels** (branch `fix/afl-aslr`).
+  After the `/dev/shm` fix, the AFL++ source path STILL failed on WSL2 6.6.x with two intertwined
+  symptoms — intermittent `Fork server crashed with signal 11` (0 execs, ~30%) AND a 100% `test case
+  results in a timeout → All test cases time out, giving up` dry-run abort — so `test_campaign_e2e`
+  came back `degraded`, not a clean pass. **Two root causes, both host-agnostic, neither a WSL/sandbox
+  bug:** (1) the harness+target are built with **ASan**, and on `vm.mmap_rnd_bits=32` kernels (WSL2
+  6.6.x / Ubuntu 23.10+ / GitHub CI runners) ASan's `mmap(MAP_FIXED)` shadow reservation intermittently
+  **collides with a randomized mapping and SIGSEGVs during ASan init**, before AFL's forkserver
+  handshake (confirmed: instrumented binary direct-run SIGSEGVs ~4/15 with ASLR on, **0/30 with ASLR
+  off**; refs WSL#40168, runner-images#9515, sanitizers#1614, llbit ASLR/ASan post); clang 14 in the
+  image lacks the clang-≥17 auto-re-exec mitigation. (2) The path linked AFL++'s **libFuzzer-compat
+  PERSISTENT driver** (`-fsanitize=fuzzer` + `__AFL_LOOP` + SHM testcase), whose first dry-run exec
+  **wedges** on this kernel even WITHOUT ASan (`afl-showmap` classic-forkserver on the same binary
+  works 8/8). **Fix (minimal, hardening-intact):** (a) run the target with ASLR off via **`setarch -R`**
+  (`personality(ADDR_NO_RANDOMIZE)`) — Docker's default seccomp filters out exactly that one
+  `personality` arg, so the ASan source-fuzz container (and ONLY it) is launched with a **minimal custom
+  seccomp = Docker's default + one rule allowing `personality(0x40000)`**
+  (`src/hexgraph/sandbox/seccomp/fuzz-aslr.json`, wired `PreparedFuzz.disable_aslr` → `runner.
+  _hardening_args`; the narrowest possible relaxation — reduces only the target's own ASLR, not a
+  sandbox-escape primitive; `--network none`/`--read-only`/`--cap-drop ALL`/`--no-new-privileges`/
+  `--user` all untouched, every other fuzzer keeps the default profile); (b) **switch to a CLASSIC AFL
+  forkserver harness** — compile the `LLVMFuzzerTestOneInput` harness with a one-shot `main()` shim +
+  `-fsanitize=address -fsanitize-coverage=trace-pc-guard`, feed input via `@@`, no persistent SHM loop
+  (CmpLog left opt-in: its `-c` aux forkserver under ASan is flaky here — 0 crashes with it, crashes
+  without); (c) `disable_coredump=1` + `RLIMIT_CORE=0` so a crashing child can't wedge on WSL2's piped
+  `core_pattern`. The probe's `_AFL_FAIL_SIGNATURES`/`engine_note` are **re-scoped** — they no longer
+  blame "host kernel" for the now-fixed cases, and the e2e **no longer skips on an `engine_note`** (a
+  0-exec outcome now FAILS as a regression). Proven **10/10 consecutive** green on WSL2 6.6.x
+  (~80–120k execs / 45 s, real coverage). Docs: `docs/design-fuzzing-and-source.md` (Phase-5 caveat
+  RESOLVED + new section). `just test` green; other fuzzers regression-checked. No migration (no model
+  change), no `Dockerfile.fuzz` change (probes mounted at runtime; the seccomp profile is in-package).
 - 2026-06-02: **Fuzzing+source Phase 7 — supply-chain + cross-compile + editable IDE (EPIC COMPLETE)**
   ([`docs/design-fuzzing-and-source.md`](docs/design-fuzzing-and-source.md) §7 Phase 7, branch
   `build/fuzz-phase7`). The FINAL feature phase — closes Phases 0–7. **Bounded audited dependency
