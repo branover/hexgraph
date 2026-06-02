@@ -190,6 +190,30 @@ select.sel:focus, .settings select.sel:focus { outline: none; border-color: var(
 .legend .sw.shape-barrel { border-radius: 40% / 18%; }
 .legend .sw.shape-pentagon { clip-path: polygon(50% 0,100% 38%,82% 100%,18% 100%,0 38%); }
 
+/* ── Phase 2: focus / navigation chrome ─────────────────────────────────────────────── */
+/* The reversible breadcrumb trail (design §4.2), pinned top-left of the canvas. */
+.focus-crumbs { position: absolute; left: 10px; top: 10px; z-index: 6; display: flex; align-items: center;
+  flex-wrap: wrap; gap: 1px; max-width: 70%; background: rgba(17,20,29,.92); backdrop-filter: blur(6px);
+  border: 1px solid var(--border); border-radius: 8px; padding: 3px 5px; box-shadow: var(--sh-2); }
+.focus-crumbs .crumb { background: transparent; border: none; color: var(--fg-dim); cursor: pointer;
+  font-size: 11.5px; padding: 2px 7px; border-radius: 6px; display: inline-flex; align-items: center; gap: 5px;
+  max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.focus-crumbs .crumb:hover { background: var(--surface-3); color: var(--fg); }
+.focus-crumbs .crumb.active { color: var(--fg); font-weight: 600; cursor: default; }
+.focus-crumbs .crumb.active:hover { background: transparent; }
+.focus-crumbs .crumb.home { color: var(--accent); }
+.focus-crumbs .crumb.reset { margin-left: 2px; color: var(--muted); font-size: 13px; padding: 2px 7px; }
+.focus-crumbs .crumb.reset:hover { color: var(--fg); }
+.focus-crumbs .crumb-sep { color: var(--muted); padding: 0 1px; font-size: 12px; }
+
+/* Reversible hide chip — hidden nodes are never a silent loss (design §4.1). */
+.graph-wrap .hide-chip { background: rgba(255,93,108,.14); border-color: rgba(255,93,108,.4); color: #ffb3bb; }
+.graph-wrap .hide-chip:hover { background: rgba(255,93,108,.22); }
+
+/* Right-click verb menu danger row (Hide) reuses the menu styling. */
+.menu.graph-cxt .mi.danger { color: #ff9aa3; }
+.menu.graph-cxt .mi.danger:hover { background: rgba(255,93,108,.16); }
+
 /* findings */
 .fbar { display: flex; gap: 6px; align-items: center; padding: 9px 11px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .sevsummary { display: flex; gap: 5px; padding: 8px 11px 0; flex-wrap: wrap; }

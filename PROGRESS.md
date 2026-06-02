@@ -522,6 +522,26 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-02: **build: graph presentation Phase 2 — focus / hide / navigation** (branch
+  `build/graph-phase2`; `docs/design-graph-presentation.md` §8 Phase 2, §4/§5/§9). Frontend-only,
+  live-instance class toggles + camera over the existing flat dagre graph — **zero new deps, no
+  rebuild, color-coding untouched (D8)**. The fix for the "drowned highlight" at LARGE/PATHOLOGICAL.
+  `GraphView.tsx` + `Workspace.tsx` + `theme.css`: a real **focus model** replaces `.lit`-only —
+  `.focus` on the anchor + N-hop neighborhood (1–3), `.context` on the rest (mute ~16% opacity +
+  `background-blacken` + drop labels + `events:no`, **hue preserved at low alpha**); a **live concentric
+  re-arrange** of just the focus set around the anchor (positions saved/restored on clear — resting
+  layout untouched) so the **scoped `animate({fit})`** lands on a readable local diagram instead of a
+  full-graph fit; **hover preview** (transient `.hl`/`.hl-dim`, no commit); a **focus stack + breadcrumb**
+  (`Overview › crumb`, URL-serialized `?focus=&hop=` → shareable/restorable, crumb pops + reframes);
+  **search drives focus** (`focusOn` not select); a dependency-free **right-click verb menu** (focus /
+  expand-hop / reveal / hide) + a **reversible hide chip** ("N hidden · restore ↺"). Auto-frame fires
+  only on explicit focus (double-tap/search/verb/URL), never hover/plain-select (D5). NB: dagre is
+  synchronous so the layout is now run explicitly *after* wiring `layoutstop` (the constructor fired it
+  before a listener could attach). `just test` 702 passed / 2 skipped. Human-eyes A/B (Playwright, §9)
+  in `docs/ui-backlog.md`: **PATHOLOGICAL focus is the decisive PASS** — the amber-ringed anchor +
+  concentric ring of labeled neighbors pops out of a faint muted backdrop (vs the baseline static);
+  LARGE focus, breadcrumb reversibility, auto-frame (no flake), hide+restore all verified; defaults
+  unregressed. Resting LARGE/PATH default frame still letterboxed (layout-by-context is Phase 3/4).
 - 2026-06-02: **docs: release-readiness legal files** (branch `docs/disclaimer-notices`). Added two new
   standalone files: `DISCLAIMER.md` (boilerplate authorized-use / dual-use disclaimer for an offensive
   security tool — authorized use only, user is responsible for legal compliance, AS-IS / no liability)

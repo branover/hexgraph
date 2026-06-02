@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api, Finding, Graph, GraphNode, ProjectDetail, SettingsView, TargetNode } from "../api";
 import Header from "../components/Header";
-import GraphView, { NODE_T, EDGE_C, KIND, NODE_SHAPE } from "../components/GraphView";
+import GraphView, { NODE_T, EDGE_C, KIND, NODE_SHAPE, FocusSpec } from "../components/GraphView";
 import FindingsPanel from "../components/FindingsPanel";
 import Inspector from "../components/Inspector";
 import NodeInspector from "../components/NodeInspector";
@@ -19,6 +19,10 @@ import ArtifactsView from "../components/ArtifactsView";
 import FuzzModal from "../components/FuzzModal";
 import EgressPanel from "../components/EgressPanel";
 import { Icon, NODE_ICON } from "../components/Icon";
+
+// A reversible focus frame (design §4.2): the anchor node, the hop radius of its focused
+// neighborhood, and a human label for the breadcrumb crumb.
+interface FocusFrame { id: string; hop: number; label: string }
 
 export default function Workspace() {
   const { projectId } = useParams();
@@ -56,6 +60,16 @@ export default function Workspace() {
   const [view, setView] = useState<"graph" | "source">(
     new URLSearchParams(window.location.search).get("view") === "source" ? "source" : "graph");
   const [openSource, setOpenSource] = useState<{ treeId?: string; rel?: string; line?: number } | null>(null);
+  // Phase-2 focus stack (design §4.2): focusing a node pushes a reversible frame; the
+  // breadcrumb trail lets you pop back. The TOP frame is the live focus driving the graph.
+  // Seeded from the URL (?focus=<id>&hop=N) so a focused view is shareable + reload-restorable.
+  const [focusStack, setFocusStack] = useState<FocusFrame[]>(() => {
+    const sp = new URLSearchParams(window.location.search);
+    const id = sp.get("focus");
+    if (!id) return [];
+    const hop = Math.max(1, Math.min(3, Number(sp.get("hop")) || 1));
+    return [{ id, hop, label: id.slice(0, 8) }];
+  });
   const searchTimer = useRef<any>();
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -115,6 +129,46 @@ export default function Workspace() {
     for (const [k, v] of Object.entries(kv)) { if (v) u.searchParams.set(k, v); else u.searchParams.delete(k); }
     window.history.replaceState(null, "", u.toString());
   };
+
+  // ── Phase 2: the focus stack (design §4.2 — reversible navigation) ────────────────────
+  // The TOP frame drives the graph (anchor + hop). Focusing pushes; a crumb pops; clear
+  // empties. The focus id + hop are serialized to the URL so the view is shareable/restorable.
+  const focus = focusStack.length ? { id: focusStack[focusStack.length - 1].id, hop: focusStack[focusStack.length - 1].hop } as FocusSpec : null;
+  const labelFor = (id: string): string => {
+    const n = graph?.nodes.find((x) => x.id === id);
+    if (n) return n.label;
+    const t = detail?.targets.find((x) => x.id === id);
+    if (t) return t.name;
+    const f = detail?.findings.find((x) => x.id === id);
+    if (f) return f.title;
+    return id.slice(0, 8);
+  };
+  // Focus a node: ensure Graph view, push (or replace-top if same anchor — e.g. hop change),
+  // select it, and serialize. This is the single entry every focus path routes through
+  // (double-tap, search, the verb menu, hop +/-).
+  const focusOn = (id: string, hop = 1) => {
+    const h = Math.max(1, Math.min(3, hop));
+    setView("graph"); setSelTask(undefined); setSelCampaign(undefined);
+    onGraphSelect(id, (graph?.nodes.find((n) => n.id === id)?.type === "target") ? "target" : "node");
+    setFocusStack((prev) => {
+      const top = prev[prev.length - 1];
+      const frame: FocusFrame = { id, hop: h, label: labelFor(id) };
+      // same anchor → replace top (a hop change / re-focus), never grow the stack uselessly
+      if (top && top.id === id) return [...prev.slice(0, -1), frame];
+      return [...prev, frame];
+    });
+    setUrl({ focus: id, hop: h > 1 ? String(h) : undefined });
+  };
+  // Pop back to a given depth (a breadcrumb click): index -1 = Overview (clear).
+  const popFocusTo = (index: number) => {
+    setFocusStack((prev) => {
+      const next = index < 0 ? [] : prev.slice(0, index + 1);
+      const top = next[next.length - 1];
+      setUrl({ focus: top?.id, hop: top && top.hop > 1 ? String(top.hop) : undefined });
+      return next;
+    });
+  };
+  const clearFocus = () => popFocusTo(-1);
 
   const switchView = (v: "graph" | "source") => {
     setView(v);
@@ -408,13 +462,13 @@ export default function Workspace() {
             <div className="search-pop">
               {results.targets?.length > 0 && <div className="res-head">Targets</div>}
               {(results.targets || []).map((t: any) => (
-                <div className="res" key={t.id} onClick={() => { setResults(null); setQ(""); onGraphSelect(t.id, "target"); }}>
+                <div className="res" key={t.id} onClick={() => { setResults(null); setQ(""); focusOn(t.id); }}>
                   <Icon name={NODE_ICON[t.kind] || "binary"} size={13} /> {t.name} <span className="muted">{t.kind}{t.arch ? " · " + t.arch : ""}</span>
                 </div>
               ))}
               {results.nodes.length > 0 && <div className="res-head">Graph nodes</div>}
               {results.nodes.map((n: any) => (
-                <div className="res" key={n.id} onClick={() => { setResults(null); setQ(""); onGraphSelect(n.id, "node"); }}>
+                <div className="res" key={n.id} onClick={() => { setResults(null); setQ(""); focusOn(n.id); }}>
                   <Icon name={NODE_ICON[n.node_type] || "fn"} size={13} /> {n.name} <span className="muted">{n.node_type}</span>
                 </div>
               ))}
@@ -437,8 +491,28 @@ export default function Workspace() {
             </div>
           ) : (
           <>
+          {/* Focus breadcrumb (design §4.2): the reversible navigation trail. Overview ›
+              crumb › crumb. A crumb pops to that frame; ↺ clears to the full graph. Pinned
+              top-left of the canvas, shown only once a focus has been pushed. */}
+          {focusStack.length > 0 && (
+            <div className="focus-crumbs">
+              <button className="crumb home" title="Back to the full graph" onClick={() => clearFocus()}>
+                <Icon name="hex" size={12} /> Overview
+              </button>
+              {focusStack.map((f, i) => (
+                <span key={f.id + "-" + i} style={{ display: "inline-flex", alignItems: "center" }}>
+                  <span className="crumb-sep">›</span>
+                  <button className={"crumb" + (i === focusStack.length - 1 ? " active" : "")}
+                          title={i === focusStack.length - 1 ? f.label : `Back to ${f.label}`}
+                          onClick={() => popFocusTo(i)}>{f.label}</button>
+                </span>
+              ))}
+              <button className="crumb reset" title="Clear focus" onClick={() => clearFocus()}>↺</button>
+            </div>
+          )}
           <GraphView graph={graph} selectedId={selGraphId} onSelect={onGraphSelect}
                      isolateType={pinType || hoverType}
+                     focus={focus} onFocus={(id, hop) => focusOn(id, hop)} onClearFocus={clearFocus}
                      onEdgeSelect={(e) => { setSelEdge(e); if (e) { setSelNode(null); setSelFinding(null); setSelTask(undefined); } }}
                      onDrawEdge={(src, dst) => { setEdgePrefill({ src, dst }); setModal("edge"); }} />
           {(() => {

@@ -447,7 +447,62 @@ showcase, ~27/58), LARGE (~173/649), PATHOLOGICAL (~494/2144). Guard test
 - **Legend isolate-by-type** — verified: clicking `taints` (MEDIUM) / `socket` (LARGE) dims all but
   that type + incident edges/endpoints, hue preserved at low alpha (mute, not de-color). Surfaces the
   firmware network map as a readable subset. Hover = transient preview, click = pin (click to clear).
-- [ ] **Phase 2+ (later):** focus/context muting + N-hop neighborhood + breadcrumb (Phase 2);
-  compound target islands + skeleton-collapsed default + size-by-finding-weight (Phase 3);
-  layout-by-context (fcose-spread / scoped dagre / concentric) + semantic-zoom LOD to kill the
-  letterbox at LARGE/PATHOLOGICAL (Phase 4); layer panel + filter rail + Table/Matrix (Phase 5).
+- [ ] **Phase 3+ (later):** compound target islands + skeleton-collapsed default +
+  size-by-finding-weight (Phase 3); layout-by-context (fcose-spread / scoped dagre / concentric) +
+  semantic-zoom LOD to kill the letterbox at LARGE/PATHOLOGICAL (Phase 4); layer panel + filter rail
+  + Table/Matrix (Phase 5).
+
+## Graph presentation — Phase 2: focus / hide / navigation (2026-06-02)
+
+**Shipped in `build/graph-phase2`** (`docs/design-graph-presentation.md` §8 Phase 2, §4/§5/§9).
+Live-instance only — class toggles + camera on the existing flat dagre graph; **zero new deps, no
+rebuild, color-coding untouched (D8 — `.context` only mutes opacity + desaturates, hue preserved).**
+The fix for the "drowned highlight" the council found at LARGE/PATHOLOGICAL.
+
+Changes:
+- **Focus model replaces `.lit`-only.** Selecting/focusing a node applies `.focus` to it + its
+  N-hop neighborhood (default 1, expandable to 3) and `.context` to everything else (mute to ~16%
+  opacity + `background-blacken` + labels dropped + `events:no`, **hue preserved at low alpha**). The
+  focus anchor gets an amber ring; focus edges brighten + label.
+- **Scoped auto-frame + live concentric re-arrange.** On an explicit focus (double-tap / search /
+  verb menu / URL restore — never hover, never plain select, per D5) the focus set is re-arranged
+  into a concentric ring around the anchor *on the live cy instance* (positions saved + restored on
+  clear — the resting layout is untouched, no layout-engine swap) and `animate({fit})` frames it.
+  This is what makes a hub's scattered neighbors land as a readable local diagram instead of a
+  full-graph fit. (Reliable framing required running dagre explicitly after wiring `layoutstop` —
+  dagre is synchronous and fires `layoutstop` from the constructor before a listener can attach.)
+- **Hover preview** (transient `.hl`/`.hl-dim`): lifts the hovered node + 1-hop ring, dims the rest,
+  no commit/reframe — suspended while a focus is committed.
+- **Focus stack + breadcrumb (URL-serialized).** `Overview › crumb › crumb` pinned top-left; each
+  focus/hop pushes a frame, a crumb pops to it, `↺`/clear returns to the resting full graph. The top
+  frame's `?focus=<id>&hop=N` is in the URL → shareable + reload-restorable.
+- **Search drives the graph (§4.3):** picking a node/target result now `focusOn`s it (push + frame),
+  not just select.
+- **Right-click verb menu (dependency-free):** Focus neighborhood · Expand one hop · Reveal in panel
+  · Hide this node. **Reversible hide chip** ("N hidden · restore ↺", bottom-left) — non-destructive,
+  one-click reverse.
+
+**Before/after human-eyes verdict (Playwright, §9 criteria — judged as a human):**
+- **PATHOLOGICAL focus (the headline pass/fail)** — Before: focusing a node in the ~494n/2144e
+  smudge did nothing legible (selection brightened a few edges lost in the static). **After: PASS,
+  decisively.** The amber-ringed anchor sits in a clean concentric ring of its ~24 labeled function
+  neighbors with call edges radiating; the entire rest of the firmware is a faint, present, muted
+  backdrop. The eye lands on the anchor instantly and reads the local neighborhood — exactly the
+  "neighborhood pops out of a quiet background" goal. **[Eye lands ✓][Focus pops ✓][Color kept ✓]**
+- **LARGE focus** — Before: same drowned highlight in ~173n/649e. **After: PASS.** Identical clean
+  concentric local diagram; 1-hop ≈ a dozen+ labeled neighbors, 2-hop a richer inner+outer ring,
+  both legible against the mute.
+- **Breadcrumb** — verified present + reversible: `Overview › <fn>` top-left, clear/`↺` returns to
+  the full resting view (foc→0, URL cleared), navigation feels safe/undoable. **[Reversible ✓]**
+- **Auto-frame** — fires only on explicit focus (double-tap/search/verb/URL), zoom lands ~1.4 on the
+  scoped set; never on hover/plain-select; consistent across repeated PATH trials (no flake). **[Auto-frame ✓]**
+- **Hover preview** — a subtle transient lift of the hovered node + ring against a light dim; reads as
+  "what's this connected to?" without committing focus. Modest at full-graph zoom but distinct from focus.
+- **Hide + restore** — right-click → Hide removes a node from the focus ring; the "1 hidden · restore
+  ↺" chip restores it in one click. Non-destructive. **[No-loss ✓]**
+- **SMALL/MEDIUM + LARGE/PATH default (resting) frames** — unchanged from Phase 1 (no breadcrumb, no
+  mute until a focus is committed). **[SMALL/MEDIUM unregressed ✓]**
+
+*Limitation (by design — deferred):* the concentric re-arrange is a Phase-2 live nicety so focus
+frames readably on the flat layout; the resting LARGE/PATH default frame is still letterboxed/small
+(layout-by-context + the skeleton default are Phase 3/4). Hover preview is faint at far zoom.
