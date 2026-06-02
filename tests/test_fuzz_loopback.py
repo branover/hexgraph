@@ -165,6 +165,10 @@ def test_launch_and_join_starts_service_then_joins_fuzzer(hg_home):
         ev = s.query(EgressEvent).filter(EgressEvent.project_id == p.id,
                                          EgressEvent.allowed.is_(True)).all()
         assert ev and ev[0].dest == "127.0.0.1:9102"
+        # the fuzzer gets a generous STARTUP GRACE so the just-launched service has time to
+        # bind its port before boofuzz declares it unreachable (no false 'not reachable').
+        ch = json.loads(fuzz["extra_args"][fuzz["extra_args"].index("--channel") + 1])
+        assert ch["startup_grace"] >= 10
 
 
 def test_launch_and_join_needs_exec_tier(hg_home):
@@ -243,3 +247,45 @@ def test_spec_roundtrips_launch_fields():
     d = spec.to_dict()
     assert d["launch"] is True and d["launch_binary"] == "/x/srv"
     assert d["launch_command"] == ["/x/srv", "-p", "80"]
+
+
+# ── boofuzz startup-grace (the launch-and-join readiness race, review finding #1) ──
+
+def test_boofuzz_wait_alive_tolerates_slow_bind():
+    """`_wait_alive` polls within the grace window, so a service that binds a beat AFTER
+    the fuzzer starts (the launch-and-join race) is NOT spuriously declared unreachable —
+    while a service that never comes up still returns False once the grace elapses."""
+    import socket
+    import threading
+    import time as _t
+    from hexgraph.sandbox.probes import boofuzz_probe as B
+
+    # Pre-pick a free port, then bind it ~0.6s LATE in a thread: a single connect would
+    # miss it, but the grace-window poll catches it.
+    probe_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe_sock.bind(("127.0.0.1", 0))
+    port = probe_sock.getsockname()[1]
+    probe_sock.close()
+
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+    def _serve_late():
+        _t.sleep(0.6)
+        srv.bind(("127.0.0.1", port))
+        srv.listen(1)
+
+    th = threading.Thread(target=_serve_late, daemon=True)
+    th.start()
+    try:
+        assert B._wait_alive("127.0.0.1", port, "tcp", grace=5, interval=0.2) is True
+    finally:
+        srv.close()
+        th.join(timeout=2)
+
+    # A port nothing ever binds: the grace elapses and we report unreachable (fail honestly).
+    dead = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    dead.bind(("127.0.0.1", 0))
+    dead_port = dead.getsockname()[1]
+    dead.close()  # closed → nothing is listening on dead_port
+    assert B._wait_alive("127.0.0.1", dead_port, "tcp", grace=0.5, interval=0.2) is False

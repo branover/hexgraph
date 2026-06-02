@@ -66,6 +66,22 @@ def _udp_guard(host, port):
     _egress.ensure_allowed(host, port, _ALLOW)  # raises EgressBlocked off-list
 
 
+def _wait_alive(host, port, proto, *, grace, interval=0.5):
+    """Poll `_alive` for up to `grace` seconds, returning True as soon as the service
+    accepts a connection. A launch-and-join service (§5.8b) is started in its OWN
+    container an instant before this fuzzer; `docker run -d` returns before the server
+    has bound its port, so a single connect can race the bind. A bounded startup grace
+    lets a slow-binding launched (or rehosted) service come up before we declare it dead
+    — without it, the campaign spuriously reports 'not reachable at start' / 0 executions."""
+    deadline = time.monotonic() + max(0.0, float(grace))
+    while True:
+        if _alive(host, port, proto):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(interval)
+
+
 def _alive(host, port, proto, timeout=2.0):
     """True if the service still accepts a connection (TCP) / responds (UDP)."""
     try:
@@ -183,6 +199,10 @@ def main() -> int:
     outdir = ch.get("outdir") or "/out"
     max_total_time = int(ch.get("max_total_time", 60))
     max_crashes = int(ch.get("max_crashes", 10))
+    # Bounded startup grace: how long to wait for the service to accept a connection
+    # before declaring it unreachable. Defaults small for an already-up host; the engine
+    # raises it for launch-and-join / rehosted services that need a moment to bind.
+    startup_grace = float(ch.get("startup_grace", 2))
     os.makedirs(outdir, exist_ok=True)
 
     # Bounded-egress backstop: every TCP connect must be on the allowlist (the stdlib
@@ -201,7 +221,7 @@ def main() -> int:
                           "error": "destination not in allowlist"}))
         return 0
 
-    if not _alive(host, port, proto_kind):
+    if not _wait_alive(host, port, proto_kind, grace=startup_grace):
         _write_status(outdir, {"ran": False, "error": f"service {host}:{port} not reachable at start",
                                "crash_count": 0, "crashes": [], "done": True})
         with open(os.path.join(outdir, "DONE"), "w") as fh:

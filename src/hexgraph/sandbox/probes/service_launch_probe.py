@@ -17,9 +17,11 @@ exec tier). Foreign-arch (MIPS/ARM/…) binaries run under qemu-user with the pa
 firmware rootfs as the `-L` sysroot (the proven PoC/desock path). STDLIB only.
 
 The process is run in the FOREGROUND so the container's lifetime IS the service's
-lifetime: the reaper/stop tears the container (and thus the service) down. A small
-`status.json` ({launched, pid, port, ...}) and a `READY`/`EXITED` marker stream to /out
-so the campaign engine can confirm the service came up before pointing the fuzzer at it.
+lifetime: the reaper/stop tears the container (and thus the service) down. (A server that
+double-forks/daemonizes off the foreground process would exit the container and break the
+netns join — pass a `launch_command` keeping it in the foreground, e.g. a `-f`/`-D` flag.)
+A small `status.json` ({launched, pid, port, ...}) and a `READY`/`EXITED` marker stream to
+/out; the fuzzer waits out a startup grace (boofuzz `_wait_alive`) for the port to bind.
 """
 
 from __future__ import annotations

@@ -425,9 +425,14 @@ def _launch_network(session, project, target, row, prepared, spec, *, executor, 
 
     from hexgraph import settings
     timeout = int(settings.get("features.network.timeout", 30) or 30)
+    # A launch-and-join service was started an instant ago in its own container; `docker
+    # run -d` returns before the server binds its port, so give the fuzzer a longer
+    # startup grace to wait for the bind (an already-up rehosted/private host needs none).
+    startup_grace = 15 if prepared.launch_binary else 2
     channel = {"host": host, "port": port, "protocol": spec.protocol,
                "allow": sorted(scope.allow), "timeout": timeout, "outdir": "/out",
-               "max_total_time": spec.max_total_time, "max_crashes": spec.max_crashes}
+               "max_total_time": spec.max_total_time, "max_crashes": spec.max_crashes,
+               "startup_grace": startup_grace}
     args = [*prepared.extra_args, "--channel", json.dumps(channel)]
     # requires_execution=False: the boofuzz container itself runs NO target bytes (it's a
     # network client) — it's gated by the egress assert above. The launched SERVICE (which
