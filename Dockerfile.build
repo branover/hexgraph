@@ -1,0 +1,93 @@
+# HexGraph build image (design §5.4, KEY DECISION D4 — a DEDICATED image, never the
+# shared hexgraph-sandbox). It carries the instrumentation toolchain so a managed
+# source tree can be rebuilt with SanCov+ASan in the TARGET's own objects (the crux
+# of coverage-guided fuzzing). It IS the recorded `base_image` in a BuildSpec, so it
+# is date-tagged for reproducibility.
+#
+# Build:  docker build -f Dockerfile.build -t hexgraph-build:latest .
+#         WORKTREE DISCIPLINE: for local testing build a PRIVATE tag and point the
+#         env override at it — NEVER clobber a shared tag:
+#           docker build -f Dockerfile.build -t hexgraph-build:wt-<topic> .
+#           export HEXGRAPH_BUILD_IMAGE=hexgraph-build:wt-<topic>
+#
+# Run ONLY via sandbox/runner.py with --network none (vendored/offline only this
+# phase) + the resource caps + RO source + non-root user. Probes (build_probe.py)
+# are MOUNTED from the install at run time — editing a probe needs no rebuild; only
+# a toolchain change here does.
+FROM debian:bookworm-slim
+
+ARG WITH_CROSS=0
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Core build toolchain: clang/LLVM (the cross-compiler + sanitizer/SanCov runtimes),
+# the build-system frontends (autotools/cmake/meson/ninja/pkg-config), and a C/C++
+# stdlib. `llvm-symbolizer` ships with the clang/llvm packages — note this RESOLVES
+# the Phase-0 symbolization limitation for builds/fuzzing done in this image (ASan
+# frames symbolize to function:line instead of module+offset).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        clang \
+        llvm \
+        lld \
+        libclang-rt-dev \
+        clang-tools \
+        make \
+        cmake \
+        meson \
+        ninja-build \
+        autoconf \
+        automake \
+        libtool \
+        pkg-config \
+        gcc \
+        g++ \
+        libc6-dev \
+        git \
+        file \
+        binutils \
+        ca-certificates \
+        python3 \
+        python3-pip \
+        curl \
+        xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# AFL++ instrumented compilers (afl-clang-fast / afl-clang-lto) — the route to
+# collision-free coverage + CmpLog for source builds, consumed by the Phase-3
+# AFL++ fuzzer. Best-effort: if the apt package is unavailable on a given base, the
+# image still serves libFuzzer/SanCov builds (the design's graceful-degrade rule).
+RUN apt-get update \
+    && (apt-get install -y --no-install-recommends afl++ \
+        || apt-get install -y --no-install-recommends aflplusplus \
+        || echo "WARN: AFL++ not in apt; afl-clang-* unavailable (libFuzzer/SanCov builds still work)") \
+    && rm -rf /var/lib/apt/lists/*
+
+# Rust + Go toolchains for cargo/go build systems (vendored/offline builds use
+# --offline / GOFLAGS=-mod=vendor). Best-effort via apt; absence degrades those
+# systems only.
+RUN apt-get update \
+    && (apt-get install -y --no-install-recommends cargo golang-go \
+        || echo "WARN: cargo/go not installed; those build systems unavailable") \
+    && rm -rf /var/lib/apt/lists/*
+
+# Cross toolchains are a STUB this image (Phase 7 wires firmware-rootfs-as-sysroot
+# cross-compilation). WITH_CROSS=1 pulls a couple of common cross gcc/sysroots so the
+# layer exists; the cross BUILD path itself is deferred.
+RUN if [ "$WITH_CROSS" = "1" ]; then \
+        apt-get update && apt-get install -y --no-install-recommends \
+            gcc-mipsel-linux-gnu gcc-arm-linux-gnueabi \
+        && rm -rf /var/lib/apt/lists/* ; \
+    else \
+        echo "Cross toolchains not included (build with --build-arg WITH_CROSS=1; cross build is Phase 7)"; \
+    fi
+
+# Bake the probe scripts into the image (mounted-over at run time, except in NO_MOUNT mode).
+COPY src/hexgraph/sandbox/probes/ /opt/hexgraph/
+
+# Drop privileges: the build probe runs as the unprivileged analyst (uid 1000),
+# matching the runner's --user 1000. Source is RO; output only to /out.
+RUN useradd --create-home --uid 1000 analyst
+USER analyst
+
+ENTRYPOINT []
+CMD ["clang", "--version"]

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { SourceFileEntry, SourceTreeRow, api } from "../api";
+import { BuildRow, SourceFileEntry, SourceTreeRow, api } from "../api";
 import { Icon } from "./Icon";
+import BuildModal from "./BuildModal";
 
 // The read-only Source/IDE mode (Phase 1). A multi-tree file explorer (a dropdown
 // switcher over a shared <FileTree>, mirroring FilesystemBrowser) + a code viewer.
@@ -25,20 +26,30 @@ function buildTree(files: SourceFileEntry[]): TreeNode {
 
 const fmtSize = (n?: number) => (n == null ? "" : n < 1024 ? `${n} B` : n < 1e6 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1e6).toFixed(1)} MB`);
 
-export default function SourceBrowser({ projectId, open, onPickedTarget }: {
+export default function SourceBrowser({ projectId, open, onPickedTarget, buildEnabled, onChanged }: {
   projectId: string;
   open?: { treeId?: string; rel?: string; line?: number } | null;
   onPickedTarget?: (targetIds: string[]) => void;
+  buildEnabled?: boolean;
+  onChanged?: () => void;
 }) {
   const [trees, setTrees] = useState<SourceTreeRow[] | null>(null);
   const [treeId, setTreeId] = useState<string>();
   const [files, setFiles] = useState<SourceFileEntry[] | null>(null);
   const [view, setView] = useState<{ rel: string; loading: boolean; role?: string; origin?: string; encoding?: "text" | "binary"; content?: string; truncated?: boolean; err?: string } | null>(null);
   const [line, setLine] = useState<number | undefined>();
+  const [showBuild, setShowBuild] = useState(false);
+  const [builds, setBuilds] = useState<BuildRow[]>([]);
   const lineRef = useRef<HTMLDivElement>(null);
 
   const loadTrees = () => api.sourceTrees(projectId).then((r) => setTrees(r.source_trees)).catch(() => setTrees([]));
   useEffect(() => { loadTrees(); }, [projectId]);
+
+  const loadBuilds = () => {
+    if (!treeId) { setBuilds([]); return; }
+    api.builds(projectId, treeId).then((r) => setBuilds(r.builds)).catch(() => setBuilds([]));
+  };
+  useEffect(() => { loadBuilds(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [treeId, projectId]);
 
   // pick a tree (deep-link, else the first)
   useEffect(() => {
@@ -127,11 +138,38 @@ export default function SourceBrowser({ projectId, open, onPickedTarget }: {
             {tree.target_ids.length > 0 && " · linked to a target"}
           </div>
         )}
+        {buildEnabled && tree && (
+          <div style={{ padding: "0 8px 6px" }}>
+            <button className="btn sm" style={{ width: "100%" }} title="Build this source tree into an instrumented artifact via a recorded recipe (sandboxed, vendored/offline)"
+                    onClick={() => setShowBuild(true)}>
+              <Icon name="chip" size={12} /> Build (instrumented)
+            </button>
+          </div>
+        )}
         <div className="fsbrowser" style={{ flex: 1, overflow: "auto" }}>
           {fileTree && Object.values(fileTree.children).sort((a, b) => Number(b.dir) - Number(a.dir) || a.name.localeCompare(b.name))
             .map((k) => <Row key={k.path} node={k} depth={0} />)}
         </div>
+        {builds.length > 0 && (
+          <div style={{ borderTop: "1px solid var(--border)", padding: "6px 8px", maxHeight: 140, overflow: "auto" }}>
+            <div className="sec-label" style={{ fontSize: 10.5 }}>Builds</div>
+            {builds.map((b) => (
+              <div key={b.id} style={{ fontSize: 10.5, display: "flex", gap: 6, alignItems: "center", padding: "2px 0" }}
+                   title={b.error || (b.recipe_sha ? `recipe ${b.recipe_sha.slice(0, 12)}` : "")}>
+                <span className={"tag"} style={{ color: b.status === "succeeded" ? "var(--ok, #6c6)" : b.status === "failed" ? "var(--accent)" : "var(--fg)" }}>{b.status}</span>
+                <span className="muted" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                  {Object.keys(b.artifacts || {}).join(", ") || (b.error ? "(failed)" : "—")}
+                </span>
+                {b.derived_target_id && <span className="tag" style={{ color: "var(--accent)" }}>instrumented</span>}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
+      {showBuild && tree && (
+        <BuildModal projectId={projectId} tree={tree} onClose={() => setShowBuild(false)}
+                    onBuilt={() => { loadBuilds(); loadTrees(); onChanged?.(); }} />
+      )}
 
       <div className="srcview" style={{ flex: 1, overflow: "auto", minWidth: 0 }}>
         {!view && <div className="muted" style={{ padding: 16, fontSize: 12 }}>Select a file to view its source (read-only).</div>}

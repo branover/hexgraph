@@ -26,6 +26,21 @@ def _sandbox_ready() -> bool:
 SANDBOX_READY = _sandbox_ready()
 
 
+def _build_image_ready() -> bool:
+    """True if Docker is up AND the hexgraph-build image is present (the dedicated
+    build-from-source image; HEXGRAPH_BUILD_IMAGE overrides the tag for worktrees)."""
+    from hexgraph.sandbox.runner import docker_available
+
+    if not docker_available():
+        return False
+    image = os.environ.get("HEXGRAPH_BUILD_IMAGE", "hexgraph-build:latest")
+    r = subprocess.run(["docker", "image", "inspect", image], capture_output=True)
+    return r.returncode == 0
+
+
+BUILD_IMAGE_READY = _build_image_ready()
+
+
 @pytest.fixture(autouse=True)
 def _restore_socket_guard():
     """The egress probes' `_egress.install_socket_guard` monkeypatches global stdlib socket

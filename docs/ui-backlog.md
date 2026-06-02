@@ -1,5 +1,29 @@
 # UI improvement backlog
 
+## Build modal — Phase 2 (fuzzing+source design §6.3, 2026-06-01)
+
+**Shipped in `build/fuzz-phase2`:** the capability-gated **Build modal** (`BuildModal.tsx`),
+reached from a **Build (instrumented)** button in Source mode's tree pane (shown only when
+`features.build` is on, read from `GET /api/capabilities`'s new `features.build` flag). It is
+build-as-API: instrumentation toggles (ASan/UBSan/MSan · SanCov · engine) + an artifacts field
+regenerate a **read-only recorded-recipe preview** via `POST /api/projects/{id}/build/preview`
+(phases + the injected base-image-contract env `CC/CXX/CFLAGS/SANITIZER/FUZZING_ENGINE` + the
+`recipe_sha`) — there is **no free-text command box**, and a "vendored/offline only
+(`--network none`)" note is shown. Launching posts to `POST /api/projects/{id}/builds`; a
+**Builds** status list in the tree pane shows each build's status/artifacts and an
+"instrumented" tag when it registered a derived target. (Playwright-verified the modal renders
+the recipe preview + injected env + recipe_sha.)
+
+**Deferred to later phases (per the design):**
+- [ ] **P3** — live build status streaming (currently the list refreshes on completion);
+  pairs with the Phase-4 SSE campaign status.
+- [ ] **P4** — surface the instrumented **derived target** prominently (a "fuzz this" CTA) once
+  coverage-guided fuzzing lands (Phase 3).
+- [ ] **P3** — a build-log viewer in the UI (the `GET /api/builds/{id}/log` endpoint exists; the
+  list only tooltips the error today).
+- [ ] **P7** — the dependency-posture control ("vendored" default vs the audited "fetch" tier)
+  becomes meaningful when `features.build_fetch` ships; today it's vendored-only (shown as a note).
+
 ## Source/IDE tab — Phase 1 (fuzzing+source design §6, 2026-06-01)
 
 **Shipped in `build/fuzz-phase1`:** the center-pane **Graph ⇆ Source** segmented control

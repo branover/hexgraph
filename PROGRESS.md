@@ -89,6 +89,28 @@ then run the resume verifier, then continue at the next unchecked task.
   `source_tree` as a polymorphic endpoint). Read-only **Graph⇆Source** mode switch + finding→source
   jump (`evidence.extra.source_ref`). MCP read `list_source_trees`/`read_source_file`, write
   `import_source_tree`/`link_finding_to_source`. Frozen schema untouched; no `policy.py` edit.
+  **Fuzzing+source Phase 2 DONE** (`docs/design-fuzzing-and-source.md` §7 Phase 2, branch
+  `build/fuzz-phase2`): the **`Builder` seam + build-as-API** — a managed source tree → an
+  instrumented artifact via a recorded, reproducible recipe HexGraph runs in the sandbox.
+  `engine/build.py` (`get_builder()`, `HEXGRAPH_BUILDER`, default `sandbox`; `MockBuilder` for
+  offline `just test`) + `engine/builds.py` (orchestration: persist the recipe, run it, CAS-ingest
+  artifacts/log, register the derived target) + `build_probe.py`/`build_detect_probe.py` +
+  `Dockerfile.build`/`hexgraph-build` (`just build-image` — clang/LLVM + sanitizers + SanCov +
+  AFL++ + `llvm-symbolizer`). **`BuildSpec`** {system, phases (recorded verbatim), instrumentation,
+  artifacts, NON-secret env, arch, base_image, network="none"} with **`recipe_sha` = hash{phases,
+  env, base_image, instrumentation, arch}** — reproducibility is the contract (same recipe_sha +
+  source content_hash + toolchain_digest ⇒ same build). The orchestrator INJECTS CC/CXX/CFLAGS/
+  SANITIZER/FUZZING_ENGINE (the base-image contract) so the same phases yield ASan/SanCov vs AFL++
+  by swapping the profile. **New gate [D5]:** `assert_allows_build()` / **`features.build`** (the
+  ONLY `policy.py` edit) — peer of, not folded into, the exec gate (build-and-inspect without
+  running the target), fail-closed. **Tables (migration 0013):** `build_spec` + `build` (the durable
+  ledger). **Rebuild-with-instrumentation → derived target [§3.3]:** a build of a `built_from`-linked
+  source tree registers an instrumented derived target wired `instrumented_build_of`→ the original
+  (zero-migration edge vocab + `build_spec` endpoint widening). API `/api/builds` (+ `/build/preview`,
+  `/builds/{id}/log`); MCP run-tool `build_target` + read-tool `list_builds`; the IDE **Build modal**
+  (recorded-recipe preview, instrumentation toggles, vendored-only) gated by the new
+  `capabilities.features.build`. **Vendored/offline only** (`--network none`; the audited fetch tier
+  is Phase 7). Frozen schema untouched.
   **Target soft-removal** (archive subtree, restore on re-add) and **firmware filesystem browser**
   (persisted unpacked tree, add any file as a child target; library exports → nodes; function nodes
   launch tasks).
@@ -329,6 +351,25 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-01: **Fuzzing+source Phase 2 — the `Builder` seam + build-as-API**
+  ([`docs/design-fuzzing-and-source.md`](docs/design-fuzzing-and-source.md) §7 Phase 2, branch
+  `build/fuzz-phase2`). First phase to add a new policy gate + a dedicated image. The `Builder`
+  seam (`engine/build.py` `get_builder()` — `SandboxBuilder` default, `MockBuilder` for offline
+  tests) turns a managed source tree into an instrumented artifact via a recorded `BuildSpec` the
+  API/tool runs in the sandbox (`build_probe.py` in the new `hexgraph-build` image — `Dockerfile.build`
+  / `just build-image`: clang/LLVM + sanitizers + SanCov + AFL++ + llvm-symbolizer). Reproducibility
+  is the contract (`recipe_sha = hash{phases,env,base_image,instrumentation,arch}`; same recipe_sha +
+  source content_hash + toolchain_digest ⇒ same build); the orchestrator injects CC/CXX/CFLAGS per
+  the base-image contract so one recipe yields ASan/SanCov vs AFL++ by swapping the profile. New gate
+  `assert_allows_build()` / `features.build` [D5] — the ONLY `policy.py` edit, a peer of (not folded
+  into) the exec gate, fail-closed. Migration **0013** (`build_spec` recipe + `build` ledger; applies
+  on 0012, autogenerate no-drift). Rebuild-with-instrumentation registers an instrumented **derived
+  target** (`instrumented_build_of`→ the original) [§3.3] — the fuzzable twin for Phase-3 coverage-
+  guided fuzzing. API `/api/builds` (+ preview/log), MCP `build_target`/`list_builds`, the IDE Build
+  modal. Vendored/offline only (`--network none`). Proven: full offline `just test` green (mock
+  builder + recipe_sha determinism + fail-closed gate + derived-target + migration round-trip),
+  Docker-gated `test_build_e2e.py` (real SanCov+ASan build proven by symbol inspection; net-dep build
+  fails honestly), Playwright check of the Build modal. Frozen schema untouched.
 - 2026-06-01: **Fuzzing+source Phase 1 — source-tree foundation + read-only Source/IDE tab**
   ([`docs/design-fuzzing-and-source.md`](docs/design-fuzzing-and-source.md) §7 Phase 1, branch
   `build/fuzz-phase1`). NO exec, NO new policy gate — pure data-model + read-only browse + graph

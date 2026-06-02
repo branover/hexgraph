@@ -172,6 +172,81 @@ def link_finding_to_source(finding_id: str, tree_id: str, rel: str,
         return {"node_id": node.id, "tree_id": tree_id, "rel": rel}
 
 
+def list_builds(project_id: str, source_tree_id: str | None = None) -> dict:
+    """List builds in a project (the build ledger) — each with status, the
+    reproducibility triple (recipe_sha/source_content_hash/toolchain_digest),
+    artifacts as CAS shas, and the instrumented derived_target_id it registered.
+    Optionally filter by source_tree_id. Returns {build_specs, builds}."""
+    from hexgraph.engine import builds as B
+
+    with session_scope() as s:
+        p = s.get(Project, project_id)
+        if p is None:
+            return {"error": "project not found"}
+        return {"build_specs": B.list_build_specs(s, p, source_tree_id=source_tree_id),
+                "builds": B.list_builds(s, p, source_tree_id=source_tree_id)}
+
+
+def build_target(project_id: str, source_tree_id: str, system: str | None = None,
+                 phases: list | None = None, instrumentation: dict | None = None,
+                 artifacts: list | None = None, env: dict | None = None,
+                 arch: str | None = None) -> dict:
+    """Build a managed SOURCE tree into an INSTRUMENTED artifact in the sandbox via a
+    RECORDED, REPRODUCIBLE recipe (build-as-API). You author/approve a BuildSpec and
+    REQUEST the build — you never run a compiler yourself; HexGraph runs the recipe.
+
+    The recipe: `system` (make|cmake|autotools|meson|cargo|go|custom — auto-detected if
+    omitted), `phases` (ordered explicit-argv steps, recorded verbatim; default phases
+    are derived from the system), `instrumentation` ({sanitizers:[address,undefined,…],
+    coverage:[sancov|afl_pcguard], engine:libfuzzer|afl}), `artifacts` (rel paths to
+    capture — the fuzz target/.so/binary), `env` (NON-secret build env — secrets are
+    rejected). Instrumentation is INJECTED as CC/CXX/CFLAGS by HexGraph (the base-image
+    contract), so the SAME phases yield ASan/SanCov/AFL++ builds by swapping the profile.
+
+    Reproducibility: recipe_sha = hash of {phases,env,base_image,instrumentation,arch};
+    same recipe_sha + same source content_hash + same toolchain_digest ⇒ the same build.
+
+    If the source tree is linked (built_from) to a target, the instrumented rebuild is
+    registered as a DERIVED target wired instrumented_build_of→ the original — ready for
+    coverage-guided fuzzing next. VENDORED/OFFLINE ONLY: the build runs --network none
+    (a recipe needing network deps fails honestly). Requires features.build (else error)."""
+    from hexgraph.engine import builds as B
+    from hexgraph.engine.build import BuildError, BuildSpec
+    from hexgraph.policy import PolicyViolation, assert_allows_build
+
+    try:
+        assert_allows_build()
+    except PolicyViolation:
+        return {"error": "building not permitted — enable features.build in Settings"}
+    with session_scope() as s:
+        from hexgraph.db.models import SourceTree
+
+        p = s.get(Project, project_id)
+        if p is None:
+            return {"error": "project not found"}
+        tree = s.get(SourceTree, source_tree_id)
+        if tree is None or tree.project_id != project_id:
+            return {"error": "source tree not found in this project"}
+        detected = B.propose_build_spec(tree)
+        try:
+            spec = BuildSpec.from_dict({
+                "source_tree_id": tree.id,
+                "system": system or detected["system"],
+                "phases": phases if phases is not None else detected["phases"],
+                "instrumentation": instrumentation or {},
+                "artifacts": artifacts or [],
+                "env": env or {},
+                "arch": arch or "x86_64",
+            })
+            spec_row = B.create_build_spec(s, p, spec)
+            build = B.run_build(s, p, spec_row)
+        except BuildError as exc:
+            return {"error": str(exc)}
+        except PolicyViolation:
+            return {"error": "building not permitted — enable features.build in Settings"}
+        return B.build_to_dict(build)
+
+
 def _tool(target_id: str, name: str, args: dict) -> str:
     """Run a sandboxed inspection tool (decompile/strings/…) via the shared registry."""
     from hexgraph.engine.agent_tools import ToolContext, run_tool

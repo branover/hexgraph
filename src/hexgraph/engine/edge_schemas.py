@@ -117,6 +117,21 @@ EDGE_ATTRIBUTE_SCHEMAS: dict[str, dict[str, Any]] = {
                        "target|node). The harness's source is a role-tagged source_file.",
         "attributes": {"function": _attr("the function the harness drives, if focused")},
     },
+    "instrumented_build_of": {
+        "description": "a derived (instrumented) target is a rebuild OF the original "
+                       "shipped target (target → target). Keeps 'the shipped binary' and "
+                       "'our fuzzable rebuild' distinct but linked; the rebuild carries "
+                       "SanCov+ASan for coverage-guided fuzzing.",
+        "attributes": {
+            "build_id": _attr("the build that produced this instrumented target"),
+            "sanitizers": _attr("the sanitizers baked into the rebuild", list=True),
+        },
+    },
+    "builds": {
+        "description": "a build_spec produces a target/artifact (build_spec → target). "
+                       "The recorded recipe that built the (instrumented) target.",
+        "attributes": {"build_id": _attr("the build (execution) that produced the target")},
+    },
 }
 
 

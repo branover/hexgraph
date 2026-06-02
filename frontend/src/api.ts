@@ -47,6 +47,9 @@ export interface GhidraStatus { enabled: boolean; ok: boolean; detail: string; m
 export interface FsEntry { rel: string; size?: number; is_elf?: boolean; child_target_id?: string | null; added?: boolean; }
 export interface SourceTreeRow { id: string; name: string; origin: string; editable: boolean; vcs_rev?: string | null; content_hash?: string | null; file_count: number; archived: boolean; target_ids: string[]; }
 export interface SourceFileEntry { rel: string; size?: number; role: string; node_id?: string | null; is_harness?: boolean; }
+export interface BuildSpecBody { source_tree_id: string; system?: string; phases?: any[]; instrumentation?: { sanitizers?: string[]; coverage?: string[]; engine?: string }; artifacts?: string[]; env?: Record<string, string>; arch?: string; name?: string; }
+export interface BuildPreview { system: string; phases: { argv: string[]; shell?: boolean }[]; instrumentation: any; artifacts: string[]; recipe_sha: string; injected_env: Record<string, string>; base_image: string; arch: string; network: string; }
+export interface BuildRow { id: string; status: string; recipe_sha?: string | null; source_content_hash?: string | null; toolchain_digest?: string | null; artifacts: Record<string, string>; instrumentation: any; returncode?: number | null; duration: number; error?: string | null; derived_target_id?: string | null; source_tree_id: string; created_at?: string | null; }
 export interface GraphNode { id: string; type: "target" | "node" | "finding"; label: string; [k: string]: any; }
 export interface GraphEdge { id: string; source: string; target: string; type: string; src_kind?: string; dst_kind?: string; origin?: string; confidence?: number | null; attrs?: Record<string, any>; count?: number; }
 export interface Graph { project_id: string; nodes: GraphNode[]; edges: GraphEdge[]; }
@@ -81,7 +84,7 @@ export const api = {
   project: (id: string) => getJSON<ProjectDetail>(`/api/projects/${id}`),
   graph: (id: string) => getJSON<Graph>(`/graph/${id}`),
   finding: (id: string) => getJSON<Finding>(`/api/findings/${id}`),
-  capabilities: () => getJSON<Record<string, Record<string, string[]>>>("/api/capabilities"),
+  capabilities: () => getJSON<{ target: Record<string, string[]>; node: Record<string, string[]>; edge: Record<string, string[]>; features?: { build?: boolean } }>("/api/capabilities"),
   suggestions: (fid: string) => getJSON<any[]>(`/api/findings/${fid}/suggestions`),
   setStatus: (fid: string, status: string) => postJSON(`/api/findings/${fid}/status`, { status }),
   patchFinding: (fid: string, body: Partial<{ title: string; severity: string; confidence: string; category: string; summary: string; reasoning: string; status: string; human_notes: string; evidence: any }>) => patchJSON<Finding>(`/api/findings/${fid}`, body),
@@ -135,6 +138,10 @@ export const api = {
   sourceFiles: (treeId: string) => getJSON<{ id: string; name: string; origin: string; editable: boolean; files: SourceFileEntry[] }>(`/api/source-trees/${treeId}/files`),
   sourceFile: (treeId: string, rel: string) => getJSON<{ rel: string; size: number; role: string; origin: string; encoding: "text" | "binary"; content: string; truncated: boolean }>(`/api/source-trees/${treeId}/file?rel=${encodeURIComponent(rel)}`),
   backfillHarnesses: (pid: string) => postJSON<{ promoted: number; scanned: number }>(`/api/projects/${pid}/backfill-harnesses`, {}),
+  buildPreview: (pid: string, body: BuildSpecBody) => postJSON<BuildPreview>(`/api/projects/${pid}/build/preview`, body),
+  createBuild: (pid: string, body: { build_spec_id?: string; spec?: BuildSpecBody }) => postJSON<BuildRow>(`/api/projects/${pid}/builds`, body),
+  builds: (pid: string, sourceTreeId?: string) => getJSON<{ builds: BuildRow[] }>(`/api/projects/${pid}/builds${sourceTreeId ? `?source_tree_id=${sourceTreeId}` : ""}`),
+  buildLog: (bid: string) => getJSON<{ build_id: string; log: string }>(`/api/builds/${bid}/log`),
   createEdge: (pid: string, body: any) => postJSON<any>(`/api/projects/${pid}/edges`, body),
   updateEdge: (eid: string, body: { attrs: Record<string, any>; merge?: boolean }) => patchJSON<any>(`/api/edges/${eid}`, body),
   createSocket: (pid: string, body: { kind?: string; port?: number | string | null; name?: string | null; bind_addr?: string | null; attrs?: any }) => postJSON<any>(`/api/projects/${pid}/sockets`, body),

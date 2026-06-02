@@ -44,6 +44,7 @@ _LOCAL_HOSTNAMES = frozenset({"localhost", "host.docker.internal", "gateway.dock
 class AnalysisPolicy:
     static_only: bool = True
     allow_execution: bool = False  # never run the target (v1)
+    allow_build: bool = False      # compile source in the sandbox (features.build) — D5
     allow_network: bool = False    # sandboxes run --network none unless this is on
     allow_rehost: bool = False     # full-system emulation of the firmware (features.rehost)
     allow_remote: bool = False     # connect to ONE live remote device (features.remote)
@@ -55,22 +56,34 @@ class AnalysisPolicy:
 
 def current_policy() -> AnalysisPolicy:
     # Static-only by default. Enabling PoC/fuzzing flips on execution; enabling
-    # `features.network` flips on bounded egress (the local-network tier); enabling
-    # `features.rehost` permits full-system emulation. This is the single, explicit place
-    # the static-only invariant is relaxed; a settings error fails closed at tier 0.
+    # `features.build` permits compiling source in the sandbox (a sub-capability of
+    # the sandboxed-exec tier — D5); enabling `features.network` flips on bounded
+    # egress (the local-network tier); enabling `features.rehost` permits full-system
+    # emulation. This is the single, explicit place the static-only invariant is
+    # relaxed; a settings error fails closed at tier 0.
     try:
         from hexgraph import settings
 
         exec_on = bool(settings.get("features.fuzzing.enabled") or settings.get("features.poc.enabled"))
+        # Building runs UNTRUSTED third-party code (configure/make is arbitrary execution
+        # and the highest supply-chain risk in the design), so it is gated — but it is NOT
+        # the same as executing the TARGET: a useful workflow is "build instrumented,
+        # inspect, don't run yet" (D5). features.build alone permits building; enabling
+        # exec (fuzzing/poc) implies you'll build, so it also lifts allow_build. Running
+        # the produced artifact still hits assert_allows_execution() — two independent,
+        # fail-closed checks.
+        build_on = bool(settings.get("features.build.enabled")) or exec_on
         net_on = bool(settings.get("features.network.enabled"))
         rehost_on = bool(settings.get("features.rehost.enabled"))
         remote_on = bool(settings.get("features.remote.enabled"))
-        if exec_on or net_on or rehost_on or remote_on:
+        if exec_on or build_on or net_on or rehost_on or remote_on:
             # features.remote raises the live-remote tier and inherently permits egress (to the
             # one operator-authorized host — enforced by remote_scope, not by allow_network alone).
+            # Building is a sub-capability of the sandboxed-exec tier, so build-only still sits
+            # at TIER_SANDBOXED_EXEC (it runs a compiler in the box) without permitting target exec.
             tier = (TIER_LIVE_REMOTE if remote_on else
                     TIER_LOCAL_NETWORK if net_on else TIER_SANDBOXED_EXEC)
-            return AnalysisPolicy(static_only=False, allow_execution=exec_on,
+            return AnalysisPolicy(static_only=False, allow_execution=exec_on, allow_build=build_on,
                                   allow_network=net_on or remote_on, allow_rehost=rehost_on,
                                   allow_remote=remote_on, tier=tier)
     except Exception:  # noqa: BLE001 — a settings problem must never widen the policy
@@ -82,6 +95,20 @@ def assert_allows_execution(policy: AnalysisPolicy | None = None) -> None:
     policy = policy or current_policy()
     if not policy.allow_execution:
         raise PolicyViolation("analysis policy is static-only; executing the target is not permitted")
+
+
+def assert_allows_build(policy: AnalysisPolicy | None = None) -> None:
+    """Gate compiling source in the sandbox (the `Builder` seam). Opt-in via
+    features.build (or implied by features.fuzzing/poc — see current_policy). Building
+    runs untrusted third-party code (configure/make), so it has its own fail-closed
+    gate — peer of, not folded into, assert_allows_execution (D5): you can build-and-
+    inspect without permitting the TARGET to run. The compile phase is still
+    `--network none`, non-root, RO source, ephemeral (the supply-chain containment)."""
+    policy = policy or current_policy()
+    if not policy.allow_build:
+        raise PolicyViolation(
+            "building from source is not permitted (enable features.build to compile a "
+            "source tree into an instrumented artifact in the sandbox)")
 
 
 def assert_allows_rehost(policy: AnalysisPolicy | None = None) -> None:
