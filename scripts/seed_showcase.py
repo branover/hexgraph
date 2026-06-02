@@ -187,7 +187,8 @@ def _classify(target, *, kind, fmt=None, arch=None, extra=None):
 
 def seed(session, *, reset: bool) -> dict:
     from hexgraph.db.models import (
-        Edge, EdgeType, Finding as FRow, FuzzCampaign, Node, NodeType, Project, Target,
+        Edge, EdgeType, Finding as FRow, FindingStatus, FuzzCampaign, Node, NodeType,
+        Project, Target,
     )
     from hexgraph.engine import assurance as A
     from hexgraph.engine.audit import record_egress
@@ -322,9 +323,10 @@ def seed(session, *, reset: bool) -> dict:
                          Node.fq_name == "tcp:5000").first())
 
     # ── Edges: a wide, curated variety ───────────────────────────────────────────────
-    # calls (with call_sites), taints (source→sink), bypasses, listens_on / connects_to,
-    # links_against, instrumented_build_of, related_to. (contains/about/routes_to/built_from
-    # are created by the helpers above.)
+    # calls (with call_sites), taints (source→sink), listens_on / connects_to, links_against,
+    # references. (contains/about/built_from already exist from the helpers above; routes_to
+    # is created by run_surface_recon below; instrumented_build_of is added with the
+    # instrumented rebuild further down.)
     add_edge(session, project_id=pid, src=("node", fns["main"].id), dst=("node", fns["diagnostics"].id),
              type=EdgeType.calls, origin="tool", confidence=0.9, attrs={"call_sites": ["0x401c1c"]})
     add_edge(session, project_id=pid, src=("node", fns["diagnostics"].id), dst=("node", fns["cgi_handler"].id),
@@ -351,7 +353,7 @@ def seed(session, *, reset: bool) -> dict:
     # links_against: httpd links the upnp lib.
     add_edge(session, project_id=pid, src=("target", httpd.id), dst=("target", lib.id),
              type=EdgeType.links_against, origin="tool", confidence=0.9)
-    # routes_to handler in the lib (cross-binary): /api/system/status → upnp_control.
+    # references: the upnp control handler touches the same system() sink (cross-binary).
     add_edge(session, project_id=pid, src=("node", upnp_fns["upnp_control"].id),
              dst=("node", sink.id), type=EdgeType.references, origin="tool", confidence=0.5)
 
@@ -417,7 +419,7 @@ def seed(session, *, reset: bool) -> dict:
                                    params={"sink": "system"}),
                 FollowupSuggestion(task_type="reverse_engineering", label="Trace get_param() bounds in libupnp"),
             ]),
-        status=__import__("hexgraph.db.models", fromlist=["FindingStatus"]).FindingStatus.confirmed,
+        status=FindingStatus.confirmed,
         finding_type="poc")
     # Jump-to-source link for the PoC finding (located_in → src/httpd.c at the sink line).
     link_finding_to_source(session, project, finding_id=f_poc.id, tree=tree, rel="src/httpd.c", line=27)
