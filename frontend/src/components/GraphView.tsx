@@ -185,10 +185,15 @@ export default function GraphView({
   // ids are "loose" (no room — e.g. shared sockets → the network bus lane).
   const model = useMemo(() => {
     const byId = new Map(graph.nodes.map((n) => [n.id, n] as const));
-    // map a finding to the node/target(s) it is about (for finding-grouping + target rollups).
+    // map a finding to the node/target(s) it is `about` (for target-grouping placement: nest a
+    // finding under the room of the FINEST node it concerns). `about` edges are emitted
+    // src=finding → dst=node/target (engine/findings.py), so the finding is e.source. (Hypothesis
+    // `about` edges go node→target — guard on the source being a finding so they don't pollute.)
     const findingAbout = new Map<string, string[]>(); // findingId → [nodeId/targetId]
     for (const e of graph.edges) {
-      if (e.type === "about") (findingAbout.get(e.target) ?? findingAbout.set(e.target, []).get(e.target)!).push(e.source);
+      if (e.type === "about" && byId.get(e.source)?.type === "finding") {
+        (findingAbout.get(e.source) ?? findingAbout.set(e.source, []).get(e.source)!).push(e.target);
+      }
     }
 
     const parentOf = new Map<string, string>();   // childId → roomId
@@ -254,8 +259,12 @@ export default function GraphView({
         rooms.push({ id: "room:" + n.id, label: n.label, tkey: "finding", gkind: "finding", kind: "finding" });
       }
       for (const e of graph.edges) {
-        if (e.type === "about" && byId.get(e.target)?.type === "finding" && !parentOf.has(e.source)) {
-          parentOf.set(e.source, "room:" + e.target);
+        // `about` edges are finding(src) → node/target(dst); nest the implicated node under
+        // its finding's room. (Guard on the source being a finding: hypothesis `about` edges
+        // run node→target and must not parent a target under a non-existent finding room.)
+        if (e.type === "about" && byId.get(e.source)?.type === "finding"
+            && byId.has(e.target) && byId.get(e.target)?.type !== "finding" && !parentOf.has(e.target)) {
+          parentOf.set(e.target, "room:" + e.source);
         }
       }
       const other = "room:__unimplicated";
