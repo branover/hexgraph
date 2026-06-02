@@ -452,6 +452,70 @@ showcase, ~27/58), LARGE (~173/649), PATHOLOGICAL (~494/2144). Guard test
   semantic-zoom LOD to kill the letterbox at LARGE/PATHOLOGICAL (Phase 4); layer panel + filter rail
   + Table/Matrix (Phase 5).
 
+## Graph presentation — Phase 3: compound islands + grouping + expand/collapse (2026-06-02)
+
+**Shipped in `build/graph-phase3`** (`docs/design/design-graph-presentation.md` §8 Phase 3, §1/§2.1/
+§3/D1/D6/D7/D8). The **headline structural fix** — turns the flat node plane into collapsible
+per-target "rooms" so even the *default resting view* of a huge target is parseable. Composes on
+Phase 1 (sizing/edge-recede/labels) + Phase 2 (focus/hide/breadcrumb). **Two new deps** (see bundle
+note); **color-coding untouched (D8)** — rooms use the target-kind/severity color, the only mute is
+the existing `.context` opacity/desaturate.
+
+Changes:
+- **New deps:** `cytoscape-fcose` (compound-aware force layout that spreads islands + fills the pane
+  where dagre letterboxed) + `cytoscape-expand-collapse` (registered for collapse mechanics; the
+  visual model is driven by React `expandedRooms` state + a rebuild for determinism). **Bundle
+  impact: gzip 315.9 kB → 361.7 kB (+45.8 kB); raw 1000.5 kB → 1166.5 kB.** `cytoscape-cxtmenu`
+  skipped — the hand-rolled Phase-2 verb menu already covers the verbs cleanly (now extended with
+  room expand/collapse).
+- **Compound rooms by target (default).** Each byte target → a Cytoscape compound parent; a
+  `firmware_image` is the GRANDPARENT room containing its child-target rooms ("12 boxes in one box").
+  Sub-file nodes nest under their target's room; findings nest under the target they're `about`.
+- **Skeleton-collapsed default at LARGE/PATHOLOGICAL (D1).** The skeleton = rooms visible, interiors
+  hidden: the firmware grandparent is expanded so its child rooms show as **finding-weighted cards**
+  (size ∝ node + Σfinding-severity), each carrying a **severity rollup ring** (worst finding inside
+  tints the border red/orange) + a chip (`sbin/svc_00  27 · 1⚠`). SMALL/MEDIUM **auto-expand all
+  rooms** below the node ceiling (look like today's full graph).
+- **"Group by" control** (in the graph Filter menu): **target** (default) / **type** (a box per node
+  type) / **finding** (each finding parents the nodes it's about) / **none**. **"None" = the flat
+  Phase-1/2 dagre graph — the REGRESSION FALLBACK**, verified to reproduce Phase 2 exactly.
+- **Collapse-all / expand-all** controls (toolbar buttons + Filter menu); expand-all warns above 200
+  nodes. Double-tap a room or right-click → Expand/Collapse toggles a single room (auto-frames the
+  opened room's interior, scoped `fcose` re-layout — never on a plain rebuild, per §3.4).
+- **Aggregated cross-room meta-edges:** edges between two collapsed rooms fold into ONE weighted
+  ribbon with a `×N` count (width ∝ count). Semantic meta-edges (links_against/taints/listens_on…)
+  stay visible + labelled; purely-structural ones (references/contains) recede to faint hairlines —
+  the same edge-ink discipline at the room scale (kills the room-level cobweb).
+- **Socket bus lane:** shared `socket` nodes (`target_id = null`, cross-binary) belong to no room and
+  render as loose pink hexagons around the islands, linked to the rooms that listen/connect — the
+  firmware's network map stays a first-class, separately-readable region.
+- **Auto-expand-path on focus/search (Phase-2 reviewer note):** focusing or searching a node inside a
+  collapsed room now auto-expands the path to it so the focus actually lands.
+
+**Before/after human-eyes verdict (Playwright, §9 — judged as a human):**
+- **PATHOLOGICAL default (THE headline pass/fail, ~494n/2144e)** — Before: an undifferentiated
+  smudge of equal dots / near-invisible static; the eye slides off. **After: PASS, decisively.** The
+  default frame opens as a firmware grandparent box containing ~18 countable, labeled, colored room
+  cards (blue executables, teal libraries), each ringed by its worst-finding severity (red/orange
+  cards jump out), with a pink socket bus-lane around them and the structural cobweb pushed to faint
+  hairlines. I can count the binaries and point to the critical-finding rooms at a glance.
+  **[Eye lands ✓][Countable rooms ✓][Calm default ✓][Color kept ✓][Squint test ✓]**
+- **LARGE default (~173n/649e)** — Before: flat clump in the upper-center. **After: PASS.** ~12 room
+  cards inside the firmware box, severity rings legible, breathing room, semantic meta-edges + bus
+  lane readable.
+- **Drill-in (double-tap a room)** — PASS: the room opens to its interior (functions + call graph +
+  the finding diamond + sink), auto-framed, siblings collapse to cards. Clean, scoped, reversible.
+- **Group by: none** — PASS: reproduces the Phase-2 flat dagre graph verbatim (the fallback is solid).
+- **Group by: type / finding** — both render without error (7 type-rooms / 9 finding-rooms on LARGE).
+- **SMALL/MEDIUM** — PASS, unregressed/better: SMALL auto-expands to a single labeled `sbin/httpd`
+  room with its functions/sink/finding + the http socket on the bus lane; MEDIUM auto-expands all
+  rooms (the showcase's good frame).
+
+*Limitations / deferred:* MEDIUM with many open compound boxes + cross-target meta-edges reads a
+touch busy (acceptable — it's the auto-expanded "today's good frame"). The socket bus is loose
+fcose-placed nodes, not a literal reserved lane (visually grouped, not geometrically banded —
+deferrable polish). Layout-by-context fine-tuning + semantic-zoom LOD are Phase 4.
+
 ## Graph presentation — Phase 2: focus / hide / navigation (2026-06-02)
 
 **Shipped in `build/graph-phase2`** (`docs/design-graph-presentation.md` §8 Phase 2, §4/§5/§9).

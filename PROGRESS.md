@@ -522,6 +522,28 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-02: **build: graph presentation Phase 3 — compound islands + grouping + expand/collapse**
+  (branch `build/graph-phase3`; `docs/design/design-graph-presentation.md` §8 Phase 3, §1/§2.1/§3/
+  D1/D6/D7/D8). The **headline structural fix** — the flat node plane becomes collapsible per-target
+  "rooms" so even the default resting view of a huge target is parseable. **Two new deps**
+  (`cytoscape-fcose` + `cytoscape-expand-collapse`; `cxtmenu` skipped — the Phase-2 verb menu suffices,
+  now extended with room expand/collapse). **Bundle: gzip 315.9 → 361.7 kB (+45.8 kB).
+  Color-coding untouched (D8).** `GraphView.tsx` rewrite (composes on Phase 1 sizing/edge-recede/labels
+  + Phase 2 focus/hide/breadcrumb): targets render as **compound parent rooms** (firmware = grandparent
+  containing child-target rooms); **skeleton-collapsed default at LARGE/PATHOLOGICAL** (rooms visible
+  as finding-weighted cards w/ a severity-rollup ring, interiors hidden) with **SMALL/MEDIUM
+  auto-expand** below the node ceiling; a **Group-by control** (target/type/finding/**none** — None =
+  the flat Phase-1/2 graph, the regression fallback); **collapse-all/expand-all**; **aggregated
+  cross-room meta-edges** (one `×N` ribbon, semantic visible / structural faint); a **socket bus lane**
+  (shared sockets loose around the islands); double-tap/right-click room expand auto-frames the
+  interior (scoped fcose); **focus/search auto-expands the path** into a collapsed room (Phase-2
+  reviewer note). `just test` green (mock/offline; Docker fuzz flakes excepted). Human-eyes A/B (§9) in
+  `docs/ui-backlog.md`: **PATHOLOGICAL default is the decisive PASS** — ~494n/2144e opens as a firmware
+  box of ~18 countable, labeled, severity-ringed room cards + a socket bus, the structural cobweb
+  receded to faint hairlines (vs the baseline smudge); can count binaries + spot the critical-finding
+  rooms at a glance; drill-in clean + reversible; None reproduces Phase 2; SMALL/MEDIUM unregressed.
+  Deferred to Phase 4: semantic-zoom LOD + layout-by-context fine-tuning; the socket "bus" is grouped
+  not geometrically banded.
 - 2026-06-02: **build: graph presentation Phase 2 — focus / hide / navigation** (branch
   `build/graph-phase2`; `docs/design-graph-presentation.md` §8 Phase 2, §4/§5/§9). Frontend-only,
   live-instance class toggles + camera over the existing flat dagre graph — **zero new deps, no
