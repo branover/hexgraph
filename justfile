@@ -198,6 +198,23 @@ fixtures:
 demo:
     {{py}} -m hexgraph.demo
 
+# Seed the rich SCREENSHOT-SHOWCASE project (mock, offline, $0, no Docker) into HEXGRAPH_HOME:
+# one engagement exercising the firmware tree, dynamic surfaces, source/coverage, the
+# assurance ladder, a finished mock fuzz campaign, and a wide edge variety — for the README
+# hero shots + the per-feature doc captures. `--reset` rebuilds it. Then `just serve` to view,
+# or `just capture` to regenerate docs/images/. Enables fuzzing/poc/network/build features.
+[group('demo')]
+showcase *args:
+    HEXGRAPH_FUZZER=mock {{py}} scripts/seed_showcase.py {{args}}
+
+# Regenerate the committed docs/images/*.png from the showcase project (Playwright, dark
+# theme, 1440x900). Seeds the showcase into a throwaway HEXGRAPH_HOME, serves it on a spare
+# port, captures the hero + per-feature shots, and tears down. Needs the dev-only Playwright
+# browser: `.venv/bin/pip install playwright && .venv/bin/playwright install chromium`.
+[group('demo')]
+capture:
+    HEXGRAPH_FUZZER=mock {{py}} scripts/capture_screenshots.py
+
 # ===========================================================================
 # rehosting (OPTIONAL, HEAVY — only needed to boot/assess real firmware)
 # ===========================================================================

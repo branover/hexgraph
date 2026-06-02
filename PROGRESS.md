@@ -522,6 +522,24 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-02: **build: reproducible screenshot showcase + captures** (branch `build/showcase`).
+  A deterministic, $0/offline **showcase** project for the README hero shots + per-feature doc
+  captures. `scripts/seed_showcase.py` (`just showcase [--reset]`) seeds ONE rich engagement on
+  the mock backend (no Docker): a firmware tree (firmware_image + unpacked-FS children sbin/httpd +
+  lib/libupnp.so) + a standalone binary + a `web_app` admin surface + a `service` (tcp/5000) socket
+  surface + a source tree (C lib + fuzz harness); 7 findings spanning finding_type + ALL FOUR
+  assurance rungs (a **verified PoC** input_reachable/dynamic with a repro spec, a code_present/static
+  floor, an input_reachable/static argued path, a fuzz_crash code_present/dynamic); a **wide curated
+  edge variety** (contains/calls/routes_to/listens_on/connects_to/built_from/located_in/
+  instrumented_build_of/links_against/taints/about/fuzzed_by/produced_artifact); typed function/
+  string/sink/socket/endpoint/param nodes; a **finished mock fuzz campaign** (run via the offline
+  MockFuzzer → crash artifact + minimized reproducer + dedup + a per-line coverage map); + egress-audit
+  events (allowed + 1 denied). `scripts/capture_screenshots.py` (`just capture`) serves it on a spare
+  port and shoots 12 PNGs into `docs/images/` (1440×900, dark, 1.5× — Playwright, dev-only) — manifest
+  in `docs/images/README.md` mapping each → its README/doc slot. Guard test `tests/test_showcase_seed.py`
+  (offline) asserts the seed stays rich. Counts at seed: 7 targets · 27 nodes · 58 edges · 7 findings ·
+  1 campaign. README.md untouched (owned by the separate README-overhaul effort — this produces the
+  images + manifest it consumes).
 - 2026-06-02: **build: interactive `hexgraph setup` wizard** (branch `build/setup-wizard`).
   `just setup` now bootstraps (venv + deps + SPA) then launches a polished, sequential TUI wizard
   (**Rich** panels/tables/progress + **questionary** checkboxes/selects/confirms; added to `[server]`
