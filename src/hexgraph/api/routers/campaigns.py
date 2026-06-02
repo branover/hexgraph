@@ -45,6 +45,9 @@ class CampaignCreate(BaseModel):
     max_crashes: int | None = None
     instances: int | None = None
     seeds: list[str] | None = None
+    # Optional fuzzing dictionary tokens (auto-derived from the target's strings when
+    # omitted) — mirrors the MCP start_fuzz_campaign param + the Fuzz modal input.
+    dictionary: list[str] | None = None
     build_spec_id: str | None = None
     net: CampaignNet | None = None      # network-fuzz overrides (surface=network)
     # Per-campaign ResourceSpec override (mem/cpus/pids/tmpfs/timeout/unconstrained).
@@ -88,6 +91,7 @@ def api_start_campaign(project_id: str, body: CampaignCreate):
             target_id=t.id, surface=surface, engine=body.engine,
             harness_source=source, function=body.function or function,
             target_sources=sources, seeds=body.seeds or [],
+            dictionary=body.dictionary or [],
             max_total_time=body.max_total_time or 60, max_len=body.max_len or 4096,
             max_crashes=body.max_crashes or 10, instances=body.instances or 1,
             build_spec_id=body.build_spec_id,
@@ -289,7 +293,7 @@ async def api_campaign_events(campaign_id: str):
     if the stream errors — so live status is robust either way."""
 
     async def gen():
-        terminal = {"completed", "failed", "stopped"}
+        terminal = {"completed", "failed", "stopped", "degraded"}
         last = None
         for _ in range(3600):  # hard cap (~1h at 1s) so a stream can't leak forever
             def snap():

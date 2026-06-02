@@ -180,6 +180,54 @@ def test_reap_is_idempotent(hg_home, monkeypatch):
         assert s.query(FuzzArtifact).filter(FuzzArtifact.campaign_id == cid).count() == 1
 
 
+# ── Degraded / zero-work campaigns surface a WARNING, not a silent "completed" ────
+
+@pytest.mark.parametrize("scenario,expect_note", [
+    ("unreachable", "not reachable"),       # boofuzz: service down → ran:False
+    ("noexec", "0 execution"),              # ran but did no work
+    ("unstable", "AFL persistent mode"),    # engine flagged instability
+])
+def test_degraded_campaign_status_and_warning(hg_home, monkeypatch, scenario, expect_note):
+    """A campaign that did 0 work or hit engine degradation finalizes as `degraded`
+    (NOT `completed`) and the serializer exposes the WHY (warning/engine_note). This is
+    the battle-test fix: an unreachable / 0-exec / degraded run was reporting a clean
+    completed/error:null with no signal."""
+    _mock_env(monkeypatch)
+    _enable_fuzzing()
+    with session_scope() as s:
+        p, t = _project_with_target(s)
+        # The mock launcher keys these degraded scenarios off `function`.
+        spec = FuzzCampaignSpec(target_id=t.id, surface="source_lib", harness_source=HARNESS,
+                                function=scenario, target_sources=["/x.c"])
+        cid = C.start_campaign(s, p, t, spec=spec).id
+        C.reap_campaign(s, s.get(FuzzCampaign, cid))
+        row = s.get(FuzzCampaign, cid)
+        assert row.status == "degraded", f"{scenario} should be degraded, got {row.status}"
+        d = C.campaign_to_dict(row)
+        assert d["status"] == "degraded"
+        assert d["warning"], "a degraded campaign must carry a human warning reason"
+        assert expect_note.lower() in d["warning"].lower()
+        if scenario == "unstable":
+            assert d["engine_note"] and "AFL persistent" in d["engine_note"]
+
+
+def test_clean_campaign_is_not_degraded(hg_home, monkeypatch):
+    """A genuinely-successful run (execs > 0, no note) stays `completed` with no warning —
+    the degraded logic must NOT mislabel a real success."""
+    _mock_env(monkeypatch)
+    _enable_fuzzing()
+    with session_scope() as s:
+        p, t = _project_with_target(s)
+        spec = FuzzCampaignSpec(target_id=t.id, surface="source_lib", harness_source=HARNESS,
+                                function="clean", target_sources=["/x.c"])
+        cid = C.start_campaign(s, p, t, spec=spec).id
+        C.reap_campaign(s, s.get(FuzzCampaign, cid))
+        row = s.get(FuzzCampaign, cid)
+        assert row.status == "completed"
+        d = C.campaign_to_dict(row)
+        assert d["warning"] is None and not d["engine_note"]
+
+
 # ── Crash-safe re-attach: a simulated serve restart re-binds the reaper ───────────
 
 def test_crash_safe_reattach(hg_home, monkeypatch):
@@ -221,6 +269,27 @@ class _StopExecutor:
     def start_detached(self, *a, **k):  # pragma: no cover
         from hexgraph.sandbox.runner import DetachedHandle
         return DetachedHandle(name=k["name"], outdir=str(k["outdir"]))
+
+
+def test_resume_clears_stale_degradation_signal(hg_home, monkeypatch):
+    """A degraded campaign that is resumed must NOT carry its stale engine_note/run_error
+    into the new run's finalize — else a clean resume would be re-labelled `degraded`."""
+    _mock_env(monkeypatch)
+    _enable_fuzzing()
+    with session_scope() as s:
+        p, t = _project_with_target(s)
+        spec = FuzzCampaignSpec(target_id=t.id, surface="source_lib", harness_source=HARNESS,
+                                function="unstable", target_sources=["/x.c"])
+        cid = C.start_campaign(s, p, t, spec=spec).id
+        C.reap_campaign(s, s.get(FuzzCampaign, cid))
+        row = s.get(FuzzCampaign, cid)
+        assert row.status == "degraded" and (row.stats_json or {}).get("engine_note")
+        # Resume clears the stale note; the row goes back to running with no engine_note.
+        C.resume_campaign(s, row)
+        row = s.get(FuzzCampaign, cid)
+        assert row.status == "running"
+        assert not (row.stats_json or {}).get("engine_note")
+        assert not (row.stats_json or {}).get("run_error")
 
 
 def test_stop_preserves_corpus_then_resume(hg_home, monkeypatch):

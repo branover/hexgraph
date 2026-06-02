@@ -17,6 +17,7 @@ import SourceBrowser from "../components/SourceBrowser";
 import { CampaignsPanel } from "../components/CampaignsPanel";
 import ArtifactsView from "../components/ArtifactsView";
 import FuzzModal from "../components/FuzzModal";
+import EgressPanel from "../components/EgressPanel";
 import { Icon, NODE_ICON } from "../components/Icon";
 
 export default function Workspace() {
@@ -39,7 +40,7 @@ export default function Workspace() {
   const [fuzzFor, setFuzzFor] = useState<TargetNode | null>(null);
   const [q, setQ] = useState("");
   const [results, setResults] = useState<any | null>(null);
-  const [modal, setModal] = useState<"node" | "edge" | "report" | "compare" | "ghidra" | null>(null);
+  const [modal, setModal] = useState<"node" | "edge" | "report" | "compare" | "ghidra" | "egress" | null>(null);
   const [edgePrefill, setEdgePrefill] = useState<{ src: string; dst: string } | null>(null);
   const [ghidraBridge, setGhidraBridge] = useState(false);
   const [fuzzingEnabled, setFuzzingEnabled] = useState(false);
@@ -205,6 +206,18 @@ export default function Workspace() {
   const isMock = detail.project.backend === "mock";
   const roots = detail.targets.filter((t) => !t.parent_id);
   const childrenOf = (id: string) => detail.targets.filter((t) => t.parent_id === id);
+  // The best DEFAULT fuzz target for the Campaigns-tab launch button: the raw ingested
+  // root (roots[0]) is usually the WRONG choice (it's the source, not the live/instrumented
+  // surface). Prefer, in order: an instrumented derived target → a live web_app/remote
+  // surface → a target carrying fuzz_target_sources → the first non-firmware root → roots[0].
+  const bestFuzzTarget = (): TargetNode | undefined => {
+    const ts = detail.targets;
+    return ts.find((t) => t.metadata?.instrumented)
+        || ts.find((t) => t.kind === "web_app" || t.kind === "remote")
+        || ts.find((t) => (t.metadata?.fuzz_target_sources || []).length > 0)
+        || roots.find((t) => t.kind !== "firmware_image")
+        || roots[0];
+  };
 
   const TreeRow = (t: TargetNode, child: boolean) => {
     const allowed = caps.target?.[t.kind] ?? ["recon"];
@@ -260,7 +273,7 @@ export default function Workspace() {
                    onSelect={(f) => { setSelTask(undefined); setSelNode(null); setSelCampaign(undefined); setSelFinding(f); setSelGraphId(f.id); }} />
   ) : tab === "campaigns" ? (
     <CampaignsPanel projectId={projectId!} selectedId={selCampaign} onSelect={(id) => selectCampaign(id)}
-                    onStartCampaign={roots[0] ? () => setFuzzFor(roots[0]) : undefined} />
+                    onStartCampaign={bestFuzzTarget() ? () => setFuzzFor(bestFuzzTarget()!) : undefined} />
   ) : (
     <TasksPanel tasks={tasks} selectedId={selTask} onSelect={(id) => setSelTask(id)} onClear={clearTasks} />
   );
@@ -370,6 +383,7 @@ export default function Workspace() {
             <button className="btn sm" title="Link identical functions across targets (n-day clone detection)" onClick={linkSameCode}><Icon name="link" size={13} /> Same-code</button>
             <button className="btn sm" title="Merge duplicate binaries/nodes (e.g. sym.foo == foo)" onClick={mergeDupes}><Icon name="refresh" size={13} /> Merge dupes</button>
             <button className="btn sm" title="Download the project graph as JSON" onClick={exportGraph}><Icon name="doc" size={13} /> Export</button>
+            <button className="btn sm" title="Egress audit log — every outbound action against a live target (allowed/denied)" onClick={() => setModal("egress")}><Icon name="shield" size={13} /> Audit</button>
             {busy && <span className="badge"><Icon name="refresh" size={12} className="spin" /> {busy}</span>}
           </div>
           {results && q.trim() && (
@@ -480,6 +494,7 @@ export default function Workspace() {
                                          onClose={() => { setModal(null); setEdgePrefill(null); }}
                                          onDone={load} />}
       {modal === "report" && <ReportModal projectId={projectId!} projectName={detail.project.name} onClose={() => setModal(null)} />}
+      {modal === "egress" && <EgressPanel projectId={projectId!} onClose={() => setModal(null)} />}
       {modal === "compare" && <RunCompareModal targets={detail.targets} onClose={() => setModal(null)} />}
       {modal === "ghidra" && <GhidraImportModal projectId={projectId!} onClose={() => setModal(null)} onDone={load} />}
       {launchFor && (
@@ -493,7 +508,7 @@ export default function Workspace() {
                      onClose={() => setLaunchFor(null)} onLaunched={pollThenReload} />
       )}
       {fuzzFor && (
-        <FuzzModal projectId={projectId!} target={fuzzFor} settings={settings}
+        <FuzzModal projectId={projectId!} target={fuzzFor} targets={detail.targets} settings={settings}
                    onClose={() => setFuzzFor(null)}
                    onStarted={(cid) => { setFuzzFor(null); selectCampaign(cid); }} />
       )}

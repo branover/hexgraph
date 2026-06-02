@@ -61,8 +61,13 @@ export interface Campaign {
   status: string; instances: number; stats: CampaignStats; resources: Record<string, any>;
   coverage_instrumented?: boolean | null; build_spec_id?: string | null; task_id?: string | null;
   corpus_ref?: string | null; coverage_ref?: string | null; error?: string | null;
+  // First-class degradation signal: a campaign that did 0 work / hit engine instability
+  // finalizes `degraded` (not `completed`) and carries the WHY here.
+  warning?: string | null; engine_note?: string | null;
   created_at?: string | null; finished_at?: string | null;
 }
+// One outbound action against a live target (allowed or denied) — the egress audit log.
+export interface EgressEvent { id: string; dest: string; allowed: boolean; tool: string; target_id?: string | null; task_id?: string | null; detail?: string | null; created_at?: string | null; }
 export interface StackFrame { idx: number; func: string; file: string; line: number; col?: number | null; }
 export interface FuzzArtifact {
   id: string; campaign_id: string; kind: string; content_cas?: string | null; size: number;
@@ -137,6 +142,7 @@ export const api = {
   linkSameCode: (pid: string) => postJSON<{ created: number }>(`/api/projects/${pid}/link-same-code`, {}),
   mergeDuplicates: (pid: string) => postJSON<{ targets_merged: number; nodes_merged: number }>(`/api/projects/${pid}/merge-duplicates`, {}),
   reportUrl: (pid: string) => `/api/projects/${pid}/report`,
+  egress: (pid: string, limit = 500) => getJSON<{ events: EgressEvent[] }>(`/api/projects/${pid}/egress?limit=${limit}`),
   async report(pid: string): Promise<string> {
     const r = await fetch(`/api/projects/${pid}/report`);
     if (!r.ok) throw new Error(`${r.status}`);
@@ -182,7 +188,7 @@ export const api = {
   // Fuzz campaigns + artifacts (Phase 4 triage)
   campaigns: (pid: string, targetId?: string) => getJSON<{ campaigns: Campaign[] }>(`/api/projects/${pid}/campaigns${targetId ? `?target_id=${targetId}` : ""}`),
   campaign: (cid: string) => getJSON<Campaign>(`/api/campaigns/${cid}`),
-  startCampaign: (pid: string, body: { target_id: string; surface?: string | null; engine?: string | null; function?: string | null; max_total_time?: number; max_len?: number; max_crashes?: number; instances?: number; build_spec_id?: string | null; resources?: Record<string, any>; environment?: string | null }) => postJSON<Campaign>(`/api/projects/${pid}/campaigns`, body),
+  startCampaign: (pid: string, body: { target_id: string; surface?: string | null; engine?: string | null; function?: string | null; max_total_time?: number; max_len?: number; max_crashes?: number; instances?: number; seeds?: string[]; dictionary?: string[]; build_spec_id?: string | null; net?: { host?: string | null; port?: number | null; protocol?: string | null; proto_spec?: Record<string, any> | null } | null; resources?: Record<string, any>; environment?: string | null }) => postJSON<Campaign>(`/api/projects/${pid}/campaigns`, body),
   stopCampaign: (cid: string) => postJSON<Campaign>(`/api/campaigns/${cid}/stop`, {}),
   resumeCampaign: (cid: string) => postJSON<Campaign>(`/api/campaigns/${cid}/resume`, {}),
   campaignArtifacts: (cid: string) => getJSON<{ artifacts: FuzzArtifact[] }>(`/api/campaigns/${cid}/artifacts`),

@@ -17,6 +17,29 @@ def test_catalog_exposes_core_tools():
         assert callable(t["fn"]) and t["schema"]["type"] == "object"
 
 
+def test_start_fuzz_campaign_schema_declares_network_and_seed_params():
+    """Battle-test fix D: the tool DESCRIPTION told the agent to pass host/port/protocol/
+    proto_spec (network) + seeds/dictionary, but the JSON SCHEMA omitted them, so a
+    schema-respecting agent couldn't model a binary protocol or supply a corpus. The
+    schema must now declare every param the function accepts (and CampaignCreate honors)."""
+    import inspect
+
+    from hexgraph.engine.mcp_tools import start_fuzz_campaign
+
+    tool = next(t for t in mcp_tools.catalog() if t["name"] == "start_fuzz_campaign")
+    props = tool["schema"]["properties"]
+    for p in ("host", "port", "protocol", "proto_spec", "seeds", "dictionary",
+              "max_len", "max_total_time", "max_crashes", "instances", "engine",
+              "surface", "function", "resources", "environment"):
+        assert p in props, f"start_fuzz_campaign schema is missing declared param {p!r}"
+    assert props["protocol"].get("enum") == ["tcp", "udp"]
+    assert props["port"]["type"] == "integer"
+    assert props["seeds"]["type"] == "array" and props["dictionary"]["type"] == "array"
+    # The schema must not advertise a param the function can't accept (no phantom args).
+    sig = set(inspect.signature(start_fuzz_campaign).parameters)
+    assert set(props) - {"target_id"} <= sig, set(props) - sig - {"target_id"}
+
+
 def test_list_and_facts(hg_home):
     with session_scope() as s:
         p = create_project(s, name="m")

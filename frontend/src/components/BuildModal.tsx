@@ -25,14 +25,22 @@ export default function BuildModal({ projectId, tree, fetchEnabled, onClose, onB
   const [artifacts, setArtifacts] = useState("");
   const [arch, setArch] = useState("x86_64");
   const [network, setNetwork] = useState<"none" | "fetch">("none");
+  // Custom build phases (one shell command per line) for a source tree with no default
+  // recipe — previously you could only "author phases via the API". When non-empty these
+  // become the recorded compile phases (each a `shell` step); empty = the server default.
+  const [customPhases, setCustomPhases] = useState("");
   const [preview, setPreview] = useState<BuildPreview | null>(null);
   const [err, setErr] = useState<string>();
   const [busy, setBusy] = useState(false);
 
+  const phaseLines = () => customPhases.split(/\n/).map((s) => s.trim()).filter(Boolean);
   const spec = () => ({
     source_tree_id: tree.id,
     instrumentation: { sanitizers, coverage: coverage ? ["sancov"] : [], engine },
     artifacts: artifacts.split(/[\n,]/).map((s) => s.trim()).filter(Boolean),
+    // Each non-empty line is one recorded step: `sh -c "<line>"` (the probe runs the argv
+    // directly; shell:true is reserved for a recorded script PATH, not an inline command).
+    ...(phaseLines().length ? { phases: phaseLines().map((cmd) => ({ argv: ["sh", "-c", cmd], shell: false })) } : {}),
     arch, network,
   });
 
@@ -43,7 +51,7 @@ export default function BuildModal({ projectId, tree, fetchEnabled, onClose, onB
       .catch((e) => { if (live) setErr(String(e.message || e)); });
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sanitizers.join(","), coverage, engine, artifacts, arch, network]);
+  }, [sanitizers.join(","), coverage, engine, artifacts, arch, network, customPhases]);
 
   const toggleSan = (s: string) =>
     setSanitizers((cur) => cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s]);
@@ -118,6 +126,14 @@ export default function BuildModal({ projectId, tree, fetchEnabled, onClose, onB
             <input value={artifacts} onChange={(e) => setArtifacts(e.target.value)}
                    placeholder="e.g. fuzz.o, fuzz_target"
                    style={{ width: "100%", marginTop: 4, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, padding: "4px 6px", fontSize: 12 }} />
+          </label>
+
+          <label style={{ fontSize: 12 }}>
+            Custom build phases (one shell command per line — optional; overrides the default recipe)
+            <textarea value={customPhases} onChange={(e) => setCustomPhases(e.target.value)} rows={3} spellCheck={false}
+                      placeholder={"e.g.\n./autogen.sh\n./configure --disable-shared\nmake -j$(nproc) fuzz_target"}
+                      title="For a source tree with no default recipe (a plain build.sh / autotools / custom). Each line is recorded verbatim as a shell step and runs --network none in the sandbox."
+                      style={{ width: "100%", marginTop: 4, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, padding: "4px 6px", fontSize: 11.5, fontFamily: "var(--mono, monospace)" }} />
           </label>
 
           <div>

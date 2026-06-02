@@ -5,6 +5,9 @@ import { Icon } from "./Icon";
 const STATUS_COLOR: Record<string, string> = {
   running: "#58a6ff", building: "#d29922", queued: "#8b949e",
   completed: "#2ea043", failed: "#ff5d6c", stopped: "#8b949e", paused: "#d29922",
+  // A campaign that did 0 work / ran a degraded engine — a distinct WARNING terminal
+  // state, visually unlike a clean "completed" (the battle-test no-op confusion).
+  degraded: "#d29922",
 };
 
 function StatusPill({ status }: { status: string }) {
@@ -35,7 +38,7 @@ function useLiveCampaign(id: string | undefined, onUpdate: (c: Campaign) => void
         try {
           const c = await api.campaign(id);
           cb.current(c);
-          if (["completed", "failed", "stopped"].includes(c.status)) { clearInterval(poll); poll = null; }
+          if (["completed", "failed", "stopped", "degraded"].includes(c.status)) { clearInterval(poll); poll = null; }
         } catch { /* keep trying */ }
       }, 1500);
     };
@@ -126,11 +129,23 @@ function CampaignRow({ c, selected, onSelect, onChanged }: {
         {c.coverage_instrumented === false && <span title="coverage-blind run" style={{ color: "#d29922" }}>black-box</span>}
       </div>
       {c.error && <div className="muted" style={{ fontSize: 10.5, marginTop: 4, color: "#ff5d6c" }}>{c.error}</div>}
+      {/* A degraded campaign's WHY (0 execs / unreachable / engine instability) — never
+          let a no-op pass as a clean success. engine_note shows even when not terminal. */}
+      {c.warning && (
+        <div style={{ fontSize: 10.5, marginTop: 5, padding: "4px 7px", borderRadius: 4,
+                      background: "rgba(210,153,34,0.12)", border: "1px solid #d29922", color: "#d29922",
+                      display: "flex", gap: 5, alignItems: "flex-start" }}>
+          <Icon name="alert" size={11} /> <span>{c.warning}</span>
+        </div>
+      )}
+      {!c.warning && c.engine_note && (
+        <div className="muted" style={{ fontSize: 10.5, marginTop: 4, color: "#d29922" }}>⚠ {c.engine_note}</div>
+      )}
       <div className="actions" style={{ marginTop: 6 }}>
         {(c.status === "running" || c.status === "building") && (
           <button className="btn sm ghost danger" onClick={stop} disabled={busy}><Icon name="x" size={11} /> Stop</button>
         )}
-        {(c.status === "stopped" || c.status === "completed" || c.status === "failed") && (
+        {(c.status === "stopped" || c.status === "completed" || c.status === "failed" || c.status === "degraded") && (
           <button className="btn sm ghost" onClick={resume} disabled={busy}><Icon name="run" size={11} /> Resume</button>
         )}
       </div>

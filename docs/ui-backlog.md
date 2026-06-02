@@ -1,5 +1,29 @@
 # UI improvement backlog
 
+## Battle-test remediation PR-1 — fuzz UX + campaign status + egress audit (2026-06-02)
+
+**Shipped in `fix/battletest-fuzzux`** (Playwright-verified, screenshots judged):
+- **Campaign degraded/warning state** (`CampaignsPanel.tsx`, `ArtifactsView.tsx`) — a campaign
+  that did 0 work (unreachable / 0 executions) or hit engine instability now finalizes as a
+  distinct **`degraded`** status (amber pill) with a **warning banner** stating WHY (the
+  `warning` / `engine_note` the serializer now exposes). Verified: a `clean` campaign stays green
+  `completed`; `unreachable` shows "service … not reachable at start"; `unstable` shows "AFL
+  persistent mode unstable …" — visually unmistakable from a real run (was the no-op confusion).
+- **Surface-aware Fuzz modal** (`FuzzModal.tsx`) — adds a **target picker** (switch the surface to
+  fuzz, not pinned to the wrong root), **network** inputs (host / port / protocol / proto_spec)
+  shown only for a `network` surface, always-available **seeds** + **dictionary** textareas, and
+  the focus-function field hidden for network. Verified both source_lib + network states render.
+- **Custom build phases** (`BuildModal.tsx`) — a "custom build phases" textarea (one shell step
+  per line) so a `custom` source tree's recipe can be authored in the UI (was "author via the API").
+- **Egress audit-log view** (`EgressPanel.tsx`, **Audit** toolbar button) — a read-only table of
+  every outbound action (allowed/denied · destination · tool · reason) + allowed/denied counts,
+  backed by the new `GET /api/projects/{id}/egress`. Verified rendering with allowed + denied rows.
+- **Smarter launch default** (`Workspace.tsx`) — the Campaigns-tab "New campaign" button defaults
+  to the best fuzz target (instrumented → live web_app/remote → fuzz_target_sources → non-firmware
+  root) instead of `roots[0]` (the raw ingested source).
+- **Deferred:** seeds in the modal are host *paths* (no in-browser file upload); the proto_spec is a
+  raw JSON textarea (no guided binary-protocol builder).
+
 ## Editable IDE + build supply-chain badges — Phase 7 (fuzzing+source design §6.2, 2026-06-02)
 
 **Shipped in `build/fuzz-phase7`** (Playwright-verified, screenshots judged):

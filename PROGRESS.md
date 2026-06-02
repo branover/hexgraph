@@ -506,6 +506,25 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-02: **fix: battle-test remediation PR-1 — fuzz UX + dev-ex + campaign status** (branch
+  `fix/battletest-fuzzux`). Six fixes from the four VR battle-test engagements (`FEEDBACK.md` PR-1
+  block). **A [BUG-HIGH] stale SPA on `just serve`:** `serve` now depends on a new `ui-check` recipe
+  that rebuilds the SPA only if `dist` is missing or stale vs `frontend/` mtimes (no full rebuild
+  when current) — the new UI is no longer invisible by default. **F [BUG] silent degraded campaigns:**
+  a campaign that did 0 work (unreachable / 0 execs) or hit engine instability (`engine_note`) now
+  finalizes in a distinct **`degraded`** status (not a clean `completed`) via `_finalize_status`;
+  `campaign_to_dict` exposes `warning` + `engine_note`; the Campaigns/Artifacts UI renders an amber
+  degraded badge + warning banner. SSE/poll terminal sets include `degraded`. **G [UX] Fuzz modal:**
+  surface-aware network inputs (host/port/protocol/proto_spec), seeds + dictionary textareas, a target
+  picker; **D [BUG] MCP `start_fuzz_campaign` schema** now declares host/port/protocol/proto_spec +
+  seeds/dictionary/max_len (fn signature + catalog schema); REST `CampaignCreate` gained `dictionary`.
+  **N [UX]** Campaigns "New campaign" defaults to the best fuzz target, not `roots[0]`; **M [UX]**
+  new `GET /api/projects/{id}/egress` + an `EgressPanel` (Audit toolbar button) audit-log viewer.
+  Build modal gained custom-phase authoring for a `custom` source tree. **No DB migration** (status
+  is a plain String; engine_note/reason ride stats_json). Tests: degraded-status (engine + API),
+  egress endpoint, MCP schema. `just test` green (626 passed; the 2 pre-existing fuzz-remote/AFL e2e
+  failures need a configured remote DOCKER_HOST + are identical on baseline `main`). Playwright-verified
+  (campaigns degraded badges, network Fuzz modal, egress audit view). README + VR skill + ui-backlog updated.
 - 2026-06-02: **fix: AFL++ source-fuzz forkserver in the hardened sandbox** (branch
   `fix/afl-forkserver`). The Phase-3 AFL++ **source** path (`-fsanitize=fuzzer` aflpp_driver under
   `afl-fuzz`, hardened box) aborted with `Fork server crashed with signal 11` while every other

@@ -378,6 +378,27 @@ def _launch_mock(row: FuzzCampaign, prepared, spec: FuzzCampaignSpec) -> None:
     outdir = Path(row.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     scenario = spec.function or "crash"
+    # Offline degradation scenarios so the FULL `degraded` lifecycle (and its UI/serializer
+    # surfacing) is exercisable at $0 — mirroring the three real battle-test failures:
+    #   unreachable → boofuzz couldn't reach the service (ran:False);
+    #   noexec      → the campaign ran 0 executions (silent no-op);
+    #   unstable    → the engine flagged instability (engine_note).
+    if scenario in ("unreachable", "noexec", "unstable"):
+        degraded = {"compiled": True, "engine": "mock", "done": True,
+                    "coverage_instrumented": prepared.coverage_instrumented,
+                    "edges_covered": 0, "crash_count": 0, "crashes": []}
+        if scenario == "unreachable":
+            degraded.update({"ran": False, "executions": 0,
+                             "error": "service 127.0.0.1:9999 not reachable at start"})
+        elif scenario == "noexec":
+            degraded.update({"ran": True, "executions": 0})
+        else:  # unstable
+            degraded.update({"ran": True, "executions": 1000,
+                             "engine_note": "AFL persistent mode unstable on this host — "
+                                            "ran in non-persistent mode (reduced throughput)"})
+        (outdir / "status.json").write_text(json.dumps(degraded))
+        (outdir / "DONE").write_text("mock")
+        return
     crashes = []
     if scenario != "clean":
         # A deterministic reproducer + report so the verify tie-in test can re-run it.
@@ -478,7 +499,7 @@ def reap_campaign(session: Session, row: FuzzCampaign, *, executor=None) -> int:
         # instrumented binary, not the unrelated shipped target.
         _snapshot_fuzzer(session, project, row)
         if row.status != "stopped":
-            row.status = "completed" if (status and status.get("compiled", True)) else "failed"
+            row.status = _finalize_status(row, status)
             if status and not status.get("compiled", True):
                 row.error = (status.get("stderr") or "compile failed")[:500]
         row.finished_at = _now()
@@ -582,12 +603,58 @@ def _update_stats(row: FuzzCampaign, status: dict) -> None:
     if status.get("coverage_percent") is not None:
         stats["coverage_percent"] = status["coverage_percent"]
     # A diagnostic from a probe that compiled + instrumented but couldn't reach steady-state
-    # fuzzing (e.g. the AFL++ forkserver/dry-run aborted on an unstable host kernel). Surfaced
-    # so the campaign isn't a silent zero-crash "success" — the engine/UI can show WHY.
-    if status.get("afl_note"):
-        stats["engine_note"] = status["afl_note"]
+    # fuzzing (e.g. the AFL++ forkserver/dry-run aborted on an unstable host kernel, or a
+    # boofuzz engine note). Surfaced so the campaign isn't a silent zero-crash "success" —
+    # the engine/UI can show WHY. Accept the generic `engine_note` too (probe-agnostic).
+    note = status.get("engine_note") or status.get("afl_note")
+    if note:
+        stats["engine_note"] = note
+    # A network-fuzz campaign whose service was unreachable / never ran writes ran:False +
+    # an error reason in status.json (the failure was previously buried on disk). Capture
+    # the reason on the stats so finalize can flag a 0-work campaign as degraded with WHY.
+    if status.get("ran") is False and status.get("error"):
+        stats["run_error"] = str(status["error"])[:300]
     stats["last_run_at"] = _now_iso()
     row.stats_json = stats
+
+
+def _finalize_status(row: FuzzCampaign, status: dict | None) -> str:
+    """Classify a finished campaign's terminal status (design §5.5 — no silent zero-work
+    success). A campaign that failed to compile is `failed`; one that COMPILED but did no
+    real work or hit an engine degradation lands in `degraded` (a distinct WARNING terminal
+    state) so the UI/agent never mistakes it for a clean `completed`:
+
+      • the probe reported `ran: False` (e.g. boofuzz: the service was unreachable), OR
+      • it ran zero executions (no fuzzing actually happened), OR
+      • the engine flagged instability (`engine_note` — e.g. AFL persistent mode unstable).
+
+    Otherwise `completed`. `campaign_warning()` derives the human reason for the serializer.
+    The status column is a plain String — a new value is zero-migration."""
+    if status is not None and not status.get("compiled", True):
+        return "failed"
+    stats = row.stats_json or {}
+    if (status is not None and status.get("ran") is False) \
+            or int(stats.get("execs") or 0) <= 0 \
+            or stats.get("engine_note") or stats.get("run_error"):
+        return "degraded"
+    return "completed"
+
+
+def campaign_warning(row: FuzzCampaign) -> str | None:
+    """A human-readable reason a finished campaign is `degraded` (for the API serializer +
+    UI badge). None for a clean run / a still-running campaign. Prefers the most specific
+    signal: an explicit run error (unreachable), then an engine note (instability), then a
+    generic zero-work message."""
+    if row.status != "degraded":
+        return None
+    stats = row.stats_json or {}
+    if stats.get("run_error"):
+        return str(stats["run_error"])
+    if stats.get("engine_note"):
+        return str(stats["engine_note"])
+    if int(stats.get("execs") or 0) <= 0:
+        return "campaign ran 0 executions — no fuzzing actually happened (check the target/harness)"
+    return "campaign finished with a degraded result"
 
 
 # ── Stop / resume ────────────────────────────────────────────────────────────────
@@ -624,8 +691,9 @@ def resume_campaign(session: Session, row: FuzzCampaign, *, executor=None) -> Fu
     """Resume a stopped campaign, seeded from the preserved corpus (AFL++ resumes
     natively). Re-prepares from the recorded config + the CAS corpus snapshot and
     launches a fresh detached container under the same row."""
-    if row.status not in ("stopped", "completed", "failed"):
-        raise CampaignError(f"campaign is {row.status}; only a stopped/completed one resumes")
+    if row.status not in ("stopped", "completed", "failed", "degraded"):
+        raise CampaignError(f"campaign is {row.status}; only a finished one (stopped/"
+                            f"completed/failed/degraded) resumes")
     project = session.get(Project, row.project_id)
     target = session.get(Target, row.target_id)
     cfg = dict(row.config_json or {})
@@ -643,7 +711,11 @@ def resume_campaign(session: Session, row: FuzzCampaign, *, executor=None) -> Fu
     row.outdir = new.outdir
     row.status = "running"
     row.finished_at = None
-    row.stats_json = {**(row.stats_json or {}), "last_run_at": _now_iso()}
+    # Clear the prior run's degradation signals so a resumed campaign isn't re-finalized
+    # `degraded` off a STALE note/error (the new run sets its own if it degrades again).
+    fresh = {k: v for k, v in (row.stats_json or {}).items()
+             if k not in ("engine_note", "run_error")}
+    row.stats_json = {**fresh, "last_run_at": _now_iso()}
     # Clean up everything start_campaign created for the throwaway row so resuming
     # doesn't leak a dangling fuzzed_by edge (→ a now-deleted campaign) or an orphan
     # backing task on every resume.
@@ -1131,6 +1203,11 @@ def campaign_to_dict(row: FuzzCampaign) -> dict:
         "build_spec_id": row.build_spec_id, "task_id": row.task_id,
         "corpus_ref": row.corpus_ref, "coverage_ref": row.coverage_ref,
         "error": row.error,
+        # First-class degradation signal (design §5.5 — no silent zero-work success). A
+        # `degraded` campaign exposes WHY here; `engine_note` is the raw engine-instability
+        # diagnostic (also in stats, surfaced top-level so the UI doesn't dig).
+        "warning": campaign_warning(row),
+        "engine_note": (row.stats_json or {}).get("engine_note"),
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "finished_at": row.finished_at.isoformat() if row.finished_at else None,
     }

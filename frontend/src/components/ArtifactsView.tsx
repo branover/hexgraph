@@ -36,10 +36,19 @@ export default function ArtifactsView({ campaign, onViewFinding, onOpenSource }:
       <div className="head"><Icon name="bug" size={16} /><h3 style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{campaign.name}</h3></div>
       <div className="chips">
         <span className="tag">{campaign.engine} · {campaign.surface}</span>
-        <span className="tag">{campaign.status}</span>
+        <span className="tag" style={campaign.status === "degraded" ? { color: "#d29922", borderColor: "#d29922" } : undefined}>{campaign.status}</span>
         <span className="tag">{(campaign.stats?.crash_count ?? crashes.length)} crashes</span>
         {campaign.stats?.coverage_percent != null && <span className="tag">{campaign.stats.coverage_percent.toFixed(0)}% cov</span>}
       </div>
+      {/* A degraded campaign's WHY, so a no-op / unreachable / unstable run isn't read as a
+          clean zero-crash success (the battle-test confusion). */}
+      {(campaign.warning || campaign.engine_note) && (
+        <div style={{ fontSize: 11, marginTop: 8, padding: "6px 9px", borderRadius: 5,
+                      background: "rgba(210,153,34,0.12)", border: "1px solid #d29922", color: "#d29922",
+                      display: "flex", gap: 6, alignItems: "flex-start" }}>
+          <Icon name="alert" size={13} /> <span>{campaign.warning || campaign.engine_note}</span>
+        </div>
+      )}
 
       {crashes.length === 0 && (
         <div className="empty" style={{ padding: 16, fontSize: 12 }}>

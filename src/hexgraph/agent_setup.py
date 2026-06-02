@@ -251,7 +251,7 @@ recorded recipe in the sandbox. This is the analogue of "you direct, HexGraph ru
 A **campaign** is a long-lived, detached fuzz job — the SOTA upgrade over the single
 `fuzzing` task. You NEVER run a fuzzer; you REQUEST a campaign and HexGraph spawns +
 reaps a hardened sandbox container.
-- **`start_fuzz_campaign(target_id, surface?, engine?, function?, host?, port?, protocol?, proto_spec?, max_total_time?, max_crashes?, instances?, resources?, environment?)`**
+- **`start_fuzz_campaign(target_id, surface?, engine?, function?, host?, port?, protocol?, proto_spec?, seeds?, dictionary?, max_total_time?, max_len?, max_crashes?, instances?, resources?, environment?)`**
   returns immediately with `{id, status:'running'}`. The `Fuzzer` seam picks the engine by
   attack **surface** (auto-inferred from the target; override `surface`/`engine` if needed):
   - **source_lib** — a **Phase-2 instrumented derived target** (a `build_target` rebuild, with
@@ -271,8 +271,13 @@ reaps a hardened sandbox container.
     **Remote blind network-fuzz of a physical bench device is OFF by default** (destructive) —
     prefer replay/PoC of a known crash over blind mutation.
   - **file_format** — a structured-input parser → AFL++/libFuzzer + an auto-dictionary.
-  `instances` = AFL++ master + N-1 secondaries (capped per host).
-- **Poll `fuzz_status(campaign_id)`** for live stats (execs, edges_covered, crash_count, coverage)
+  `instances` = AFL++ master + N-1 secondaries (capped per host). Optional **`seeds`** (host
+  corpus paths) + **`dictionary`** (tokens; auto-derived from the target's strings when omitted)
+  shape the search; **`max_len`** caps input size.
+- **Poll `fuzz_status(campaign_id)`** for live stats (execs, edges_covered, crash_count, coverage).
+  **Check the campaign `status`**: a clean run is `completed`, but a campaign that did 0 work
+  (service unreachable / 0 executions) or hit engine instability finalizes as **`degraded`** —
+  NOT a silent zero-crash success. The reason rides `warning` / `engine_note` on the status.
   and **`list_fuzz_artifacts(campaign_id)`** for the deduplicated crashes. Crashes STREAM as they
   happen — an early crash in a 6-hour run surfaces in minutes; you don't wait for the budget.
   Each unique crash becomes a **`fuzz_crash` finding** (one representative per normalized
