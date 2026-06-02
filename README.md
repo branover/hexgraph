@@ -313,6 +313,17 @@ and — where it can identify the code behind a route — draws a **`routes_to`*
 to its handler `function`. That edge is the **bridge between the static and dynamic views**: the same
 graph holds both the binary you reversed and the live service it serves.
 
+A device exposes more than the web, so a bare **non-HTTP network service** — a bind shell, a vendor
+binary control protocol, a custom daemon on some high port — is a first-class surface too:
+a **`service` target** reached over a raw TCP/UDP Channel `{kind, host, port}`, with **no bytes and no
+credentials** (a protocol endpoint you talk to, not a box you log into). Register one with
+`register_socket(project_id, host, port, transport="tcp")` (MCP) or `POST
+/api/projects/{id}/targets/socket`; it links to the shared `socket` graph node via a `listens_on` edge
+(the network-map endpoint), and HexGraph infers the **`network` surface** for it — so `start_fuzz_campaign`
+points **boofuzz** straight at `host:port` and `tcp_request`/`verify_poc` probe and prove it, all on the
+bounded local-network tier below. (Use this instead of misusing a `remote`/telnet target for a bare
+protocol — `remote` carries SSH/telnet **shell** semantics a socket service doesn't have.)
+
 **Live assessment is gated by `features.network`** (off by default). With it on, HexGraph can actually
 talk to the surface: an `http_request` tool (with a `session` cookie jar that persists across calls)
 and a **web-flavoured `verify_poc`** whose oracle is the same unforgeable `{{NONCE}}` token used for

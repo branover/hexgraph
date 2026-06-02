@@ -155,6 +155,14 @@ do to an extracted/rehosted rootfs, but live:
 A device exposes more than web: a bind shell, a binary control protocol, a pwnable daemon on
 some high port. `rehost` returns `ports` (everything that answered); a `socket` node or netstat
 shows what's listening. To assess these LIVE:
+- **`register_socket(project_id, host, port, transport="tcp", proto?, parent_ref?)`** registers
+  a bare non-HTTP service as a first-class `service` target (a Channel `{kind,host,port}`, no
+  bytes, NO credentials). This is the RIGHT way to model a raw-TCP service — do NOT misuse
+  `register_remote(transport="telnet")` for a bare protocol (that carries SSH/telnet SHELL
+  semantics a protocol endpoint doesn't have). Pass `parent_ref` to make it a child of a
+  rehosted firmware (the probe then reaches the device's private IP through the emulator netns).
+  Once registered, `start_fuzz_campaign(target)` infers the `network` surface and fuzzes it
+  directly (boofuzz at host:port), and the probes below work against it.
 - **`tcp_request(target, port, payload?)`** is your hands on a raw socket (the non-HTTP
   `http_request`): connect to the device's port (through the emulator netns when rehosted),
   optionally send `payload` bytes, read the bounded response. Omit `payload` to banner-grab and

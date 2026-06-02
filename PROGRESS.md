@@ -54,7 +54,23 @@ then run the resume verifier, then continue at the next unchecked task.
   branches web_app→HTTP oracle (`body_contains`/`status_is`/`status_differs`, gated by features.network)
   vs binary→exec (features.poc); `{{NONCE}}` shared so a web RCE is unforgeable. SKILL §2b +
   `docs/engagement-vulnrouter.md` + `just vulnrouter`. **Validated**: an agent (MCP only, no source) solved
-  vulnrouter — auth bypass + RCE verified → 6 findings/11 nodes/29 edges. Plus **graph-quality + tool
+  vulnrouter — auth bypass + RCE verified → 6 findings/11 nodes/29 edges.
+  **First-class raw-TCP/socket targets DONE** (branch `build/register-socket`): a bare non-HTTP service
+  (bind shell / vendor binary protocol / custom daemon) is now its own **`TargetKind.service`** —
+  reached via a raw TCP/UDP Channel `{kind,host,port}` in `metadata_json`, **no bytes, no credentials**
+  (zero-migration: `Target.kind` is a constraint-free `VARCHAR` on SQLite, like `web_app`/`remote` before
+  it). `surfaces.register_socket_target` mirrors `register_web_surface`/`register_remote_target` and links
+  the surface to the shared `socket` graph node via a `listens_on` edge (surface vs annotation stays
+  distinct). `infer_surface` returns `network` for it, so `start_fuzz_campaign` points **boofuzz** straight
+  at the target's `host:port` (`_launch_network` reads them from the Channel) on the EXISTING bounded
+  local-network tier — `local_tcp_scope` (loopback/private only, refuses public), `features.network`,
+  every send audited to `EgressEvent`; **no policy relaxation, no new gate**. MCP `register_socket` (under
+  `run`, like its siblings) + REST `POST /api/projects/{id}/targets/socket`; SKILL §2d + README updated to
+  use it INSTEAD of misusing `register_remote(transport=telnet)` for a bare protocol. UI: `service` added
+  to the graph kind-color + icon maps + `bestFuzzTarget`; the existing Fuzz modal already makes it
+  selectable + network-fuzzable (Playwright-verified — two service targets `listens_on` their socket
+  nodes). Tests: `tests/test_sockets.py` (register/channel/node-link/validation, infer_surface→network, a
+  mock network campaign launches egress-gated+audited + refuses a public host, REST+MCP paths). Plus **graph-quality + tool
   contracts**: every target-bound node gets a `contains` edge (no orphans); `engine/node_schemas.py`
   advertised via `get_schemas` with per-type `use_when`/recommended attrs + the sink-vs-symbol rule;
   `run_task` folds dupes; `test_tool_contract.py` locks it. `just sandbox-build` now forwards
