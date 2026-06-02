@@ -27,6 +27,12 @@ from hexgraph import config as _cfg
 DEFAULTS: dict[str, Any] = {
     "llm": {"backend": "mock", "model": None},
     "server": {"host": "127.0.0.1", "port": 8765},
+    # Non-secret UI preferences. `lenses` are the named graph "Saved Lenses"
+    # (design-graph-presentation §6.2): each captures {view, scope, group-by,
+    # active filters, layer visibility, focus} so a complex target has several
+    # inviting saved entry points. Persisted here (managed prefs, NO DB/schema
+    # change); deep-linkable by `name`. A pure presentation pref — never a secret.
+    "ui": {"lenses": []},
     "features": {
         "ghidra": {
             "enabled": False,
@@ -210,6 +216,11 @@ ALLOWED: dict[str, tuple[Any, set | None]] = {
     "llm.model": ((str, type(None)), None),
     "server.host": (str, None),
     "server.port": (int, None),
+    # Saved graph Lenses (design-graph-presentation §6.2). A list of named,
+    # non-secret presentation snapshots; each item is validated structurally by
+    # `_validate_lenses` (the dotted-path scalar model can't express a list of
+    # objects). Replaces the whole list on each write (the UI sends the full set).
+    "ui.lenses": (list, None),
     "features.ghidra.enabled": (bool, None),
     "features.ghidra.mode": (str, {"headless", "bridge"}),
     "features.ghidra.enrich_recon": (bool, None),
@@ -271,6 +282,48 @@ ALLOWED: dict[str, tuple[Any, set | None]] = {
 
 class SettingsError(ValueError):
     """A settings write was rejected (unknown key, bad type, illegal value)."""
+
+
+# A Saved Lens is a small, non-secret presentation snapshot. We bound it tightly
+# (names + a fixed key allowlist + caps) so settings.json can't be turned into an
+# arbitrary blob store via this path.
+_LENS_MAX = 64
+_LENS_KEYS = {"name", "view", "scope", "groupBy", "findings", "layers", "filters", "focus", "hop"}
+
+
+def _validate_lenses(value: Any) -> list:
+    """Structurally validate the Saved-Lenses list (a list of bounded dicts).
+
+    The dotted-path/scalar ALLOWED model can't express a list of objects, so the
+    lens list gets its own validator: each lens must be a dict with a non-empty
+    string `name`, only known keys, and a sane size. Returns a normalized copy."""
+    if not isinstance(value, list):
+        raise SettingsError("ui.lenses expects a list")
+    if len(value) > _LENS_MAX:
+        raise SettingsError(f"ui.lenses may hold at most {_LENS_MAX} lenses")
+    out: list = []
+    seen: set[str] = set()
+    for i, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise SettingsError(f"ui.lenses[{i}] must be an object")
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise SettingsError(f"ui.lenses[{i}].name must be a non-empty string")
+        if len(name) > 80:
+            raise SettingsError(f"ui.lenses[{i}].name too long")
+        extra = set(item) - _LENS_KEYS
+        if extra:
+            raise SettingsError(f"ui.lenses[{i}] has unknown keys {sorted(extra)}")
+        if name in seen:
+            raise SettingsError(f"ui.lenses has a duplicate name {name!r}")
+        seen.add(name)
+        # Re-serialize to guarantee it's plain JSON (no secrets, no surprises) and
+        # bounded in size — a lens is a tiny snapshot, not a payload.
+        blob = json.dumps(item)
+        if len(blob) > 4096:
+            raise SettingsError(f"ui.lenses[{i}] is too large")
+        out.append(json.loads(blob))
+    return out
 
 
 def settings_path() -> Path:
@@ -356,6 +409,11 @@ def update_settings(patch: dict) -> dict:
     for path, value in flat.items():
         if path not in ALLOWED:
             raise SettingsError(f"unknown or read-only setting {path!r}")
+        # Saved Lenses are a list of bounded objects — validated structurally
+        # rather than by the scalar (type, choices) rule below.
+        if path == "ui.lenses":
+            _set_path(raw, path, _validate_lenses(value))
+            continue
         typ, choices = ALLOWED[path]
         if isinstance(typ, tuple):
             ok = isinstance(value, typ)

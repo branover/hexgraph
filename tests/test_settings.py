@@ -87,6 +87,43 @@ def test_settings_api_roundtrip(hg_home):
     assert bad.status_code == 400
 
 
+def test_lenses_default_empty(hg_home):
+    assert st.read_settings()["settings"]["ui"]["lenses"] == []
+
+
+def test_lenses_roundtrip_and_persist(hg_home):
+    lens = {"name": "Attack surface", "view": "graph", "groupBy": "type",
+            "filters": {"severity": "high"}, "layers": {"nodes": {"string": False}}}
+    st.update_settings({"ui.lenses": [lens]})
+    got = st.get("ui.lenses")
+    assert got == [lens]
+    # persisted to settings.json
+    assert json.loads(st.settings_path().read_text())["ui"]["lenses"][0]["name"] == "Attack surface"
+
+
+def test_lenses_reject_bad_shapes(hg_home):
+    with pytest.raises(st.SettingsError):
+        st.update_settings({"ui.lenses": "not-a-list"})
+    with pytest.raises(st.SettingsError):
+        st.update_settings({"ui.lenses": [{"view": "graph"}]})  # missing name
+    with pytest.raises(st.SettingsError):
+        st.update_settings({"ui.lenses": [{"name": ""}]})  # empty name
+    with pytest.raises(st.SettingsError):
+        st.update_settings({"ui.lenses": [{"name": "x", "evil": 1}]})  # unknown key
+    with pytest.raises(st.SettingsError):
+        st.update_settings({"ui.lenses": [{"name": "dup"}, {"name": "dup"}]})  # dup name
+
+
+def test_lenses_api_roundtrip(hg_home):
+    c = TestClient(create_app())
+    assert c.get("/api/settings").json()["settings"]["ui"]["lenses"] == []
+    r = c.patch("/api/settings", json={"ui.lenses": [{"name": "Findings only", "view": "table"}]})
+    assert r.status_code == 200
+    assert r.json()["settings"]["ui"]["lenses"][0]["name"] == "Findings only"
+    bad = c.patch("/api/settings", json={"ui.lenses": [{"view": "x"}]})
+    assert bad.status_code == 400
+
+
 def test_ghidra_test_endpoint_disabled(hg_home):
     c = TestClient(create_app())
     r = c.post("/api/settings/ghidra/test")
