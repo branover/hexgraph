@@ -539,8 +539,14 @@ then run the resume verifier, then continue at the next unchecked task.
   node/edge-type variety. Each step asserts its outcome (replacing the brittle hard counts); needs only the
   base sandbox image + mock seams (no fuzz/build Docker images, no key, no network). Distinct from
   `just showcase` (which SEEDS rows; demo RUNS the pipeline). justfile demo doc-comment + `test_demo.py`
-  docstring refreshed. No migration (no model change), frozen finding schema untouched. `just test` green
-  (offline); `just demo` exits 0 with the new narrated arc (5 targets · 117 nodes · 118 edges · 7 findings).
+  docstring refreshed. No migration (no model change), frozen finding schema untouched. `just demo` exits 0
+  with the new narrated arc (5 targets · 117 nodes · 118 edges · 7 findings).
+  **PR-review fix:** the demo was leaking `HEXGRAPH_BUILDER/_FUZZER=mock` into the process env (`main()` set
+  them unconditionally, restored only `HEXGRAPH_HOME`), which steered 16 later full-suite tests onto the mock
+  seam (the "pre-existing failures" were actually this regression). Now `main()` snapshots + restores the
+  mutated env keys in a `finally` (body in `_run()`); `test_demo` asserts no leak. Full offline suite: 1
+  remaining failure (`test_fuzz_phase6::test_full_campaign_via_local_daemon_as_remote`) is pre-existing —
+  passes standalone, flaky only under full-suite Docker contention (the `remote-fuzz-e2e` sibling's domain).
 - 2026-06-02: **build: reproducible screenshot showcase + captures** (branch `build/showcase`).
   A deterministic, $0/offline **showcase** project for the README hero shots + per-feature doc
   captures. `scripts/seed_showcase.py` (`just showcase [--reset]`) seeds ONE rich engagement on
