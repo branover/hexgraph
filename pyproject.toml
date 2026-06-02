@@ -37,7 +37,7 @@ setup = [
 ]
 # NB: there is no host-side "analysis" extra. The binary-analysis libs
 # (r2pipe/lief/pyelftools) are imported ONLY inside sandbox/probes/*.py, which run
-# in the disposable sandbox image (Dockerfile.sandbox), never in the host process.
+# in the disposable sandbox image (docker/sandbox.Dockerfile), never in the host process.
 # Real Anthropic backend (BYOK). The mock backend needs none of this.
 byok = [
     "anthropic>=0.40",

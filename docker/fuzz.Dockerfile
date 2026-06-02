@@ -19,10 +19,10 @@
 #   - preeny / desock.so — desock+AFL++ coverage-fuzzes a LOCAL server binary with
 #     --network none (network tier 1, static-by-default).
 #
-# Build:  docker build -f Dockerfile.fuzz -t hexgraph-fuzz:latest .
+# Build:  docker build -f docker/fuzz.Dockerfile -t hexgraph-fuzz:latest .  (context = repo root)
 #         WORKTREE DISCIPLINE: for local testing build a PRIVATE tag and point the env
 #         override at it — NEVER clobber a shared tag:
-#           docker build -f Dockerfile.fuzz -t hexgraph-fuzz:wt-fuzz-phase3 .
+#           docker build -f docker/fuzz.Dockerfile -t hexgraph-fuzz:wt-fuzz-phase3 .
 #           export HEXGRAPH_FUZZ_IMAGE=hexgraph-fuzz:wt-fuzz-phase3
 #
 # Run ONLY via sandbox/runner.py — same hardening as every sandbox container:

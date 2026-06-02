@@ -295,7 +295,7 @@ def symbolizer_env(base: dict | None = None) -> dict:
 
     ASan only emits module+offset frames (unsymbolized) unless it can find
     llvm-symbolizer; the base sandbox image lacks it, but the dedicated `hexgraph-fuzz`
-    image HAS it (Dockerfile.fuzz). We point ASAN_SYMBOLIZER_PATH at it explicitly +
+    image HAS it (docker/fuzz.Dockerfile). We point ASAN_SYMBOLIZER_PATH at it explicitly +
     `symbolize=1` so the crash replay produces source-mapped frames (battle-test H — the
     headline 'frame → source jump' + symbolized stack). Best-effort: if no symbolizer is
     on PATH the env is harmless (ASan falls back to module+offset, as before)."""

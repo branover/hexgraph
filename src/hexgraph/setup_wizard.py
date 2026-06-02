@@ -315,7 +315,7 @@ def _repo_root() -> str:
     here = os.getcwd()
     cur = here
     for _ in range(6):
-        if os.path.exists(os.path.join(cur, "justfile")) or os.path.exists(os.path.join(cur, "Dockerfile.sandbox")):
+        if os.path.exists(os.path.join(cur, "justfile")) or os.path.exists(os.path.join(cur, "docker", "sandbox.Dockerfile")):
             return cur
         parent = os.path.dirname(cur)
         if parent == cur:

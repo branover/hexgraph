@@ -1,0 +1,15 @@
+# Keep the Docker build context small + reproducible. The build needs source + frontend +
+# migrations only; everything below is host/dev state or rebuilt inside the image.
+.git
+.venv
+**/.venv
+.hghome
+**/.hghome
+.hexgraph
+frontend/node_modules
+**/__pycache__
+**/*.pyc
+.pytest_cache
+*.egg-info
+src/hexgraph/web/dist
+tests/fixtures

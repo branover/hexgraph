@@ -16,6 +16,7 @@ py             := ".venv/bin/python"          # venv interpreter
 pip            := ".venv/bin/pip"             # venv pip
 host           := env_var_or_default("HEXGRAPH_HOST", "127.0.0.1")  # loopback only — do not change (product invariant)
 port           := env_var_or_default("HEXGRAPH_PORT", "8765")       # API/UI port (ambient HEXGRAPH_PORT or `just port=… serve` wins)
+app_image      := env_var_or_default("HEXGRAPH_APP_IMAGE", "hexgraph-app:latest")       # full app (frontend+backend) image tag
 sandbox_image  := "hexgraph-sandbox:latest"   # analysis sandbox image tag
 build_image    := env_var_or_default("HEXGRAPH_BUILD_IMAGE", "hexgraph-build:latest")  # build-from-source image tag
 fuzz_image     := env_var_or_default("HEXGRAPH_FUZZ_IMAGE", "hexgraph-fuzz:latest")    # coverage-guided fuzz image tag
@@ -114,15 +115,15 @@ ui-check:
 ui:
     cd frontend && npm install && npm run build
 
-# REBUILD WHEN you change Dockerfile.sandbox or the sandbox toolchain — NOT when you
+# REBUILD WHEN you change docker/sandbox.Dockerfile or the sandbox toolchain — NOT when you
 # edit/add a probe under sandbox/probes/ (probes are mounted from the install at runtime,
 # so probe changes need no rebuild). with_ghidra=1 is an opt-in heavy build.
 # Build the analysis sandbox Docker image (needs Docker; with_ghidra=1 bundles Ghidra headless).
 [group('build')]
 sandbox-build with_ghidra="0":
-    docker build -f Dockerfile.sandbox --build-arg WITH_GHIDRA={{with_ghidra}} -t {{sandbox_image}} .
+    docker build -f docker/sandbox.Dockerfile --build-arg WITH_GHIDRA={{with_ghidra}} -t {{sandbox_image}} .
 
-# OPT-IN, gated by features.build. REBUILD WHEN you change Dockerfile.build or the build
+# OPT-IN, gated by features.build. REBUILD WHEN you change docker/build.Dockerfile or the build
 # toolchain — NOT when you edit build_probe.py (probes are mounted from the install at
 # runtime). This DEDICATED image (clang/LLVM + sanitizers + SanCov + AFL++ compilers) is
 # the recorded base_image a BuildSpec compiles in; it is NOT the shared sandbox image.
@@ -131,9 +132,9 @@ sandbox-build with_ghidra="0":
 # Build the build-from-source image (needs Docker; with_cross=1 adds cross gcc/binutils + qemu-user for firmware cross-compile).
 [group('build')]
 build-image with_cross="0":
-    docker build -f Dockerfile.build --build-arg WITH_CROSS={{with_cross}} -t {{build_image}} .
+    docker build -f docker/build.Dockerfile --build-arg WITH_CROSS={{with_cross}} -t {{build_image}} .
 
-# OPT-IN, gated by features.fuzzing/poc. REBUILD WHEN you change Dockerfile.fuzz or the
+# OPT-IN, gated by features.fuzzing/poc. REBUILD WHEN you change docker/fuzz.Dockerfile or the
 # fuzz toolchain — NOT when you edit fuzz_probe.py / afl_probe.py (probes are mounted
 # from the install at runtime). This DEDICATED image (AFL++ LTO/CmpLog + libFuzzer +
 # llvm-symbolizer + afl-cov/llvm-cov + gdb + qemu-user) is what a coverage-guided fuzz
@@ -143,7 +144,28 @@ build-image with_cross="0":
 # Build the coverage-guided fuzz image (needs Docker; AFL++ + libFuzzer + llvm-symbolizer).
 [group('build')]
 fuzz-build:
-    docker build -f Dockerfile.fuzz -t {{fuzz_image}} .
+    docker build -f docker/fuzz.Dockerfile -t {{fuzz_image}} .
+
+# Build the full HexGraph app image (frontend SPA + backend + docker CLI) for the
+# `docker compose up` path. The host pip install (`just setup`) remains the primary/dev
+# path; this is for running the whole thing in a container. Multi-stage: Node builds the
+# SPA, Python installs the package with the bundle. REBUILD WHEN you change app source,
+# frontend/, or docker/app.Dockerfile.
+[group('build')]
+app-build:
+    docker build -f docker/app.Dockerfile -t {{app_image}} .
+
+# Start HexGraph via docker-compose at http://{{host}}:{{port}} (published on host
+# loopback only). Mounts the host Docker socket so the app spawns its sandbox/build/fuzz
+# sibling containers on the host daemon — see the security note in docker-compose.yml.
+[group('run')]
+up:
+    docker compose up --build
+
+# Stop the docker-compose stack (keeps the named data volume).
+[group('run')]
+down:
+    docker compose down
 
 # ===========================================================================
 # test — the offline suites (mock backend, $0)

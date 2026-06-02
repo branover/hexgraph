@@ -4,10 +4,10 @@
 # of coverage-guided fuzzing). It IS the recorded `base_image` in a BuildSpec, so it
 # is date-tagged for reproducibility.
 #
-# Build:  docker build -f Dockerfile.build -t hexgraph-build:latest .
+# Build:  docker build -f docker/build.Dockerfile -t hexgraph-build:latest .  (context = repo root)
 #         WORKTREE DISCIPLINE: for local testing build a PRIVATE tag and point the
 #         env override at it — NEVER clobber a shared tag:
-#           docker build -f Dockerfile.build -t hexgraph-build:wt-<topic> .
+#           docker build -f docker/build.Dockerfile -t hexgraph-build:wt-<topic> .
 #           export HEXGRAPH_BUILD_IMAGE=hexgraph-build:wt-<topic>
 #
 # Run ONLY via sandbox/runner.py with --network none (vendored/offline only this

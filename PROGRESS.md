@@ -111,7 +111,7 @@ then run the resume verifier, then continue at the next unchecked task.
   `engine/build.py` (`get_builder()`, `HEXGRAPH_BUILDER`, default `sandbox`; `MockBuilder` for
   offline `just test`) + `engine/builds.py` (orchestration: persist the recipe, run it, CAS-ingest
   artifacts/log, register the derived target) + `build_probe.py`/`build_detect_probe.py` +
-  `Dockerfile.build`/`hexgraph-build` (`just build-image` — clang/LLVM + sanitizers + SanCov +
+  `docker/build.Dockerfile`/`hexgraph-build` (`just build-image` — clang/LLVM + sanitizers + SanCov +
   AFL++ + `llvm-symbolizer`). **`BuildSpec`** {system, phases (recorded verbatim), instrumentation,
   artifacts, NON-secret env, arch, base_image, network="none"} with **`recipe_sha` = hash{phases,
   env, base_image, instrumentation, arch}** — reproducibility is the contract (same recipe_sha +
@@ -135,7 +135,7 @@ then run the resume verifier, then continue at the next unchecked task.
   of the Phase-0 single-pass path — `execute_fuzzing` now resolves inputs through the seam, byte-
   identical, regression-tested) + **`AflPlusPlusFuzzer`** (`afl-clang-fast` + persistent libFuzzer-
   driver `main` + llvm-symbolizer, real coverage on the Phase-2 instrumented derived target) +
-  `MockFuzzer`. **Dedicated `hexgraph-fuzz` image** (`Dockerfile.fuzz` / `just fuzz-build` [D4] —
+  `MockFuzzer`. **Dedicated `hexgraph-fuzz` image** (`docker/fuzz.Dockerfile` / `just fuzz-build` [D4] —
   AFL++ LTO/CmpLog + libFuzzer + llvm-symbolizer + afl-cov + gdb + qemu-user; worktree builds a
   PRIVATE tag, `HEXGRAPH_FUZZ_IMAGE`). **Detached campaign lifecycle [§5.5]:** `Executor.start_detached`/
   `poll_detached`/`stop_detached` (a `docker run -d` long-lived container, SAME hardening) owned by a
@@ -217,7 +217,7 @@ then run the resume verifier, then continue at the next unchecked task.
   a service → `features.network` — `start_campaign`/`verify_artifact`/the API/MCP pick the right gate,
   **no `policy.py` edit, no new gate**. `start_detached` gained a policy-checked `allow_network`/
   `net_container` (the single place a detached campaign relaxes `--network none`; all other security
-  flags hold). Image: `Dockerfile.fuzz` now builds AFL++ from source with **qemu-mode (afl-qemu-trace)
+  flags hold). Image: `docker/fuzz.Dockerfile` now builds AFL++ from source with **qemu-mode (afl-qemu-trace)
   + frida-mode**, **preeny/desock**, and **boofuzz** (a PRIVATE `hexgraph-fuzz:wt-fuzz-phase5` tag for
   the worktree, `HEXGRAPH_FUZZ_IMAGE`). Tests: `tests/test_fuzz_phase5.py` (19 offline — the matrix +
   fail-closed pairs, prepare() launch descriptions, the network bounded-egress gate + audit + the
@@ -445,7 +445,7 @@ then run the resume verifier, then continue at the next unchecked task.
 - [x] M1-T6 `docker-compose.yml` + `Dockerfile` loopback UI service (build not yet smoke-tested)
 
 ## M2 — Recon loop  *(core loop demonstrable with ZERO model calls)* ✅
-- [x] M2-T1 `Dockerfile.sandbox` (file/binwalk/strings/pyelftools/lief; Ghidra opt-in build arg).
+- [x] M2-T1 `docker/sandbox.Dockerfile` (file/binwalk/strings/pyelftools/lief; Ghidra opt-in build arg).
       **radare2 deferred to M3-T1** (not in bookworm-slim apt; install from upstream there).
 - [x] M2-T2 `sandbox/runner.py` docker run --network none --read-only + mem/cpu/pids caps + tmpfs +
       timeout (docker kill); HOME/TMP→/scratch; probes baked in (dev-mount via HEXGRAPH_SANDBOX_DEV=1)
@@ -531,6 +531,26 @@ then run the resume verifier, then continue at the next unchecked task.
   pyproject.toml + frontend/package.json), with an aggregation note (tools run as separate processes /
   in containers → consistent with HexGraph's own AGPL-3.0). License stays AGPL-3.0; README untouched
   (owned by a concurrent sibling PR). Docs-only — no test impact.
+- 2026-06-02: **build: Docker reorg + app image + docker-compose** (branch `build/docker-reorg`).
+  Consolidated all Dockerfiles under `docker/`: moved `Dockerfile.{sandbox,build,fuzz}` → `docker/{sandbox,build,fuzz}.Dockerfile`
+  (build context stays the repo root, COPY paths unchanged), keeping `docker/firmae/` + `docker/qemu/` as-is.
+  Updated **every** reference (`justfile` build recipes, `setup_catalog.py` build commands, `setup_wizard.py`
+  repo-root detection → `docker/sandbox.Dockerfile`, `CLAUDE.md` paths/worktree notes/where-things-live,
+  `docs/design-fuzzing-and-source.md`, `pyproject.toml` + `fuzz_probe.py` comments, PROGRESS history tokens).
+  **New `docker/app.Dockerfile`** — the full app (multi-stage: Node builds the SPA, Python installs the package
+  editable so the migration runner's `repo_root()` resolves `/opt/hexgraph/migrations`; includes the docker CLI
+  for Docker-out-of-Docker). Entrypoint runs `hexgraph db upgrade --no-backup` then `hexgraph serve`. **New
+  `docker-compose.yml`** (one `app` service): publishes **host loopback only** `127.0.0.1:8765:8765`, mounts the
+  host Docker socket so the app spawns its sandbox/build/fuzz siblings on the host daemon (DooD; documented as an
+  intentional single-user-local trade-off, not hardened/multi-tenant), persists a named `hexgraph-data` volume at
+  `/data`, BYOK key passthrough (never baked in), optional `config.toml` RO mount. **Loopback guard:** added a
+  recognized container mode to `api/loopback.py` — `HEXGRAPH_IN_CONTAINER=1` lets `assert_loopback` accept the
+  `0.0.0.0` bind Docker's published-port forwarding needs, **without** widening the anti-DNS-rebinding Host-header
+  allowlist (the host-loopback guarantee is preserved at the publish boundary); an un-flagged non-loopback bind
+  still raises. Tests added (`test_loopback.py`). New `just` recipes `app-build`/`up`/`down`; `.dockerignore` added.
+  README gained a "Run with Docker" section (compose path + socket-mount security note + DISCLAIMER.md reference).
+  **Verified:** `docker compose config` valid; the app image builds; smoke-run migrated the DB to head, bound
+  0.0.0.0 in-container, and `/health` + `/` returned 200 over the loopback-published port. `just test` green.
 - 2026-06-02: **build: graph presentation Phase 1 — visual legibility** (branch `build/graph-phase1`;
   `docs/design-graph-presentation.md` §8 Phase 1). Frontend-only, **zero new deps, color-coding
   untouched (D8)**. `GraphView.tsx` + `theme.css`: structural edges recede (opacity ~0.18, arrowheads
@@ -821,7 +841,7 @@ then run the resume verifier, then continue at the next unchecked task.
   crash→dedup→verify chain on a capable host and **skips with that reason** when the kernel can't
   calibrate (no false green, no hard flake). Docs: `docs/design-fuzzing-and-source.md` §7 + README
   hostile-target-isolation note. `just test` green (609); `just demo` exits 0. No migration (no model
-  change), no `Dockerfile.fuzz` change (probes mounted at runtime).
+  change), no `docker/fuzz.Dockerfile` change (probes mounted at runtime).
 - 2026-06-02: **fix: AFL++ source-fuzz on high-ASLR-entropy kernels** (branch `fix/afl-aslr`).
   After the `/dev/shm` fix, the AFL++ source path STILL failed on WSL2 6.6.x with two intertwined
   symptoms — intermittent `Fork server crashed with signal 11` (0 execs, ~30%) AND a 100% `test case
@@ -852,7 +872,7 @@ then run the resume verifier, then continue at the next unchecked task.
   0-exec outcome now FAILS as a regression). Proven **10/10 consecutive** green on WSL2 6.6.x
   (~80–120k execs / 45 s, real coverage). Docs: `docs/design-fuzzing-and-source.md` (Phase-5 caveat
   RESOLVED + new section). `just test` green; other fuzzers regression-checked. No migration (no model
-  change), no `Dockerfile.fuzz` change (probes mounted at runtime; the seccomp profile is in-package).
+  change), no `docker/fuzz.Dockerfile` change (probes mounted at runtime; the seccomp profile is in-package).
 - 2026-06-02: **Fuzzing+source Phase 7 — supply-chain + cross-compile + editable IDE (EPIC COMPLETE)**
   ([`docs/design-fuzzing-and-source.md`](docs/design-fuzzing-and-source.md) §7 Phase 7, branch
   `build/fuzz-phase7`). The FINAL feature phase — closes Phases 0–7. **Bounded audited dependency
@@ -924,7 +944,7 @@ then run the resume verifier, then continue at the next unchecked task.
   surface, fail-closed) — `LibFuzzerFuzzer` (strict superset of the Phase-0 single-pass path, byte-
   identical, regression-tested) + `AflPlusPlusFuzzer` (real coverage on the Phase-2 instrumented
   derived target via `afl-clang-fast` + the persistent libFuzzer driver + llvm-symbolizer) +
-  `MockFuzzer`. Dedicated `hexgraph-fuzz` image (`Dockerfile.fuzz`/`just fuzz-build`). Detached
+  `MockFuzzer`. Dedicated `hexgraph-fuzz` image (`docker/fuzz.Dockerfile`/`just fuzz-build`). Detached
   lifecycle: `Executor.start_detached`/`poll_detached`/`stop_detached` (a hardened `docker run -d`),
   a durable `fuzz_campaign`/`fuzz_artifact` (migration 0014), a periodic reaper (worker job) that
   streams crashes → `fuzz_crash` findings, finalizes, and re-attaches by `container_name` on restart
@@ -940,7 +960,7 @@ then run the resume verifier, then continue at the next unchecked task.
   `build/fuzz-phase2`). First phase to add a new policy gate + a dedicated image. The `Builder`
   seam (`engine/build.py` `get_builder()` — `SandboxBuilder` default, `MockBuilder` for offline
   tests) turns a managed source tree into an instrumented artifact via a recorded `BuildSpec` the
-  API/tool runs in the sandbox (`build_probe.py` in the new `hexgraph-build` image — `Dockerfile.build`
+  API/tool runs in the sandbox (`build_probe.py` in the new `hexgraph-build` image — `docker/build.Dockerfile`
   / `just build-image`: clang/LLVM + sanitizers + SanCov + AFL++ + llvm-symbolizer). Reproducibility
   is the contract (`recipe_sha = hash{phases,env,base_image,instrumentation,arch}`; same recipe_sha +
   source content_hash + toolchain_digest ⇒ same build); the orchestrator injects CC/CXX/CFLAGS per
@@ -1199,7 +1219,7 @@ then run the resume verifier, then continue at the next unchecked task.
   `ghidra_bridge._decompile_one` validates the function name against a strict `_SAFE_NAME` regex and
   passes it as a BOUND `fn` eval var instead of `%r`-interpolating it (#17), and dropped a dead
   placeholder remote_eval. Decluttered deps: removed the host-side `analysis` extra (r2pipe/lief/pyelftools
-  are sandbox-only) and unused `jinja2` from the `server` extra; dropped `lief` from `Dockerfile.sandbox`
+  are sandbox-only) and unused `jinja2` from the `server` extra; dropped `lief` from `docker/sandbox.Dockerfile`
   (no probe imports it; kept python-magic, which recon_probe uses); **deleted the unmaintained M1-era root
   `Dockerfile` + `docker-compose.yml`** (docker-out-of-docker socket-mount footgun, referenced by no
   recipe/doc/test; in git history) and the README section that documented `docker compose up` (#18).

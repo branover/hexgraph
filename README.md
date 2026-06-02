@@ -51,6 +51,37 @@ the wizard, the manual step-by-step, non-interactive/CI mode, and Ghidra.
 > `curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to ~/.local/bin`
 > (ensure `~/.local/bin` is on `PATH`), or `snap install just`. Run `just` for the full recipe menu.
 
+### Run with Docker
+
+If you would rather not install anything on the host, you can run the entire workbench in a
+container. From a checkout, bring it up with a single command:
+
+```bash
+docker compose up --build      # or: just up   →  http://127.0.0.1:8765
+```
+
+This builds an app image that bundles the web UI and the Python backend, runs the database
+migrations on startup, and serves the workbench. The service is published on the host loopback
+only (`127.0.0.1:8765:8765`), so it stays local to your machine exactly like the pip install does.
+Your `ANTHROPIC_API_KEY` is passed through from the environment if it is set, and no key is ever
+baked into the image; with nothing set, the container runs the offline mock backend.
+
+One thing to understand before you use this path: the compose file mounts the host's Docker
+socket into the app container. HexGraph needs to talk to a Docker daemon so it can launch its
+disposable sandbox, build, fuzz, and rehosting containers, and in this deployment those siblings
+run on your host daemon, isolated the same way they are in the pip install. Mounting the daemon
+socket effectively grants the app container root-equivalent control of your host's Docker. That is
+a deliberate trade-off for a single-user, local, self-hosted tool that you run on your own machine,
+and it is not a hardened or multi-tenant posture. Do not expose this stack to untrusted users or
+networks. If that trade-off is not one you want to make, the host pip path below remains the
+primary and recommended way to run HexGraph for development.
+
+Stop the stack with `docker compose down` (or `just down`); your project database and findings
+persist in a named Docker volume.
+
+By using HexGraph you agree to use it only against targets you are authorized to analyze; see
+[DISCLAIMER.md](DISCLAIMER.md).
+
 ---
 
 ## The core loop
