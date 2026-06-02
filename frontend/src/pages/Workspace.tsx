@@ -364,7 +364,8 @@ export default function Workspace() {
 
         <section className="pane">
           <div className="toolbar">
-            <div className="seg" style={{ display: "flex", gap: 2, border: "1px solid var(--border)", borderRadius: 6, padding: 2 }}>
+            {/* view toggle */}
+            <div className="seg tgroup" style={{ gap: 2, border: "1px solid var(--border)", borderRadius: 7, padding: 2 }}>
               <button className={"btn sm" + (view === "graph" ? " primary" : " ghost")} title="Graph view" onClick={() => switchView("graph")}>
                 <Icon name="hex" size={12} /> Graph
               </button>
@@ -372,18 +373,31 @@ export default function Workspace() {
                 <Icon name="doc" size={12} /> Source
               </button>
             </div>
-            <div className="input" style={{ flex: 1 }}>
+            {/* search — grows to fill the row */}
+            <div className="input" style={{ flex: 1, minWidth: 180 }}>
               <Icon name="search" size={14} />
               <input placeholder="Search functions, strings, findings…" value={q} onChange={(e) => doSearch(e.target.value)} />
             </div>
-            <button className="btn sm" title="Add a node to the graph (function/symbol/hypothesis/…)" onClick={() => setModal("node")}><Icon name="plus" size={12} /> Node</button>
-            <button className="btn sm" title="Connect two graph entities with an edge" onClick={() => setModal("edge")}><Icon name="link" size={13} /> Edge</button>
-            <button className="btn sm" title="Markdown report of confirmed/reported findings" onClick={() => setModal("report")}><Icon name="doc" size={13} /> Report</button>
-            <button className="btn sm" title="Diff two analysis runs over a target (added/dropped/changed findings)" onClick={() => setModal("compare")}><Icon name="refresh" size={13} /> Compare</button>
-            <button className="btn sm" title="Link identical functions across targets (n-day clone detection)" onClick={linkSameCode}><Icon name="link" size={13} /> Same-code</button>
-            <button className="btn sm" title="Merge duplicate binaries/nodes (e.g. sym.foo == foo)" onClick={mergeDupes}><Icon name="refresh" size={13} /> Merge dupes</button>
-            <button className="btn sm" title="Download the project graph as JSON" onClick={exportGraph}><Icon name="doc" size={13} /> Export</button>
-            <button className="btn sm" title="Egress audit log — every outbound action against a live target (allowed/denied)" onClick={() => setModal("egress")}><Icon name="shield" size={13} /> Audit</button>
+            <div className="tsep" />
+            {/* create */}
+            <div className="tgroup">
+              <button className="btn sm" title="Add a node to the graph (function/symbol/hypothesis/…)" onClick={() => setModal("node")}><Icon name="plus" size={12} /> Node</button>
+              <button className="btn sm" title="Connect two graph entities with an edge" onClick={() => setModal("edge")}><Icon name="link" size={13} /> Edge</button>
+            </div>
+            <div className="tsep" />
+            {/* analyze */}
+            <div className="tgroup">
+              <button className="btn sm" title="Diff two analysis runs over a target (added/dropped/changed findings)" onClick={() => setModal("compare")}><Icon name="refresh" size={13} /> Compare</button>
+              <button className="btn sm" title="Link identical functions across targets (n-day clone detection)" onClick={linkSameCode}><Icon name="copy" size={13} /> Same-code</button>
+              <button className="btn sm" title="Merge duplicate binaries/nodes (e.g. sym.foo == foo)" onClick={mergeDupes}><Icon name="copy" size={13} /> Merge dupes</button>
+            </div>
+            <div className="tsep" />
+            {/* report / export / audit */}
+            <div className="tgroup">
+              <button className="btn sm" title="Markdown report of confirmed/reported findings" onClick={() => setModal("report")}><Icon name="doc" size={13} /> Report</button>
+              <button className="btn sm" title="Download the project graph as JSON" onClick={exportGraph}><Icon name="arrowin" size={13} /> Export</button>
+              <button className="btn sm" title="Egress audit log — every outbound action against a live target (allowed/denied)" onClick={() => setModal("egress")}><Icon name="shield" size={13} /> Audit</button>
+            </div>
             {busy && <span className="badge"><Icon name="refresh" size={12} className="spin" /> {busy}</span>}
           </div>
           {results && q.trim() && (

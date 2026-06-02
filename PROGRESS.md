@@ -522,6 +522,23 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-02: **build: UI "sexiness" pass — source viewer + toolbar + fuzz modal** (branch
+  `build/ui-sexiness`). Frontend-only visual/layout pass, ZERO backend/behavior change. (1) The
+  **Source viewer** (`SourceBrowser.tsx` + new `highlight.ts`) replaces the per-line-boxed,
+  uncolored `<pre>` with a clean continuous code block: **highlight.js core** (8 grammars
+  registered → ~30 KB raw bundle add) line-split so block comments/strings carry across rows,
+  themed to the dark palette; a dimmed right-aligned tabular line-number gutter; faithful
+  indentation (`white-space: pre` + `tab-size`) with horizontal scroll. Coverage shading
+  (covered/uncovered) + the finding→source jump highlight ride as per-row CSS classes UNDER the
+  syntax color, so all three coexist — Playwright-verified shading still lights up and the jump
+  still lands+highlights. (2) The **center-pane toolbar** (`Workspace.tsx`) is grouped with
+  dividers (view-toggle · search · create · analyze · report/export), wraps cleanly 1280–1600px.
+  (3) The **Fuzz modal** (`FuzzModal.tsx`) is redesigned into a lede + grouped cards (Target&engine ·
+  Network · Inputs · Stop conditions · Resources) with a scrollable body + pinned footer; every
+  input kept functional (target picker, network host/port/proto_spec on a web_app surface, seeds/
+  dict, unconstrained toggle). All CSS in `theme.css` (`.codeview`/`.toolbar .tgroup`/`.modal.fuzz`).
+  `tsc -b` clean; the 3 `just test` failures are PRE-EXISTING fuzz/Docker e2e failures on `main`
+  (verified), unrelated to frontend. Before/after PNGs in `docs/ui-shots/`, notes in `docs/ui-backlog.md`.
 - 2026-06-02: **fix: battle-test remediation PR-3 — build→fuzz handoff + coverage/symbolization** (branch
   `fix/battletest-buildfuzz`). Four fixes from the libfuzzer/afl engagements (`FEEDBACK.md` PR-3 block).
   **C [BUG-HIGH] the build→fuzz happy path silently no-op'd:** after `build_target`, the derived
