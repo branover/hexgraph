@@ -637,7 +637,23 @@ Each phase is independently shippable through the worktree→PR-review-subagent�
 > re-verifies). `just test` green; `just demo` exits 0. **Known limits:** a heavier dedicated
 > fuzz-worker daemon / real k8s job executor remains a later drop-in behind the same seam (the
 > `DOCKER_HOST` route is ~90% of the value at ~10% of the cost); a `tcp://`+TLS endpoint is supported
-> via the cert env triple but only the SSH path is exercised against the local-daemon test rig.
+> via the cert env triple but only the non-TLS `tcp://` + `unix://` transports are exercised by the test rig.
+>
+> **Self-provisioning remote e2e (`build/remote-fuzz-e2e`).** The whole-campaign remote e2e
+> (`tests/test_fuzz_phase6.py::test_full_campaign_via_local_daemon_as_remote`) is **no longer a permanent
+> skip** — it now stands up a GENUINELY SEPARATE Docker daemon itself via a session-scoped `dind_remote`
+> conftest fixture (docker-in-docker on a loopback TCP port, its own image store so bind-mounts truly
+> cannot cross — the highest-fidelity exercise of the CAS named-VOLUME stage-in + `docker cp` stream-back
+> path; a same-daemon `unix://` endpoint would let a bind-mount silently "work" and mask a regression).
+> The fixture loads the fuzz image into the dind store, yields a `tcp://127.0.0.1:<port>` DOCKER_HOST, and
+> tears the daemon down; it is gated on Docker + the fuzz image (skips cleanly offline). So the full
+> Phase-6 loop (build + fuzz on the separate "remote", crashes streamed back into the local graph,
+> reproducer re-verified) runs green locally with **no hand-configured DOCKER_HOST**. (A latent bug was
+> fixed in the test: it set `HEXGRAPH_FUZZ_REMOTE_LOCALASREMOTE_DOCKER_HOST`, but the env id is the SLUG
+> of the env NAME and `config.fuzz_remote_connection` maps dashes→underscores in the key — so the secret
+> connection never resolved and the test had never actually run green. The fixture uses a single-word env
+> name to keep the slug→env-key mapping unambiguous.) The `RemoteDockerExecutor`/`fuzz_env`/`policy` code
+> required no changes — the plumbing was correct.
 
 **Phase 7 — Supply-chain, cross-compile, editable IDE, polish (was Phase 6).** `features.build_fetch` bounded audited fetch tier + lockfile + SBOM-lite + reproducibility badges; `WITH_CROSS=1` cross-compile (firmware-rootfs-as-sysroot, degrade to qemu-mode on failure); ccache incrementality + `SOURCE_DATE_EPOCH` determinism + cache-key artifact reuse; OSS-Fuzz `build.sh` import; editable IDE behind `features.source.edit` (revisioned saves, rebuild-from-revision — last because riskiest and least-needed for the core loop); run-to-run coverage diff (reuse `AnalysisRun`). *Risk:* fetch tier is the highest residual supply-chain risk — fail-closed, allowlisted, audited, fetch-then-offline.
 

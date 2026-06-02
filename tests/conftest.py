@@ -170,6 +170,88 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
                  "(check Docker / the hexgraph-sandbox image).", yellow=True)
 
 
+def _dind_image() -> str:
+    """The docker-in-docker image used to stand up a SELF-PROVISIONED separate daemon for
+    the remote-fuzz e2e (overridable for an offline mirror)."""
+    return os.environ.get("HEXGRAPH_DIND_IMAGE", "docker:27-dind")
+
+
+@pytest.fixture(scope="session")
+def dind_remote():
+    """A genuinely SEPARATE Docker daemon on a loopback TCP port, simulating a user-owned
+    remote fuzz host WITHOUT a hand-configured DOCKER_HOST — so the Phase-6 remote-fuzz e2e
+    is self-runnable instead of a permanent skip.
+
+    Why dind (not unix:// or socat): a docker-in-docker daemon has its OWN image store and
+    filesystem, so bind-mounts genuinely cannot cross — this is the highest-fidelity proof
+    that the CAS-staged named-VOLUME transfer + `docker cp` stream-back path is exercised for
+    real (a same-daemon unix:// endpoint would let a bind-mount "work" and mask a regression).
+    Binds ONLY to 127.0.0.1, no TLS (loopback). The fuzz image required by a campaign is loaded
+    into the dind daemon's separate store. Tears the daemon (and its anonymous state) down at
+    session end.
+
+    Yields the `tcp://127.0.0.1:<port>` DOCKER_HOST string. Skips cleanly if Docker, the dind
+    image, or the fuzz image is unavailable (offline-safe), and skips if the daemon never comes
+    up within the boot budget."""
+    import time
+    import uuid
+
+    from hexgraph.sandbox.runner import docker_available
+
+    if not docker_available():
+        pytest.skip("requires Docker to stand up a docker-in-docker remote endpoint")
+    if not FUZZ_IMAGE_READY:
+        pytest.skip("requires the hexgraph-fuzz image (just fuzz-build) to load into the dind remote")
+
+    dind_img = _dind_image()
+    fuzz_img = os.environ.get("HEXGRAPH_FUZZ_IMAGE", "hexgraph-fuzz:latest")
+    # Ensure the dind image is present (pull once; offline-safe — skip if it can't be fetched).
+    if subprocess.run(["docker", "image", "inspect", dind_img], capture_output=True).returncode != 0:
+        if subprocess.run(["docker", "pull", dind_img], capture_output=True).returncode != 0:
+            pytest.skip(f"could not obtain the dind image {dind_img} (offline?) — skipping the dind remote")
+
+    name = f"hexgraph-dind-{uuid.uuid4().hex[:8]}"
+    # Pick a free loopback port for the dind daemon's insecure (loopback-only) TCP socket.
+    import socket as _socket
+    with _socket.socket() as sk:
+        sk.bind(("127.0.0.1", 0))
+        port = sk.getsockname()[1]
+    dh = f"tcp://127.0.0.1:{port}"
+    # --privileged is required for an inner dockerd; bind ONLY to loopback, no TLS (the control
+    # plane stays loopback — a private compute backend the test owns, torn down at session end).
+    up = subprocess.run(
+        ["docker", "run", "-d", "--privileged", "--name", name,
+         "-p", f"127.0.0.1:{port}:2375", "-e", "DOCKER_TLS_CERTDIR=",
+         dind_img, "--host=tcp://0.0.0.0:2375", "--tls=false"],
+        capture_output=True, text=True)
+    if up.returncode != 0:
+        pytest.skip(f"could not start the dind remote daemon: {up.stderr.strip()[:200]}")
+    try:
+        # Wait for the inner daemon to accept the Docker API (bounded).
+        deadline = time.monotonic() + 60
+        ready = False
+        while time.monotonic() < deadline:
+            v = subprocess.run(["docker", "-H", dh, "version", "--format", "{{.Server.Version}}"],
+                               capture_output=True)
+            if v.returncode == 0:
+                ready = True
+                break
+            time.sleep(1)
+        if not ready:
+            pytest.skip("the dind remote daemon did not come up within 60s")
+        # Load the fuzz image into the SEPARATE store (`docker save | docker -H <dind> load`).
+        save = subprocess.Popen(["docker", "save", fuzz_img], stdout=subprocess.PIPE)
+        load = subprocess.run(["docker", "-H", dh, "load"], stdin=save.stdout,
+                              capture_output=True, text=True, timeout=300)
+        save.stdout.close()
+        save.wait()
+        if load.returncode != 0:
+            pytest.skip(f"could not load {fuzz_img} into the dind remote: {load.stderr.strip()[:200]}")
+        yield dh
+    finally:
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+
+
 @pytest.fixture
 def hg_home(tmp_path, monkeypatch):
     """Isolate HEXGRAPH_HOME + the SQLite engine in a tmp dir for a test."""
