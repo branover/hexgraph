@@ -33,6 +33,14 @@ class CampaignNet(BaseModel):
     port: int | None = None
     protocol: str | None = None
     proto_spec: dict | None = None
+    # Launch-and-join (§5.8b): for a LOCAL service HexGraph can start itself (a launchable
+    # server binary, no externally-reachable host), it starts the service in its OWN
+    # hardened container and joins the fuzzer to its netns so 127.0.0.1:port is reachable
+    # WITHOUT --network host. `launch` forces it on; None auto-detects (a launchable binary
+    # + a loopback/unset host). `launch_binary` overrides the host path to the server ELF.
+    launch: bool | None = None
+    launch_binary: str | None = None
+    launch_command: list[str] | None = None
 
 
 class CampaignCreate(BaseModel):
@@ -98,6 +106,9 @@ def api_start_campaign(project_id: str, body: CampaignCreate):
             host=net.host if net else None, port=net.port if net else None,
             protocol=(net.protocol if net and net.protocol else "tcp"),
             proto_spec=net.proto_spec if net else None,
+            launch=net.launch if net else None,
+            launch_binary=net.launch_binary if net else None,
+            launch_command=net.launch_command if net else None,
             environment_id=body.environment,
         )
         try:

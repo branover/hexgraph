@@ -270,7 +270,7 @@ recorded recipe in the sandbox. This is the analogue of "you direct, HexGraph ru
 A **campaign** is a long-lived, detached fuzz job — the SOTA upgrade over the single
 `fuzzing` task. You NEVER run a fuzzer; you REQUEST a campaign and HexGraph spawns +
 reaps a hardened sandbox container.
-- **`start_fuzz_campaign(target_id, surface?, engine?, function?, host?, port?, protocol?, proto_spec?, seeds?, dictionary?, max_total_time?, max_len?, max_crashes?, instances?, resources?, environment?)`**
+- **`start_fuzz_campaign(target_id, surface?, engine?, function?, host?, port?, protocol?, proto_spec?, launch?, launch_binary?, launch_command?, seeds?, dictionary?, max_total_time?, max_len?, max_crashes?, instances?, resources?, environment?)`**
   returns immediately with `{id, status:'running'}`. The `Fuzzer` seam picks the engine by
   attack **surface** (auto-inferred from the target; override `surface`/`engine` if needed):
   - **source_lib** — a **Phase-2 instrumented derived target** (a `build_target` rebuild, with
@@ -287,6 +287,16 @@ reaps a hardened sandbox container.
     here is a **service death** = `input_reachable/dynamic` (the STRONGEST assurance — reached +
     triggered end-to-end through the live input boundary). **engine='desock'** instead
     coverage-fuzzes a LOCAL server binary with `--network none` (no real networking).
+    **Launch-and-join (a LOCAL service HexGraph can start itself):** for a launchable server
+    binary with no externally-reachable host, HexGraph starts the service in its OWN hardened
+    container and joins the fuzzer to that container's netns, so `127.0.0.1:port` is reachable
+    **WITHOUT `--network host`** (same isolation). Auto-detected on a launchable target with a
+    loopback/unset host; force it with `launch=true` / override the server ELF with
+    `launch_binary`. It EXECUTES the service → needs **`features.poc`/`fuzzing`** AND, for the
+    fuzz egress, **`features.network`**. **To fuzz a service ALREADY running on the host (one
+    HexGraph can't start): bind it to a reachable PRIVATE IP (`192.168.x.x`/`10.x.x.x`) and pass
+    that as `host`** — a fuzz container's bridge can't reach the host's bare `127.0.0.1`;
+    launch-and-join is the supported path for a service HexGraph starts.
     **Remote blind network-fuzz of a physical bench device is OFF by default** (destructive) —
     prefer replay/PoC of a known crash over blind mutation.
   - **file_format** — a structured-input parser → AFL++/libFuzzer + an auto-dictionary.

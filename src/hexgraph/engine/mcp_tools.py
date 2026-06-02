@@ -379,6 +379,8 @@ def start_fuzz_campaign(target_id: str, surface: str | None = None, engine: str 
                         dictionary: list | None = None,
                         host: str | None = None, port: int | None = None,
                         protocol: str | None = None, proto_spec: dict | None = None,
+                        launch: bool | None = None, launch_binary: str | None = None,
+                        launch_command: list | None = None,
                         resources: dict | None = None, environment: str | None = None) -> dict:
     """Start a fuzz CAMPAIGN on a target; returns immediately with {id, status:'running'}.
     HexGraph spawns a DETACHED hardened sandbox container that fuzzes continuously + a
@@ -391,7 +393,16 @@ def start_fuzz_campaign(target_id: str, surface: str | None = None, engine: str 
     qemu-user + the parent firmware rootfs as sysroot; needs features.fuzzing/poc),
     network→boofuzz (a LIVE service over a real socket — needs features.network, bounded to
     loopback/private + every send audited; pass host/port if not recorded on the target, or
-    engine='desock' to coverage-fuzz a LOCAL server binary with --network none), file_format
+    engine='desock' to coverage-fuzz a LOCAL server binary with --network none). For a LOCAL
+    service HexGraph can START itself (a launchable server binary + no externally-reachable
+    host), it uses LAUNCH-AND-JOIN: it starts the service in its OWN hardened container and
+    joins the fuzzer to that container's netns so 127.0.0.1:port is reachable WITHOUT
+    --network host (needs features.network for the fuzz egress + features.fuzzing/poc to run
+    the service). `launch` forces it on (auto-detected otherwise); `launch_binary` overrides
+    the server ELF path. To fuzz a service ALREADY running on your host, bind it to a
+    reachable private IP (192.168/10.x) — a fuzz container's bridge cannot reach the host's
+    bare 127.0.0.1; launch-and-join is the supported way to fuzz a service HexGraph starts.
+    file_format
     →afl + an auto-dictionary. A crash becomes a re-verifiable finding climbing the assurance
     ladder: a binary-only crash is code_present/dynamic; a network service-death is
     input_reachable/dynamic (reached + triggered end-to-end through the live input boundary).
@@ -425,7 +436,9 @@ def start_fuzz_campaign(target_id: str, surface: str | None = None, engine: str 
             max_crashes=max_crashes or 10, instances=instances or 1,
             seeds=seeds or [], dictionary=dictionary or [],
             host=host, port=port,
-            protocol=protocol or "tcp", proto_spec=proto_spec, environment_id=environment,
+            protocol=protocol or "tcp", proto_spec=proto_spec,
+            launch=launch, launch_binary=launch_binary, launch_command=launch_command,
+            environment_id=environment,
         )
         try:
             row = C.start_campaign(s, p, t, spec=spec, resources=resources)

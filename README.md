@@ -204,6 +204,22 @@ work** (service unreachable / 0 executions) or hit **engine instability** finali
 "completed". Every outbound action against a live target is recorded in the **egress audit log**,
 viewable from the **Audit** toolbar button (allowed/denied · destination · tool · reason).
 
+**Network-fuzzing a LOCAL service — launch-and-join.** A fuzz container runs on `--network bridge`,
+whose loopback is the *container's own* — so it **cannot reach a service bound to the host's bare
+`127.0.0.1`**. For a service HexGraph can **start itself** (a launchable server binary, no
+externally-reachable host), HexGraph uses **launch-and-join**: it boots the service in its **own**
+hardened sandbox container and joins the fuzzer to that container's network namespace, so
+`127.0.0.1:port` is reachable **without `--network host`** — the sandbox isolation is preserved
+(both containers keep `--cap-drop ALL`/`--no-new-privileges`/`--read-only`/non-root; the service
+runs `--network none`, the fuzzer reaches it over the *shared* netns, every send still audited).
+The service launch executes the target (the **PoC/fuzzing** tier); the fuzz egress rides
+**`features.network`** + the bounded local-network tier. It is auto-selected for a launchable target
+with a loopback/unset host and can be forced (`launch`/`launch_binary`). **To fuzz a service that is
+already running on your host** (one HexGraph cannot start), **bind it to a reachable private address**
+(a `192.168.x.x`/`10.x.x.x` interface, or a container HexGraph can bridge to) and point the campaign
+at that host — the fuzz container's bridge cannot reach the host's bare `127.0.0.1`. (`--network host`
+is deliberately not offered: it would dissolve the network isolation.)
+
 Selecting a campaign opens the **Artifacts / triage** view: crashes **grouped by dedup bucket**
 (one representative + a dupe count), each with an **assurance chip** (the two-standards ladder —
 `code_present`/`input_reachable` × `static`/`dynamic`), the deterministic exploitability rating,
