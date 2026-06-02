@@ -175,11 +175,20 @@ sandbox). Over MCP: `list_source_trees` / `read_source_file` (read), `import_sou
 
 With **fuzzing** enabled, a **Campaigns** tab and a per-target **Fuzz** button appear. The **Fuzz
 modal** is surface-aware: it shows the engines the *server advertises* for the target's attack
-surface (`GET /api/fuzz/engines` — the UI never hardcodes the engine list) and lets you set the
-per-campaign **`ResourceSpec`** (mem/cpus/pids + an *unconstrained* toggle to use the whole
-machine), defaulting from Settings. Starting a campaign is non-blocking; the **Campaigns** tab
-shows a **live row** per campaign (status, execs/s, edges covered, crash count, coverage %) updated
-over a **Server-Sent Events** stream with automatic fallback to polling, plus Stop/Resume.
+surface (`GET /api/fuzz/engines` — the UI never hardcodes the engine list), lets you **pick the
+target** to fuzz (a launch from the Campaigns tab defaults to the best surface — an instrumented
+or live target, not the raw ingested root), and exposes the surface-relevant inputs: **network**
+host/port/protocol + an optional binary-protocol `proto_spec`, optional **seeds** (corpus paths)
+and a **dictionary** (auto-derived when omitted), a **focus function** (binary/source), and the
+per-campaign **`ResourceSpec`** (mem/cpus/pids + an *unconstrained* toggle), defaulting from
+Settings. (A `custom` source tree's build phases can be authored right in the **Build modal** —
+one shell step per line.) Starting a campaign is non-blocking; the **Campaigns** tab shows a
+**live row** per campaign (status, execs/s, edges covered, crash count, coverage %) over a
+**Server-Sent Events** stream with polling fallback, plus Stop/Resume. A campaign that did **0
+work** (service unreachable / 0 executions) or hit **engine instability** finalizes in a distinct
+**`degraded`** state with an amber **warning badge** explaining why — never a silent zero-crash
+"completed". Every outbound action against a live target is recorded in the **egress audit log**,
+viewable from the **Audit** toolbar button (allowed/denied · destination · tool · reason).
 
 Selecting a campaign opens the **Artifacts / triage** view: crashes **grouped by dedup bucket**
 (one representative + a dupe count), each with an **assurance chip** (the two-standards ladder —

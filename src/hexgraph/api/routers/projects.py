@@ -124,6 +124,21 @@ def api_search(project_id: str, q: str = ""):
         return search_project(s, project_id, q)
 
 
+@router.get("/api/projects/{project_id}/egress")
+def api_egress(project_id: str, limit: int = 500):
+    """The egress audit log — every outbound action (allowed OR denied) against a live
+    target/service when the bounded-network/remote tier is in use (boofuzz sends, http
+    probes, remote-fuzz launches). Mandatory once egress is enabled: nothing reaches the
+    network without an EgressEvent. Read-only; the operator inspects what HexGraph
+    contacted and why."""
+    from hexgraph.engine.audit import list_egress
+
+    with session_scope() as s:
+        if s.get(Project, project_id) is None:
+            raise HTTPException(404, "project not found")
+        return {"events": list_egress(s, project_id, limit=limit)}
+
+
 @router.get("/api/projects/{project_id}/report")
 def api_report(project_id: str):
     with session_scope() as s:

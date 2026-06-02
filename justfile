@@ -62,9 +62,37 @@ install: venv
 # ===========================================================================
 
 # Start the loopback-only API/UI at http://127.0.0.1:8765 (mock backend by default).
+# Ensures the served SPA is CURRENT first (ui-check rebuilds it only if stale) — a plain
+# `just serve` used to silently ship an OLD bundle when frontend/ had changed since the
+# last build, hiding new UI (the Campaigns tab, assurance chips, …) until you ran `just ui`.
 [group('run')]
-serve:
+serve: ui-check
     HEXGRAPH_HOST={{host}} HEXGRAPH_PORT={{port}} {{py}} -m hexgraph.cli serve
+
+# Rebuild the SPA only if the built bundle is MISSING or STALE vs frontend/ sources —
+# so a plain `just serve` always ships current UI without paying a full npm build when
+# nothing changed. Run `just ui` to force an unconditional rebuild.
+[group('run')]
+ui-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dist="src/hexgraph/web/dist/index.html"
+    if [ ! -f "$dist" ]; then
+        echo ">> SPA bundle missing — building it (just ui)…"
+        just ui
+        exit 0
+    fi
+    # Any frontend source/config newer than the built bundle ⇒ the bundle is stale.
+    newer=$(find frontend -type f \
+        \( -path 'frontend/src/*' -o -name 'index.html' -o -name 'package.json' \
+           -o -name 'package-lock.json' -o -name 'vite.config.*' -o -name 'tsconfig*.json' \) \
+        -newer "$dist" -not -path 'frontend/node_modules/*' -print -quit 2>/dev/null || true)
+    if [ -n "$newer" ]; then
+        echo ">> SPA bundle is STALE ($newer changed since last build) — rebuilding (just ui)…"
+        just ui
+    else
+        echo ">> SPA bundle is current."
+    fi
 
 # ===========================================================================
 # build — front-end SPA + analysis sandbox image

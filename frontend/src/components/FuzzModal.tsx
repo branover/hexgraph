@@ -8,10 +8,15 @@ import { Icon } from "./Icon";
 // The user sets the per-campaign ResourceSpec (mem/cpus/pids/timeout + unconstrained),
 // defaulting from Settings. Launching a campaign is non-blocking (status `running`); the
 // Campaigns tab streams live status.
-export default function FuzzModal({ projectId, target, settings, onClose, onStarted }: {
-  projectId: string; target: TargetNode; settings: SettingsView | null;
+export default function FuzzModal({ projectId, target: initialTarget, targets, settings, onClose, onStarted }: {
+  projectId: string; target: TargetNode; targets?: TargetNode[]; settings: SettingsView | null;
   onClose: () => void; onStarted: (campaignId: string) => void;
 }) {
+  // The target under fuzz — defaulted by the caller (the best candidate), switchable here
+  // when a target list is supplied (so a launch from the Campaigns tab isn't pinned to the
+  // wrong root). Re-infers the surface/engine on change.
+  const [target, setTarget] = useState<TargetNode>(initialTarget);
+  const pickable = (targets || []).filter((t) => t.kind !== "firmware_image");
   const [eng, setEng] = useState<FuzzEngines | null>(null);
   const [engine, setEngine] = useState<string>("");
   const [maxTime, setMaxTime] = useState(String(settings?.settings.features.fuzzing?.max_total_time ?? 60));
@@ -19,6 +24,18 @@ export default function FuzzModal({ projectId, target, settings, onClose, onStar
   const [maxCrashes, setMaxCrashes] = useState(String(settings?.settings.features.fuzzing?.max_crashes ?? 10));
   const [instances, setInstances] = useState("1");
   const [fn, setFn] = useState("");
+  // Optional seeds (host corpus file paths) + dictionary tokens — applicable to every
+  // surface (auto-derived when omitted). Newline/comma separated.
+  const [seeds, setSeeds] = useState("");
+  const [dictionary, setDictionary] = useState("");
+  // Network-surface inputs (host/port/protocol/proto_spec) — shown only when the selected
+  // surface is `network` (a live service / rehosted device). Usually inferred from the
+  // target; this lets the user point boofuzz at a specific host:port or supply a binary
+  // protocol spec (the same fields REST CampaignCreate.net accepts).
+  const [host, setHost] = useState("");
+  const [port, setPort] = useState("");
+  const [protocol, setProtocol] = useState("tcp");
+  const [protoSpec, setProtoSpec] = useState("");
   // ResourceSpec defaults from Settings (the global default a campaign inherits).
   const rdef = settings?.settings.features.fuzzing?.resources;
   const [mem, setMem] = useState(rdef?.mem ?? "2g");
@@ -44,12 +61,33 @@ export default function FuzzModal({ projectId, target, settings, onClose, onStar
     if (fuzzRemoteOn) api.fuzzEnvironments().then((r) => setEnvs(r.environments)).catch(() => {});
   }, [fuzzRemoteOn]);
 
+  const isNetwork = eng?.surface === "network";
+  const splitList = (s: string) => s.split(/[\n,]/).map((x) => x.trim()).filter(Boolean);
+
   const start = async () => {
     setBusy(true); setErr(undefined);
     try {
       const resources = unconstrained
         ? { unconstrained: true }
         : { mem, cpus: parseFloat(cpus) || 2, pids: parseInt(pids) || 256, unconstrained: false };
+      // Network-surface overrides (boofuzz host/port/protocol + an optional binary-protocol
+      // proto_spec). proto_spec is JSON; surface a clear error rather than sending garbage.
+      let net: { host?: string; port?: number; protocol?: string; proto_spec?: any } | undefined;
+      if (isNetwork) {
+        let parsedSpec: any;
+        if (protoSpec.trim()) {
+          try { parsedSpec = JSON.parse(protoSpec); }
+          catch { setErr("proto_spec must be valid JSON"); setBusy(false); return; }
+        }
+        net = {
+          host: host.trim() || undefined,
+          port: port.trim() ? parseInt(port) : undefined,
+          protocol,
+          proto_spec: parsedSpec,
+        };
+      }
+      const seedList = splitList(seeds);
+      const dictList = splitList(dictionary);
       const c = await api.startCampaign(projectId, {
         target_id: target.id,
         surface: eng?.surface || undefined,
@@ -59,6 +97,9 @@ export default function FuzzModal({ projectId, target, settings, onClose, onStar
         max_len: parseInt(maxLen) || 4096,
         max_crashes: parseInt(maxCrashes) || 10,
         instances: parseInt(instances) || 1,
+        seeds: seedList.length ? seedList : undefined,
+        dictionary: dictList.length ? dictList : undefined,
+        net,
         resources,
         environment: fuzzRemoteOn && environment !== "local" ? environment : undefined,
       });
@@ -82,6 +123,19 @@ export default function FuzzModal({ projectId, target, settings, onClose, onStar
             appear — you never run a fuzzer by hand. Engines are <b>what the server advertises</b> for
             this target's attack surface. Live status streams in the <b>Campaigns</b> tab.
           </div>
+
+          {pickable.length > 1 && (
+            <div className="row" style={{ display: "flex", gap: 12, alignItems: "center" }}>
+              <label style={{ fontSize: 12 }}>target</label>
+              <select value={target.id} onChange={(e) => { const t = pickable.find((x) => x.id === e.target.value); if (t) setTarget(t); }}
+                      style={{ flex: 1, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, fontSize: 12, padding: "2px 6px" }}>
+                {pickable.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name} · {t.kind}{(t.metadata?.instrumented) ? " (instrumented)" : ""}</option>
+                ))}
+              </select>
+              <span className="muted" style={{ fontSize: 10.5 }}>which surface to fuzz</span>
+            </div>
+          )}
 
           <div className="row" style={{ display: "flex", gap: 16, alignItems: "center" }}>
             <label style={{ fontSize: 12 }}>surface</label>
@@ -110,9 +164,46 @@ export default function FuzzModal({ projectId, target, settings, onClose, onStar
             </div>
           )}
 
-          <div className="field"><label>focus function (optional)</label>
-            <input value={fn} onChange={(e) => setFn(e.target.value)} placeholder="e.g. cgi_handler (uses the latest harness for this target)"
-                   style={{ width: "100%", background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, padding: "4px 6px", fontSize: 12 }} />
+          {isNetwork && (
+            <div>
+              <div className="sec-label">Network target <span className="muted" style={{ fontWeight: 400 }}>· loopback/private only · every send audited</span></div>
+              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 10 }}>
+                <label style={{ fontSize: 11.5 }}>host
+                  <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="inferred from target (e.g. 127.0.0.1)"
+                         style={{ width: "100%", marginTop: 2, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, padding: "3px 4px", fontSize: 12 }} /></label>
+                <label style={{ fontSize: 11.5 }}>port
+                  <input value={port} onChange={(e) => setPort(e.target.value)} placeholder="e.g. 8080"
+                         style={{ width: "100%", marginTop: 2, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, padding: "3px 4px", fontSize: 12 }} /></label>
+                <label style={{ fontSize: 11.5 }}>protocol
+                  <select value={protocol} onChange={(e) => setProtocol(e.target.value)}
+                          style={{ width: "100%", marginTop: 2, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, padding: "3px 4px", fontSize: 12 }}>
+                    <option value="tcp">tcp</option><option value="udp">udp</option>
+                  </select></label>
+              </div>
+              <label style={{ fontSize: 11.5, display: "block", marginTop: 8 }}>proto_spec (optional, JSON — a boofuzz generational request/state spec for a binary protocol)
+                <textarea value={protoSpec} onChange={(e) => setProtoSpec(e.target.value)} rows={3} spellCheck={false}
+                          placeholder='e.g. {"requests": [...]} — omit for the default text/CRLF spec'
+                          style={{ width: "100%", marginTop: 2, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, padding: "4px 6px", fontSize: 11.5, fontFamily: "var(--mono, monospace)" }} /></label>
+            </div>
+          )}
+
+          {!isNetwork && (
+            <div className="field"><label>focus function (optional)</label>
+              <input value={fn} onChange={(e) => setFn(e.target.value)} placeholder="e.g. cgi_handler (uses the latest harness for this target)"
+                     style={{ width: "100%", background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, padding: "4px 6px", fontSize: 12 }} />
+            </div>
+          )}
+
+          <div className="field"><label>seeds <span className="muted" style={{ fontWeight: 400 }}>· optional · host corpus file paths, comma/newline separated</span></label>
+            <textarea value={seeds} onChange={(e) => setSeeds(e.target.value)} rows={2} spellCheck={false}
+                      placeholder="e.g. /path/to/seed1.bin, /path/to/seed2.bin — omit to start from an empty/auto corpus"
+                      style={{ width: "100%", background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, padding: "4px 6px", fontSize: 11.5, fontFamily: "var(--mono, monospace)" }} />
+          </div>
+
+          <div className="field"><label>dictionary <span className="muted" style={{ fontWeight: 400 }}>· optional · tokens, comma/newline separated (auto-derived from the target's strings when omitted)</span></label>
+            <textarea value={dictionary} onChange={(e) => setDictionary(e.target.value)} rows={2} spellCheck={false}
+                      placeholder='e.g. GET, POST, Content-Length, \xff\xd8 — guides the mutator'
+                      style={{ width: "100%", background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, padding: "4px 6px", fontSize: 11.5, fontFamily: "var(--mono, monospace)" }} />
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10 }}>

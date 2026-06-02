@@ -167,6 +167,54 @@ def test_api_artifact_actions(hg_home, monkeypatch):
         assert mr.status_code == 200 and "verified" in mr.json()
 
 
+def test_api_campaign_degraded_status_surfaced(hg_home, monkeypatch):
+    """Battle-test fix F: an unreachable / 0-exec / degraded campaign must report a
+    DISTINCT `degraded` status (not a clean `completed`) and expose the reason via the
+    serializer (`warning` + `engine_note`) so the UI/agent sees the signal."""
+    _mock_env(monkeypatch)
+    _enable_fuzzing()
+    app = create_app()
+    with session_scope() as s:
+        p, t = _project_with_target(s)
+        pid, tid = p.id, t.id
+    with TestClient(app) as c:
+        camp = c.post(f"/api/projects/{pid}/campaigns",
+                      json={"target_id": tid, "function": "unstable"}).json()
+        d = c.get(f"/api/campaigns/{camp['id']}").json()  # reap-on-read finalizes
+        assert d["status"] == "degraded"
+        assert d["warning"] and "AFL persistent" in d["warning"]
+        assert d["engine_note"] and "AFL persistent" in d["engine_note"]
+        # And a clean run is still `completed` with no warning.
+        ok = c.post(f"/api/projects/{pid}/campaigns",
+                    json={"target_id": tid, "function": "clean"}).json()
+        d2 = c.get(f"/api/campaigns/{ok['id']}").json()
+        assert d2["status"] == "completed" and d2["warning"] is None
+
+
+def test_api_egress_audit_log(hg_home, monkeypatch):
+    """Battle-test fix M: the egress audit log is queryable over the API (it backs the new
+    UI audit panel). Records an allowed + a denied event and reads them back newest-first."""
+    from hexgraph.engine.audit import record_egress
+
+    app = create_app()
+    with session_scope() as s:
+        p, t = _project_with_target(s)
+        pid, tid = p.id, t.id
+        record_egress(s, project_id=pid, target_id=tid, dest="127.0.0.1:8080",
+                      allowed=True, tool="boofuzz", detail="loopback ok")
+        record_egress(s, project_id=pid, target_id=tid, dest="8.8.8.8:53",
+                      allowed=False, tool="http_probe", detail="blocked: public host")
+    with TestClient(app) as c:
+        r = c.get(f"/api/projects/{pid}/egress")
+        assert r.status_code == 200
+        events = r.json()["events"]
+        assert len(events) == 2
+        assert events[0]["dest"] == "8.8.8.8:53" and events[0]["allowed"] is False
+        assert any(e["allowed"] and e["tool"] == "boofuzz" for e in events)
+        # missing project → 404
+        assert c.get("/api/projects/nope/egress").status_code == 404
+
+
 def test_api_capabilities_features_fuzzing(hg_home):
     _enable_fuzzing()
     app = create_app()

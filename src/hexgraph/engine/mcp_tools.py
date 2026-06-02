@@ -365,7 +365,9 @@ def build_target(project_id: str, source_tree_id: str, system: str | None = None
 
 def start_fuzz_campaign(target_id: str, surface: str | None = None, engine: str | None = None,
                         function: str | None = None, max_total_time: int | None = None,
-                        max_crashes: int | None = None, instances: int | None = None,
+                        max_len: int | None = None, max_crashes: int | None = None,
+                        instances: int | None = None, seeds: list | None = None,
+                        dictionary: list | None = None,
                         host: str | None = None, port: int | None = None,
                         protocol: str | None = None, proto_spec: dict | None = None,
                         resources: dict | None = None, environment: str | None = None) -> dict:
@@ -410,8 +412,10 @@ def start_fuzz_campaign(target_id: str, surface: str | None = None, engine: str 
         spec = FuzzCampaignSpec(
             target_id=t.id, surface=surface or C.infer_surface(t), engine=engine,
             harness_source=source, function=function or fn, target_sources=sources,
-            max_total_time=max_total_time or 60, max_crashes=max_crashes or 10,
-            instances=instances or 1, host=host, port=port,
+            max_total_time=max_total_time or 60, max_len=max_len or 4096,
+            max_crashes=max_crashes or 10, instances=instances or 1,
+            seeds=seeds or [], dictionary=dictionary or [],
+            host=host, port=port,
             protocol=protocol or "tcp", proto_spec=proto_spec, environment_id=environment,
         )
         try:
