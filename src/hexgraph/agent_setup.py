@@ -238,6 +238,15 @@ recorded recipe in the sandbox. This is the analogue of "you direct, HexGraph ru
   to a target, the rebuild registers a DERIVED target wired `instrumented_build_of`→ the original —
   the fuzzable, coverage-instrumented twin of the shipped binary. That unlocks **coverage-guided
   fuzzing next** (the target's own objects carry SanCov+ASan, not just the harness).
+- **The build→fuzz handoff is automatic** — on a successful build, HexGraph records the instrumented
+  TARGET sources on the derived target's `metadata_json.fuzz_target_sources` (the lib's `.c`/`.cc`,
+  harness EXCLUDED) AND promotes any `role=harness` file in the tree to a `source_file(role=harness)`
+  + a `harnesses`→ edge to the derived target. So a subsequent **`start_fuzz_campaign(derived_id)`
+  Just Works**: it infers `source_lib` (coverage-guided), resolves the sources + harness, and runs
+  with real coverage — no manual `fuzz_target_sources`/harness wiring. (Author the harness with
+  `import_source_tree(files=[{rel, content, role:"harness"}, …])` or `save_source_revision(...,
+  role="harness")`.) A self-including-header lib (`#include "tlv.h"`) compiles — sources mount
+  preserving their directory layout + each dir is added to the include path.
 - **Import an OSS-Fuzz `build.sh`:** **`import_oss_fuzz(project_id, source_tree_id, build_sh)`** maps an
   OSS-Fuzz project's build.sh onto our env contract and records a build_spec — so an existing OSS-Fuzz
   target builds with minimal hand-authoring. Then `build_target` (or POST builds with the spec id).
@@ -287,11 +296,14 @@ reaps a hardened sandbox container.
   rating, and the coverage flag — all on `evidence.extra.fuzz`.
 - **`stop_fuzz_campaign(campaign_id)`** preserves the corpus (resumable). Campaigns are
   **crash-safe**: they survive a server restart (the reaper re-attaches).
-- **A crash is a re-runnable PoC.** `minimize_artifact(artifact_id)` replays the stored, minimized
-  reproducer IN THE SANDBOX and reports `{verified, assurance}` — LLM-free, one click. A binary/
-  harness crash replays the input against the instrumented binary (the unforgeable `crash` oracle,
-  `code_present/dynamic`); a **network** crash re-sends its crashing MESSAGE over the live socket +
-  a liveness oracle (`input_reachable/dynamic`). So a `fuzz_crash` climbs the assurance ladder the
+- **A crash is a re-runnable PoC.** **`verify_fuzz_artifact(artifact_id)`** (the first-class verb;
+  `minimize_artifact` is its back-compat alias) replays the crash reproducer BYTE-FAITHFULLY IN THE
+  SANDBOX and reports `{verified, assurance, output}` — LLM-free, one click. The reproducer is run as
+  a raw-bytes FILE (0x00/0xff preserved exactly — never text-mangled like `verify_poc`'s stdin), so a
+  binary fuzz reproducer replays faithfully. A binary/harness crash replays against the instrumented
+  binary (the unforgeable `crash` oracle, `code_present/dynamic`); a **network** crash re-sends its
+  crashing MESSAGE over the live socket + a liveness oracle (`input_reachable/dynamic`). So a
+  `fuzz_crash` climbs the assurance ladder the
   same way a hand-written PoC does.
 - **Did a change help? `coverage_diff(campaign_id, other_campaign_id)`** compares two campaigns'
   per-line coverage — what NEW lines `other` reached that the base didn't (and which it lost). Use it

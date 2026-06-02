@@ -257,6 +257,16 @@ def _collect(outdir, work, target, sysroot, arch, mode, max_crashes, *, done):
         if not info.get("kind") or info["kind"] == "crash":
             # No ASan on a stripped binary — classify by the killing signal.
             info = {"kind": _signal_kind(rc), "function": None, "summary": report[:400] or f"exit {rc}"}
+        # Symbolize the binary-only sink (battle-test: "abort in ?"). A native `-g` binary
+        # gives a gdb backtrace with `func at file:line`; we fold the symbolized frames into
+        # the report so the reaper extracts a source-mapped stack + names the sink.
+        gdb_bt = _gdb_backtrace(target, sysroot, arch, path, outdir)
+        if gdb_bt:
+            report = (report or "") + "\n" + gdb_bt
+            if not info.get("function"):
+                top = _top_user_frame(gdb_bt)
+                if top:
+                    info["function"] = top
         key = fuzz_probe.dedup_key(info["kind"], report or f"{rc}")
         if key in seen:
             crashes[seen[key]]["dupe_count"] += 1
@@ -277,6 +287,80 @@ def _collect(outdir, work, target, sysroot, arch, mode, max_crashes, *, done):
             "coverage_instrumented": True, "executions": execs, "edges_covered": edges,
             "crash_count": len(crashes), "crashes": crashes,
             "binary_only": True, "arch": arch}
+
+
+import re as _re
+
+# A gdb backtrace line: "#3  0x... in parse_image (buf=..., len=...) at imghdr.c:66"
+# (or "#3  parse_image (…) at imghdr.c:66" when no address is shown).
+_GDB_FRAME = _re.compile(
+    r"#(?P<idx>\d+)\s+(?:0x[0-9a-fA-F]+\s+in\s+)?(?P<func>[\w:~<>]+)\s*\([^)]*\)\s+at\s+"
+    r"(?P<file>[^\s:]+):(?P<line>\d+)")
+_SYM_SKIP = ("__libc", "__GI_", "abort", "raise", "__stack_chk_fail", "__fortify_fail",
+             "_start", "??")
+
+
+def _gdb_backtrace(target, sysroot, arch, input_path, outdir) -> str | None:
+    """Run the crashing input under gdb (batch) and return a backtrace REWRITTEN into the
+    ASan frame shape (`#N 0xADDR in func file:line`) so the reaper's source-frame parser
+    extracts a clickable stack + the sink function. NATIVE binaries use plain gdb; a foreign
+    arch uses gdb-multiarch over qemu's gdbstub. Best-effort: None if gdb/symbols are absent
+    (the crash still records, just without a symbolized sink — honest, not faked)."""
+    gdb = shutil.which("gdb") or shutil.which("gdb-multiarch")
+    if not gdb:
+        return None
+    is_foreign = bool(arch and sysroot)
+    try:
+        if is_foreign:
+            # Launch the target under qemu with a gdbstub, attach gdb-multiarch remotely.
+            qemu = shutil.which(f"qemu-{arch}") or shutil.which(f"qemu-{arch}-static")
+            gdbm = shutil.which("gdb-multiarch") or gdb
+            if not qemu:
+                return None
+            port = "1234"
+            q = subprocess.Popen([qemu, "-g", port, "-L", sysroot, target, input_path],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=outdir)
+            try:
+                cmds = (f"set sysroot {sysroot}\ntarget remote :{port}\ncontinue\nbt\nquit\n")
+                p = subprocess.run([gdbm, "-q", "-batch", "-nx", target, "-ex",
+                                    "set pagination off", "-x", "/dev/stdin"],
+                                   input=cmds, capture_output=True, text=True, timeout=40, cwd=outdir)
+                out = (p.stdout or "") + (p.stderr or "")
+            finally:
+                q.terminate()
+                try:
+                    q.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    q.kill()
+        else:
+            # Native: gdb runs the target directly, catching the fatal signal, then `bt`.
+            p = subprocess.run(
+                [gdb, "-q", "-batch", "-nx", "-ex", "set pagination off",
+                 "-ex", "run", "-ex", "bt", "--args", target, input_path],
+                capture_output=True, text=True, timeout=40, cwd=outdir)
+            out = (p.stdout or "") + (p.stderr or "")
+    except Exception:  # noqa: BLE001 — symbolization is best-effort
+        return None
+    return _rewrite_gdb_bt(out)
+
+
+def _rewrite_gdb_bt(gdb_out: str) -> str | None:
+    """Rewrite gdb `bt` lines into ASan-style frames the reaper parser understands.
+    Returns the joined frames or None if nothing symbolized to a source line."""
+    lines = []
+    for m in _GDB_FRAME.finditer(gdb_out or ""):
+        func, file, line = m.group("func"), m.group("file"), m.group("line")
+        lines.append(f"    #{m.group('idx')} 0x0000000000000000 in {func} {file}:{line}")
+    return "\n".join(lines) if lines else None
+
+
+def _top_user_frame(gdb_bt_rewritten: str) -> str | None:
+    """The first non-libc/runtime frame's function in a rewritten backtrace (the sink)."""
+    for m in _re.finditer(r"#\d+\s+0x[0-9a-fA-F]+\s+in\s+(\S+)\s", gdb_bt_rewritten or ""):
+        fn = m.group(1)
+        if not any(fn.startswith(s) for s in _SYM_SKIP):
+            return fn
+    return None
 
 
 def _signal_kind(rc: int) -> str:

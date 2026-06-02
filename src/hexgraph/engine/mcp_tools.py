@@ -542,6 +542,38 @@ def minimize_artifact(artifact_id: str) -> dict:
                 "detail": res.get("detail"), "assurance": res.get("assurance")}
 
 
+def verify_fuzz_artifact(artifact_id: str) -> dict:
+    """Replay a fuzz crash ARTIFACT byte-faithfully against its harness/binary and report
+    whether it still crashes (the unforgeable `crash` oracle) + the assurance rung. This is
+    the first-class 'verify this crash reproducer' verb (battle-test GAP: re-verify was only
+    reachable via the misleadingly-named `minimize_artifact`; `verify_poc` corrupts a binary
+    reproducer over text-mode stdin). The reproducer is materialized from CAS and mounted as
+    a FILE (raw bytes — 0x00/0xff preserved exactly, never text-encoded) and run against the
+    campaign's preserved instrumented harness binary; a NETWORK crash re-sends its crashing
+    message over the live socket + a liveness oracle. LLM-free; the surface-correct exec/egress
+    gate is applied inside. Returns {artifact_id, verified, detail, assurance, output}."""
+    from hexgraph.db.models import FuzzArtifact
+    from hexgraph.engine import campaigns as C
+    from hexgraph.policy import PolicyViolation
+
+    with session_scope() as s:
+        a = s.get(FuzzArtifact, artifact_id)
+        if a is None:
+            return {"error": "artifact not found"}
+        if not a.content_cas:
+            return {"error": "artifact has no stored reproducer to re-verify"}
+        try:
+            res = C.verify_artifact(s, a)
+        except PolicyViolation as exc:
+            return {"error": f"not permitted — {exc} (enable features.fuzzing/poc to replay a "
+                             "crash; features.network for a live-socket crash)"}
+        except (C.CampaignError, ValueError) as exc:
+            return {"error": str(exc)}
+        return {"artifact_id": artifact_id, "verified": bool(res.get("verified")),
+                "detail": res.get("detail"), "assurance": res.get("assurance"),
+                "output": res.get("output")}
+
+
 def _tool(target_id: str, name: str, args: dict) -> str:
     """Run a sandboxed inspection tool (decompile/strings/…) via the shared registry."""
     from hexgraph.engine.agent_tools import ToolContext, run_tool

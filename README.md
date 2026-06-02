@@ -193,9 +193,11 @@ viewable from the **Audit** toolbar button (allowed/denied · destination · too
 Selecting a campaign opens the **Artifacts / triage** view: crashes **grouped by dedup bucket**
 (one representative + a dupe count), each with an **assurance chip** (the two-standards ladder —
 `code_present`/`input_reachable` × `static`/`dynamic`), the deterministic exploitability rating,
-and a **source-mapped stack** (symbolized frames → jump to the IDE line). Per crash: **Reproduce**
-and **Minimize** re-run the stored, minimized reproducer against the instrumented harness binary
-(LLM-free, the unforgeable `crash` oracle); **Promote** confirms it as a tracked finding;
+and a **source-mapped stack** (symbolized frames → jump to the IDE line; ASan frames are symbolized
+at runtime via `llvm-symbolizer`, a binary-only `abort` is addr2line'd to its sink). Per crash:
+**Reproduce** and **Minimize** re-run the stored reproducer **byte-faithfully** against the
+instrumented harness binary (LLM-free, the unforgeable `crash` oracle — the MCP verb is
+`verify_fuzz_artifact`); **Promote** confirms it as a tracked finding;
 **Promote → PoC** seeds a reproducer-backed PoC the one-click **Re-verify** path re-proves. Every
 entity (finding, source line, campaign, artifact, node) is addressable through a single `reveal()`
 navigation primitive and **deep-linkable** by URL (`?view=source&file=…&line=…`,
@@ -257,7 +259,11 @@ contract), so the *same* phases yield an ASan+SanCov, an AFL++, or a plain build
 profile. Building runs **untrusted third-party code**, so it has its own fail-closed gate (separate
 from executing the target — you can build-and-inspect without permitting the binary to run). If the
 tree is `built_from` a target, the rebuild registers an **instrumented derived target** (wired
-`instrumented_build_of`→ the original) — ready for coverage-guided fuzzing. **Reproducibility is the
+`instrumented_build_of`→ the original) — ready for coverage-guided fuzzing. **The build→fuzz handoff
+is automatic:** the build records the instrumented target sources on the derived target
+(`metadata_json.fuzz_target_sources`, the harness excluded) and **promotes any `role=harness` file**
+to a `harnesses`→ edge, so a subsequent `start_fuzz_campaign` on the derived target infers
+`source_lib` and runs coverage-guided with no manual wiring. **Reproducibility is the
 contract:** `recipe_sha` + the source byte-content hash + the toolchain digest (+ a lockfile) make a
 build replayable; a **reproducibility badge** shows when all are recorded, and a **cache-key hit**
 reuses the prior artifact and skips the rebuild (`SOURCE_DATE_EPOCH` + ccache make rebuilds

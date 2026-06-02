@@ -506,6 +506,46 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-02: **fix: battle-test remediation PR-3 — build→fuzz handoff + coverage/symbolization** (branch
+  `fix/battletest-buildfuzz`). Four fixes from the libfuzzer/afl engagements (`FEEDBACK.md` PR-3 block).
+  **C [BUG-HIGH] the build→fuzz happy path silently no-op'd:** after `build_target`, the derived
+  instrumented target's `fuzz_target_sources` was hard-coded `[]` and no harness was promoted, so
+  `start_fuzz_campaign` inferred `binary_only/qemu` on a relocatable `.o` and ran 0 execs. Now
+  `builds._register_derived_target` populates `metadata_json.fuzz_target_sources` with the
+  instrumented TARGET sources (the tree's code-role `.c`/`.cc`, harness/poc/script EXCLUDED — host
+  paths `resolve_target_sources` reads) AND promotes any `role=harness` tree file to a
+  `source_file(role=harness)` + a `harnesses`→ edge to the derived target (`_promote_build_harness`).
+  So a later `start_fuzz_campaign(derived_id)` infers `source_lib` and runs coverage-guided with no
+  manual wiring. Exposed on the existing serializer (`fuzz_target_sources` was already in
+  `metadata_json`). **L [BUG] coverage compile couldn't handle a self-including header:** sources were
+  mounted flat at `/src/target_N.c` with no `-I`. New `fuzzers/shared.target_source_mounts` mounts each
+  source's CONTAINING dir (preserving layout, so a sibling header sits next to its `.c`) + offers each
+  dir as `-I`; `fuzz_probe.py`/`afl_probe.py` consume `--include-dir`. **H [BUG] coverage shading +
+  source-mapped stacks rendered empty:** (a) the libFuzzer probe now collects a per-line llvm-cov map
+  (`_collect_coverage` → `coverage.json` {percent, files:{rel:{covered,uncovered,total}}}) so
+  `coverage_for` returns `available:true` and the Source viewer shades lines; (b) ASan crash replays
+  now force symbolization (`symbolizer_env` → `ASAN_SYMBOLIZER_PATH`/llvm-symbolizer, present in
+  `hexgraph-fuzz`) and the probe carries the symbolized `_report`, so the reaper's `parse_source_frames`
+  yields `func file:line` frames + auto-links finding→source; the binary-only AFL qemu "abort in ?"
+  is gdb/addr2line-symbolized to the real sink (`afl_qemu_probe._gdb_backtrace`). Also fixed the
+  fork-mode execs parse (`#NNN: cov:` lines) + an exec floor so a real run isn't mis-finalized
+  `degraded`, and made libFuzzer `-minimize_crash` VERIFY the minimized input still crashes (a
+  non-reproducing "minimized" reproducer no longer gets stored — fixes one-click re-verify flakiness).
+  **verify_fuzz_artifact [GAP]:** added a first-class `verify_fuzz_artifact` MCP tool (+ catalog entry;
+  `minimize_artifact` kept as a back-compat alias) that replays a crash reproducer BYTE-FAITHFULLY;
+  `poc_probe.py` gained a `stdin_b64` raw-bytes path and `poc.verify_reproducer` now uses it (was
+  `stdin` latin-1 → UTF-8-re-encoded by the subprocess, corrupting a binary reproducer). **No DB
+  migration** (`fuzz_target_sources` rides existing `metadata_json`; coverage/frames ride
+  `coverage.json`/`evidence.extra`; frozen finding schema untouched). Tests:
+  `tests/test_buildfuzz_handoff.py` — an OFFLINE mock regression guard (build populates
+  fuzz_target_sources + promotes harness → infer source_lib → mock campaign finds the crash), unit
+  tests for `target_source_mounts` (include-dir layout) + the `verify_fuzz_artifact` tool + byte-faithful
+  replay, and a Docker-gated libFuzzer e2e (build → coverage-guided campaign → real execs + coverage_for
+  available + planted crash + byte-faithful re-verify; skips-with-reason on the host's known libFuzzer
+  `-fork` forkserver instability). README/SKILL(`agent_setup.py`)/MCP-catalog/ui-backlog updated;
+  Playwright-verified the coverage shading (green/amber lines) + the `#0 line_1 target.c:1` frame→source
+  jump render. `just test` green (only the pre-existing environmental `test_fuzz_phase6` local-daemon-as-
+  remote fails, identical to baseline `main`).
 - 2026-06-02: **fix: battle-test remediation PR-2 — assurance correctness + agent visibility** (branch
   `fix/battletest-assurance`). Four fixes from the poc-tier engagement (`FEEDBACK.md` PR-2 block).
   **B [BUG] the verify-WRITE path overwrote assurance UNCONDITIONALLY** (a failed/misrouted re-verify

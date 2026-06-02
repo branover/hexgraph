@@ -19,7 +19,7 @@ import os
 import tempfile
 
 from hexgraph.engine.fuzzers.base import FuzzCampaignSpec, Fuzzer, PreparedFuzz
-from hexgraph.engine.fuzzers.shared import fuzz_image
+from hexgraph.engine.fuzzers.shared import fuzz_image, target_source_mounts
 
 
 class AflPlusPlusFuzzer(Fuzzer):
@@ -46,11 +46,14 @@ class AflPlusPlusFuzzer(Fuzzer):
             f"--max-crashes={spec.max_crashes}",
             f"--instances={max(1, int(spec.instances))}",
         ]
-        mounts: list[tuple[str, str]] = []
-        for i, ts in enumerate(spec.target_sources):
-            guest = f"/src/target_{i}{os.path.splitext(ts)[1] or '.c'}"
-            mounts.append((ts, guest))
+        # Mount each source's directory (preserving layout) so a self-including header
+        # compiles, and add each dir to the include path (battle-test L).
+        src_mounts, guest_sources, include_dirs = target_source_mounts(spec.target_sources)
+        mounts: list[tuple[str, str]] = list(src_mounts)
+        for guest in guest_sources:
             extra_args.append(f"--target-source={guest}")
+        for inc in include_dirs:
+            extra_args.append(f"--include-dir={inc}")
 
         for i, s in enumerate(spec.seeds):
             if s and os.path.isfile(s):

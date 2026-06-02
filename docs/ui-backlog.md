@@ -1,5 +1,28 @@
 # UI improvement backlog
 
+## Battle-test remediation PR-3 — build→fuzz handoff + coverage/symbolization (2026-06-02)
+
+**Shipped in `fix/battletest-buildfuzz`** (Playwright-verified, screenshots judged). These are
+BACKEND fixes that make two existing-but-empty UI affordances finally render real data — no new
+components were needed (`SourceBrowser.tsx` coverage shading + `ArtifactsView.tsx` source-mapped
+stack already existed; they were starved of data):
+- **Coverage shading now lights up** — `coverage_for` previously returned `available:false` for a
+  libFuzzer campaign (no per-line map was ever produced), so the Source IDE's "Coverage shading"
+  picker shaded nothing. The fuzz probe now collects a per-line llvm-cov map (`coverage.json`)
+  on a coverage-guided run, and `coverage_for` serves it. **Verified:** opening `target.c` in the
+  Source/IDE view with the campaign selected shades covered lines GREEN (left-border + tint) and
+  uncovered lines AMBER, with the covered/uncovered legend — the prominent-but-empty affordance
+  the libFuzzer agent flagged now works.
+- **Source-mapped stack + frame→source jump now render** — ASan crash frames were unsymbolized
+  (module+offset only; no `llvm-symbolizer` wired at runtime) so `frames:[]` and the triage
+  stack was empty. The probe now forces ASan symbolization (`ASAN_SYMBOLIZER_PATH` →
+  llvm-symbolizer, present in `hexgraph-fuzz`) + carries the symbolized `_report`, and the reaper
+  parses `func file:line` frames. **Verified:** the artifact DETAIL shows a "Stack" section with
+  `#0 line_1 target.c:1`; clicking the frame JUMPS to the Source view at that file/line. Binary-only
+  (AFL qemu) "abort in ?" is now addr2line'd/gdb-symbolized to the real sink function too.
+- **No new components / no UI rebuild gotcha:** `just ui` rebuilt the SPA; the data now populates
+  the existing components. The fixes are entirely in the probes/engine serializer.
+
 ## Battle-test remediation PR-1 — fuzz UX + campaign status + egress audit (2026-06-02)
 
 **Shipped in `fix/battletest-fuzzux`** (Playwright-verified, screenshots judged):
