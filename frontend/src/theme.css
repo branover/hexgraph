@@ -287,6 +287,85 @@ select.sel:focus, .settings select.sel:focus { outline: none; border-color: var(
 .settings .banner.err { background: rgba(255,93,108,.12); border: 1px solid rgba(255,93,108,.4); color: #ff8a93; padding: 9px 12px; border-radius: 8px; font-size: 12.5px; margin-bottom: 14px; }
 .dot.ok { background: #2ea043; } .dot.off { background: #6e7681; }
 
+/* ---- Source code viewer (syntax-highlighted, continuous block) ---- */
+/* A clean, GitHub-dark-style code block: a single continuous surface, a dimmed
+   right-aligned line-number gutter, faithful indentation (tab-size + pre), and a
+   horizontal scroll for long lines. Coverage shading + the jump highlight ride as
+   per-row backgrounds layered UNDER the syntax-colored text. */
+.codeview { font-family: var(--mono); font-size: 12.5px; line-height: 1.55; background: #0c0f17;
+  tab-size: 4; -moz-tab-size: 4; min-height: 100%; padding: 8px 0; }
+.codeview .cl { display: grid; grid-template-columns: 52px 1fr; align-items: stretch;
+  border-left: 2px solid transparent; }
+.codeview .cl > .ln { color: #4b566b; text-align: right; padding: 0 14px 0 0; user-select: none;
+  -webkit-user-select: none; flex: none; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.codeview .cl > .src { white-space: pre; padding: 0 18px 0 6px; color: var(--fg); }
+.codeview .scrollx { overflow-x: auto; }
+/* coverage shading — a subtle tint + a left accent rail, never a per-line BOX */
+.codeview .cl.cov-y { background: rgba(46,160,67,.10); border-left-color: #2ea043; }
+.codeview .cl.cov-n { background: rgba(210,153,34,.09); border-left-color: #d29922; }
+.codeview .cl.cov-y > .ln { color: #5fae6e; }
+.codeview .cl.cov-n > .ln { color: #b08a3a; }
+/* the finding→source jump highlight (wins over coverage) */
+.codeview .cl.hot { background: rgba(106,163,255,.16); border-left-color: var(--accent);
+  box-shadow: inset 0 0 0 1px rgba(106,163,255,.22); }
+.codeview .cl.hot > .ln { color: var(--accent); }
+.cov-legend { display: inline-flex; gap: 10px; align-items: center; }
+.cov-legend .it { display: inline-flex; gap: 5px; align-items: center; }
+.cov-legend .sw { width: 9px; height: 9px; border-radius: 2px; }
+
+/* highlight.js token theme — tuned to the HexGraph dark palette (not a stock theme) */
+.codeview .hljs-comment, .codeview .hljs-quote { color: #5d6b85; font-style: italic; }
+.codeview .hljs-keyword, .codeview .hljs-selector-tag, .codeview .hljs-literal,
+.codeview .hljs-section, .codeview .hljs-doctag, .codeview .hljs-type, .codeview .hljs-name { color: #c792ea; }
+.codeview .hljs-string, .codeview .hljs-regexp, .codeview .hljs-meta-string { color: #9ece6a; }
+.codeview .hljs-number, .codeview .hljs-symbol, .codeview .hljs-bullet { color: #f6a468; }
+.codeview .hljs-title, .codeview .hljs-title.function_, .codeview .hljs-function .hljs-title { color: #82aaff; }
+.codeview .hljs-attr, .codeview .hljs-attribute, .codeview .hljs-variable, .codeview .hljs-template-variable { color: #7fd1e0; }
+.codeview .hljs-built_in, .codeview .hljs-class .hljs-title, .codeview .hljs-title.class_ { color: #ffcb6b; }
+.codeview .hljs-meta, .codeview .hljs-meta .hljs-keyword { color: #6f7a90; }
+.codeview .hljs-deletion { color: #ff7b86; }
+.codeview .hljs-addition { color: #62d27a; }
+.codeview .hljs-emphasis { font-style: italic; }
+.codeview .hljs-strong { font-weight: 700; }
+
+/* source file tree + file header */
+.srctree .fsfile.sel { background: var(--surface-3); border-radius: 6px; color: var(--fg); }
+.srcview .filehdr { display: flex; align-items: center; gap: 8px; padding: 8px 14px;
+  border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 1;
+  background: linear-gradient(180deg, var(--surface-2), var(--surface)); }
+.srcview .filehdr .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 12.5px; }
+
+/* ---- Toolbar groups (intentional, divided, responsive) ---- */
+.toolbar .tgroup { display: inline-flex; align-items: center; gap: 6px; }
+.toolbar .tsep { width: 1px; align-self: stretch; min-height: 22px; background: var(--border); margin: 0 2px; }
+
+/* ---- Fuzz modal (clean hierarchy) ---- */
+.modal.fuzz { width: 600px; max-height: 90vh; display: flex; flex-direction: column; }
+.modal.fuzz .modal-b { overflow-y: auto; min-height: 0; padding-right: 4px; margin-right: -4px; }
+.fuzz .lede { font-size: 11.5px; line-height: 1.55; color: var(--fg-dim);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.fuzz .grp { border: 1px solid var(--border); border-radius: 9px; padding: 12px 13px; background: var(--surface); }
+.fuzz .grp + .grp { margin-top: 10px; }
+.fuzz .grp-h { font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted);
+  font-weight: 700; margin: 0 0 9px; display: flex; align-items: center; gap: 7px; }
+.fuzz .grp-h .note { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--muted); font-size: 10.5px; }
+.fuzz .fld { display: flex; flex-direction: column; gap: 4px; }
+.fuzz .fld > label, .fuzz .grid label { font-size: 10.5px; color: var(--muted); text-transform: uppercase;
+  letter-spacing: .05em; margin: 0; display: block; }
+.fuzz .fld .sub { text-transform: none; letter-spacing: 0; color: var(--muted); font-weight: 400; }
+.fuzz input, .fuzz select, .fuzz textarea { width: 100%; background: var(--bg); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 7px; padding: 6px 9px; font: inherit; font-size: 12px; }
+.fuzz textarea { font-family: var(--mono); font-size: 11.5px; resize: vertical; }
+.fuzz input:focus, .fuzz select:focus, .fuzz textarea:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
+.fuzz .grid { display: grid; gap: 10px; }
+.fuzz .grid label { margin-bottom: 3px; }
+.fuzz .grid > div { display: flex; flex-direction: column; gap: 4px; }
+.fuzz .inline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.fuzz .inline .fld { flex: 1; min-width: 130px; }
+.fuzz .resnote { font-size: 10.5px; color: var(--muted); line-height: 1.5; margin-top: 9px;
+  border-top: 1px dashed var(--border); padding-top: 8px; }
+.fuzz .resnote code { background: var(--surface-3); padding: 1px 5px; border-radius: 4px; }
+
 /* addable export chips + firmware filesystem browser */
 .tag.addable { cursor: pointer; border: 1px dashed var(--border-strong); background: transparent; display: inline-flex; align-items: center; gap: 3px; }
 .tag.addable:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }

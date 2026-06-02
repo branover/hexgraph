@@ -1,5 +1,44 @@
 # UI improvement backlog
 
+## UI "sexiness" pass — source viewer + toolbar + fuzz modal (2026-06-02)
+
+**Shipped in `build/ui-sexiness`** (Playwright-verified, before/after screenshots judged;
+final PNGs under `docs/ui-shots/`). A pure VISUAL/LAYOUT pass — zero backend/behavior change.
+
+- **Source viewer** (`SourceBrowser.tsx`, `highlight.ts`, `theme.css .codeview`) — was a
+  line-numbered `<pre>` where every line rendered as a separate bordered ROW with a thick
+  colored gutter rule, huge line spacing, NO syntax coloring, and weird left/right alignment.
+  Now a clean **continuous code block**: syntax highlighting via **highlight.js core** (only
+  c/cpp/python/js/ts/bash/json/xml registered → ~30 KB raw added to the bundle, vs the full
+  ~190-language auto-bundle), themed to the dark palette; a dimmed, right-aligned, tabular
+  line-number gutter with a gap before the code; faithful indentation (`white-space: pre` +
+  `tab-size`) with **horizontal scroll** for long lines (no more wrap-mangling). The
+  highlighter is line-split (carries open `<span>`s across newlines so block comments/strings
+  stay colored) and only colors the TEXT — **coverage shading** (covered=green tint + left
+  rail / uncovered=amber) and the **finding→source jump** highlight ride as per-row classes
+  UNDER it, so all three coexist. Verified: covered/uncovered shading still lights up; the
+  Inspector "Open in source" jump still lands on + highlights the right line (1 `.cl.hot`);
+  file picker / source-tree dropdown / read-only vs Edit affordance / Build modal launch all
+  unchanged. No console errors.
+- **Center-pane toolbar** (`Workspace.tsx`, `theme.css .toolbar .tgroup/.tsep`) — was an
+  undifferentiated scattered row. Now grouped with vertical dividers: **view-toggle**
+  (segmented Graph/Source) · **search** (grows to fill) · **create** (Node, Edge) ·
+  **analyze** (Compare, Same-code, Merge-dupes) · **report/export** (Report, Export, Audit),
+  with tidier icons (Same-code/Merge-dupes → `copy`, Export → `arrowin`). Wraps cleanly at
+  1280/1440/1600 px, staying grouped.
+- **Fuzz campaign modal** (`FuzzModal.tsx`, `theme.css .modal.fuzz`) — was plain + busy
+  (all-caps labels, cramped surface/engine row, run-together resources block). Redesigned into
+  a clean header + a lede panel + grouped cards (**Target & engine** · **Network target** ·
+  **Inputs** · **Stop conditions** · **Resources**) with aligned grids, consistent labels, a
+  scrollable body (`max-height: 90vh`) and pinned footer with a prominent primary button. ALL
+  inputs kept functional: the target picker, the network host/port/protocol/proto_spec block
+  (verified rendering on a `web_app` surface), seeds/dictionary, the numeric params, and the
+  Resources unconstrained-toggle (collapses mem/cpu/pids when on). No console errors.
+- **Highlighter choice + bundle:** highlight.js core (registering 8 grammars). Raw JS bundle
+  935.6 KB → ~967 KB (gzip ~294 KB → ~304 KB); the dominant weight is still Cytoscape.
+- **Deferred (still true):** no inline-diff/coverage-diff view in the editor; the source viewer
+  is read-only-highlighted (the Edit textarea is still plain — editing UX unchanged on purpose).
+
 ## First-class raw-TCP / socket targets — `register_socket` (2026-06-02)
 
 **Shipped in `build/register-socket`** (Playwright-verified). A bare non-HTTP service is now a

@@ -110,147 +110,145 @@ export default function FuzzModal({ projectId, target: initialTarget, targets, s
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal" style={{ maxWidth: 560 }} onClick={(e) => e.stopPropagation()}>
+      <div className="modal fuzz" onClick={(e) => e.stopPropagation()}>
         <h3>
           <Icon name="bug" size={16} /> Fuzz campaign
           <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}> · on {target.name}</span>
           <span style={{ flex: 1 }} />
           <button className="btn sm ghost icon" onClick={onClose}><Icon name="x" size={13} /></button>
         </h3>
-        <div className="modal-b" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <div className="muted" style={{ fontSize: 11.5 }}>
+        <div className="modal-b" style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+          <p className="lede">
             HexGraph spawns a <b>detached, hardened sandbox container</b> and reaps crashes as they
             appear — you never run a fuzzer by hand. Engines are <b>what the server advertises</b> for
             this target's attack surface. Live status streams in the <b>Campaigns</b> tab.
-          </div>
+          </p>
 
-          {pickable.length > 1 && (
-            <div className="row" style={{ display: "flex", gap: 12, alignItems: "center" }}>
-              <label style={{ fontSize: 12 }}>target</label>
-              <select value={target.id} onChange={(e) => { const t = pickable.find((x) => x.id === e.target.value); if (t) setTarget(t); }}
-                      style={{ flex: 1, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, fontSize: 12, padding: "2px 6px" }}>
-                {pickable.map((t) => (
-                  <option key={t.id} value={t.id}>{t.name} · {t.kind}{(t.metadata?.instrumented) ? " (instrumented)" : ""}</option>
-                ))}
-              </select>
-              <span className="muted" style={{ fontSize: 10.5 }}>which surface to fuzz</span>
-            </div>
-          )}
-
-          <div className="row" style={{ display: "flex", gap: 16, alignItems: "center" }}>
-            <label style={{ fontSize: 12 }}>surface</label>
-            <span className="tag">{eng?.surface || "…"}{eng?.inferred ? " (inferred)" : ""}</span>
-            <label style={{ fontSize: 12, marginLeft: 12 }}>engine</label>
-            <select value={engine} onChange={(e) => setEngine(e.target.value)}
-                    style={{ background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, fontSize: 12, padding: "2px 6px" }}>
-              {(eng?.engines || []).map((x) => <option key={x} value={x}>{x}{x === eng?.default ? " (default)" : ""}</option>)}
-            </select>
-          </div>
-
-          {fuzzRemoteOn && (
-            <div className="row" style={{ display: "flex", gap: 12, alignItems: "center" }}>
-              <label style={{ fontSize: 12 }}>environment</label>
-              <select value={environment} onChange={(e) => setEnvironment(e.target.value)}
-                      style={{ background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, fontSize: 12, padding: "2px 6px" }}>
-                {envs.map((e) => (
-                  <option key={e.id} value={e.id} disabled={!e.is_local && !e.connection_present}>
-                    {e.name}{e.is_local ? " (local)" : e.connection_present ? "" : " — no connection"}
-                  </option>
-                ))}
-              </select>
-              <span className="muted" style={{ fontSize: 10.5 }}>
-                where the container runs — remote = a user-owned Docker host, SAME sandbox boundary.
-              </span>
-            </div>
-          )}
-
-          {isNetwork && (
-            <div>
-              <div className="sec-label">Network target <span className="muted" style={{ fontWeight: 400 }}>· loopback/private only · every send audited</span></div>
-              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 10 }}>
-                <label style={{ fontSize: 11.5 }}>host
-                  <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="inferred from target (e.g. 127.0.0.1)"
-                         style={{ width: "100%", marginTop: 2, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, padding: "3px 4px", fontSize: 12 }} /></label>
-                <label style={{ fontSize: 11.5 }}>port
-                  <input value={port} onChange={(e) => setPort(e.target.value)} placeholder="e.g. 8080"
-                         style={{ width: "100%", marginTop: 2, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, padding: "3px 4px", fontSize: 12 }} /></label>
-                <label style={{ fontSize: 11.5 }}>protocol
-                  <select value={protocol} onChange={(e) => setProtocol(e.target.value)}
-                          style={{ width: "100%", marginTop: 2, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, padding: "3px 4px", fontSize: 12 }}>
-                    <option value="tcp">tcp</option><option value="udp">udp</option>
-                  </select></label>
+          {/* ── Target & engine ───────────────────────────────────────── */}
+          <div className="grp" style={{ marginTop: 12 }}>
+            <div className="grp-h"><Icon name="target" size={12} /> Target &amp; engine</div>
+            <div className="inline">
+              {pickable.length > 1 && (
+                <div className="fld" style={{ flex: 2 }}>
+                  <label>surface <span className="sub">· which target to fuzz</span></label>
+                  <select value={target.id} onChange={(e) => { const t = pickable.find((x) => x.id === e.target.value); if (t) setTarget(t); }}>
+                    {pickable.map((t) => (
+                      <option key={t.id} value={t.id}>{t.name} · {t.kind}{(t.metadata?.instrumented) ? " (instrumented)" : ""}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <div className="fld" style={{ flex: "none" }}>
+                <label>attack surface</label>
+                <span className="tag" style={{ alignSelf: "flex-start", padding: "5px 9px" }}>{eng?.surface || "…"}{eng?.inferred ? " · inferred" : ""}</span>
               </div>
-              <label style={{ fontSize: 11.5, display: "block", marginTop: 8 }}>proto_spec (optional, JSON — a boofuzz generational request/state spec for a binary protocol)
-                <textarea value={protoSpec} onChange={(e) => setProtoSpec(e.target.value)} rows={3} spellCheck={false}
-                          placeholder='e.g. {"requests": [...]} — omit for the default text/CRLF spec'
-                          style={{ width: "100%", marginTop: 2, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, padding: "4px 6px", fontSize: 11.5, fontFamily: "var(--mono, monospace)" }} /></label>
+              <div className="fld">
+                <label>engine</label>
+                <select value={engine} onChange={(e) => setEngine(e.target.value)}>
+                  {(eng?.engines || []).map((x) => <option key={x} value={x}>{x}{x === eng?.default ? " (default)" : ""}</option>)}
+                </select>
+              </div>
+              {fuzzRemoteOn && (
+                <div className="fld">
+                  <label>environment</label>
+                  <select value={environment} onChange={(e) => setEnvironment(e.target.value)}>
+                    {envs.map((e) => (
+                      <option key={e.id} value={e.id} disabled={!e.is_local && !e.connection_present}>
+                        {e.name}{e.is_local ? " (local)" : e.connection_present ? "" : " — no connection"}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
-          )}
-
-          {!isNetwork && (
-            <div className="field"><label>focus function (optional)</label>
-              <input value={fn} onChange={(e) => setFn(e.target.value)} placeholder="e.g. cgi_handler (uses the latest harness for this target)"
-                     style={{ width: "100%", background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, padding: "4px 6px", fontSize: 12 }} />
-            </div>
-          )}
-
-          <div className="field"><label>seeds <span className="muted" style={{ fontWeight: 400 }}>· optional · host corpus file paths, comma/newline separated</span></label>
-            <textarea value={seeds} onChange={(e) => setSeeds(e.target.value)} rows={2} spellCheck={false}
-                      placeholder="e.g. /path/to/seed1.bin, /path/to/seed2.bin — omit to start from an empty/auto corpus"
-                      style={{ width: "100%", background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, padding: "4px 6px", fontSize: 11.5, fontFamily: "var(--mono, monospace)" }} />
-          </div>
-
-          <div className="field"><label>dictionary <span className="muted" style={{ fontWeight: 400 }}>· optional · tokens, comma/newline separated (auto-derived from the target's strings when omitted)</span></label>
-            <textarea value={dictionary} onChange={(e) => setDictionary(e.target.value)} rows={2} spellCheck={false}
-                      placeholder='e.g. GET, POST, Content-Length, \xff\xd8 — guides the mutator'
-                      style={{ width: "100%", background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, padding: "4px 6px", fontSize: 11.5, fontFamily: "var(--mono, monospace)" }} />
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10 }}>
-            <label style={{ fontSize: 11.5 }}>max time (s)
-              <input value={maxTime} onChange={(e) => setMaxTime(e.target.value)} className="num-input"
-                     style={{ width: "100%", marginTop: 2, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, padding: "3px 4px", fontSize: 12 }} /></label>
-            <label style={{ fontSize: 11.5 }}>max len
-              <input value={maxLen} onChange={(e) => setMaxLen(e.target.value)}
-                     style={{ width: "100%", marginTop: 2, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, padding: "3px 4px", fontSize: 12 }} /></label>
-            <label style={{ fontSize: 11.5 }}>max crashes
-              <input value={maxCrashes} onChange={(e) => setMaxCrashes(e.target.value)}
-                     style={{ width: "100%", marginTop: 2, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, padding: "3px 4px", fontSize: 12 }} /></label>
-            <label style={{ fontSize: 11.5 }}>instances
-              <input value={instances} onChange={(e) => setInstances(e.target.value)}
-                     style={{ width: "100%", marginTop: 2, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, padding: "3px 4px", fontSize: 12 }} /></label>
-          </div>
-
-          <div>
-            <div className="sec-label">Resources (this campaign) <span className="muted" style={{ fontWeight: 400 }}>· defaults from Settings</span></div>
-            <label className="switch" style={{ fontSize: 12, display: "flex", gap: 8, alignItems: "center", margin: "4px 0 8px" }}>
-              <input type="checkbox" checked={unconstrained} onChange={(e) => setUnconstrained(e.target.checked)} />
-              <span>Unconstrained (use the whole machine — lifts mem/cpu/pids only)</span>
-            </label>
-            {!unconstrained && (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-                <label style={{ fontSize: 11.5 }}>memory
-                  <input value={mem} onChange={(e) => setMem(e.target.value)}
-                         style={{ width: "100%", marginTop: 2, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, padding: "3px 4px", fontSize: 12 }} /></label>
-                <label style={{ fontSize: 11.5 }}>cpus
-                  <input value={cpus} onChange={(e) => setCpus(e.target.value)}
-                         style={{ width: "100%", marginTop: 2, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, padding: "3px 4px", fontSize: 12 }} /></label>
-                <label style={{ fontSize: 11.5 }}>pids
-                  <input value={pids} onChange={(e) => setPids(e.target.value)}
-                         style={{ width: "100%", marginTop: 2, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 4, padding: "3px 4px", fontSize: 12 }} /></label>
+            {fuzzRemoteOn && (
+              <div className="muted" style={{ fontSize: 10.5, marginTop: 7 }}>
+                Environment = WHERE the container runs — remote is a user-owned Docker host, SAME sandbox boundary.
               </div>
             )}
-            <div className="muted" style={{ fontSize: 10.5, marginTop: 6 }}>
+          </div>
+
+          {/* ── Network target (network surface only) ──────────────────── */}
+          {isNetwork && (
+            <div className="grp">
+              <div className="grp-h"><Icon name="globe" size={12} /> Network target
+                <span className="note">· loopback / private only · every send audited</span></div>
+              <div className="grid" style={{ gridTemplateColumns: "2fr 1fr 1fr" }}>
+                <div><label>host</label>
+                  <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="inferred (e.g. 127.0.0.1)" /></div>
+                <div><label>port</label>
+                  <input value={port} onChange={(e) => setPort(e.target.value)} placeholder="e.g. 8080" /></div>
+                <div><label>protocol</label>
+                  <select value={protocol} onChange={(e) => setProtocol(e.target.value)}>
+                    <option value="tcp">tcp</option><option value="udp">udp</option>
+                  </select></div>
+              </div>
+              <div className="fld" style={{ marginTop: 10 }}>
+                <label>proto_spec <span className="sub">· optional JSON · a boofuzz request/state spec for a binary protocol</span></label>
+                <textarea value={protoSpec} onChange={(e) => setProtoSpec(e.target.value)} rows={3} spellCheck={false}
+                          placeholder='e.g. {"requests": [...]} — omit for the default text/CRLF spec' />
+              </div>
+            </div>
+          )}
+
+          {/* ── Inputs (focus fn / seeds / dictionary) ─────────────────── */}
+          <div className="grp">
+            <div className="grp-h"><Icon name="arrowin" size={12} /> Inputs</div>
+            {!isNetwork && (
+              <div className="fld" style={{ marginBottom: 10 }}>
+                <label>focus function <span className="sub">· optional</span></label>
+                <input value={fn} onChange={(e) => setFn(e.target.value)} placeholder="e.g. cgi_handler (uses the latest harness for this target)" />
+              </div>
+            )}
+            <div className="fld" style={{ marginBottom: 10 }}>
+              <label>seeds <span className="sub">· optional · host corpus file paths, comma/newline separated</span></label>
+              <textarea value={seeds} onChange={(e) => setSeeds(e.target.value)} rows={2} spellCheck={false}
+                        placeholder="e.g. /path/to/seed1.bin, /path/to/seed2.bin — omit to start from an empty/auto corpus" />
+            </div>
+            <div className="fld">
+              <label>dictionary <span className="sub">· optional · tokens, comma/newline separated (auto-derived from strings when omitted)</span></label>
+              <textarea value={dictionary} onChange={(e) => setDictionary(e.target.value)} rows={2} spellCheck={false}
+                        placeholder='e.g. GET, POST, Content-Length, \xff\xd8 — guides the mutator' />
+            </div>
+          </div>
+
+          {/* ── Stop conditions ────────────────────────────────────────── */}
+          <div className="grp">
+            <div className="grp-h"><Icon name="sliders" size={12} /> Stop conditions</div>
+            <div className="grid" style={{ gridTemplateColumns: "1fr 1fr 1fr 1fr" }}>
+              <div><label>max time (s)</label><input value={maxTime} onChange={(e) => setMaxTime(e.target.value)} /></div>
+              <div><label>max len</label><input value={maxLen} onChange={(e) => setMaxLen(e.target.value)} /></div>
+              <div><label>max crashes</label><input value={maxCrashes} onChange={(e) => setMaxCrashes(e.target.value)} /></div>
+              <div><label>instances</label><input value={instances} onChange={(e) => setInstances(e.target.value)} /></div>
+            </div>
+          </div>
+
+          {/* ── Resources ──────────────────────────────────────────────── */}
+          <div className="grp">
+            <div className="grp-h"><Icon name="chip" size={12} /> Resources
+              <span className="note">· this campaign · defaults from Settings</span></div>
+            <label className="switch" style={{ fontSize: 12, display: "flex", gap: 9, alignItems: "center", marginBottom: unconstrained ? 0 : 11 }}>
+              <input type="checkbox" checked={unconstrained} onChange={(e) => setUnconstrained(e.target.checked)} />
+              <span>Unconstrained <span className="muted" style={{ fontWeight: 400 }}>— use the whole machine (lifts mem/cpu/pids only)</span></span>
+            </label>
+            {!unconstrained && (
+              <div className="grid" style={{ gridTemplateColumns: "1fr 1fr 1fr" }}>
+                <div><label>memory</label><input value={mem} onChange={(e) => setMem(e.target.value)} /></div>
+                <div><label>cpus</label><input value={cpus} onChange={(e) => setCpus(e.target.value)} /></div>
+                <div><label>pids</label><input value={pids} onChange={(e) => setPids(e.target.value)} /></div>
+              </div>
+            )}
+            <div className="resnote">
               Resource ceilings are NOT a security relaxation — the sandbox stays <code>--network none</code>,
               cap-dropped, no-new-privileges, read-only, non-root regardless.
             </div>
           </div>
 
-          {err && <div className="err" style={{ fontSize: 11.5 }}>{err}</div>}
+          {err && <div className="err" style={{ fontSize: 11.5, marginTop: 10 }}>{err}</div>}
         </div>
-        <div className="modal-f" style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <div className="modal-f" style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 14 }}>
           <button className="btn sm ghost" onClick={onClose} disabled={busy}>Cancel</button>
-          <button className="btn sm primary" onClick={start} disabled={busy || !(eng?.engines || []).length}>
+          <button className="btn primary" onClick={start} disabled={busy || !(eng?.engines || []).length}>
             {busy ? <><Icon name="refresh" size={12} className="spin" /> starting…</> : <><Icon name="run" size={12} /> Start campaign</>}
           </button>
         </div>

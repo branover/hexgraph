@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { BuildRow, SourceFileEntry, SourceTreeRow, api } from "../api";
 import { Icon } from "./Icon";
 import BuildModal from "./BuildModal";
+import { highlightLines, langForFile } from "../highlight";
 
 // The read-only Source/IDE mode (Phase 1). A multi-tree file explorer (a dropdown
 // switcher over a shared <FileTree>, mirroring FilesystemBrowser) + a code viewer.
@@ -221,9 +222,9 @@ export default function SourceBrowser({ projectId, open, onPickedTarget, buildEn
               <div className="muted" style={{ fontSize: 10, marginTop: 3 }}>no per-line coverage map from this campaign</div>
             )}
             {fileCov && (
-              <div style={{ fontSize: 10, marginTop: 3, display: "flex", gap: 8, alignItems: "center" }}>
-                <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }}><span style={{ width: 9, height: 9, background: "rgba(46,160,67,0.5)", borderRadius: 2 }} /> covered</span>
-                <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }}><span style={{ width: 9, height: 9, background: "rgba(210,153,34,0.35)", borderRadius: 2 }} /> uncovered</span>
+              <div className="cov-legend" style={{ fontSize: 10, marginTop: 5 }}>
+                <span className="it"><span className="sw" style={{ background: "#2ea043" }} /> covered</span>
+                <span className="it"><span className="sw" style={{ background: "#d29922" }} /> uncovered</span>
               </div>
             )}
           </div>
@@ -272,8 +273,9 @@ export default function SourceBrowser({ projectId, open, onPickedTarget, buildEn
         {view?.err && <div className="err" style={{ padding: 16 }}>{view.err}</div>}
         {view && !view.loading && !view.err && (
           <>
-            <div className="sec" style={{ display: "flex", alignItems: "center", gap: 8, position: "sticky", top: 0, background: "var(--panel, var(--bg))", zIndex: 1 }}>
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{view.rel}</span>
+            <div className="filehdr">
+              <Icon name="doc" size={13} />
+              <span className="path">{view.rel}</span>
               {view.role && view.role !== "code" && <span className="tag" style={{ color: "var(--accent)" }}>{view.role}</span>}
               <span className="muted" style={{ fontSize: 10.5 }}>{fmtSize(view.encoding === "text" ? new Blob([view.content || ""]).size : undefined)}{view.encoding === "binary" && "binary (hex)"}{view.truncated && " · truncated"}</span>
               <span style={{ flex: 1 }} />
@@ -295,23 +297,28 @@ export default function SourceBrowser({ projectId, open, onPickedTarget, buildEn
               <textarea value={draft} onChange={(e) => setDraft(e.target.value)} spellCheck={false}
                         style={{ width: "100%", minHeight: "60vh", boxSizing: "border-box", fontFamily: "var(--mono, monospace)", fontSize: 11.5, lineHeight: "1.55em", background: "var(--bg)", color: "var(--fg)", border: "none", padding: 12, resize: "vertical" }} />
             ) : view.encoding === "text" ? (
-              <div className="codelines" style={{ fontFamily: "var(--mono, monospace)", fontSize: 11.5, lineHeight: "1.55em" }}>
-                {(view.content || "").split("\n").map((l, i) => {
-                  const n = i + 1;
-                  const hot = line === n;
-                  // Coverage shading: covered (green) / uncovered (amber) per the
-                  // selected campaign's line map. The hot (jump) line wins.
-                  const cov = covered.has(n) ? "rgba(46,160,67,0.18)"
-                            : uncovered.has(n) ? "rgba(210,153,34,0.13)" : undefined;
-                  return (
-                    <div key={i} ref={hot ? lineRef : undefined}
-                         style={{ display: "flex", background: hot ? "var(--hl, rgba(255,93,108,0.18))" : cov }}>
-                      <span className="muted" style={{ width: 44, textAlign: "right", paddingRight: 10, userSelect: "none", flex: "none",
-                                   borderLeft: covered.has(n) ? "2px solid #2ea043" : uncovered.has(n) ? "2px solid #d29922" : "2px solid transparent" }}>{n}</span>
-                      <pre style={{ margin: 0, whiteSpace: "pre-wrap", flex: 1 }}>{l || " "}</pre>
-                    </div>
-                  );
-                })}
+              // Syntax-highlighted, continuous code block with a dimmed gutter. The
+              // highlighter (highlight.js, line-split) only colors the text; coverage
+              // shading + the jump highlight ride as per-row classes UNDER it, so the
+              // two decorations coexist (don't let the highlighter clobber them).
+              <div className="scrollx">
+                <div className="codeview">
+                  {(() => {
+                    const raw = view.content || "";
+                    const hl = highlightLines(raw, langForFile(view.rel));
+                    return hl.map((html, i) => {
+                      const n = i + 1;
+                      const hot = line === n;
+                      const cls = "cl" + (hot ? " hot" : covered.has(n) ? " cov-y" : uncovered.has(n) ? " cov-n" : "");
+                      return (
+                        <div key={i} className={cls} ref={hot ? lineRef : undefined}>
+                          <span className="ln">{n}</span>
+                          <code className="src hljs" dangerouslySetInnerHTML={{ __html: html || " " }} />
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
               </div>
             ) : (
               <pre className="codewrap" style={{ whiteSpace: "pre-wrap", padding: 12, fontFamily: "var(--mono, monospace)", fontSize: 11 }}>{view.content}</pre>
