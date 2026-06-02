@@ -10,6 +10,11 @@ against identical data.
                                         shared sockets, findings incl. a critical
   PATHOLOGICAL  ~500 / ~2000            dense firmware, high-degree hubs (degree 15–25),
                                         2000+ edges, findings across binaries
+  REAL          ~12-13k nodes           a REAL rehosted-firmware-scale image (IoTGoat-like):
+                                        ~250 child-binary targets each with functions/strings/
+                                        call-graph + cross-target links + shared sockets +
+                                        findings. The scale that turns the old full-load graph
+                                        into an illegible smudge — the skeleton-first A/B target.
 
 All structure is built through the engine/authoring API (no sandbox, no Docker, no LLM),
 seeded with a fixed RNG so a re-seed reproduces the same graph. Each tier is its own
@@ -38,6 +43,7 @@ TIER_NAMES = {
     "medium": "Graph tier — MEDIUM (showcase)",
     "large": "Graph tier — LARGE",
     "pathological": "Graph tier — PATHOLOGICAL",
+    "real": "Graph tier — REAL (firmware-scale)",
 }
 
 
@@ -259,6 +265,143 @@ def seed_pathological(session, project) -> None:
                    n_sockets=8, n_findings=16, seed=8675309)
 
 
+# ── REAL (firmware-scale, ~12-13k nodes) ─────────────────────────────────────────────
+def seed_real(session, project) -> None:
+    """A REAL rehosted-firmware-scale image (IoTGoat-like): hundreds of child-binary
+    targets nested under a firmware root, each with functions/strings + a small call
+    graph, shared sockets (the network bus), cross-target links, and findings.
+
+    Tuned to land at ~12-13k graph nodes (targets + functions + strings + findings),
+    which is the scale at which the OLD full-load graph renders as an illegible
+    two-clump smudge — the exact A/B target for the skeleton-first redesign. Built
+    efficiently (no per-edge fixture re-reads) so a re-seed is bearable.
+    """
+    from hexgraph.db.models import EdgeType, FindingStatus, NodeType, Target, TargetKind
+    from hexgraph.engine.authoring import create_socket
+    from hexgraph.engine.edges import add_edge
+    from hexgraph.engine.findings import persist_finding
+    from hexgraph.engine.ingest import ingest_file
+    from hexgraph.engine.nodes import get_or_create_node, materialize_function
+    from hexgraph.engine.tasks import create_task
+    from hexgraph.models.finding import Evidence, Finding
+
+    rng = random.Random(20240613)
+    pid = project.id
+    fw_bytes = _fixtures() / "synthetic_fw.bin"
+
+    n_bins = 250          # ~250 child binaries (a busy embedded rootfs)
+    fns_per_bin = 44      # → ~11k function nodes
+    n_sockets = 24        # the shared network bus
+    n_findings = 90       # findings spread across binaries, incl. criticals
+
+    fw = ingest_file(session, project, str(fw_bytes), name="IoTGoat_x.y.z.img")
+    _classify(fw, kind="firmware_image", fmt="squashfs", arch="armv7",
+              extra={"vendor": "IoTGoat", "model": "vuln-router"})
+
+    # Shared sockets — the firmware's network map (cross-binary endpoints).
+    sockets = []
+    for i in range(n_sockets):
+        kind = rng.choice(["tcp", "udp"])
+        port = rng.choice([80, 443, 22, 23, 53, 1900, 5000, 5353, 7547, 8080, 8443, 9000, 161]) + i
+        sockets.append(create_socket(session, project, kind=kind, port=port,
+                                     name=f"svc{i}", bind_addr="0.0.0.0"))
+
+    # Realistic rootfs directory buckets so the firmware groups into nested rooms.
+    buckets = ["bin", "sbin", "usr/bin", "usr/sbin", "lib", "usr/lib", "www/cgi-bin"]
+    # Ingest binaries WITHOUT re-copying the fixture each time: register a target row
+    # pointing at the firmware's bytes (the graph view never reads these bytes; this is
+    # a presentation fixture, not a recon target). This keeps a 250-binary seed fast.
+    bins = []
+    fw_path = fw.path
+    fw_meta = dict(fw.metadata_json or {})
+    for b in range(n_bins):
+        bucket = buckets[b % len(buckets)]
+        is_lib = "lib" in bucket
+        name = (f"{bucket}/lib{b:03d}.so" if is_lib else f"{bucket}/svc_{b:03d}")
+        binr = Target(
+            project_id=pid, parent_id=fw.id, name=name, path=fw_path,
+            kind=TargetKind.shared_library if is_lib else TargetKind.executable,
+            format="ELF", arch="armv7",
+            metadata_json={"sha256": fw_meta.get("sha256"), "size": fw_meta.get("size"),
+                           "imports": ["system", "strcpy", "recv", "memcpy", "popen"]},
+        )
+        session.add(binr)
+        bins.append(binr)
+    session.flush()
+
+    bin_fns: list[list] = []
+    for b, binr in enumerate(bins):
+        fns = []
+        addr = 0x400000 + b * 0x20000
+        for f in range(fns_per_bin):
+            fn = materialize_function(session, project_id=pid, target_id=binr.id,
+                                      name=f"fn_{b:03d}_{f:03d}", address=hex(addr),
+                                      created_by="recon")
+            fns.append(fn)
+            addr += 0x40
+        bin_fns.append(fns)
+
+        # A couple of in-binary hubs (moderate degree — keeps total edges sane at scale).
+        n_hubs = 2
+        hubs = fns[:n_hubs]
+        for hub in hubs:
+            callers = rng.sample(fns[n_hubs:], min(7, len(fns) - n_hubs))
+            for caller in callers:
+                add_edge(session, project_id=pid, src=("node", caller.id),
+                         dst=("node", hub.id), type=EdgeType.calls, origin="tool",
+                         confidence=0.9)
+        # A light chain so each fn has at least one outgoing call.
+        for i in range(n_hubs, len(fns) - 1):
+            add_edge(session, project_id=pid, src=("node", fns[i].id),
+                     dst=("node", fns[i + 1].id), type=EdgeType.calls, origin="tool",
+                     confidence=0.7)
+        # A sink + a taint into it on a subset of binaries (semantic signal, not all).
+        if b % 3 == 0:
+            sink = get_or_create_node(session, project_id=pid, node_type=NodeType.sink,
+                                      name="system", target_id=binr.id, address=hex(0x402300 + b),
+                                      attrs={"library": "libc", "danger": "command-exec"})
+            add_edge(session, project_id=pid, src=("node", rng.choice(fns).id), dst=("node", sink.id),
+                     type=EdgeType.taints, origin="llm", confidence=0.8)
+        # A couple of strings per binary (some interior detail beyond functions).
+        for s in (f"GET /cgi-bin/svc{b} HTTP/1.1", f"/tmp/svc_{b:03d}.pid"):
+            get_or_create_node(session, project_id=pid, node_type=NodeType.string, name=s,
+                               target_id=binr.id, attrs={"value": s})
+        # Bind some binaries to the shared sockets (listens_on / connects_to).
+        if b % 4 != 3:
+            for sock in rng.sample(sockets, min(2, len(sockets))):
+                etype = EdgeType.listens_on if binr.kind == TargetKind.executable else EdgeType.connects_to
+                add_edge(session, project_id=pid, src=("node", hubs[0].id), dst=("node", sock.id),
+                         type=etype, origin="tool", confidence=0.9)
+
+    # Cross-target links: each binary links_against a couple of others (the structural
+    # story the skeleton's meta-edges aggregate).
+    for binr in bins:
+        for other in rng.sample(bins, min(2, len(bins) - 1)):
+            if other.id != binr.id:
+                add_edge(session, project_id=pid, src=("target", binr.id), dst=("target", other.id),
+                         type=EdgeType.links_against, origin="tool", confidence=0.9)
+
+    # Findings spread across binaries, incl. several criticals (so the skeleton's
+    # severity rollups have hot rooms to surface).
+    cats = ["command-injection", "memory-safety", "auth", "recon", "hardcoded-secret"]
+    sevs = (["critical"] * 4) + (["high"] * 12) + (["medium"] * 24) + (["low"] * 30) + (["info"] * 20)
+    for i in range(n_findings):
+        binr = rng.choice(bins)
+        sev = sevs[i] if i < len(sevs) else rng.choice(sevs)
+        t = create_task(session, project=project, target_id=binr.id,
+                        type="static_analysis", backend="mock")
+        persist_finding(session, project_id=pid, target_id=binr.id, task_id=t.id,
+                        finding=Finding(
+                            title=f"{rng.choice(cats)} in {binr.name}",
+                            severity=sev, confidence=rng.choice(["high", "medium", "low"]),
+                            category=rng.choice(cats),
+                            summary="Generated finding for the REAL-scale graph-tier fixture.",
+                            reasoning="Procedurally generated for skeleton-first A/B captures.",
+                            evidence=Evidence(file=f"/{binr.name}")),
+                        status=(FindingStatus.confirmed if sev == "critical" else FindingStatus.new),
+                        finding_type="vulnerability")
+
+
 # ── Driver ───────────────────────────────────────────────────────────────────────────
 def _counts(session, pid: str) -> dict:
     from hexgraph.db.models import Edge, Finding as FRow, Node, Target
@@ -302,7 +445,8 @@ def seed_tier(session, tier: str, *, reset: bool) -> dict:
 
     _step(f"Seed {tier.upper()} tier")
     project = create_project(session, name=name, llm_backend="mock")
-    {"small": seed_small, "large": seed_large, "pathological": seed_pathological}[tier](session, project)
+    {"small": seed_small, "large": seed_large, "pathological": seed_pathological,
+     "real": seed_real}[tier](session, project)
     session.flush()
     return {"tier": tier, "project_id": project.id, "reused": False, **_counts(session, project.id)}
 

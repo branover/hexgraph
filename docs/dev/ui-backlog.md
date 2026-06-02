@@ -1,5 +1,69 @@
 # UI improvement backlog
 
+## Graph at REAL firmware scale — skeleton-first loading (2026-06-02)
+
+**Shipped in `build/graph-scale`.** The Phase 1–5 graph redesign was validated against a synthetic
+~500-node "pathological" tier — ~25× too small. A real rehosted firmware (IoTGoat, ~12.9k nodes)
+still rendered as an illegible two-clump smudge because the client **fetched and rendered every
+node at once**. The fix is to NOT render everything at once, both on the client and (the real fix)
+on the server.
+
+- **Backend skeleton-first endpoints** (`engine/graph.py` + `/graph/{id}/…`, no migration —
+  read-only serialization over existing models):
+  - `GET /graph/{id}/size` — cheap node/edge counts so the client picks skeleton-first vs full
+    load WITHOUT first fetching ~13k nodes. `skeleton_recommended` true above `SKELETON_THRESHOLD`
+    (1500 total elements).
+  - `GET /graph/{id}/skeleton` — the **structural skeleton only**: one *room* per byte target
+    (with own + **subtree** rollups: `roll_nodes`/`roll_findings`/`roll_worst_severity`/`child_bins`),
+    the shared cross-binary sockets (the network bus), and the **aggregated cross-room meta-edges**
+    (parallel edges between two rooms collapse into one weighted ribbon with a `count`). NO
+    interiors. A 38,332-element IoTGoat graph → **275 skeleton nodes + 875 meta-edges.** Firmware→
+    child `contains` is dropped (shown as nesting, not a ribbon).
+  - `GET /graph/{id}/room/{target_id}` — one room's interior **on demand**: that target's nodes +
+    findings + the edges among them (and to the shared sockets, pulled in so they don't dangle).
+- **Client skeleton-first wiring** (`Workspace.tsx` + `GraphView.tsx`): `load()` probes `/size`
+  first; above the threshold it loads the skeleton and lazily merges a room's interior into `graph`
+  only when the user expands it (`expandRoom` → `/room/<id>`, idempotent, deduped). Below the
+  threshold the old full-load path is **unchanged** (SMALL/MEDIUM/LARGE identical to before).
+  - At firmware scale a container (firmware) with **> 40 direct children does NOT auto-expand** —
+    it opens as a **single card** summarizing all its binaries (`IoTGoat… · 250 bins · 90⚠`, with
+    the critical-severity ring), surrounded by the socket bus. Expand it to reveal the child-binary
+    cards; expand a child to load its interior. A small (≤40-binary) firmware still auto-expands to
+    the "12 boxes in one box" view, as before.
+  - Skeleton-mode affordances: a "showing the skeleton — expand a room to load its interior" hint
+    + a `skeleton · N rooms` / `loading N rooms…` badge; label suppression (LOD) holds.
+- **Bug fixed along the way (latent, made fatal at scale):** in compound mode a `target` was
+  rendered BOTH as its room box AND as a free-floating anchor dot — so a collapsed firmware's
+  children still drew as ~hundreds of loose dots. `target`-type nodes are now represented only by
+  their `room:<id>` box; skeleton meta-edges (target↔target) `rep()` to those room boxes.
+- **Real-scale fixture:** `scripts/seed_graph_tiers.py` gains a **REAL** tier (~250 child binaries,
+  ~11.6k nodes / ~26k edges / 90 findings) mirroring a rehosted firmware. `just graph-tiers
+  --tier real`. Guarded by `tests/test_graph_skeleton.py` (skeleton/room/size logic on a small
+  synthetic firmware).
+
+**Real-scale A/B verdict (Playwright, ~13k-node REAL tier, 1440×900, mock/offline).** Headless
+Chromium, isolated `HEXGRAPH_HOME`, spare port; PNGs viewed as a human.
+
+- **BEFORE (`main`):** the default open frame is a dense overprinted grid of thousands of dots
+  letterboxed into the center — visual static. The browser fetched + rendered all ~11.6k nodes /
+  26k edges. **Fail** on every human-parsability criterion (eye slides off; not countable).
+- **AFTER:** the default open frame is **one firmware card** (`250 bins · 90⚠`, critical ring) in a
+  ring of 24 labeled pink socket hexagons — **25 nodes rendered, not 11.6k.** Calm, countable, the
+  eye lands on the firmware + the red rollup immediately. Expanding the firmware reveals the 251
+  child-binary cards (browser holds 275 nodes); expanding a child fetches + shows its ~44-function
+  interior cleanly. Browser stays responsive throughout. **Pass** — same information, finally
+  organized so the eye flows in. (PATHOLOGICAL, 18 binaries < the 40-child ceiling, still opens as
+  the "18 boxes in one box" view — the design's ideal.)
+- **SMALL/MEDIUM/LARGE unregressed:** all under the 1500 threshold → the old full-load path, byte-
+  for-byte the same behavior.
+
+**Open follow-ups (noted, not done here):** (1) a firmware with hundreds of children, once
+expanded, is still a busy field of cards — grouping children by rootfs directory bucket into
+intermediate rooms (the design's "collapse child-binaries into groups" hint) would make the
+expanded view as calm as the collapsed one; left for a follow-up to keep this change atomic.
+(2) search-to-focus on a node inside an unloaded room can't land until that room is loaded (the
+node isn't in the client graph yet) — a search hit could trigger the room fetch first.
+
 ## README + docs overhaul — single-folder screenshots (2026-06-02)
 
 **Shipped in `docs/readme-overhaul`.** Docs/tooling only (no behavior change beyond the two

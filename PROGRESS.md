@@ -532,6 +532,24 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-02: **build: graph at REAL firmware scale — skeleton-first loading** (branch
+  `build/graph-scale`; `docs/design/design-graph-presentation.md` §1/§8-Phase-3 + the §8 scoped-graph
+  endpoint note, D1). The Phase 1–5 redesign was validated against a ~500-node synthetic tier — ~25× too
+  small; a real IoTGoat firmware (~12.9k nodes) still rendered as a smudge because the client fetched +
+  rendered EVERY node at once. **Fix (two parts): (1) backend skeleton-first endpoints** (`engine/graph.py`
+  `graph_size`/`build_skeleton`/`build_room` + `/graph/{id}/{size,skeleton,room/{tid}}`, no migration —
+  read-only serialization): `/skeleton` serves rooms-only (per-room + **subtree** rollups, shared sockets,
+  **aggregated cross-room meta-edges**) — a 38k-element graph → 275 nodes + 875 edges; `/room/{tid}` serves
+  one room's interior on demand. **(2) client skeleton-first** (`Workspace.tsx` probes `/size`, loads the
+  skeleton above a 1500-element threshold, lazily merges a room's interior on expand; `GraphView.tsx`
+  skeleton mode). A firmware with >40 children opens as a **single card** (`250 bins · 90⚠`, critical ring)
+  + the socket bus — expand to drill in. **SMALL/MEDIUM/LARGE under-threshold paths unchanged.** Fixed a
+  latent compound-mode bug (a `target` rendered as both a room box AND a loose anchor dot — fatal at scale).
+  New REAL tier in `scripts/seed_graph_tiers.py` (~11.6k nodes) + `tests/test_graph_skeleton.py`. **Real-
+  scale Playwright A/B: BEFORE = a smudge of thousands of dots; AFTER = one calm, countable firmware card,
+  25 nodes rendered, expand-to-load interiors clean. `just test` green, tsc clean.** Reviewed + merged
+  via PR #88 (independent reviewer re-ran the offline suite + the real-scale human A/B + below-threshold
+  unchanged check).
 - 2026-06-02: **fix: byte recon never runs on a path-less surface target** (branch `fix/recon-surface`,
   PR #84). A generic `recon` task on a `web_app`/`service`/`remote` SURFACE target (no bytes, `path=""`)
   resolved the empty path to the cwd and crashed with a baffling `artifact not found: <repo root>`. Two
