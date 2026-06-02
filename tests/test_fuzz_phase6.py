@@ -324,6 +324,29 @@ def test_campaign_on_remote_env_refused_when_gate_off(hg_home, monkeypatch):
             C.start_campaign(s, p, t, spec=spec, executor=_FakeRemoteExecutor())
 
 
+def test_resume_preserves_environment(hg_home, monkeypatch):
+    """Regression: resuming a campaign that ran on a remote environment must re-select the
+    SAME environment (not silently fall back to local). The env_id rides config_json and
+    _spec_from_config re-hydrates it."""
+    monkeypatch.setenv("HEXGRAPH_FUZZER", "mock")
+    st.update_settings({"features.fuzzing.enabled": True, "features.fuzz_remote.enabled": True})
+    monkeypatch.setenv("HEXGRAPH_FUZZ_REMOTE_FUZZBOX_DOCKER_HOST", SECRET_HOST)
+    config._load_toml.cache_clear()
+    with session_scope() as s:
+        p, t = _project_with_target(s)
+        env = FE.register_environment(s, name="fuzzbox")
+        spec = FuzzCampaignSpec(target_id=t.id, surface="source_lib", harness_source=HARNESS,
+                                function="cgi_handler", target_sources=["/x.c"],
+                                environment_id=env.id)
+        row = C.start_campaign(s, p, t, spec=spec, executor=_FakeRemoteExecutor())
+        cid = row.id
+        C.reap_campaign(s, s.get(FuzzCampaign, cid), executor=_FakeRemoteExecutor())
+        # The re-hydrated spec carries the environment forward.
+        re_spec = C._spec_from_config(s, p, t, s.get(FuzzCampaign, cid),
+                                      dict(s.get(FuzzCampaign, cid).config_json or {}))
+        assert re_spec.environment_id == env.id
+
+
 def test_local_campaign_unchanged_no_audit(hg_home, monkeypatch):
     """Regression: a LOCAL campaign (the default) is unchanged — no env recorded, no
     fuzz_remote audit event."""

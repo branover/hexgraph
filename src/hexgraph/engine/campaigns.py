@@ -444,19 +444,25 @@ def reap_campaign(session: Session, row: FuzzCampaign, *, executor=None) -> int:
     outdir = row.outdir
     is_mock = row.engine == "mock"
 
-    # Read the streamed status.json the probe writes (continuously / on completion).
-    status = _read_status(outdir)
+    # Poll FIRST (before reading status). For a LOCAL detached container /out is a live
+    # bind-mount, so this is just a status check; for a REMOTE container poll_detached also
+    # STREAMS /out back to the local outdir over the Docker connection — so the status.json
+    # / crashes / coverage we read next are the freshest the remote has emitted, and the
+    # final tick captures them before finalize. Mock campaigns wrote /out locally already.
     done = False
     if outdir and (Path(outdir) / "DONE").exists():
         # The probe (or the mock launcher) signals completion with a DONE marker.
         done = True
     elif row.container_name and not is_mock:
-        # Crash-safe re-attach: poll the detached container by its durable name. If it
-        # no longer exists (e.g. removed) or has exited, the campaign is done.
+        # Crash-safe re-attach: poll the detached container by its durable name (streams
+        # back for a remote executor). If it no longer exists / has exited, the campaign is done.
         poll = executor.poll_detached(row.container_name)
         if not poll.get("exists") or not poll.get("running"):
             done = True
 
+    # Read the streamed status.json the probe writes (continuously / on completion) — now
+    # reflecting the just-streamed-back remote /out.
+    status = _read_status(outdir)
     created = 0
     if status:
         created = _ingest_artifacts(session, project, target, row, status)
@@ -668,6 +674,14 @@ def _spec_from_config(session, project, target, row, cfg) -> FuzzCampaignSpec:
         max_crashes=int(cfg.get("max_crashes", 10)),
         instances=int(cfg.get("instances", 1)),
         build_spec_id=row.build_spec_id,
+        # Preserve the selected fuzz environment across resume (design §5.8b) — else a
+        # resumed REMOTE campaign would silently revert to `local`.
+        environment_id=cfg.get("environment_id"),
+        # Carry the network-fuzz fields so a resumed boofuzz campaign still targets the
+        # right host/port/netns (also previously dropped).
+        host=cfg.get("host"), port=cfg.get("port"),
+        protocol=cfg.get("protocol") or "tcp", proto_spec=cfg.get("proto_spec"),
+        net_container=cfg.get("net_container"),
     )
 
 

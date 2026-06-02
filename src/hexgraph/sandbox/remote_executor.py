@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import tempfile
 import uuid
@@ -211,11 +212,17 @@ class RemoteDockerExecutor(SandboxRunner):
         """The container reads its inputs from the /stage VOLUME and writes results to
         /stage/out. Extra RO inputs the probe expects at a fixed path (e.g. /target.so,
         /seeds/seed_0) are copied from the staged volume into a writable tmpfs we mounted
-        at their parent (`_tmpfs_for_extras`). The probe runs from /stage/probes."""
+        at their parent (`_tmpfs_for_extras`). The probe runs from /stage/probes.
+
+        Every interpolated token (probe args like `--channel <json>` / `--spec <json>`,
+        the extra-mount paths) is shlex-quoted so a value with spaces/quotes/shell
+        metacharacters is passed to the probe as a SINGLE argv token — matching the local
+        runner's argv-list semantics exactly (no word-splitting, no injection)."""
         lines = ["set -e"]
         for i, cont in extras:
-            lines.append(f"cp -a /stage/extra_{i} '{cont}'")
-        argv = " ".join(["python3", f"/stage/{_STAGE_PROBES}/{probe}", *probe_args])
+            lines.append(f"cp -a /stage/extra_{i} {shlex.quote(cont)}")
+        argv = " ".join(shlex.quote(tok) for tok in
+                        ["python3", f"/stage/{_STAGE_PROBES}/{probe}", *probe_args])
         lines.append(argv)
         return ["sh", "-c", "; ".join(lines)]
 
