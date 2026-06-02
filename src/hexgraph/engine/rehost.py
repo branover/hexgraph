@@ -1,4 +1,4 @@
-"""Firmware rehosting seam (docs/design-rehosting.md).
+"""Firmware rehosting seam (docs/design/design-rehosting.md).
 
 Boot a whole firmware image (kernel + userland + web server) under full-system emulation
 so its LIVE web surface can be assessed, then register that surface as a `web_app` child of

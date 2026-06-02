@@ -4,9 +4,9 @@ The durable, resumable record of this build. **A new session should read this fi
 then run the resume verifier, then continue at the next unchecked task.
 
 ## ▶ RESUME HERE
-- **Current milestone:** v2 build — see [`docs/implementation-plan.md`](docs/implementation-plan.md)
-  (built from [`docs/design-vision.md`](docs/design-vision.md)). MVP (M0–M5) is the foundation.
-- **Dynamic surfaces (new track, see [`docs/design-dynamic-surfaces.md`](docs/design-dynamic-surfaces.md)):**
+- **Current milestone:** v2 build — see [`docs/design/implementation-plan.md`](docs/design/implementation-plan.md)
+  (built from [`docs/design/design-vision.md`](docs/design/design-vision.md)). MVP (M0–M5) is the foundation.
+- **Dynamic surfaces (new track, see [`docs/design/design-dynamic-surfaces.md`](docs/design/design-dynamic-surfaces.md)):**
   extending HexGraph beyond static binaries to web/service, live-device, and rehosted-firmware surfaces.
   **Phase 1 (backbone) DONE:** a Target can now be a `web_app` *surface* (reached via a Channel in
   `metadata_json`, no bytes); `engine/surfaces.py` `register_web_surface` + the offline `surface_recon`

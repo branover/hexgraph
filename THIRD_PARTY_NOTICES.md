@@ -1,31 +1,27 @@
 # Third-Party Notices
 
-HexGraph is licensed under **AGPL-3.0-or-later** (see [LICENSE](LICENSE)). It
-makes use of a number of third-party tools and libraries, each owned by its
-respective authors and distributed under its own license.
+HexGraph is licensed under AGPL-3.0-or-later (see [LICENSE](LICENSE)). It relies on a number of
+third-party tools and libraries, each owned by its respective authors and distributed under its own
+license. They are listed below for reference.
 
-## Aggregation note (why this is consistent with AGPL-3.0)
+## Why this is consistent with AGPL-3.0
 
-HexGraph **does not** statically link or incorporate the source of the
-binary-analysis, fuzzing, extraction, or rehosting tools listed below into its
-own program. Instead it **invokes them as separate processes**, the vast
-majority **inside disposable Docker containers** (the sandbox / fuzz / build /
-rehosting images) that are built and run at the user's discretion. This is
-"mere aggregation" of independent programs on a distribution medium / at run
-time, not a combined work. Each tool runs under and remains governed by its own
-license; HexGraph's own code remains AGPL-3.0-or-later.
+HexGraph does not statically link or fold the source of the binary-analysis, fuzzing, extraction, or
+rehosting tools listed here into its own program. It invokes them as separate processes, and the vast
+majority of those run inside disposable Docker containers (the sandbox, fuzz, build, and rehosting
+images) that are built and run at your discretion. That makes this "mere aggregation" of independent
+programs, whether on a distribution medium or at run time, rather than a combined work. Each tool runs
+under, and remains governed by, its own license, and HexGraph's own code remains AGPL-3.0-or-later.
 
-License identifiers below are **best-effort** and provided for convenience.
-Always consult each project upstream for the authoritative, current license
-text.
+The license identifiers below are best-effort, and are offered for convenience. For the authoritative,
+current license text, always consult each project upstream.
 
 ---
 
-## Sandboxed analysis & extraction tools (run as separate processes / in containers)
+## Sandboxed analysis & extraction tools (run as separate processes, in containers)
 
-These are installed into and invoked from the HexGraph sandbox/fuzz/build
-container images, or the rehosting images. They are never linked into the
-HexGraph host process.
+These are installed into, and invoked from, the HexGraph sandbox, fuzz, build, and rehosting container
+images. None of them is linked into the HexGraph host process.
 
 | Tool | Upstream | License (best-effort) |
 | --- | --- | --- |
@@ -64,10 +60,10 @@ HexGraph host process.
 
 ---
 
-## Host-side Python dependencies (HexGraph application)
+## Host-side Python dependencies (the HexGraph application)
 
-These are installed into the HexGraph Python environment. They are independent
-libraries imported by the application; each is distributed under its own license.
+These are installed into the HexGraph Python environment. They are independent libraries that the
+application imports, and each is distributed under its own license.
 
 | Library | Upstream | License (best-effort) |
 | --- | --- | --- |
@@ -90,8 +86,8 @@ libraries imported by the application; each is distributed under its own license
 
 ## Frontend (SPA) dependencies
 
-The web UI is a React + Vite + TypeScript single-page app, built to static
-assets and served over loopback.
+The web UI is a React, Vite, and TypeScript single-page app, built to static assets and served over
+loopback.
 
 | Library | Upstream | License (best-effort) |
 | --- | --- | --- |
@@ -107,16 +103,14 @@ assets and served over loopback.
 
 ## Container base images
 
-The sandbox/fuzz/build images derive from **Debian** (`debian:bookworm-slim`);
-the rehosting images derive from **Ubuntu** (`ubuntu:20.04`, `ubuntu:22.04`).
-These base images aggregate many independent packages under their respective
-licenses (predominantly GPL/LGPL/BSD/MIT). See the Debian and Ubuntu projects
-for the authoritative package licensing.
+The sandbox, fuzz, and build images derive from Debian (`debian:bookworm-slim`), and the rehosting
+images derive from Ubuntu (`ubuntu:20.04` and `ubuntu:22.04`). These base images themselves aggregate
+many independent packages under their respective licenses, predominantly GPL, LGPL, BSD, and MIT. For
+the authoritative package licensing, see the Debian and Ubuntu projects.
 
 ---
 
-*This list is maintained on a best-effort basis and may lag the actual
-dependency set. For the precise, current set of dependencies and versions, see
-[`pyproject.toml`](pyproject.toml), [`frontend/package.json`](frontend/package.json),
-and the `Dockerfile.*` / `docker/**/Dockerfile` build files. When in doubt, the
-upstream project's own license text is authoritative.*
+*This list is maintained on a best-effort basis and may lag behind the actual dependency set. For the
+precise, current set of dependencies and versions, see [`pyproject.toml`](pyproject.toml),
+[`frontend/package.json`](frontend/package.json), and the `Dockerfile.*` and `docker/**/Dockerfile`
+build files. When in doubt, the upstream project's own license text is the authority.*

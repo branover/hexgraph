@@ -1,4 +1,4 @@
-"""Web/service attack surfaces — Phase 1 backbone (docs/design-dynamic-surfaces.md).
+"""Web/service attack surfaces — Phase 1 backbone (docs/design/design-dynamic-surfaces.md).
 
 A `web_app` Target is a *reachable surface*, not bytes at rest: it's described by a
 **Channel** in `metadata_json` (here, an HTTP base URL) plus the route spec. `surface_recon`

@@ -45,7 +45,7 @@ class TargetKind(str, enum.Enum):
     shared_library = "shared_library"
     web_app = "web_app"      # a dynamic HTTP(S) attack surface reached via a Channel (design-dynamic-surfaces.md)
     service = "service"      # a bare non-HTTP network listener (raw TCP/UDP) reached via a Channel — first-class fuzzable surface (design-dynamic-surfaces.md)
-    remote = "remote"        # a live device reached over SSH/telnet — the live-remote tier (docs/vr-feedback.md)
+    remote = "remote"        # a live device reached over SSH/telnet — the live-remote tier (docs/dynamic-surfaces-rehosting-remote.md)
     unknown = "unknown"
 
 
@@ -644,7 +644,7 @@ class EgressEvent(Base):
     """Audit record for every outbound network action against a live target. Mandatory
     once the bounded-egress (local-network) tier is enabled — a durable, queryable log
     of what HexGraph connected to, when, and whether the policy allowed it
-    (docs/design-dynamic-surfaces.md)."""
+    (docs/design/design-dynamic-surfaces.md)."""
 
     __tablename__ = "egress_event"
 

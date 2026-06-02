@@ -80,7 +80,7 @@ def main() -> int:
     print(f"  firmware   : {fwid}")
     print(f"  surface    : {sid}  →  {base}")
     print(f"  emulator   : container {container}")
-    print("\nHand it to Claude Code (docs/engagement-rehosted.md), giving it the project_id")
+    print("\nHand it to Claude Code (scripts/engagement-rehosted.md), giving it the project_id")
     print("and surface id. Then run_task(surface, 'surface_recon'/'web_recon'), http_request,")
     print("verify_poc — the same web workflow, now against the real firmware's live UI.")
     print(f"\nTear down the emulator when done:  docker rm -f {container}")

@@ -1,4 +1,4 @@
-"""Phase-2 verification oracle (docs/design-verification-oracles.md §4): the DoS LIVENESS oracle.
+"""Phase-2 verification oracle (docs/design/design-verification-oracles.md §4): the DoS LIVENESS oracle.
 
 A DoS is proven by an unforgeable LIVENESS TRANSITION HexGraph observes ITSELF on the service's
 own channel: baseline UP → send the DoS input → re-probe DOWN, and STAYS down across N probes

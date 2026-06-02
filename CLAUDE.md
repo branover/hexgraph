@@ -104,8 +104,15 @@ docker/                        # ALL Dockerfiles: app.Dockerfile (the full app f
                                #   build context = repo root), firmae/ + qemu/ (rehosting). docker-compose.yml is at repo root.
 frontend/                      # React+Vite+TS SPA → built to src/hexgraph/web/dist by `just ui` (gitignored)
 migrations/                    # Alembic; baseline bbdb1d98bf54. prepare_database() in db/migrate.py
-tests/                         # pytest; fixtures under tests/fixtures (built by build.sh / `just fixtures`)
-docs/                          # design-vision.md, implementation-plan.md, ui-backlog.md, mock-llm-provider.md
+tests/                         # pytest; fixtures under tests/fixtures (built by build.sh / `just fixtures`).
+                               #   Internal VR-test engagement scenarios live beside their fixture/script:
+                               #   tests/fixtures/eval_fw/engagement-brief.md + engagement-answer-key.md (the
+                               #   Aria Router blind pair), scripts/engagement-{vulnrouter,rehosted}.md
+docs/                          # USER-FACING feature docs only: setup.md, graph-ui.md, fuzzing.md,
+                               #   build-from-source.md, verification-assurance.md,
+                               #   dynamic-surfaces-rehosting-remote.md, mcp.md + images/ + ui-backlog.md.
+                               #   design/ subdir holds the reference/design docs (design-vision.md,
+                               #   implementation-plan.md, mock-llm-provider.md, design-*.md).
 ```
 The frozen Finding schema and the mock-LLM fixtures ship **inside the package**:
 `src/hexgraph/schemas/finding.schema.json` and `src/hexgraph/llm/fixtures/mock_llm/`
@@ -155,10 +162,14 @@ LLM tasks themselves use a tool-use **agent loop** (above) over a plain BYOK key
 ## Read before writing code
 
 1. **This file (`CLAUDE.md`) + `README.md`** — the source of truth for constraints, data model, the seam rule, and the graduated opt-in policy model. (The MVP `context/SPEC.md` is retired; its constraints live here, evolved past the original static-only framing.)
-2. `docs/mock-llm-provider.md` — the mock backend design (three fidelity layers, scenarios, contract test).
+2. `docs/design/mock-llm-provider.md` — the mock backend design (three fidelity layers, scenarios, contract test).
 3. `src/hexgraph/schemas/finding.schema.json` — the canonical, frozen Finding schema (shipped in-package).
-4. `docs/design-vision.md` + `docs/implementation-plan.md` — the v2 target shape and sequenced plan.
-5. `docs/design-dynamic-surfaces.md` + `docs/design-rehosting.md` — dynamic web surfaces and firmware rehosting.
+4. `docs/design/design-vision.md` + `docs/design/implementation-plan.md` — the v2 target shape and sequenced plan.
+5. `docs/design/design-dynamic-surfaces.md` + `docs/design/design-rehosting.md` — dynamic web surfaces and firmware rehosting.
+
+## Writing docs for humans
+
+User-facing docs (`README.md`, the feature docs in `docs/`, `DISCLAIMER.md`, `THIRD_PARTY_NOTICES.md`) are written in natural human prose, for people, not as machine output. When you write or edit one, read each line back and ask: would a person actually write it this way, and would a person want to read it? Avoid the usual LLM tells — em-dashes in every other sentence (reach for a comma, a period, parentheses, or "and"/"but" instead), stacked terse fragments, the "Label: punchy phrase" staccato, dense bullet lists of fragments, and the robotic "X, Y, and Z, all bounded/audited/gated" parallelism. Prefer flowing sentences with connective tissue, vary short and long, and add the transitions that make sections read as a whole rather than disconnected notes. Keep every technical fact exact; change the voice, not the substance. Judge a doc by whether a newcomer feels invited in, not merely by whether it's complete. (The `docs/design/` reference docs get a lighter touch — fix egregious slop, but they need not be fully rewritten.)
 
 When a workflow becomes repetitive, capture it as a skill under `.claude/skills/` and note it in `PROGRESS.md`.
 

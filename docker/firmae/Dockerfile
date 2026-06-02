@@ -1,4 +1,4 @@
-# HexGraph FirmAE rehosting image (docs/design-rehosting.md).
+# HexGraph FirmAE rehosting image (docs/design/design-rehosting.md).
 #
 # Wraps FirmAE (full-system firmware emulation) behind the stable rehost_entry.sh contract
 # that HexGraph's FirmAERehoster drives. Build:  just firmae-build

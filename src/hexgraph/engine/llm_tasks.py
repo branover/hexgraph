@@ -315,7 +315,7 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
 
     merge_duplicate_nodes(session, project.id)
 
-    # Standard B, static (docs/design-verification-oracles.md Phase 4): now that the agent has
+    # Standard B, static (docs/design/design-verification-oracles.md Phase 4): now that the agent has
     # built the graph (input/sink nodes + taints/calls dataflow) and dupes are folded, try to
     # ARGUE static input-reachability for each finding whose cited sink has a source→sink path.
     # Best-effort + envelope-only: it only UPGRADES a code_present/static floor (never downgrades a

@@ -1,6 +1,6 @@
 """Seed the four GRAPH-PRESENTATION complexity tiers (mock, offline, $0, deterministic).
 
-A *reusable A/B fixture* for the graph-presentation redesign (docs/design-graph-presentation.md
+A *reusable A/B fixture* for the graph-presentation redesign (docs/design/design-graph-presentation.md
 §9): one isolated project per tier so any phase can shoot before/after Playwright captures
 against identical data.
 

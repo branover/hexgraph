@@ -9,7 +9,7 @@
 > `features.network` (bounded local-network egress), `features.rehost` (full-system
 > emulation), and `features.remote` (one authorized live device) each raise a higher
 > tier behind its own gate. See **`CLAUDE.md`** and **`README.md`** for the authoritative,
-> current security model, and `docs/design-dynamic-surfaces.md` for the dynamic-surface
+> current security model, and `design-dynamic-surfaces.md` for the dynamic-surface
 > design as shipped. Read §1's "never executed" / "out of scope: dynamic execution" lines
 > as the v2 *starting point*, not today's product.
 

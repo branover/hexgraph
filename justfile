@@ -239,7 +239,7 @@ showcase *args:
 
 # Seed the four GRAPH-PRESENTATION complexity tiers (SMALL/MEDIUM/LARGE/PATHOLOGICAL) into
 # HEXGRAPH_HOME — the reusable A/B fixture for the graph redesign's before/after Playwright
-# captures (docs/design-graph-presentation.md §9). Mock, offline, $0, deterministic. `--reset`
+# captures (docs/design/design-graph-presentation.md §9). Mock, offline, $0, deterministic. `--reset`
 # rebuilds; `--tier large` seeds one. Then `just serve` and open each "Graph tier — …" project.
 [group('demo')]
 [private]

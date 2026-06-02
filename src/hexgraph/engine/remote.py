@@ -1,4 +1,4 @@
-"""Remote live-device targets (SSH/telnet) — the live-remote tier (docs/vr-feedback.md #2).
+"""Remote live-device targets (SSH/telnet) — the live-remote tier (docs/dynamic-surfaces-rehosting-remote.md).
 
 When you have a PHYSICAL box on the bench (or a rehosted device) but not its firmware, point
 HexGraph at it over SSH/telnet and run the SAME read-only analysis we'd run on a static or

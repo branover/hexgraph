@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { EgressEvent, api } from "../api";
 import { Icon } from "./Icon";
 
-// The egress audit log (docs/design-dynamic-surfaces.md): every outbound action against a
+// The egress audit log (docs/design/design-dynamic-surfaces.md): every outbound action against a
 // live target/service when the bounded-network/remote tier is in use — boofuzz sends, HTTP
 // probes, remote-fuzz launches — recorded ALLOWED or DENIED. Mandatory once egress is on:
 // nothing reaches the network without an EgressEvent. Read-only inspection; the operator

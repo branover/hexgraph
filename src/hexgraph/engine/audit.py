@@ -1,5 +1,5 @@
 """Egress audit — a durable, queryable log of every outbound action against a live
-target (docs/design-dynamic-surfaces.md). Mandatory once the bounded-egress tier is
+target (docs/design/design-dynamic-surfaces.md). Mandatory once the bounded-egress tier is
 enabled: nothing should reach the network without a corresponding EgressEvent."""
 
 from __future__ import annotations

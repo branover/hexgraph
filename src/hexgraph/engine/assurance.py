@@ -1,4 +1,4 @@
-"""The two standards of "verified" (docs/design-verification-oracles.md).
+"""The two standards of "verified" (docs/design/design-verification-oracles.md).
 
 A finding's verification is described by an **assurance triple**, so HexGraph differentiates —
 and never blurs — *what* is being claimed:

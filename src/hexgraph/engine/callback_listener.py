@@ -1,6 +1,6 @@
 """Bounded local callback listener — the INGRESS mirror of the bounded-egress tier.
 
-The `callback` oracle (docs/design-verification-oracles.md §1) proves a *blind* vuln —
+The `callback` oracle (docs/design/design-verification-oracles.md §1) proves a *blind* vuln —
 blind command-injection, SSRF, blind RCE, OOB exfil — by having HexGraph stand up a small
 listener the target can reach, minting a per-run token (`{{CALLBACK}}` = host:port + a nonce
 path), substituting it into the PoC like `{{NONCE}}`, running the exploit, and confirming the

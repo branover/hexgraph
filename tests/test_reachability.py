@@ -1,5 +1,5 @@
 """Standard B, static — source→sink reachability argument over the typed graph
-(docs/design-verification-oracles.md, Phase 4).
+(docs/design/design-verification-oracles.md, Phase 4).
 
 These tests pin the honesty guarantees the reviewer must trust:
   - a real source→sink path stamps `input_reachable/static` with the right precondition;

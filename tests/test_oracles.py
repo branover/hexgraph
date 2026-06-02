@@ -1,4 +1,4 @@
-"""Phase-1 verification oracles (docs/design-verification-oracles.md): oob_write, canary_read,
+"""Phase-1 verification oracles (docs/design/design-verification-oracles.md): oob_write, canary_read,
 and callback. Each proves a vuln class BEYOND reflected cmdi by observing a side effect on a
 channel INDEPENDENT of the exploit's request — so it can't be forged by the producing model.
 

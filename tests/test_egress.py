@@ -1,4 +1,4 @@
-"""Phase 2 of dynamic surfaces (docs/design-dynamic-surfaces.md): the bounded-egress
+"""Phase 2 of dynamic surfaces (docs/design/design-dynamic-surfaces.md): the bounded-egress
 machinery — the network policy tier, the loopback/private-only NetworkScope, the
 egress audit, the runner's gated network mode, and web_recon's denial-by-default +
 audit behaviour (the live probe itself is Docker/feature-gated and not run here)."""

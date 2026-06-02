@@ -17,7 +17,7 @@ allowlist robust-by-construction in two layers:
 
 Kernel-level confinement (per-container nftables DROP-default, "Option B") is the real
 containment story and is **deferred** — see the "Future hardening" subsection of
-`docs/design-dynamic-surfaces.md`. This module is the interim app-layer middle ground.
+`docs/design/design-dynamic-surfaces.md`. This module is the interim app-layer middle ground.
 
 STDLIB ONLY: this runs inside the sandbox image where the `hexgraph` package is NOT
 installed; probes import it as a sibling via `sys.path[0]` (the probes dir).
