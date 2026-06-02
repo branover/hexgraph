@@ -27,30 +27,28 @@ from sqlalchemy.orm import Session
 from hexgraph.db.models import Project, SourceTree
 from hexgraph.engine.build import BuildPhase, BuildSpec, Instrumentation
 
-# Where OSS-Fuzz drops built fuzz targets. The build.sh copies its targets here; we
-# capture them as artifacts. `$OUT` resolves to the probe's artifact-output dir.
-OSS_FUZZ_OUT = "out"
-
 # The OSS-Fuzz → HexGraph instrumentation default: ASan + libFuzzer (their most common
 # sanitizer/engine pairing). The recorded recipe is editable; the operator can swap to
 # AFL++ by changing only the instrumentation profile (the base-image contract).
 _DEFAULT_INSTR = {"sanitizers": ["address"], "coverage": ["sancov"], "engine": "libfuzzer"}
 
-# Heuristic: pull `$OUT/<name>` copy targets out of a build.sh so we can capture them.
-_OUT_COPY = re.compile(r"\$\{?OUT\}?/([A-Za-z0-9._-]+)")
+# Heuristic: pull `$OUT/<name>` targets out of a build.sh so we can capture them. In the
+# OSS-Fuzz contract `$OUT` IS the artifact-output dir (HexGraph maps it to the capture
+# root), so a target written to `$OUT/<name>` is captured as the BARE `<name>` (the probe
+# accepts an artifact rel resolving under either $WORK or $OUT).
+_OUT_TARGET = re.compile(r"\$\{?OUT\}?/([A-Za-z0-9._-]+)")
 
 
 def parse_build_sh_artifacts(build_sh: str) -> list[str]:
-    """Best-effort: the fuzz-target names a build.sh copies into `$OUT` (so we capture
-    them as build artifacts). Deterministic regex over the script text — runs nothing."""
+    """Best-effort: the fuzz-target names a build.sh writes into `$OUT` (so we capture
+    them as build artifacts, by their BARE name — `$OUT` is the capture root).
+    Deterministic regex over the script text — runs nothing."""
     names: list[str] = []
-    for m in _OUT_COPY.finditer(build_sh or ""):
+    for m in _OUT_TARGET.finditer(build_sh or ""):
         n = m.group(1)
         if n and n not in names and not n.endswith((".o", ".a", ".options", ".dict")):
             names.append(n)
-    # Captured artifacts are rel to the BUILD dir; OSS-Fuzz copies into $OUT which the
-    # probe maps to the artifact dir, so we capture by the bare target name under `out/`.
-    return [f"{OSS_FUZZ_OUT}/{n}" for n in names]
+    return names
 
 
 def import_oss_fuzz(session: Session, project: Project, tree: SourceTree, *,

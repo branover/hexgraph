@@ -68,6 +68,23 @@ def docker_available() -> bool:
         return False
 
 
+def _assert_network_gate(network_gate: str) -> None:
+    """The runner's defense-in-depth egress re-check (on top of the caller's assert).
+    `"build_fetch"` re-checks the SEPARATE bounded-fetch tier (features.build_fetch) — a
+    registry-allowlisted fetch is NOT the local-network tier, so requiring features.network
+    here would defeat the separate gate. `"network"` (default) re-checks features.network.
+    Both fail closed."""
+    if network_gate == "build_fetch":
+        from hexgraph.policy import assert_allows_build_fetch
+
+        assert_allows_build_fetch()
+        return
+    from hexgraph.policy import PolicyViolation, current_policy
+
+    if not current_policy().allow_network:
+        raise PolicyViolation("network egress is not permitted by the active policy")
+
+
 class SandboxRunner:
     def __init__(self, image: str | None = None, timeout: int = DEFAULT_TIMEOUT) -> None:
         self.image = image or sandbox_image()
@@ -123,6 +140,7 @@ class SandboxRunner:
         net_container: str | None = None,
         secret: dict | None = None,
         resources: ResourceSpec | None = None,
+        network_gate: str = "network",
     ) -> RunResult:
         """Run a probe script over `artifact` inside the sandbox.
 
@@ -138,6 +156,13 @@ class SandboxRunner:
         The caller is responsible for the per-destination allowlist + audit (engine.audit)
         — this is the single, explicit place `--network none` is relaxed.
 
+        `network_gate` selects WHICH policy gate authorizes the egress (the runner's
+        defense-in-depth re-check, on top of the caller's assert): `"network"` (default)
+        re-checks the bounded local-network tier (`features.network`); `"build_fetch"`
+        re-checks the SEPARATE bounded dependency-fetch tier (`features.build_fetch`) — a
+        registry-allowlisted fetch is NOT the local-network tier, so it must NOT require
+        `features.network` (that would defeat the separate gate). Both fail closed.
+
         `secret` (a JSON-able dict) is delivered to the probe via the `HG_CHANNEL_SECRET`
         env var instead of the argv — so credentials NEVER appear on the docker command
         line (visible via `ps`/`/proc/<pid>/cmdline`). The probe reads + merges it.
@@ -150,10 +175,7 @@ class SandboxRunner:
 
             assert_allows_execution()
         if allow_network:
-            from hexgraph.policy import PolicyViolation, current_policy
-
-            if not current_policy().allow_network:
-                raise PolicyViolation("network egress is not permitted by the active policy")
+            _assert_network_gate(network_gate)
         if artifact is not None:
             artifact = Path(artifact).resolve()
             if not artifact.is_file():

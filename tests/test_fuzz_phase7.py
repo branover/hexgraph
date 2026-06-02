@@ -101,6 +101,26 @@ def test_build_fetch_scope_is_allowlist_only():
     assert "deb.local:443" in custom.allow and "deb.local:80" in custom.allow
 
 
+def test_network_gate_build_fetch_does_not_require_features_network(hg_home):
+    """REGRESSION: the runner's egress re-check for a fetch build must use the
+    features.build_fetch gate, NOT features.network — else the separate fetch tier could
+    never run without also enabling the local-network tier (defeating the gate split)."""
+    from hexgraph.sandbox.runner import _assert_network_gate
+    # build_fetch ON, network OFF
+    _enable_fetch()
+    _assert_network_gate("build_fetch")  # no raise — the fetch gate authorizes it
+    # the local-network gate is independent and still closed
+    with pytest.raises(PolicyViolation):
+        _assert_network_gate("network")
+
+
+def test_network_gate_build_fetch_fails_closed_when_off(hg_home):
+    from hexgraph.sandbox.runner import _assert_network_gate
+    settings.update_settings({"features.build.enabled": True})  # build on, build_fetch OFF
+    with pytest.raises(PolicyViolation):
+        _assert_network_gate("build_fetch")
+
+
 def test_fetch_build_refused_when_gate_off(hg_home):
     # A spec with network='fetch' is refused at the fetch gate even though features.build is on.
     _enable_build()  # build on, build_fetch OFF
@@ -238,9 +258,10 @@ cp seeds.dict $OUT/fuzz_parser.dict
 def test_oss_fuzz_parse_artifacts():
     from hexgraph.engine.oss_fuzz import parse_build_sh_artifacts
     arts = parse_build_sh_artifacts(OSS_FUZZ_SH)
-    assert "out/fuzz_parser" in arts
+    # captured by the BARE name ($OUT is the capture root)
+    assert "fuzz_parser" in arts
     # the .dict copy target is excluded (not a fuzz binary)
-    assert "out/fuzz_parser.dict" not in arts
+    assert "fuzz_parser.dict" not in arts
 
 
 def test_oss_fuzz_import_maps_contract(hg_home):
@@ -259,8 +280,8 @@ def test_oss_fuzz_import_maps_contract(hg_home):
         listing = src.list_source_files(s, p, tree)
         roles = {f["rel"]: f["role"] for f in listing["files"]}
         assert roles.get("build.sh") == "script"
-        # the fuzz target is captured
-        assert "out/fuzz_parser" in spec.artifacts
+        # the fuzz target is captured (by its bare $OUT name)
+        assert "fuzz_parser" in spec.artifacts
 
 
 def test_oss_fuzz_import_refused_on_readonly_tree(hg_home):

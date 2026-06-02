@@ -442,31 +442,20 @@ class SandboxBuilder(Builder):
         import tempfile
 
         from hexgraph import settings
-        from hexgraph.policy import (PolicyViolation, assert_allows_build_fetch,
-                                     build_fetch_scope, current_policy)
+        from hexgraph.policy import assert_allows_build_fetch, build_fetch_scope
 
         assert_allows_build_fetch()  # fail-closed — the ONLY place the fetch gate is relaxed
         allowlist = settings.get("features.build_fetch.allowlist") or None
         scope = build_fetch_scope(allowlist)
-        # The fetch egress is bounded to the registry allowlist; we assert + audit it
-        # against the (synthetic) registry destinations so the audit log records WHAT the
-        # build was permitted to reach. We can't enumerate every download host up-front, so
-        # we audit the allowlist scope itself (the in-sandbox fetch is confined to it by the
-        # probe's per-host egress check), recording one EgressEvent per allowed registry.
+        # Audit the allowlist the fetch was permitted to reach (one allowed EgressEvent per
+        # registry). We can't enumerate every download host up-front, so we record the scope
+        # the probe's per-host egress guard confines the fetch to (the gate itself was asserted
+        # above; reaching here means it passed, so every entry is `allowed=True`).
         from hexgraph.engine.audit import record_egress
-        pol = current_policy()
-        for dest in sorted(scope.allow):
-            allowed = True
-            try:
-                # assert_allows_egress requires features.network for the *local* tier; the
-                # fetch tier is gated separately (assert_allows_build_fetch above), so we
-                # don't route through it. Audit explicitly here.
-                pass
-            except PolicyViolation:
-                allowed = False
-            if fetch_session is not None and project is not None:
+        if fetch_session is not None and project is not None:
+            for dest in sorted(scope.allow):
                 record_egress(fetch_session, project_id=project.id, target_id=target_id,
-                              task_id=task_id, dest=dest, allowed=allowed, tool="build_fetch",
+                              task_id=task_id, dest=dest, allowed=True, tool="build_fetch",
                               detail=scope.rationale)
 
         fetch_out = tempfile.mkdtemp(prefix="hexgraph-fetch-out-")
@@ -485,7 +474,7 @@ class SandboxBuilder(Builder):
                 "build_fetch_probe.py", None, outdir=fetch_out,
                 extra_args=["--spec", json.dumps(fetch_payload)],
                 extra_ro_mounts=[(str(root), "/src")],
-                allow_network=True,
+                allow_network=True, network_gate="build_fetch",  # the SEPARATE fetch gate, NOT features.network
                 resources=ResourceSpec(timeout=timeout),
             )
         except Exception as exc:  # noqa: BLE001

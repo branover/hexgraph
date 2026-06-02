@@ -58,8 +58,11 @@ def test_compile_phase_has_no_network_even_with_fetch_on(hg_home):
         })
         build = B.run_build(s, p, B.create_build_spec(s, p, spec))
         assert build.status == "failed"  # the compile's network attempt failed
+        # Decisive: the failure is the COMPILE's network attempt, NOT a fetch-gate refusal —
+        # the fetch ran (features.network is OFF; only features.build_fetch is on), the
+        # compile log exists, and it carries our planted NETFAIL marker.
         log = cas.get_text(p, build.log_cas) if build.log_cas else ""
-        assert "NETFAIL" in (log or "") or "network" in (build.error or "").lower()
+        assert "NETFAIL" in (log or ""), f"expected the compile (not the fetch gate) to fail: {build.error}"
 
 
 def test_fetch_blocks_non_allowlisted_host(hg_home):
@@ -101,6 +104,23 @@ def _nm(image, obj_bytes, needles):
         return (out.stdout or "") + (out.stderr or "")
     finally:
         os.unlink(path)
+
+
+def test_oss_fuzz_build_captures_out_target(hg_home):
+    """An OSS-Fuzz build.sh writes its fuzz target to $OUT; the build must capture it from
+    there (not $WORK). Proves the $OUT/$WORK artifact-capture path end-to-end."""
+    settings.update_settings({"features.build.enabled": True})
+    with session_scope() as s:
+        p = create_project(s, name="e2e-ossfuzz")
+        tree = src.create_source_tree(s, p, name="ofz", origin="scratch", editable=True)
+        src.write_source_file(s, p, tree, "f.c", "int add(int a,int b){return a+b;}\n")
+        # A build.sh that uses the injected $CC/$CFLAGS and writes to $OUT (OSS-Fuzz contract).
+        build_sh = '$CC $CFLAGS -ffreestanding -c f.c -o "$OUT/fuzz_f"\n'
+        row = B.import_oss_fuzz_build(s, p, tree, build_sh=build_sh,
+                                      instrumentation={"sanitizers": [], "coverage": [], "engine": "none"})
+        build = B.run_build(s, p, row)
+        assert build.status == "succeeded", (build.error, build.log_cas and cas.get_text(p, build.log_cas))
+        assert "fuzz_f" in build.artifacts_json   # captured from $OUT by its bare name
 
 
 def test_cross_compile_produces_foreign_arch_object(hg_home):
