@@ -103,7 +103,8 @@ entries reference them by name.
 
 **SHELL-01 — Header / cost / nav**
 - Steps: in a workspace, read the header.
-- Functional: shows the project name, the running cost (`$0` on mock), and a settings gear / home link.
+- Functional: shows the project name, a **backend chip** (`mock`) and a separate **cost chip** (`$0 · mock`),
+  a `local · 127.0.0.1` chip, and a settings gear / home link.
 - 🔌 Backend: cost reflects `detail.cost` from `GET /api/projects/{id}`.
 - Qualitative: `$0 · mock` reads as reassuring (zero spend), not alarming; the gear is discoverable.
 - Principle: zero-token-spend default is visible.
@@ -260,6 +261,10 @@ loud only where you are looking; every node/edge/color kept, mute never deletes.
 - Qualitative (the headline metric): within ~3 seconds the eye should *land* on the firmware root and the
   red/orange high-severity rollups; the frame feels as calm as a MEDIUM graph regardless of DB size
   (Overall, Aesthetics). A blurred PATHOLOGICAL frame still reads "a few hot rooms here," not uniform static.
+  Concretely: the severity *glow* on a collapsed room card is RESERVED for **high/critical** (medium gets a
+  faint tint; low/info just a colored border; clean rooms recede), and at far zoom the cross-room meta-edge
+  ribbons dim to context — so a handful of hot rooms pop out of a large skeleton instead of every
+  finding-bearing room (or a wall of semantic ribbons) washing the whole ring one warm colour.
 - Principle: open inviting, not intimidating.
 - Prereq: projects across tiers (incl. a REAL firmware-scale one).
 
@@ -553,13 +558,18 @@ loud only where you are looking; every node/edge/color kept, mute never deletes.
 - Prereq: any project.
 
 **VIEW-02 — Map view (territory overview)**
-- Steps: switch to Map.
-- Functional: every room is a force-collapsed finding-weighted card regardless of tier; intra-room detail is
-  never drawn; only semantic cross-target ribbons + the socket bus show; double-tap a card drills into the
-  scoped Graph for that binary.
-- Qualitative: Map is genuinely DISTINCT from the by-target Graph (issue-8: Map ≡ Graph is the failure).
+- Steps: switch to Map (try it at SMALL and at a tier where Graph auto-expands interiors).
+- Functional: every leaf room is a force-collapsed finding-weighted card regardless of tier; intra-room detail
+  (functions/strings) is never drawn; only semantic cross-target ribbons + the socket bus show; double-tap a
+  card drills into the scoped Graph for that binary. A pure *container* room (a firmware grandparent with no
+  interior content of its own) MAY expand just far enough to reveal its child-binary CARDS — but a binary that
+  merely also has a child variant room (e.g. httpd + its instrumented build) must stay collapsed, or expanding
+  it leaks its own functions and Map collapses back into Graph.
+- Qualitative: Map is genuinely DISTINCT from the by-target Graph (issue-8: Map ≡ Graph is the failure). The
+  distinction is most visible at SMALL/MEDIUM, where Graph shows interiors and Map shows only cards; at
+  skeleton scale both are collapsed and converge, which is expected.
 - Principle: the skeleton given its own named view.
-- Prereq: a multi-target project.
+- Prereq: a multi-target project (incl. one where a binary has a derived/instrumented child target).
 
 **VIEW-03 — Table view (Nodes tab)**
 - Steps: switch to Table → Nodes tab → sort by a column (degree, findings) → filter by text.
@@ -953,7 +963,9 @@ loud only where you are looking; every node/edge/color kept, mute never deletes.
 - Qualitative: a failure is never a dead end — the error and log tell you why (Forgiveness, the whole reason
   this modal exists).
 - Principle: a failed build is debuggable, not a bare badge.
-- Prereq: a failed build (intended; note if not seedable offline).
+- Prereq: a failed build — exercisable offline: the seed's A9b drives a build that fails (e.g. a recipe whose
+  artifact path won't exist), so the Builds list shows a real failed row alongside the succeeded one; assert
+  the modal's error + log contents.
 
 **SRC-07 — Succeeded build → detail (artifacts + provenance)**
 - Steps: click a SUCCEEDED build row.
@@ -970,6 +982,15 @@ loud only where you are looking; every node/edge/color kept, mute never deletes.
 - Functional: status + reproducible / cached / locked / instrumented badges; a failed row reads "view error &
   log →".
 - Prereq: builds in the list.
+
+**SRC-09 — Coverage-shading campaign picker**
+- Steps: in the Source view toolbar, open the coverage-shading dropdown → pick a completed fuzz campaign.
+- Functional: arms per-line coverage shading for the next-opened file (the green/amber hit/miss tint of
+  FUZZ-12); the control is present even before a file is open.
+- Qualitative: the picker makes "shade this file by THAT campaign's coverage" discoverable without leaving
+  Source (Discoverable); selecting a campaign is one click (Friction).
+- Principle: coverage is a lens you point at the source, chosen explicitly.
+- Prereq: S20 — a finished campaign with a coverage map.
 
 ---
 
@@ -1150,7 +1171,7 @@ column names the step in `.claude/skills/ux-assessment/SKILL.md` (Role 1) that p
 | S16 | Tasks (succeeded + at least one finding-less, + traces) | A5 (each analysis is a task) + A1 recon | TASK-01/02/03 |
 | S17 | An instrumented derived target (real build) | A9 build an instrumented target from source | FUZZ-01/02, SRC-05/07, GRAPH-29 |
 | S18 | A managed source tree (lib + harness) editable | A9 (the source tree) + SET-03 source.edit | SRC-01/02/03, SRC-04 |
-| S19 | A succeeded build with provenance + a failed build | A9 (succeeded) + A9b (a deliberately-failing build) | SRC-06, SRC-07, SRC-08 |
+| S19 | A succeeded build with provenance + a failed build (both produced offline — A9b drives a deliberately-failing build) | A9 (succeeded) + A9b (a deliberately-failing build) | SRC-06, SRC-07, SRC-08 |
 | S20 | A finished fuzz campaign with crashes + coverage map | A10 run a fuzz campaign to completion | FUZZ-03/05/06/07/08/09/10, FUZZ-12, FIND (fuzz_crash) |
 | S21 | A running (live) campaign | A10b start a longer campaign and leave it running | FUZZ-03 (live climb), FUZZ-11 (stop) |
 | S22 | A degraded / 0-exec campaign | A10c start a no-op/degraded campaign | FUZZ-04 |
