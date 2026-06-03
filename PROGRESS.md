@@ -569,6 +569,28 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-03: **chore: pre-release CI + OSS project hygiene** (branch `build/release-prep`). First step of
+  the pre-release plan. Added the missing **CI** (`.github/workflows/ci.yml`): a fast offline lane
+  (`pytest -q -rs` on Python 3.11 + 3.12, Docker-gated tests skip), a frontend type-check+build lane, an
+  advisory `pip-audit` lane, and a **Docker lane** that buildx-builds the sandbox image (GHA-cached) and
+  runs `just test-ci` + `just demo` so the security-critical egress/exec/rehost/remote paths actually
+  execute (a green offline run validates none of them). The rehost/KVM/privileged-FirmAE lanes can't run on
+  GitHub-hosted runners (no `/dev/kvm`, no privileged) — documented as local/self-hosted-only.
+  **The docker lane surfaced a real portability bug and is ADVISORY (`continue-on-error`) until it's
+  fixed:** `sandbox/runner.py` hardcodes `--user 1000:1000`, so the execution paths (poc/fuzz/build/unpack)
+  can't write the host-owned `/out` bind-mount on any host whose uid != 1000 (works on a uid-1000 dev box,
+  fails on the uid-1001 GitHub runner — and on any real user whose uid != 1000). A separate, security-reviewed
+  `fix/sandbox-uid` change runs the sandbox as the host uid (safe non-root fallback) and flips this lane back
+  to a blocking gate. Added OSS
+  hygiene: `SECURITY.md` (threat model + private-reporting via GH advisories/email), `CONTRIBUTING.md` (the
+  invariants + the worktree/PR/review gate in human form), issue templates + `config.yml` (blank issues off,
+  security routed to the advisory form) + a PR template mirroring the merge checklist. Fixed the README
+  `git clone` placeholder → the real `github.com/branover/hexgraph` URL. `CODE_OF_CONDUCT.md` (Contributor
+  Covenant) was added to `main` separately. No product code touched; no migration; frozen schema untouched.
+  **User actions still needed:** enable Actions + branch protection on `main` (require the CI checks + a PR
+  review), the PyPI-vs-clone-only decision (Phase 6), and an optional self-hosted runner for the rehost/KVM
+  lanes. Remaining pre-release phases: security-invariant audit, clean-machine install test, release
+  packaging/tagging (`0.0.1`→`0.1.0`). (UX evaluation is being handled in a separate session.)
 - 2026-06-03: **feat: hard-delete a finding (distinct from dismiss)** (branch `build/delete-findings`).
   Findings could only be *dismissed* (the row persists, reversibly greyed). Added a true, irreversible
   HARD delete alongside it. `engine/removal.delete_finding(session, finding_id)` removes the Finding row

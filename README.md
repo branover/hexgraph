@@ -40,7 +40,7 @@ You will need Python 3.11 or newer, a Docker daemon your user can talk to (check
 the default mock backend runs fully offline.
 
 ```bash
-git clone <your-fork-or-path> hexgraph && cd hexgraph
+git clone https://github.com/branover/hexgraph.git hexgraph && cd hexgraph
 just setup          # venv + deps + web UI, then the interactive setup wizard
 just serve          # → http://127.0.0.1:8765
 ```
