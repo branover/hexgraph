@@ -440,6 +440,86 @@ def _run_non_interactive(state: DetectedState, *, reason: str, rebuild: bool) ->
     return rc
 
 
+def _coding_agent_step(console, questionary) -> None:
+    """Optional, prompted step: register HexGraph's MCP server with a coding agent and
+    install the VR skill. Both are LOCAL filesystem / local-agent-config actions — no
+    network, no secret (the MCP command carries no key; the server reads any key from
+    env / config.toml at run time). Only ever reached on the interactive path, so the
+    non-interactive / CI baseline skips it entirely (no prompts, no hang).
+
+    Idempotent throughout: registration and the skill install are no-ops when already
+    present, so re-running setup and choosing install again can't corrupt anything.
+    """
+    from hexgraph import agent_setup
+
+    console.rule("[bold]Coding-agent integration (optional)")
+    console.print(
+        "HexGraph can be driven by a coding agent (Claude Code / Codex / gemini-cli) over "
+        "its [bold]MCP[/bold] server — the agent inspects targets and records findings using "
+        "HexGraph's sandboxed tools. The two steps below are [green]local filesystem edits "
+        "only[/green]: no network, no secret is written.\n")
+
+    # --- (a) Register the MCP server ---------------------------------------
+    if questionary.confirm(
+        "Register HexGraph's MCP server with a coding agent now?", default=False
+    ).ask():
+        agent = questionary.select(
+            "Which agent?",
+            choices=[
+                questionary.Choice("Claude Code", "claude"),
+                questionary.Choice("Codex CLI", "codex"),
+                questionary.Choice("gemini-cli", "gemini"),
+                questionary.Choice("skip", None),
+            ],
+        ).ask()
+        if agent:
+            # Codex has no per-project MCP config — only offer the scope where it applies.
+            scope_choices = [
+                questionary.Choice("this project (a config file in the current directory)", "project"),
+                questionary.Choice("user-global (all your projects)", "user"),
+            ]
+            if agent == "codex":
+                scope_choices = [questionary.Choice("user-global (Codex is user-scope only)", "user")]
+            scope = questionary.select("Scope:", choices=scope_choices).ask() or "user"
+            try:
+                res = agent_setup.register_agent(agent, scope=scope)
+            except Exception as exc:  # noqa: BLE001 — show the reason, fall back to printing steps
+                console.print(f"[yellow]Could not register automatically:[/yellow] {exc}")
+                console.print("[dim]Register it by hand with:[/dim]\n"
+                              f"  hexgraph mcp install --agent {agent}")
+            else:
+                verb = "already registered" if not res["changed"] else "registered"
+                console.print(f"[green]✓[/green] {verb} the [bold]hexgraph[/bold] MCP server "
+                              f"for {agent} ({scope} scope) → [dim]{res['path']}[/dim]")
+                console.print(f"  [dim]command:[/dim] {res['command']}")
+                if agent == "claude":
+                    console.print("  [dim]Restart Claude Code (or reload) to pick it up.[/dim]")
+
+    # --- (b) Install the VR skill ------------------------------------------
+    if questionary.confirm(
+        "Install the VR skill (teaches the agent the workflow + hostile-target rules)?",
+        default=False,
+    ).ask():
+        default_dir = agent_setup.default_skill_dir()
+        where = questionary.select(
+            "Install the skill where?",
+            choices=[
+                questionary.Choice(f"user-global ({default_dir})", default_dir),
+                questionary.Choice("this project (./.claude/skills)", os.path.join(os.getcwd(), ".claude", "skills")),
+                questionary.Choice("a custom path…", "__custom__"),
+            ],
+        ).ask()
+        if where == "__custom__":
+            where = questionary.text("Skill base directory:", default=default_dir).ask() or default_dir
+        if where:
+            try:
+                path = agent_setup.write_skill(where)
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[yellow]Could not write the skill:[/yellow] {exc}")
+            else:
+                console.print(f"[green]✓[/green] installed the VR skill → [dim]{path}[/dim]")
+
+
 def _run_interactive(state: DetectedState, *, rebuild: bool) -> int:  # pragma: no cover - exercised via PTY
     import questionary
     from rich.console import Console
@@ -613,6 +693,11 @@ def _run_interactive(state: DetectedState, *, rebuild: bool) -> int:  # pragma: 
         prepare_database()
     except Exception as exc:  # noqa: BLE001
         console.print(f"[yellow]DB init note:[/yellow] {exc}")
+
+    # --- Step 5: optional coding-agent integration (MCP + VR skill) ---------
+    # Local-only filesystem/agent-config edits; idempotent. Skipped entirely on the
+    # non-interactive path (this whole function only runs interactively).
+    _coding_agent_step(console, questionary)
 
     # --- Success summary ----------------------------------------------------
     from rich.panel import Panel

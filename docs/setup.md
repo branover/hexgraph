@@ -21,12 +21,25 @@ live only in your environment or in `~/.hexgraph/config.toml`, and the wizard on
 one is present. Accept the defaults and you stay in the static-only posture; everything beyond that is
 something you opt into, informed.
 
+Near the end the wizard also offers to wire HexGraph up to a coding agent, if you want to drive it
+that way. It can register HexGraph's MCP server with Claude Code, Codex, or gemini-cli (you pick the
+agent and whether to register it just for this project or for all of them), and it can drop the VR
+skill, the file that teaches the agent the workflow and the hostile-target rules, wherever you like
+(your global `~/.claude/skills`, a project `.claude/skills`, or a path you type in). Both steps are
+just local edits to the agent's own config and a skill file on disk: nothing goes over the network,
+and no secret is written, because the MCP command carries no key (the server reads any key from your
+environment or `config.toml` when it runs). Both are optional and you can decline either one, and
+re-running setup and choosing them again is harmless since the registration and the skill install are
+idempotent.
+
 You can re-run `hexgraph setup` any time you want to change which features are on, and `hexgraph config
-list` shows the current settings.
+list` shows the current settings. If you would rather register the MCP server by hand, `hexgraph mcp
+install` prints the exact steps for each agent.
 
 > **Non-interactive and CI.** When there is no TTY, or when you pass `just setup yes=1` (or `hexgraph
 > setup --non-interactive`), the wizard applies the static-only baseline plus the sandbox image
-> without prompting, so an unattended `just setup` never hangs.
+> without prompting, and skips the coding-agent and skill install entirely, so an unattended `just
+> setup` never hangs.
 
 ## Manual install (or adding Ghidra)
 

@@ -10,6 +10,7 @@ from hexgraph.sandbox.probes.fuzz_probe import (
     classify_exploitability,
     dedup_key,
     normalized_frames,
+    parse_libfuzzer_progress,
     worst_rating,
 )
 from hexgraph.engine.fuzzing import _severity_for
@@ -179,3 +180,77 @@ def test_severity_merge():
     assert _severity_for("stack-overflow", {"rating": "dos"}) == "low"
     # no exploitability info → bare type baseline
     assert _severity_for("heap-use-after-free", None) == "critical"
+
+
+# ── libFuzzer progress parsing (Bug A: edge coverage was never collected) ─────────
+
+# A real-shaped fork-mode libFuzzer transcript: periodic `#NNN: cov: C ft: F ...` lines
+# (note the colon after the count — fork mode's format) where cov/ft climb monotonically
+# and the LAST `#NNN:` is the cumulative exec count.
+LIBFUZZER_FORK = """\
+INFO: Running with entropic power schedule (0xFF, 100).
+#2: cov: 3 ft: 3 corp: 1/1b exec/s: 0 rss: 28Mb
+#512: cov: 17 ft: 21 corp: 4/40b lim: 4 exec/s: 0 rss: 29Mb
+#100000: cov: 142 ft: 311 corp: 22/1100b exec/s: 50000 rss: 31Mb
+#2500000: cov: 198 ft: 540 corp: 31/2200b exec/s: 80000 rss: 33Mb
+"""
+
+# Single-process libFuzzer ends with `#N DONE` + a `number_of_executed_units` stat; its
+# progress lines are tab-separated `#NNN\tNEW cov: ...` (no colon).
+LIBFUZZER_SINGLE_DONE = """\
+#1	INITED cov: 5 ft: 5 corp: 1/1b exec/s: 0 rss: 28Mb
+#4096	NEW    cov: 33 ft: 60 corp: 8/80b exec/s: 0 rss: 29Mb
+#65536	DONE   cov: 41 ft: 77 corp: 9/90b exec/s: 32000 rss: 30Mb
+stat::number_of_executed_units: 65536
+"""
+
+
+def test_libfuzzer_progress_fork_mode_extracts_edges_and_execs():
+    p = parse_libfuzzer_progress(LIBFUZZER_FORK)
+    # LAST #NNN: is the cumulative exec count; MAX cov:/ft: are the (monotonic) edges/features.
+    assert p["executions"] == 2500000
+    assert p["edges_covered"] == 198
+    assert p["features"] == 540
+
+
+def test_libfuzzer_progress_single_process_done_line():
+    p = parse_libfuzzer_progress(LIBFUZZER_SINGLE_DONE)
+    assert p["executions"] == 65536      # number_of_executed_units wins over the #N lines
+    assert p["edges_covered"] == 41
+    assert p["features"] == 77
+
+
+def test_libfuzzer_progress_empty_is_all_none():
+    p = parse_libfuzzer_progress("")
+    assert p == {"executions": None, "edges_covered": None, "features": None}
+
+
+# ── AFL++ fuzzer_stats parsing (Bug A: same edges_covered field for both engines) ──
+
+def test_afl_stats_reads_edges_found(tmp_path):
+    """The AFL probe already extracts `edges_found` from afl's `fuzzer_stats` into the same
+    `edges_covered` status field libFuzzer now populates — assert that parse directly."""
+    from hexgraph.sandbox.probes.afl_probe import _afl_stats
+
+    inst = tmp_path / "fuzzer00"
+    inst.mkdir()
+    (inst / "fuzzer_stats").write_text(
+        "start_time        : 1700000000\n"
+        "execs_done        : 1234567\n"
+        "edges_found       : 842\n"
+        "total_edges       : 5000\n"
+        "bitmap_cvg        : 16.84%\n")
+    execs, edges = _afl_stats(str(tmp_path))
+    assert execs == 1234567
+    assert edges == 842
+
+
+def test_afl_stats_sums_execs_across_instances(tmp_path):
+    for name, execs, edges in (("fuzzer00", 1000, 50), ("fuzzer01", 2000, 60)):
+        d = tmp_path / name
+        d.mkdir()
+        (d / "fuzzer_stats").write_text(f"execs_done : {execs}\nedges_found : {edges}\n")
+    from hexgraph.sandbox.probes.afl_probe import _afl_stats
+    execs, edges = _afl_stats(str(tmp_path))
+    assert execs == 3000        # summed across master + secondary
+    assert edges == 60          # max edges across instances (shared bitmap)

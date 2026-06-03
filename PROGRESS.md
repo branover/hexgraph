@@ -578,6 +578,74 @@ then run the resume verifier, then continue at the next unchecked task.
   to pick up the new Makefile (existing projects keep the old one); the build-error UI works without
   re-seeding.** Tests: `test_showcase_seed.py` + the build/executor/sandbox suite green; `just test`
   green (offline, mock).
+- 2026-06-03: **feat: setup wizard registers MCP + skill; fix: just --list truncation** (branch
+  `build/setup-mcp`). Two setup-experience improvements in one PR. **(1)** The interactive `hexgraph
+  setup` wizard now offers a final **coding-agent integration** step: register HexGraph's MCP server
+  with Claude Code / Codex / gemini-cli (pick agent + scope — project vs user) and install the VR
+  skill (pick destination: `~/.claude/skills`, a project `.claude/skills`, or a custom path). New
+  `agent_setup.register_agent()` PERFORMS the registration by editing the agent's own config file
+  directly — JSON merge into `mcpServers` (Claude `~/.claude.json` / project `.mcp.json`; gemini
+  `~/.gemini/settings.json`) or a `[mcp_servers.hexgraph]` TOML table for Codex — fully idempotent
+  (re-running is a no-op; refuses to clobber an unparseable/conflicting config). Both steps are
+  local-only filesystem edits, no network and no secret (the MCP command carries no key). The step
+  lives only on the interactive path, so the **non-interactive / CI baseline never prompts or installs
+  anything** (`hexgraph setup --non-interactive` proven: applies the static-only baseline, exit 0, no
+  agent configs touched). **(2)** Fixed `just --list` description truncation: `just` shows only the
+  single comment line directly above a recipe, so multi-line blocks were leaking a sentence fragment
+  into the menu (`setup`, `install`, `serve`, `up`, `app-build`, `demo`). Reordered each so the
+  complete one-liner sits closest to the recipe; every menu description now reads as a full phrase.
+  New `tests/test_setup_wizard.py` covers registration per agent/scope, idempotency, JSON/TOML
+  preservation, the skill install, the wizard step driven with fakes, and the non-interactive guard.
+  Docs updated (README setup, `docs/setup.md`, `docs/mcp.md`). `just test` green.
+- 2026-06-03: **fix: fuzz campaign live metrics — edges_covered + mid-run progress** (branch
+  `fix/fuzz-live-metrics`). Two related fuzz-campaign bugs, fixed as one PR. **(A) Campaigns
+  reported "0 edges" forever despite millions of execs.** ROOT CAUSE: the libFuzzer probe
+  (`fuzz_probe.py`) parsed only the exec count from `#NNN: cov: C ft: F` progress lines and
+  discarded `cov:`/`ft:`, never writing `edges_covered` into status.json — so the reaper's
+  `_update_stats` read None → 0. Added a pure, tested `parse_libfuzzer_progress()` (max `cov:`
+  = edges, max `ft:` = features, both monotonic; last `#NNN:` / `DONE` / `number_of_executed_units`
+  = execs) and now emit `edges_covered` (+ `features`) in the status. Also fixed the AFL path's
+  `_afl_stats` to read `edges_found` (edges *covered*) and NOT fall back to `total_edges` (the
+  whole bitmap size) — both engines now populate the same `edges_covered` field. **(B) No live
+  progress mid-run — the card looked idle until completion.** ROOT CAUSE 1: libFuzzer ran in one
+  blocking `subprocess.run(capture_output=True)` writing status.json only at the end. Switched to
+  a non-blocking `Popen` (output → a log file) with a periodic (~2–5s) parse loop that streams a
+  partial status.json (execs/edges/crash_count, NO DONE marker) — mirroring what the AFL probe
+  already did. ROOT CAUSE 2: `GET /api/projects/{id}/campaigns` (the 4s list poll) never reaped, so
+  rows were stale until the per-campaign SSE mounted; `api_list_campaigns` now reaps non-terminal
+  campaigns on read (mirroring `api_get_campaign`). No frontend change (it already reads
+  `stats.edges_covered`); no schema/policy/migration change (stats live in `stats_json`; sandbox
+  hardening untouched). **Verified:** `just test` green (725 passed, 2 Docker-skipped); new unit
+  tests for the libFuzzer progress parser (fork + single-process + empty) and the AFL fuzzer_stats
+  parser, plus a reaper streaming test (partial status → live `running` + advancing stats, final
+  DONE → finalize, crash not double-ingested). REAL libFuzzer run in the fuzz image against a
+  coverage-reaching target: `edges_covered: 8`, `features: 8` (was always 0), and mid-run status
+  showed execs climbing 1.09M→3.69M with edges>0 while still `running` (no DONE marker).
+- 2026-06-03: **feat: curatable targets — Phase 1 (FS-hierarchical targets pane)** (branch
+  `build/curatable-targets`). Two deliverables in one PR. **(A)** New design doc
+  [`docs/design/design-curatable-targets.md`](docs/design/design-curatable-targets.md) — the
+  4-phase plan for "curatable, filesystem-hierarchical targets & active-set graph visibility":
+  Phase 1 the pane (this PR), Phase 2 cheap-vs-deep recon split + lazy materialization
+  (deferred ONLY for auto-extracted firmware children; a durable migrated `target`
+  materialization column; idempotent activate API/MCP/pane action + analyze-directory), Phase 3
+  the unifying active-set visibility model (owned-by-active ∪ one-hop edge inheritance for
+  shared nodes ∪ stubs-with-counts for cross-edges into inactive targets; consolidates
+  archive/scope/layers/active-set into ONE documented model; drops reachability-BFS-as-hiding),
+  Phase 4 activate-from-graph/-directory/-search polish. **(B)** Phase 1 itself, **frontend-only**:
+  the firmware TARGETS pane now groups path-named children (`usr/sbin/telnetd`) into collapsible
+  directory FOLDERS derived client-side by splitting names on "/" — pure UI grouping, no target
+  rows, no backend/schema change. Folders show child counts + a rolled-up worst-severity finding
+  badge; sort dirs-first-then-files alpha; small firmware (≤12 binaries) opens top-level folders,
+  large opens collapsed (heuristic in an effect, idempotent via a ref). Leaf rows preserve ALL
+  per-target behavior (select/scope/Run/Fuzz/Remove/badge); leaf shown by FS name, full path on
+  hover. SURFACE children (web_app/service/remote) are excluded from folding so a coincidental
+  slash like `upnpd control (tcp/5000)` stays a flat leaf. Non-firmware projects render exactly as
+  before; #85 (resizable panels) and #88 (skeleton load) untouched. `Workspace.tsx` +
+  `theme.css` (`.tree-row.dir`/chevron/count) + a `folder` icon. **Verified** (Playwright, mock,
+  isolated `HEXGRAPH_HOME`, port 8772): the `seed_graph_tiers.py` REAL tier (251 targets / ~11.6k
+  nodes) collapses from a 250-row scroll to 5 calm folder rows (`bin` 36 · `lib` 36 · `sbin` 36 ·
+  `usr` 107 · `www` 35), `usr/` nests `usr/bin`/`usr/lib`/`usr/sbin`; showcase groups
+  `sbin/httpd` + `lib/libupnp.so`. `just test` 719 passed / 2 skipped.
 - 2026-06-03: **fix: graph-canvas UX round 2** (branch `build/graph-ux-round2`). Five hands-on
   graph-canvas issues the maintainer found after PR #89 — some were RESIDUALS where #89's fix
   didn't fully take, so each was re-verified LIVE (Playwright, isolated `HEXGRAPH_HOME`, mock,

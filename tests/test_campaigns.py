@@ -213,6 +213,97 @@ def test_reap_is_idempotent(hg_home, monkeypatch):
         assert s.query(FuzzArtifact).filter(FuzzArtifact.campaign_id == cid).count() == 1
 
 
+class _RunningExecutor:
+    """A fake executor that reports a still-running detached container (so the reaper
+    treats a status.json WITHOUT a DONE marker as live progress, not completion)."""
+    def __init__(self):
+        self.stopped = []
+
+    def poll_detached(self, name):
+        return {"exists": True, "running": True, "exit_code": None}
+
+    def stop_detached(self, name, *, remove=True, timeout=10):
+        self.stopped.append(name)
+
+    def start_detached(self, *a, **k):
+        from hexgraph.sandbox.runner import DetachedHandle
+        return DetachedHandle(name=k["name"], outdir=str(k["outdir"]))
+
+
+def test_reap_streaming_partial_status_is_live_then_final(hg_home, monkeypatch):
+    """Bug B: a probe that STREAMS status.json mid-run (no DONE marker) is reaped as LIVE
+    progress — stats advance, the campaign stays `running`, and crashes are not double-
+    ingested when the final DONE write repeats them. The libFuzzer probe now writes such
+    partial statuses; this exercises the reaper contract end-to-end without Docker."""
+    import json as _json
+    from pathlib import Path
+
+    _enable_fuzzing()
+    ex = _RunningExecutor()
+    with session_scope() as s:
+        p, t = _project_with_target(s)
+        # A real (non-mock) detached campaign row pointing at a writable outdir we drive
+        # by hand, standing in for the container's streamed /out.
+        spec = FuzzCampaignSpec(target_id=t.id, surface="source_lib", harness_source=HARNESS,
+                                function="cgi_handler", target_sources=["/x.c"])
+        # Force the libfuzzer engine (not mock) so reap polls the (fake) container.
+        monkeypatch.setenv("HEXGRAPH_FUZZER", "")
+        row = C.start_campaign(s, p, t, spec=spec, executor=ex)
+        cid = row.id
+        outdir = Path(row.outdir)
+        outdir.mkdir(parents=True, exist_ok=True)
+
+        crash = {
+            "kind": "heap-buffer-overflow", "function": "cgi_handler",
+            "summary": "SUMMARY: AddressSanitizer: heap-buffer-overflow",
+            "reproducer_sha256": "a" * 64, "reproducer_size": 8,
+            "reproducer_b64": "QUFBQUFBQUE=",
+            "dedup_key": "deadbeef" * 8, "dupe_count": 0,
+            "exploitability": {"rating": "likely_exploitable", "access": "WRITE", "signals": []},
+            "minimized_reproducer_sha256": "a" * 64, "minimized_reproducer_size": 8,
+            "_report": "==1==ERROR: AddressSanitizer: heap-buffer-overflow\nWRITE of size 8\n",
+        }
+
+        # 1) A PARTIAL streamed status (live progress; NO crashes yet, NO DONE marker).
+        (outdir / "status.json").write_text(_json.dumps(
+            {"compiled": True, "ran": True, "engine": "libfuzzer",
+             "executions": 100000, "edges_covered": 42, "crash_count": 0,
+             "coverage_instrumented": True}))
+        created = C.reap_campaign(s, s.get(FuzzCampaign, cid), executor=ex)
+        row = s.get(FuzzCampaign, cid)
+        assert created == 0  # no crashes in the partial write
+        assert row.status == "running"  # NOT finalized — no DONE marker
+        assert (row.stats_json or {}).get("execs") == 100000
+        assert (row.stats_json or {}).get("edges_covered") == 42
+
+        # 2) A LATER partial: more execs/edges + the first crash appears (still no DONE).
+        (outdir / "status.json").write_text(_json.dumps(
+            {"compiled": True, "ran": True, "engine": "libfuzzer",
+             "executions": 500000, "edges_covered": 77, "crash_count": 1,
+             "coverage_instrumented": True, "crashes": [crash]}))
+        created = C.reap_campaign(s, s.get(FuzzCampaign, cid), executor=ex)
+        row = s.get(FuzzCampaign, cid)
+        assert created == 1  # the new crash ingested once
+        assert row.status == "running"
+        assert (row.stats_json or {}).get("execs") == 500000
+        assert (row.stats_json or {}).get("edges_covered") == 77
+
+        # 3) The FINAL authoritative write REPEATS the same crash + sets DONE → finalize,
+        #    monotonic stats, and the crash is NOT double-ingested (dedup by dedup_key).
+        (outdir / "status.json").write_text(_json.dumps(
+            {"compiled": True, "ran": True, "engine": "libfuzzer", "done": True,
+             "executions": 800000, "edges_covered": 90, "crash_count": 1,
+             "coverage_instrumented": True, "crashes": [crash]}))
+        (outdir / "DONE").write_text("libfuzzer")
+        created = C.reap_campaign(s, s.get(FuzzCampaign, cid), executor=ex)
+        row = s.get(FuzzCampaign, cid)
+        assert created == 0  # same dedup_key → no second finding
+        assert row.status == "completed"
+        assert (row.stats_json or {}).get("execs") == 800000
+        assert (row.stats_json or {}).get("edges_covered") == 90
+        assert s.query(FuzzArtifact).filter(FuzzArtifact.campaign_id == cid).count() == 1
+
+
 # ── Degraded / zero-work campaigns surface a WARNING, not a silent "completed" ────
 
 @pytest.mark.parametrize("scenario,expect_note", [
