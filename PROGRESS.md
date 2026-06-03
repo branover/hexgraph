@@ -569,6 +569,18 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-03: **fix: warn on the container bind bypass + onboarding doc fixes** (branch
+  `fix/loopback-container-warning`). Closes the pre-release audit's one actionable finding plus the
+  clean-machine test's doc gaps. **F1 (loopback LOW):** `HEXGRAPH_IN_CONTAINER=1` set OUTSIDE a real
+  container silently bound all interfaces; `assert_loopback` now warns loudly when the container bind is
+  honored but `_looks_like_container()` (best-effort `/.dockerenv` / `/run/.containerenv`) is false — still
+  binds (never a hard refusal, so a legit container deployment can't break), just no longer silent. Tests in
+  `test_security_invariants.py` (warns outside / silent inside). **Clean-machine doc fixes:** README now
+  lists Node.js+npm as a prerequisite (the default `just setup` builds the SPA), and `docs/setup.md` notes
+  the `XDG_RUNTIME_DIR` gotcha that bites minimal/CI/`cron`/`su` contexts (`just` needs a writable runtime
+  dir for nested recipes — `export XDG_RUNTIME_DIR=$(mktemp -d)` if you hit `I/O error in runtime dir`).
+  Phase 4 clean-machine validation otherwise PASSED end-to-end (setup yes=1 exit 0, 751 tests green, serve
+  loopback-only).
 - 2026-06-03: **chore: v0.1.0 release packaging + pre-release security audit** (branch
   `build/release-packaging`). Pre-release Phases 3 + 6. Bumped `pyproject.toml` `0.0.1`→`0.1.0` (dropped the
   stale "(MVP)" from the description); added `CHANGELOG.md` (the 0.1.0 entry) and `docs/dev/releasing.md` (the

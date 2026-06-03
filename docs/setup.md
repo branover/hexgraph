@@ -40,6 +40,12 @@ install` prints the exact steps for each agent.
 > setup --non-interactive`), the wizard applies the static-only baseline plus the sandbox image
 > without prompting, and skips the coding-agent and skill install entirely, so an unattended `just
 > setup` never hangs.
+>
+> One gotcha in stripped-down environments (minimal containers, `cron`, `su` without a login session):
+> `just` needs a writable `XDG_RUNTIME_DIR` for recipes that invoke `just` again, which `setup` does. A
+> normal interactive Linux login has `/run/user/$UID` created for it, but those bare contexts may not,
+> and you'll see `error: I/O error in runtime dir`. If that happens, point it somewhere writable first,
+> e.g. `export XDG_RUNTIME_DIR=$(mktemp -d)`, then re-run `just setup`.
 
 ## Manual install (or adding Ghidra)
 
