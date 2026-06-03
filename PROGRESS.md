@@ -546,6 +546,31 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-03: **feat: deeper, staged showcase fuzz target so coverage visibly CLIMBS** (branch
+  `build/deeper-fuzz`). The showcase's fuzz entrypoint was `parse_host_header`, which overflows a
+  64-byte buffer on basically input #1, so a coverage-guided campaign crashed immediately and the
+  coverage story stayed flat at ~0 — the opposite of what we want to demonstrate. Replaced it with
+  `parse_request(data, len)` in the embedded `HTTPD_C` (appended AFTER `diagnostics`, so the
+  `system()` sink + `strcpy` lines didn't move within the function bodies; only the new
+  `#include <stdint.h>` shifted everything down by ONE line). It's a tiny length-prefixed command
+  protocol whose single stack-buffer-overflow (`key[16]`, CWE-787) is gated behind FOUR discoverable
+  stages: a magic prefix `"CMD"` → opcode `0x02` (SET) → flag byte `0xAA` → a klen that exceeds 16.
+  Pure: every READ is bounds-checked (`len >= 6 + klen` before reading klen bytes), so only the WRITE
+  on the deep path overflows; no `system()`/IO/side effects. The harness (`HARNESS_C`) now drives
+  `parse_request`. `get_param`/`cgi_handler`/`diagnostics`/`target.c` are unchanged library code (still
+  referenced by the static/PoC findings, the function graph nodes, and `target.c`'s coverage-map key);
+  the #95 Makefile is unchanged (the new fn lives in httpd.c). **Line refs re-counted + fixed for the
+  one-line shift:** PoC `link_finding_to_source` 27→28 (the `system()` sink), static finding 33→34 (the
+  `strcpy`), and the synthesized triage ASan reports' `diagnostics`/`cgi_handler` frames likewise
+  (28/34). **Proof the coverage now climbs in stages then crashes** (real clang-14 libFuzzer+ASan inside
+  `hexgraph-fuzz:latest`, `clang -fsanitize=fuzzer,address` on the seeded sources): `cov:` rose
+  3→4→5→6→7→8→9→10→11→12→13→14 over the run as libFuzzer satisfied each gate, THEN ASan reported a
+  `stack-buffer-overflow` WRITE in `parse_request /src/httpd.c:61` (frame `key[16]`), crashing input
+  `CMD\x02\xAA...` (magic+SET+flag+klen 0x2f). **Showcase-seed-only**; no schema/policy/migration.
+  **NOTE: maintainer must `just showcase --reset` to pick up the new fuzz target** (existing projects
+  keep the old one). Tests: `test_showcase_seed.py` green; full `just test` green except the known
+  WSL2 qemu/AFL Docker e2e flake (`test_fuzz_phase5_e2e::…qemu_mode…`, passes in isolation; my diff
+  touches no fuzz-probe code).
 - 2026-06-03: **fix: from-source build UX** (branch `fix/build-ux`). Two related defects in the
   "build instrumented target from source" experience, fixed as ONE PR. **(1) A REAL build of the
   showcase source tree FAILED (a regression from PR #92).** PR #92 dropped `int main()` from the
