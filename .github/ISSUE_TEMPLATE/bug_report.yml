@@ -1,0 +1,54 @@
+name: Bug report
+description: Something in HexGraph itself behaves incorrectly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. This is for bugs in HexGraph the tool — not for vulnerabilities you
+        found in a target you analyzed. If this is a security issue in HexGraph itself, stop here and
+        follow [SECURITY.md](https://github.com/branover/hexgraph/blob/main/SECURITY.md) instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you expect, and what did you get instead?
+      placeholder: I ran X, expected Y, but got Z.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The exact commands or clicks. A minimal case is worth a lot.
+      placeholder: |
+        1. just setup
+        2. hexgraph ingest ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: Console output, a stack trace, or a screenshot. Scrub any secrets first.
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: HexGraph version / commit
+      description: Output of `git rev-parse --short HEAD`, or the release tag.
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: OS, Python version, Docker version, and which optional features were enabled.
+      placeholder: |
+        OS: Ubuntu 24.04 (WSL2)
+        Python: 3.12
+        Docker: 27.x
+        Features enabled: poc, fuzzing
+    validations:
+      required: true

@@ -1,0 +1,114 @@
+name: CI
+
+# The merge gate. Two kinds of lane:
+#   * `tests` / `frontend` / `audit` run on every push and PR — fast, no Docker.
+#   * `docker` builds the sandbox image and runs `just test-ci`, which FAILS FAST
+#     unless Docker + the image are present, so the security-critical egress / exec /
+#     rehost / remote paths actually execute. A green offline run proves NONE of those
+#     (they silently skip), which is exactly why this lane exists.
+#
+# Not covered here: the rehost / KVM / privileged-FirmAE lanes need /dev/kvm or a
+# privileged container, which GitHub-hosted runners don't provide. Those stay local
+# (or move to a self-hosted runner) and are documented as such.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A newer push to the same branch/PR cancels the older in-flight run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: tests (offline, py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install (server + dev extras)
+        run: python -m pip install -e ".[server,dev]"
+      - name: Run the offline suite
+        # Docker-gated tests auto-skip here; -rs surfaces the skip reasons so a
+        # reviewer can see exactly which live paths went unexercised on this lane.
+        run: python -m pytest -q -rs
+
+  frontend:
+    name: frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install deps
+        working-directory: frontend
+        run: npm ci
+      - name: Type-check + build the SPA
+        # `tsc -b && vite build` — catches TypeScript regressions and a broken bundle.
+        working-directory: frontend
+        run: npm run build
+
+  audit:
+    name: dependency audit
+    runs-on: ubuntu-latest
+    # Advisory, not a gate: a fresh upstream advisory shouldn't block an unrelated PR.
+    # Findings show up in the step log; promote to a hard gate once the baseline is clean.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: pip-audit
+        run: |
+          python -m pip install --upgrade pip pip-audit
+          python -m pip install -e ".[server,dev,byok,mcp]"
+          pip-audit --desc --skip-editable
+
+  docker:
+    name: live tests (sandbox image + just test-ci)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: extractions/setup-just@v2
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the sandbox image (layer-cached)
+        # Build with buildx + the GitHub Actions cache and `load` it as the tag
+        # `just test-ci` looks for, so the heavy toolchain layers (sasquatch, qemu-user,
+        # sleuthkit, …) are reused across runs instead of rebuilt every time.
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/sandbox.Dockerfile
+          tags: hexgraph-sandbox:latest
+          load: true
+          build-args: WITH_GHIDRA=0
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Install (server + dev extras)
+        run: python -m pip install -e ".[server,dev]"
+      - name: Run the CI gate (fails fast if the image is missing)
+        run: just test-ci
+      - name: Smoke-test the full offline loop
+        run: just demo

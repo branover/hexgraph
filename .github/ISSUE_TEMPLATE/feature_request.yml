@@ -1,0 +1,37 @@
+name: Feature request
+description: Suggest a capability or improvement.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A few things are deliberately out of scope: accounts / multi-user, cloud or hosted compute,
+        exploit *generation*, Neo4j, and Kubernetes. Dynamic execution only ever exists as the opt-in,
+        policy-gated, sandboxed path. Proposals that fit within those bounds are very welcome.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that HexGraph makes hard or impossible today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like
+      description: The capability or change you have in mind. Rough is fine.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Anything you tried or ruled out, and why.
+  - type: checkboxes
+    id: invariants
+    attributes:
+      label: Fit with the invariants
+      description: HexGraph is local-only, BYOK, and static-by-default with capability gated behind the policy seam.
+      options:
+        - label: This keeps HexGraph local-only and doesn't add telemetry or a hosted dependency.
+        - label: Any new capability that runs or reaches a target would sit behind its own opt-in gate.
