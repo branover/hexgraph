@@ -569,6 +569,20 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-03: **fix: sandbox runs the /out bind-mount writable for any host uid** (branch `fix/sandbox-uid`).
+  The new CI's docker lane surfaced a real portability bug: `sandbox/runner.py` ran the container as
+  `--user 1000:1000` (correct — unprivileged, never root) but created the host-side `/out` bind-mount as the
+  HOST process's own uid, which equals 1000 only by luck. On any host whose uid != 1000 (a fresh account, a
+  CI runner = uid 1001, a packaged service) the container couldn't create `/out/<file>` and EVERY
+  extract/exec path (poc/fuzz/build/unpack) died with `PermissionError: '/out/...'`. Fix is by uid, WITHOUT
+  weakening the container: new `_ensure_outdir_writable()` runs after each out-dir `mkdir` — no-op when the
+  host uid is 1000, `chown` to 1000 when we're root (tightest), else widen the per-run dir's mode so the
+  unmatched container uid (mapped to "other") can write (the dir lives under the private `HEXGRAPH_HOME`, so
+  its parent gates access). `--user 1000:1000` is byte-identical (now sourced from `SANDBOX_UID/GID`
+  constants); dropped caps / read-only / `--network none` all untouched. The remote executor already chowns
+  its staged volume to 1000, so it needed no change. Tests `tests/test_sandbox_uid.py` (the 3 branches +
+  the constant). **This PR also flips the CI docker lane back to a blocking gate** (removes the
+  `continue-on-error` added in #101) — its run on the uid-1001 GitHub runner is the end-to-end proof.
 - 2026-06-03: **chore: pre-release CI + OSS project hygiene** (branch `build/release-prep`). First step of
   the pre-release plan. Added the missing **CI** (`.github/workflows/ci.yml`): a fast offline lane
   (`pytest -q -rs` on Python 3.11 + 3.12, Docker-gated tests skip), a frontend type-check+build lane, an

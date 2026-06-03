@@ -28,6 +28,12 @@ DEFAULT_IMAGE = "hexgraph-sandbox:latest"
 DEFAULT_TIMEOUT = 300  # seconds
 PROBES_DIR = Path(__file__).resolve().parent / "probes"
 CONTAINER_PROBES = "/opt/hexgraph"
+# The unprivileged uid:gid every sandbox container runs as — UNCONDITIONAL hardening,
+# never root. Kept as a constant (not a bare literal) so the host-side `/out` bind-mount
+# can be made writable by exactly this uid no matter what the host process's own uid is
+# (see _ensure_outdir_writable). The remote executor stages its volume for this same uid.
+SANDBOX_UID = 1000
+SANDBOX_GID = 1000
 # A minimal seccomp profile: byte-for-byte Docker's default deny-by-errno profile PLUS a
 # single extra rule allowing `personality(ADDR_NO_RANDOMIZE)`. Used ONLY by the ASan
 # source-fuzz path (disable_aslr) so `setarch -R` can turn ASLR off for the instrumented
@@ -43,6 +49,36 @@ def _seccomp_aslr_profile() -> str:
     if not SECCOMP_ASLR_PROFILE.is_file():
         raise SandboxError(f"seccomp profile not found: {SECCOMP_ASLR_PROFILE}")
     return str(SECCOMP_ASLR_PROFILE)
+
+
+def _ensure_outdir_writable(path: Path) -> None:
+    """Make the host-side `/out` bind-mount writable by the sandbox container's uid.
+
+    The container always runs as ``--user 1000:1000`` (non-root, UNCONDITIONAL). The host
+    process, though, creates the out-dir as ITS OWN uid — which equals 1000 only by luck.
+    On any host whose uid != 1000 (a fresh user account, a CI runner, a packaged service)
+    the container then can't create ``/out/<file>`` and every extract/exec path dies with
+    EACCES. Fix it by uid, WITHOUT weakening the container:
+
+      * host uid == 1000 → already owned by the container uid; nothing to do.
+      * host is root     → chown the dir to 1000 (we hold the privilege; tightest option).
+      * otherwise        → widen the dir's mode so uid 1000 (which the unmatched container
+                           maps to "other") can write. The dir is per-run and lives under
+                           the private ``HEXGRAPH_HOME``, whose parent mode gates access, so
+                           opening the leaf dir does not actually expose it.
+
+    Only the host-side bind-mount dir changes — the container's ``--user``, dropped caps,
+    read-only rootfs, ``--network none`` and the rest of the hardening are untouched.
+    """
+    if not hasattr(os, "getuid"):  # non-POSIX host: bind-mount uid semantics don't apply
+        return
+    host_uid = os.getuid()
+    if host_uid == SANDBOX_UID:
+        return
+    if host_uid == 0:
+        os.chown(path, SANDBOX_UID, SANDBOX_GID)
+    else:
+        os.chmod(path, 0o777)
 
 
 class SandboxError(RuntimeError):
@@ -142,7 +178,7 @@ class SandboxRunner:
             # minimal profile = Docker's default + ONE personality(ADDR_NO_RANDOMIZE)
             # allow (see _seccomp_aslr_profile). The single, narrow, documented relaxation.
             *(["--security-opt", f"seccomp={_seccomp_aslr_profile()}"] if disable_aslr else []),
-            "--user", "1000:1000",
+            "--user", f"{SANDBOX_UID}:{SANDBOX_GID}",
             # Resource ceilings — the ONLY flags a ResourceSpec governs (empty under
             # `unconstrained`, so the container can use the whole host).
             *resources.docker_resource_args(),
@@ -253,6 +289,7 @@ class SandboxRunner:
         if outdir is not None:
             outdir = Path(outdir).resolve()
             outdir.mkdir(parents=True, exist_ok=True)
+            _ensure_outdir_writable(outdir)  # so the --user 1000 container can write /out
             cmd += ["-v", f"{outdir}:/out:rw"]
             probe_args.append("/out")
         # Extra read-only inputs (e.g. the target library a fuzz harness links against).
@@ -399,6 +436,7 @@ class SandboxRunner:
         resources = resources or ResourceSpec()
         outdir = Path(outdir).resolve()
         outdir.mkdir(parents=True, exist_ok=True)
+        _ensure_outdir_writable(outdir)  # so the --user 1000 container can write /out
         cmd = [
             "docker", "run", "-d", "--name", name,
             # NOT --rm: a detached campaign container is reaped explicitly so its exit
