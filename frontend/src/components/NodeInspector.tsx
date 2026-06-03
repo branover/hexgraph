@@ -8,9 +8,9 @@ import FilesystemBrowser from "./FilesystemBrowser";
 
 // Node-type-aware detail shown when a target/function/symbol/string node is
 // selected in the graph (findings use the richer Inspector instead).
-export default function NodeInspector({ node, target, allowed, projectId, onLaunch, onChanged, onViewFinding }: {
+export default function NodeInspector({ node, target, allowed, projectId, onLaunch, onFuzz, onChanged, onViewFinding }: {
   node: GraphNode; target?: TargetNode; allowed: string[]; isMock?: boolean; projectId?: string;
-  onLaunch: (type: string) => void; onChanged?: () => void; onViewFinding?: (fid: string) => void;
+  onLaunch: (type: string) => void; onFuzz?: () => void; onChanged?: () => void; onViewFinding?: (fid: string) => void;
 }) {
   const isHypothesis = node.type === "node" && node.node_type === "hypothesis";
   const isFunction = node.type === "node" && node.node_type === "function";
@@ -78,7 +78,7 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
 
       {node.type === "target" && target && (
         <>
-          <div className="actions"><Launcher allowed={allowed} onChoose={onLaunch} /></div>
+          <div className="actions"><Launcher allowed={allowed} onChoose={onLaunch} onFuzz={onFuzz} /></div>
           <div className="sec">Recon facts</div>
           <div className="kvs">
             {target.metadata?.mitigations && <><span className="k">mitigations</span><code>{JSON.stringify(target.metadata.mitigations)}</code></>}
@@ -119,7 +119,7 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
       {isFunction && (
         <>
           <div className="actions">
-            {allowed.length > 0 && <Launcher allowed={allowed} onChoose={onLaunch} />}
+            {allowed.length > 0 && <Launcher allowed={allowed} onChoose={onLaunch} onFuzz={onFuzz} />}
             {node.target_id && (
               <button className="btn sm ghost" onClick={doDecompile} disabled={decomp?.loading}>
                 <Icon name="fn" size={12} /> {decomp?.loading ? "decompiling…" : "Decompile"}

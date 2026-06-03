@@ -467,9 +467,10 @@ export default function Workspace() {
             {fc && <span className={"tbadge" + (fc.hot ? " hot" : "")} style={{ marginLeft: "auto" }}>{fc.n}</span>}
           </div>
           <div className="mt">{t.kind}{t.arch ? " · " + t.arch : ""}</div>
-          <Launcher allowed={allowed} onChoose={(type) => setLaunchFor({ target: t, type })} />
+          <Launcher allowed={allowed} onChoose={(type) => setLaunchFor({ target: t, type })}
+                    onFuzz={caps.features?.fuzzing && t.kind !== "firmware_image" ? () => setFuzzFor(t) : undefined} />
           {caps.features?.fuzzing && t.kind !== "firmware_image" && (
-            <button className="btn sm icon ghost" title="Start a detached fuzz campaign on this target"
+            <button className="btn sm icon ghost" title="Start a fuzz campaign on this target (detached, reapable; live status in the Campaigns tab)"
                     onClick={(e) => { e.stopPropagation(); setFuzzFor(t); }}>
               <Icon name="bug" size={12} />
             </button>
@@ -572,8 +573,11 @@ export default function Workspace() {
           anchorKind: "node", anchorId: selNode.id,
         });
       };
+      const fuzzTarget = tgt || owner;
+      const onFuzz = caps.features?.fuzzing && fuzzTarget && fuzzTarget.kind !== "firmware_image"
+        ? () => setFuzzFor(fuzzTarget) : undefined;
       return <NodeInspector node={selNode} target={tgt} allowed={allowed} isMock={isMock} projectId={projectId}
-                            onChanged={load} onViewFinding={viewFinding} onLaunch={onLaunch} />;
+                            onChanged={load} onViewFinding={viewFinding} onLaunch={onLaunch} onFuzz={onFuzz} />;
     }
     return <Inspector finding={selFinding} projectId={projectId} hypotheses={hypotheses} onChanged={load}
                       onLaunch={pollThenReload} onOpenLaunch={openLaunchForFinding} onViewTask={viewTask}

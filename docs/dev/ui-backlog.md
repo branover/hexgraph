@@ -1,5 +1,28 @@
 # UI improvement backlog
 
+## Run/fuzz UX on the target card (2026-06-02)
+
+**Shipped in `build/run-fuzz-ux`.** Made the right-panel target card's launch UX expressive
+and reconciled the two fuzz entry points.
+
+- **Expressive Run menu.** The bare checkboxes became a polished menu where every task row
+  carries an icon + bold label + a one-line summary, and hovering a row reveals a richer
+  popover explaining exactly what that task does (`frontend/src/taskMeta.ts`, rewritten
+  `Launcher.tsx`, `.task-menu` / `.task-pop` styles). The task set stays SERVER-DRIVEN (the
+  capability table per target/node kind) — taskMeta only adds copy; an unknown type falls back
+  to a humanized name so a new type never breaks the menu.
+- **Fuzz entry points reconciled.** The legacy single-shot `fuzzing` task is now filtered OUT
+  of the Run menu; the menu instead shows a guided **"Fuzz campaign…"** row that opens the
+  detached-campaign modal (the real fuzzing path) — same destination as the bug-icon button,
+  which got a clearer tooltip. The single-shot path survives only as the harness-anchored
+  "Fuzz this harness" button on a harness finding (a deliberate quick run), so it's no longer
+  ambiguous which produces what.
+- **Human task/API errors.** `api.ts` helpers (`getJSON`/`postJSON`/`patchJSON`/`delJSON`) now
+  parse the FastAPI `detail` body instead of throwing a bare `400 /api/…/campaigns`. The
+  campaigns API fails FAST with a friendly, target-named 400 for the "nothing to fuzz" case
+  (no harness / no instrumented build / no binary), BEFORE a half-created campaign row.
+  Verified end-to-end in the Fuzz modal.
+
 ## Resizable + collapsible workspace panels (2026-06-02)
 
 **Shipped in `build/resizable-panels`.** The three-pane workspace (`frontend/src/pages/Workspace.tsx`)

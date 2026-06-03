@@ -15,6 +15,7 @@ from hexgraph.engine import campaigns as C
 from hexgraph.engine.fuzzers.base import FuzzCampaignSpec
 from hexgraph.engine.source import create_source_tree, write_source_file
 
+from conftest import fixture_path
 from test_campaigns import HARNESS, _enable_fuzzing, _mock_env, _project_with_target
 
 
@@ -221,3 +222,33 @@ def test_api_capabilities_features_fuzzing(hg_home):
     with TestClient(app) as c:
         caps = c.get("/api/capabilities").json()
         assert caps["features"]["fuzzing"] is True
+
+
+def test_api_campaign_nothing_to_fuzz_is_clear_400(hg_home, monkeypatch):
+    """A campaign on a target with no harness / no instrumented build must fail with a
+    HUMAN 400 body (the UI shows it verbatim) — never a terse internal message or a
+    half-created campaign. Covers the source_lib (no harness/sources) case."""
+    from hexgraph.engine.ingest import create_project, ingest_file
+    from hexgraph.db.session import session_scope as _ss
+
+    _mock_env(monkeypatch)
+    _enable_fuzzing()
+    app = create_app()
+    with _ss() as s:
+        p = create_project(s, name="bare")
+        # A plain ingested binary with NO harness_generation finding and NO instrumented
+        # build / fuzz_target_sources. Forcing surface=source_lib makes "nothing to fuzz"
+        # unambiguous (no harness + no sources to compile).
+        t = ingest_file(s, project=p, src_path=fixture_path("vuln_httpd"), name="bare_httpd")
+        pid, tid = p.id, t.id
+    with TestClient(app) as c:
+        r = c.post(f"/api/projects/{pid}/campaigns",
+                   json={"target_id": tid, "surface": "source_lib"})
+        assert r.status_code == 400
+        detail = r.json()["detail"]
+        # Human, actionable, names the target and tells the operator what to do next.
+        assert "Nothing to fuzz" in detail
+        assert "bare_httpd" in detail
+        assert "harness" in detail.lower()
+        # And NO campaign row leaked from the failed pre-flight check.
+        assert c.get(f"/api/projects/{pid}/campaigns").json()["campaigns"] == []

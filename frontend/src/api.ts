@@ -115,24 +115,38 @@ export interface ProjectDetail {
   cost: { total_usd: number; cost_source: string; task_count: number };
 }
 
+// Turn a failed Response into a human-readable Error. FastAPI puts the real reason in
+// the JSON `detail` body (a plain string, or a 422 validation list) — surface THAT, not
+// a bare `400 /api/…/campaigns`, so modals can show the actual cause. Falls back to the
+// status code only when there's no parseable body.
+async function httpError(r: Response): Promise<Error> {
+  let detail: unknown;
+  try { detail = (await r.json())?.detail; } catch { /* no/!JSON body */ }
+  let msg: string | undefined;
+  if (typeof detail === "string") msg = detail;
+  else if (Array.isArray(detail)) msg = detail.map((d: any) => d?.msg || JSON.stringify(d)).join("; ");
+  else if (detail && typeof detail === "object") msg = JSON.stringify(detail);
+  return new Error(msg || `request failed (${r.status})`);
+}
+
 async function getJSON<T>(url: string): Promise<T> {
   const r = await fetch(url);
-  if (!r.ok) throw new Error(`${r.status} ${url}`);
+  if (!r.ok) throw await httpError(r);
   return r.json() as Promise<T>;
 }
 async function postJSON<T>(url: string, body: unknown): Promise<T> {
   const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  if (!r.ok) throw new Error(`${r.status} ${url}`);
+  if (!r.ok) throw await httpError(r);
   return r.json() as Promise<T>;
 }
 async function patchJSON<T>(url: string, body: unknown): Promise<T> {
   const r = await fetch(url, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  if (!r.ok) throw new Error(`${r.status} ${url}`);
+  if (!r.ok) throw await httpError(r);
   return r.json() as Promise<T>;
 }
 async function delJSON<T>(url: string): Promise<T> {
   const r = await fetch(url, { method: "DELETE" });
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `${r.status} ${url}`);
+  if (!r.ok) throw await httpError(r);
   return r.json() as Promise<T>;
 }
 
@@ -180,7 +194,7 @@ export const api = {
   createProject: (name: string, backend: string) => postJSON<Project>("/api/projects", { name, backend }),
   async removeTarget(pid: string, tid: string): Promise<{ archived: number }> {
     const r = await fetch(`/api/projects/${pid}/targets/${tid}`, { method: "DELETE" });
-    if (!r.ok) throw new Error(`${r.status}`);
+    if (!r.ok) throw await httpError(r);
     return r.json();
   },
   deleteProject: (pid: string) => delJSON<{ deleted_project: string; rows: Record<string, number> }>(`/api/projects/${pid}`),

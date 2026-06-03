@@ -532,6 +532,20 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-02: **build: Run/fuzz UX on the target card** (branch `build/run-fuzz-ux`). Three changes,
+  frontend + a small backend tweak. (1) **Expressive Run menu** — `frontend/src/taskMeta.ts` (new) gives
+  every task type a label + one-line summary + a richer hover explanation; `Launcher.tsx` rewritten to
+  render rows with icon/title/summary and a side popover on hover (`.task-menu`/`.task-pop` in
+  `theme.css`). Task SET stays server-driven (the capability table), so a target only sees kind-valid
+  tasks. (2) **Fuzz entry points reconciled** — the legacy single-shot `fuzzing` task is filtered out of
+  the Run menu; a guided **"Fuzz campaign…"** row opens the detached-campaign modal instead (wired via a
+  new optional `onFuzz` on `Launcher`, passed from `Workspace.tsx` TreeRow + `NodeInspector.tsx`). The
+  single-shot path now lives only on a harness finding's "Fuzz this harness" button. (3) **Human errors**
+  — `api.ts` helpers parse the FastAPI `detail` body (was a bare `400 /api/…`); `api/routers/campaigns.py`
+  returns a friendly, target-named 400 for the "nothing to fuzz" case before a half-created campaign row.
+  Test `tests/test_campaigns_phase4.py::test_api_campaign_nothing_to_fuzz_is_clear_400`. `just ui` + `just
+  test` green (708 passed / 3 Docker-skipped); Playwright-verified the menu, hover popover, the reconciled
+  Fuzz path, and the clean modal error. No model/DB change → no migration. Reviewed + merged via PR #86.
 - 2026-06-02: **build: resizable + collapsible workspace panels** (branch `build/resizable-panels`).
   Frontend-only (plus docs). `Workspace.tsx` 3-pane layout is now user-adjustable so the center graph
   can claim room. (1) **Drag-to-resize** both vertical dividers (left↔center, center↔right) via a
