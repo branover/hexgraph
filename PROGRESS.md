@@ -546,6 +546,22 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-03: **feat: hard-delete a finding (distinct from dismiss)** (branch `build/delete-findings`).
+  Findings could only be *dismissed* (the row persists, reversibly greyed). Added a true, irreversible
+  HARD delete alongside it. `engine/removal.delete_finding(session, finding_id)` removes the Finding row
+  and cleans up every polymorphic reference (FK enforcement is off): edges where the finding is src OR
+  dst (`about`/`located_in`/hypothesis evidence/…), its `node_kind="finding"` annotations, and it nulls
+  any task's dangling `parent_finding_id` (the task's own history stands). Idempotent — a missing finding
+  is a safe no-op returning `found=False`. Wired up as `DELETE /api/findings/{id}` (distinct from the
+  reversible `/status` dismiss path), an MCP **write** tool `delete_finding` (gated under
+  `features.mcp.write` like the other write tools; dismiss stays via `update_finding(status='dismissed')`),
+  and a frontend **Delete** action in the finding Inspector — set apart on its own row, right-aligned with
+  a dashed danger border, behind a two-step inline "delete permanently?" confirm so it can't be a foot-gun
+  next to the benign Dismiss. No schema change, no migration (removal logic only). Verified: 5 new tests in
+  `tests/test_removal.py` (delete removes finding + an about edge + a located_in source-link + an
+  annotation with NO dangling refs; follow-up task detached not deleted; nonexistent is a no-op; dismiss
+  still works unchanged; API delete → 404 + idempotent) plus full `just test`; Playwright screenshots
+  confirmed the Delete/confirm UX and an end-to-end UI delete dropped the graph finding count 10→9.
 - 2026-06-03: **feat: setup wizard registers MCP + skill; fix: just --list truncation** (branch
   `build/setup-mcp`). Two setup-experience improvements in one PR. **(1)** The interactive `hexgraph
   setup` wizard now offers a final **coding-agent integration** step: register HexGraph's MCP server

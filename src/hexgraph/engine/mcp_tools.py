@@ -945,6 +945,21 @@ def delete_edge(edge_id: str) -> dict:
         return {"deleted": _del(s, edge_id), "edge_id": edge_id}
 
 
+def delete_finding(finding_id: str) -> dict:
+    """Permanently DELETE a junk finding (hard delete — IRREVERSIBLE). Use this to
+    remove a finding that's pure noise/garbage you never want to see again. To set a
+    finding aside reversibly instead (keep the row, greyed, restorable), call
+    update_finding(status='dismissed'). Deleting also removes every edge/annotation
+    touching the finding, leaving no dangling reference. Safe no-op if already gone."""
+    from hexgraph.engine.removal import delete_finding as _del
+
+    with session_scope() as s:
+        out = _del(s, finding_id)
+        if not out.get("found"):
+            return {"error": "finding not found", "deleted": False, "finding_id": finding_id}
+        return {"deleted": True, **out}
+
+
 def create_socket(project_id: str, kind: str = "tcp", port: int | str | None = None,
                   name: str | None = None, bind_addr: str | None = None,
                   attrs: dict | None = None) -> dict:

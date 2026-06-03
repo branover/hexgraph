@@ -26,14 +26,19 @@ and the follow-ups it suggests.
 
 Selecting a node lights up its connected edges and opens the inspector, where you can decompile,
 annotate, or run a task. When a finding suggests a follow-up, clicking it opens a pre-filled launch
-modal for the next task, and **Confirm** or **Dismiss** lets you triage. The **Add node** and **Add
-edge** tools let you author functions, sockets, hypotheses, and typed edges by hand.
+modal for the next task, and **Confirm** or **Dismiss** lets you triage. Dismiss is the gentle,
+reversible option: the finding stays in the graph, greyed, and you can bring it back at any time. When
+a finding is pure noise you never want to see again, the **Delete** button (set apart on its own,
+behind a quick "delete permanently?" confirm) removes it for good, along with every edge and
+annotation attached to it. The **Add node** and **Add edge** tools let you author functions, sockets,
+hypotheses, and typed edges by hand.
 
 ![The findings panel, grouped by target with severity + type chips](images/findings-list.png)
 
 Removing things is reversible by default. Archiving a node or a whole target subtree declutters the
-graph, and re-adding the same entity brings it back. Individual edges and whole projects, by contrast,
-are hard deletes. **Merge dupes** folds duplicate functions, strings, and targets into a single
+graph, and re-adding the same entity brings it back. Individual edges, individual findings (the
+Delete button described above), and whole projects, by contrast, are hard deletes. **Merge dupes**
+folds duplicate functions, strings, and targets into a single
 keeper, and it also runs automatically after every LLM task.
 
 ## The firmware's unpacked filesystem

@@ -744,6 +744,7 @@ export default function Workspace() {
                             onChanged={load} onViewFinding={viewFinding} onLaunch={onLaunch} onFuzz={onFuzz} />;
     }
     return <Inspector finding={selFinding} projectId={projectId} hypotheses={hypotheses} onChanged={load}
+                      onDeleted={() => { setSelFinding(null); setSelGraphId(undefined); load(); }}
                       onLaunch={pollThenReload} onOpenLaunch={openLaunchForFinding} onViewTask={viewTask}
                       fuzzingEnabled={fuzzingEnabled} onOpenSource={revealSource}
                       onHighlight={(ids) => ids[0] && setSelGraphId(ids[0])} />;

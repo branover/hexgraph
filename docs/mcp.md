@@ -34,9 +34,12 @@ agent's context small:
 - **read** covers the `list_*` family, `get_node`, `get_finding`, `xrefs`, `list_sockets`,
   `list_filesystem`/`read_file`, `list_source_trees`/`read_source_file`, `list_builds`/`coverage_diff`,
   and the reversible `archive_node`/`restore_node`/`delete_edge`/`archive_target`/`restore_target`.
-- **write** covers `record_finding`, `create_node`, `create_edge`, `create_socket`,
+- **write** covers `record_finding`, `update_finding`, `create_node`, `create_edge`, `create_socket`,
   `create_hypothesis`, `link_same_code`, `propagate_finding`, `import_source_tree`,
-  `link_finding_to_source`, `save_source_revision`, `import_oss_fuzz`, and more.
+  `link_finding_to_source`, `save_source_revision`, `import_oss_fuzz`, and more. It also
+  has `delete_finding` for clearing a junk finding outright (a hard, irreversible delete
+  that also removes the edges and annotations touching it); to set a finding aside
+  reversibly instead, call `update_finding(status='dismissed')`.
 - **run** covers `ingest`, `run_task`, `verify_poc`, `verify_fuzz_artifact`, `start_fuzz_campaign`,
   `build_target`, and more.
 

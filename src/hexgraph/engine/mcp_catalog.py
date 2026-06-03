@@ -114,6 +114,8 @@ _CATALOG = [
      {"type": "object", "properties": {"project_id": {"type": "string"}, "node_id": {"type": "string"}}, "required": ["project_id", "node_id"]}),
     ("write", "delete_edge", _t.delete_edge, "Permanently delete ONE edge by id (hard delete — recreate with create_edge to restore). To remove a node's edges reversibly, archive the node instead.",
      {"type": "object", "properties": {"edge_id": {"type": "string"}}, "required": ["edge_id"]}),
+    ("write", "delete_finding", _t.delete_finding, "Permanently DELETE a junk finding by id (hard delete — IRREVERSIBLE; also removes every edge/annotation touching it, leaving no dangling ref). Use only for pure noise. To set a finding aside reversibly instead (keep the row, greyed, restorable), call update_finding(status='dismissed').",
+     {"type": "object", "properties": {"finding_id": {"type": "string"}}, "required": ["finding_id"]}),
     ("write", "archive_target", _t.archive_target, "Soft-remove a target + its whole subtree (children/nodes/findings) from the graph (REVERSIBLE) — declutter an irrelevant component; re-ingesting the bytes or restore_target brings it back. (Whole-project deletion is operator-only, not an MCP tool.)",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "target_id": {"type": "string"}}, "required": ["project_id", "target_id"]}),
     ("write", "restore_target", _t.restore_target, "Un-archive a previously soft-removed target subtree (its nodes/findings reappear).",
