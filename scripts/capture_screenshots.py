@@ -29,7 +29,7 @@ os.environ.setdefault("HEXGRAPH_FUZZER", "mock")
 
 REPO = Path(__file__).resolve().parents[1]
 OUT = REPO / "docs" / "images"
-VIEWPORT = {"width": 1440, "height": 900}
+VIEWPORT = {"width": 2560, "height": 1440}  # 1440p — roomy panes + a taller detail pane (more finding detail)
 SETTLE = 1400  # ms after networkidle so Cytoscape layout + fetches finish
 
 
@@ -82,11 +82,16 @@ async def _shoot(page, name: str) -> None:
     print(f"  ✓ {name}")
 
 
-async def _fit_graph(page) -> None:
-    """Click the graph 'Fit' control so the whole graph is framed nicely."""
+async def _fit_graph(page, zoom_in: int = 0) -> None:
+    """Click the graph 'Fit' control so the whole graph is framed nicely. `zoom_in` then clicks
+    the zoom-in control that many times so the nodes read LARGER (at 1440p a bare fit leaves the
+    graph small in the roomy canvas) while staying centred on the fitted graph."""
     try:
         await page.click("button[title='Fit']", timeout=2500)
         await page.wait_for_timeout(700)
+        for _ in range(zoom_in):
+            await page.click("button[title='Zoom in']", timeout=2000)
+            await page.wait_for_timeout(250)
     except Exception:
         pass
 
@@ -97,19 +102,39 @@ async def _capture(base: str, pid: str) -> None:
     proj = f"{base}/projects/{pid}"
     async with async_playwright() as p:
         b = await p.chromium.launch(args=["--no-sandbox", "--force-color-profile=srgb"])
-        # 1.5x device scale: crisp on hi-dpi/README displays while keeping PNGs reasonably
-        # sized (a full 2x roughly doubles the bytes for little visible gain at README width).
-        pg = await b.new_page(viewport=VIEWPORT, device_scale_factor=1.5)
+        # device scale 1.0 at 1440p: the logical viewport is already high-res (2560x1440), so a
+        # 1x render stays crisp when downscaled to README width without ballooning the PNG bytes.
+        pg = await b.new_page(viewport=VIEWPORT, device_scale_factor=1.0)
 
         # ── Projects landing (context) ───────────────────────────────────────────────
         await pg.goto(base + "/", wait_until="networkidle")
         await pg.wait_for_timeout(SETTLE)
         await _shoot(pg, "projects.png")
 
-        # ── HERO 1 — the typed knowledge graph ───────────────────────────────────────
+        # ── HERO 1 — the typed knowledge graph, a CRITICAL finding selected ──────────
         await pg.goto(proj, wait_until="networkidle")
         await pg.wait_for_timeout(SETTLE + 600)
-        await _fit_graph(pg)
+
+        async def click_finding(substr: str) -> bool:
+            loc = pg.get_by_text(substr, exact=False)
+            try:
+                await loc.first.click(timeout=2500)
+                await pg.wait_for_timeout(900)
+                return True
+            except Exception:
+                return False
+
+        # Select the CRITICAL command-injection finding FIRST, so the README hero's detail
+        # pane shows real output (severity, the vulnerability, its evidence) instead of an
+        # empty "select a finding" placeholder — the hero should highlight what HexGraph
+        # produces, not an idle pane.
+        await click_finding("command injection")
+        # Selecting a finding focuses/zooms its node; let that animation FULLY settle, THEN
+        # re-fit so the whole graph is re-centered and clears the bottom-right controls (a fit
+        # mid-animation leaves it off-centre and bleeding under the control cluster).
+        await pg.wait_for_timeout(1300)
+        await _fit_graph(pg, zoom_in=2)
+        await pg.wait_for_timeout(800)
         await _shoot(pg, "graph.png")
 
         # Select a central FUNCTION node via search → its graph node highlights and the
@@ -128,20 +153,12 @@ async def _capture(base: str, pid: str) -> None:
                 return False
 
         await search_select("cgi_handler", "cgi_handler")
-        await _fit_graph(pg)
+        await _fit_graph(pg, zoom_in=2)
         await pg.wait_for_timeout(600)
         await _shoot(pg, "graph-selected.png")
 
-        # Now select the critical command-injection finding for the verified-PoC detail hero.
-        async def click_finding(substr: str) -> bool:
-            loc = pg.get_by_text(substr, exact=False)
-            try:
-                await loc.first.click(timeout=2500)
-                await pg.wait_for_timeout(900)
-                return True
-            except Exception:
-                return False
-
+        # Re-select the critical command-injection finding for the verified-PoC detail hero
+        # (graph-selected just switched the selection to the cgi_handler node).
         await click_finding("command injection")
         await pg.wait_for_timeout(500)
 
