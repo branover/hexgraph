@@ -151,17 +151,31 @@ int upnp_control(const char *soap) {
 """
 
 MAKEFILE = """\
-# Minimal recipe so HexGraph detects build system `make` and the instrumented rebuild
-# (engine.builds.run_build) records a real recorded recipe. Instrumentation is injected
-# by the build image's env contract (ASan/SanCov/libFuzzer), so this stays plain.
+# Recipe for HexGraph's build-as-API instrumented rebuild (engine.builds.run_build).
+# HexGraph detects build system `make` from this file and runs the DEFAULT target with
+# the toolchain env injected by the build image's instrumentation contract
+# (engine/build.py::instrumentation_env), e.g.
+#   libFuzzer:  CC=clang          CFLAGS="-g -O1 -fsanitize=fuzzer-no-link,address"
+#   AFL++:      CC=afl-clang-lto  CFLAGS="-g -O1 -fsanitize=address"
+#
+# The point of this source tree is the INSTRUMENTED FUZZ TARGET, so the default target
+# builds exactly that. The library sources (httpd.c / upnp.c) are pure library code with
+# NO main(); the harness (fuzz_cgi.c) provides LLVMFuzzerTestOneInput but also no main.
+# We append `-fsanitize=fuzzer` to the injected $(CFLAGS): with clang that links
+# libFuzzer's driver, and with afl-clang-lto it links AFL++'s libFuzzer-compatible driver
+# (afl-compiler-rt) — either way the driver supplies main(), so the link succeeds for
+# BOTH engines and the result is a runnable, instrumented fuzz binary.
 CC ?= cc
-all: httpd
-httpd: src/httpd.c src/upnp.c
-\t$(CC) -O0 -o httpd src/httpd.c src/upnp.c
-fuzz_target: fuzz/fuzz_cgi.c src/httpd.c
-\t$(CC) -O0 -o fuzz_target fuzz/fuzz_cgi.c src/httpd.c
+all: fuzz_target
+
+# Compile the harness + the library under test + the request-logging helper together,
+# WITH the injected instrumentation $(CFLAGS) plus the fuzzer driver. No main() is needed
+# in any of the sources — `-fsanitize=fuzzer` provides it.
+fuzz_target: fuzz/fuzz_cgi.c src/httpd.c src/upnp.c target.c
+\t$(CC) $(CFLAGS) -fsanitize=fuzzer -o fuzz_target fuzz/fuzz_cgi.c src/httpd.c src/upnp.c target.c
+
 clean:
-\trm -f httpd fuzz_target
+\trm -f fuzz_target
 """
 
 HARNESS_C = """\
