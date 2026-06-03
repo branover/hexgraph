@@ -562,6 +562,82 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-03: **feat: deeper, staged showcase fuzz target so coverage visibly CLIMBS** (branch
+  `build/deeper-fuzz`). The showcase's fuzz entrypoint was `parse_host_header`, which overflows a
+  64-byte buffer on basically input #1, so a coverage-guided campaign crashed immediately and the
+  coverage story stayed flat at ~0 — the opposite of what we want to demonstrate. Replaced it with
+  `parse_request(data, len)` in the embedded `HTTPD_C` (appended AFTER `diagnostics`, so the
+  `system()` sink + `strcpy` lines didn't move within the function bodies; only the new
+  `#include <stdint.h>` shifted everything down by ONE line). It's a tiny length-prefixed command
+  protocol whose single stack-buffer-overflow (`key[16]`, CWE-787) is gated behind FOUR discoverable
+  stages: a magic prefix `"CMD"` → opcode `0x02` (SET) → flag byte `0xAA` → a klen that exceeds 16.
+  Pure: every READ is bounds-checked (`len >= 6 + klen` before reading klen bytes), so only the WRITE
+  on the deep path overflows; no `system()`/IO/side effects. The harness (`HARNESS_C`) now drives
+  `parse_request`. `get_param`/`cgi_handler`/`diagnostics`/`target.c` are unchanged library code (still
+  referenced by the static/PoC findings, the function graph nodes, and `target.c`'s coverage-map key);
+  the #95 Makefile is unchanged (the new fn lives in httpd.c). **Line refs re-counted + fixed for the
+  one-line shift:** PoC `link_finding_to_source` 27→28 (the `system()` sink), static finding 33→34 (the
+  `strcpy`), and the synthesized triage ASan reports' `diagnostics`/`cgi_handler` frames likewise
+  (28/34). **Proof the coverage now climbs in stages then crashes** (real clang-14 libFuzzer+ASan inside
+  `hexgraph-fuzz:latest`, `clang -fsanitize=fuzzer,address` on the seeded sources): `cov:` rose
+  3→4→5→6→7→8→9→10→11→12→13→14 over the run as libFuzzer satisfied each gate, THEN ASan reported a
+  `stack-buffer-overflow` WRITE in `parse_request /src/httpd.c:61` (frame `key[16]`), crashing input
+  `CMD\x02\xAA...` (magic+SET+flag+klen 0x2f). **Showcase-seed-only**; no schema/policy/migration.
+  **NOTE: maintainer must `just showcase --reset` to pick up the new fuzz target** (existing projects
+  keep the old one). Tests: `test_showcase_seed.py` green; full `just test` green except the known
+  WSL2 qemu/AFL Docker e2e flake (`test_fuzz_phase5_e2e::…qemu_mode…`, passes in isolation; my diff
+  touches no fuzz-probe code).
+- 2026-06-03: **fix: from-source build UX** (branch `fix/build-ux`). Two related defects in the
+  "build instrumented target from source" experience, fixed as ONE PR. **(1) A REAL build of the
+  showcase source tree FAILED (a regression from PR #92).** PR #92 dropped `int main()` from the
+  showcase's embedded `httpd.c` so the libFuzzer harness links cleanly, but the showcase Makefile's
+  default `all: httpd` still tried to link the now-main-less library into a standalone program →
+  `undefined reference to main`. (Only the offline MockBuilder hid this — it fabricates artifacts
+  without compiling.) The Makefile also ignored the injected `$(CFLAGS)` (used a hardcoded
+  `-O0`, so ASan/SanCov were never applied) and the `fuzz_target` rule linked no fuzzer driver.
+  **Rewrote the `MAKEFILE` constant in `scripts/seed_showcase.py`:** default target is now
+  `fuzz_target`, which compiles the harness + the library sources (httpd.c/upnp.c) + target.c with
+  the injected `$(CC) $(CFLAGS)` plus `-fsanitize=fuzzer` — the driver supplies `main()` for BOTH
+  engines (clang/libFuzzer and afl-clang-lto's libFuzzer-compat driver). Dropped the broken `httpd`
+  rule. **Root infra fix uncovered while verifying:** `SandboxBuilder` computed the dedicated
+  `hexgraph-build` image but `executor.run_probe` had no `image=` param, so EVERY build ran in the
+  shared `hexgraph-sandbox` image — which has plain `clang` (so libFuzzer accidentally worked) but
+  NO `afl-clang-lto`, so an AFL build could never find its compiler. Added an `image=` override to
+  `run_probe` (both the local + remote executors, the Executor protocol) and wired `SandboxBuilder`
+  to pass `self.image` for the compile + fetch runs. **Proven via the full `engine.builds.run_build`
+  flow with the real SandboxBuilder against `hexgraph-build:latest`: BOTH libfuzzer AND afl now build
+  status=succeeded, producing runnable instrumented binaries** (AFL one carries `__afl_area_ptr` /
+  `__afl_manual_init`; libFuzzer one responds to `-help=1`). **(2) A FAILED build was a dead end in
+  the UI** — only a tiny status badge + a `title` tooltip, no way to read the error/log. New
+  `frontend/src/components/BuildDetailModal.tsx`: clicking any build row (now a `.buildrow` button
+  with a hover affordance) opens a modal in the Build/Fuzz modal idiom — for a failure it leads with
+  the recorded `error` + the full log fetched from `GET /api/builds/{id}/log` (CAS-backed; the
+  `api.buildLog` method already existed); a success shows captured artifacts + the reproducibility
+  triple + provenance. The failed row reads "view error & log →" in accent so it's clearly
+  actionable. Verified live (Playwright, isolated home, mock/offline): both the failed-build and
+  succeeded-build detail modals render legibly. **NOTE: the maintainer must `just showcase --reset`
+  to pick up the new Makefile (existing projects keep the old one); the build-error UI works without
+  re-seeding.** Tests: `test_showcase_seed.py` + the build/executor/sandbox suite green; `just test`
+  green (offline, mock).
+- 2026-06-03: **feat: setup wizard registers MCP + skill; fix: just --list truncation** (branch
+  `build/setup-mcp`). Two setup-experience improvements in one PR. **(1)** The interactive `hexgraph
+  setup` wizard now offers a final **coding-agent integration** step: register HexGraph's MCP server
+  with Claude Code / Codex / gemini-cli (pick agent + scope — project vs user) and install the VR
+  skill (pick destination: `~/.claude/skills`, a project `.claude/skills`, or a custom path). New
+  `agent_setup.register_agent()` PERFORMS the registration by editing the agent's own config file
+  directly — JSON merge into `mcpServers` (Claude `~/.claude.json` / project `.mcp.json`; gemini
+  `~/.gemini/settings.json`) or a `[mcp_servers.hexgraph]` TOML table for Codex — fully idempotent
+  (re-running is a no-op; refuses to clobber an unparseable/conflicting config). Both steps are
+  local-only filesystem edits, no network and no secret (the MCP command carries no key). The step
+  lives only on the interactive path, so the **non-interactive / CI baseline never prompts or installs
+  anything** (`hexgraph setup --non-interactive` proven: applies the static-only baseline, exit 0, no
+  agent configs touched). **(2)** Fixed `just --list` description truncation: `just` shows only the
+  single comment line directly above a recipe, so multi-line blocks were leaking a sentence fragment
+  into the menu (`setup`, `install`, `serve`, `up`, `app-build`, `demo`). Reordered each so the
+  complete one-liner sits closest to the recipe; every menu description now reads as a full phrase.
+  New `tests/test_setup_wizard.py` covers registration per agent/scope, idempotency, JSON/TOML
+  preservation, the skill install, the wizard step driven with fakes, and the non-interactive guard.
+  Docs updated (README setup, `docs/setup.md`, `docs/mcp.md`). `just test` green.
 - 2026-06-03: **fix: fuzz campaign live metrics — edges_covered + mid-run progress** (branch
   `fix/fuzz-live-metrics`). Two related fuzz-campaign bugs, fixed as one PR. **(A) Campaigns
   reported "0 edges" forever despite millions of execs.** ROOT CAUSE: the libFuzzer probe

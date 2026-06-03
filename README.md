@@ -48,9 +48,11 @@ just serve          # → http://127.0.0.1:8765
 `just setup` does the bootstrap and then hands off to an interactive setup wizard. The wizard walks
 you through the optional features, and for each one that relaxes the security posture it shows you the
 implication and asks you to confirm before turning it on. It then writes your settings and builds the
-images you picked. If you accept the defaults you stay in the static-only posture; everything beyond
-that is something you turn on yourself, with eyes open. For the wizard, the manual step-by-step, the
-non-interactive CI mode, and Ghidra, see **[docs/setup.md](docs/setup.md)**.
+images you picked, and it can optionally register HexGraph's MCP server with a coding agent and install
+the VR skill for you (both local-only, no secret). If you accept the defaults you stay in the
+static-only posture; everything beyond that is something you turn on yourself, with eyes open. For the
+wizard, the manual step-by-step, the non-interactive CI mode, and Ghidra, see
+**[docs/setup.md](docs/setup.md)**.
 
 > To install `just` without sudo:
 > `curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to ~/.local/bin`
