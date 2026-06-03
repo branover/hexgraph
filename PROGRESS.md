@@ -569,6 +569,19 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-03: **chore: v0.1.0 release packaging + pre-release security audit** (branch
+  `build/release-packaging`). Pre-release Phases 3 + 6. Bumped `pyproject.toml` `0.0.1`→`0.1.0` (dropped the
+  stale "(MVP)" from the description); added `CHANGELOG.md` (the 0.1.0 entry) and `docs/dev/releasing.md` (the
+  release checklist — notably: **`just ui` MUST run before building the wheel**, since `web/dist/` is
+  gitignored and not produced by `just install`; verified a wheel built after `just ui` bundles the SPA +
+  the frozen schema + mock fixtures + probes + seccomp = 168 files, while one built without it ships no UI).
+  **Pre-release security audit** (`docs/dev/security-audit-2026-06-03.md`): three independent adversarial
+  read-only passes — **loopback**, **policy-seam + sandbox**, **secrets** — all **PASS**. No high/medium
+  findings. One LOW (F1: `HEXGRAPH_IN_CONTAINER=1` set outside a real container is a silent un-warned
+  non-loopback bypass — not API-reachable; fix = warn when the container bind is honored) → a small
+  follow-up hardening PR. A few informational notes (operator-supplied `host_descriptor` echo; remote
+  staging helpers intentionally unhardened as they run no hostile bytes) → doc/comment only. The actual
+  `v0.1.0` tag + the PyPI decision are held for explicit go.
 - 2026-06-03: **fix: sandbox runs the /out bind-mount writable for any host uid** (branch `fix/sandbox-uid`).
   The new CI's docker lane surfaced a real portability bug: `sandbox/runner.py` ran the container as
   `--user 1000:1000` (correct — unprivileged, never root) but created the host-side `/out` bind-mount as the
