@@ -33,6 +33,13 @@ export default function Workspace() {
   const { projectId } = useParams();
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [graph, setGraph] = useState<Graph | null>(null);
+  // ── Skeleton-first loading (real-firmware scale, ~13k nodes) ────────────────────────
+  // Above the backend's size threshold we DON'T ship the whole graph: we load the
+  // SKELETON (rooms + sockets + aggregated meta-edges), then merge a room's interior into
+  // `graph` only when the user expands it. So the browser never holds ~13k nodes at once.
+  const [skeletonMode, setSkeletonMode] = useState(false);
+  const [loadedRooms, setLoadedRooms] = useState<Set<string>>(new Set());
+  const [roomLoading, setRoomLoading] = useState<Set<string>>(new Set());
   const [caps, setCaps] = useState<{ target?: Record<string, string[]>; node?: Record<string, string[]>; edge?: Record<string, string[]>; features?: { build?: boolean; build_fetch?: boolean; source_edit?: boolean; fuzzing?: boolean; poc?: boolean } }>({});
   const [selFinding, setSelFinding] = useState<Finding | null>(null);
   const [selNode, setSelNode] = useState<GraphNode | null>(null);
@@ -103,11 +110,56 @@ export default function Workspace() {
 
   const load = useCallback(async () => {
     if (!projectId) return;
-    const [d, g, tk] = await Promise.all([api.project(projectId), api.graph(projectId), api.projectTasks(projectId)]);
-    setDetail(d); setGraph(g); setTasks(tk);
+    // Cheap size probe FIRST so we never blind-fetch ~13k nodes. Above the threshold,
+    // load the skeleton (rooms only) and lazily fetch interiors on expand; otherwise the
+    // full graph exactly as before (SMALL/MEDIUM/LARGE-but-bounded behave identically).
+    const [d, sz, tk] = await Promise.all([
+      api.project(projectId), api.graphSize(projectId), api.projectTasks(projectId),
+    ]);
+    if (sz.skeleton_recommended) {
+      const sk = await api.graphSkeleton(projectId);
+      setSkeletonMode(true);
+      setLoadedRooms(new Set());
+      setRoomLoading(new Set());
+      setGraph({ project_id: sk.project_id, nodes: sk.nodes, edges: sk.edges });
+    } else {
+      const g = await api.graph(projectId);
+      setSkeletonMode(false);
+      setLoadedRooms(new Set());
+      setGraph(g);
+    }
+    setDetail(d); setTasks(tk);
     // Refresh the open detail with the reloaded data so triage (Accept/Dismiss,
     // status pills, annotations) re-renders instead of showing a stale finding.
     setSelFinding((prev) => (prev ? d.findings.find((f) => f.id === prev.id) ?? prev : prev));
+  }, [projectId]);
+
+  // ── Skeleton-first: fetch ONE room's interior on demand and merge it into `graph`.
+  // The room's target node already lives in the skeleton; merge dedups by id. The
+  // interior's functions/strings/findings + intra-room edges (and edges to the shared
+  // sockets) are appended; cross-room meta-edges from the skeleton stay as-is. Idempotent
+  // (a second expand of the same room is a no-op).
+  const expandRoom = useCallback(async (targetId: string) => {
+    if (!projectId) return;
+    setLoadedRooms((prev) => {
+      if (prev.has(targetId)) return prev;          // already loaded — nothing to fetch
+      // mark loading + kick the fetch (guarded against double-fetch by the loaded set)
+      setRoomLoading((l) => new Set(l).add(targetId));
+      api.graphRoom(projectId, targetId).then((room) => {
+        setGraph((g) => {
+          if (!g) return g;
+          const haveNodes = new Set(g.nodes.map((n) => n.id));
+          const haveEdges = new Set(g.edges.map((e) => e.id));
+          const newNodes = room.nodes.filter((n) => !haveNodes.has(n.id));
+          const newEdges = room.edges.filter((e) => !haveEdges.has(e.id));
+          if (!newNodes.length && !newEdges.length) return g;
+          return { ...g, nodes: [...g.nodes, ...newNodes], edges: [...g.edges, ...newEdges] };
+        });
+      }).finally(() => {
+        setRoomLoading((l) => { const x = new Set(l); x.delete(targetId); return x; });
+      });
+      return new Set(prev).add(targetId);
+    });
   }, [projectId]);
 
   useEffect(() => {
@@ -657,6 +709,7 @@ export default function Workspace() {
                      filters={filters} onFilters={onFilters}
                      findings={findingsLayer} onFindings={onFindingsLayer}
                      scope={scope}
+                     skeletonMode={skeletonMode} onRoomExpand={expandRoom} roomLoading={roomLoading}
                      onEdgeSelect={(e) => { setSelEdge(e); if (e) { setSelNode(null); setSelFinding(null); setSelTask(undefined); } }}
                      onDrawEdge={(src, dst) => { setEdgePrefill({ src, dst }); setModal("edge"); }} />
           {(() => {

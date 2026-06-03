@@ -102,6 +102,14 @@ export interface FuzzEnvironment { id: string; name: string; transport: string; 
 export interface GraphNode { id: string; type: "target" | "node" | "finding"; label: string; [k: string]: any; }
 export interface GraphEdge { id: string; source: string; target: string; type: string; src_kind?: string; dst_kind?: string; origin?: string; confidence?: number | null; attrs?: Record<string, any>; count?: number; }
 export interface Graph { project_id: string; nodes: GraphNode[]; edges: GraphEdge[]; }
+// Cheap node/edge counts so the client picks skeleton-first vs full load WITHOUT
+// first fetching the whole (~13k-node) graph (engine/graph.graph_size).
+export interface GraphSize { project_id: string; targets: number; nodes: number; findings: number; edges: number; total: number; skeleton_recommended: boolean; threshold: number; }
+// The structural SKELETON: rooms (byte targets, `room:true` + per-room counts +
+// worst_severity) + shared sockets + aggregated cross-room meta-edges. No interiors.
+export interface Skeleton { project_id: string; skeleton: true; nodes: GraphNode[]; edges: GraphEdge[]; }
+// One room's interior on demand (engine/graph.build_room).
+export interface RoomGraph { project_id: string; target_id: string; nodes: GraphNode[]; edges: GraphEdge[]; }
 export interface ProjectDetail {
   project: Project; targets: TargetNode[]; findings: Finding[];
   cost: { total_usd: number; cost_source: string; task_count: number };
@@ -132,6 +140,9 @@ export const api = {
   projects: () => getJSON<Project[]>("/api/projects"),
   project: (id: string) => getJSON<ProjectDetail>(`/api/projects/${id}`),
   graph: (id: string) => getJSON<Graph>(`/graph/${id}`),
+  graphSize: (id: string) => getJSON<GraphSize>(`/graph/${id}/size`),
+  graphSkeleton: (id: string) => getJSON<Skeleton>(`/graph/${id}/skeleton`),
+  graphRoom: (id: string, targetId: string) => getJSON<RoomGraph>(`/graph/${id}/room/${targetId}`),
   finding: (id: string) => getJSON<Finding>(`/api/findings/${id}`),
   capabilities: () => getJSON<{ target: Record<string, string[]>; node: Record<string, string[]>; edge: Record<string, string[]>; features?: { build?: boolean; build_fetch?: boolean; source_edit?: boolean; fuzzing?: boolean; poc?: boolean } }>("/api/capabilities"),
   suggestions: (fid: string) => getJSON<any[]>(`/api/findings/${fid}/suggestions`),

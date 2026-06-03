@@ -88,6 +88,12 @@ function glyphDataUri(ch: string): string {
 //   NEAR (z ≥ LOD_NEAR): full detail — every label, edge labels, attr hints (today's behaviour).
 const LOD_MID = 0.5;
 const LOD_NEAR = 1.35;
+// Above this many direct child rooms, a container (e.g. a firmware with hundreds of
+// child binaries) does NOT auto-expand its children on open — it stays a single card so
+// the default frame is a handful of countable rooms, never a grid of hundreds of cards.
+// The user expands it explicitly to drill into the child-binary list. (Real firmware
+// scale: ~250 children → collapsed; a 12-binary firmware → auto-expanded, as before.)
+const ROOM_AUTO_EXPAND_CEILING = 40;
 function lodClass(z: number): "lod-far" | "lod-mid" | "lod-near" {
   if (z < LOD_MID) return "lod-far";
   if (z < LOD_NEAR) return "lod-mid";
@@ -111,6 +117,7 @@ export default function GraphView({
   focus, onFocus, onClearFocus,
   groupBy: groupByProp, onGroupBy, layers: layersProp, onLayers,
   filters: filtersProp, onFilters, findings: findingsProp, onFindings, scope,
+  skeletonMode, onRoomExpand, roomLoading,
 }: {
   graph: Graph;
   onSelect: (id: string, type: string) => void;
@@ -138,6 +145,15 @@ export default function GraphView({
   // panels-drive-scope (§6.3): a target id the view is scoped to. When set, that target's
   // room is soloed/framed (others fade) — the side panels drive what the center shows.
   scope?: string | null;
+  // ── Skeleton-first loading (real-firmware scale, ~13k nodes) ─────────────────────────
+  // When `skeletonMode` is on, `graph` arrives as the SKELETON (rooms + sockets +
+  // aggregated meta-edges, NO interiors); expanding a room asks the HOST to fetch that
+  // room's interior (onRoomExpand) and merge it into `graph`. The browser thus never
+  // receives ~13k nodes at once. `roomLoading` is the set of room target-ids whose
+  // interior is currently being fetched (drives a "loading" affordance on the card).
+  skeletonMode?: boolean;
+  onRoomExpand?: (targetId: string) => void;
+  roomLoading?: Set<string>;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const cyRef = useRef<cytoscape.Core>();
@@ -204,13 +220,16 @@ export default function GraphView({
   const focusValRef = useRef<FocusSpec | null>(null);
   focusValRef.current = focus ?? null;
 
-  // graph size tier (drives the default frame, design §1/D1).
+  // graph size tier (drives the default frame, design §1/D1). In skeletonMode the
+  // payload is ALWAYS the firmware-scale skeleton → force "large" so it opens collapsed
+  // to the rooms (never auto-expanding ~hundreds of interiors that aren't even loaded).
   const tier = useMemo(() => {
+    if (skeletonMode) return "large" as const;
     const n = graph.nodes.length + graph.edges.length;
     if (n <= 40) return "small" as const;
     if (n <= 80) return "medium" as const;
     return "large" as const;
-  }, [graph]);
+  }, [graph, skeletonMode]);
 
   // children map for the flat-mode collapse: contains (parent→child) + about (→ finding).
   const childrenOf = useMemo(() => {
@@ -246,7 +265,11 @@ export default function GraphView({
     }
 
     const parentOf = new Map<string, string>();   // childId → roomId
-    const rooms: { id: string; label: string; tkey: string; gkind: "target" | "type" | "finding"; kind?: string }[] = [];
+    // `skel` carries the backend skeleton's PRE-COMPUTED rollup (counts + worst severity)
+    // for a room whose interior is NOT loaded — so a collapsed room card shows the right
+    // `14 fn · 2⚠` chip even though the browser holds none of its interior nodes.
+    const rooms: { id: string; label: string; tkey: string; gkind: "target" | "type" | "finding"; kind?: string;
+                   skel?: { nNodes: number; nFind: number; worst: number; bins: number } }[] = [];
     const loose = new Set<string>();               // ids that belong to no room (bus lane etc.)
     let grandparent: string | null = null;         // firmware room (by-target nesting)
 
@@ -262,7 +285,17 @@ export default function GraphView({
       grandparent = fw ? "room:" + fw.id : null;
       for (const t of targets) {
         const rid = "room:" + t.id;
-        rooms.push({ id: rid, label: t.label, tkey: t.kind as string, gkind: "target", kind: t.kind as string });
+        // skeleton payload tags rooms with the SUBTREE rollup (roll_*) so a collapsed
+        // container (firmware) card summarizes all its descendant binaries, plus a
+        // child-binary count. Falls back to own counts for a leaf binary.
+        const skel = (t as any).room
+          ? { nNodes: (t.roll_nodes as number) ?? (t.n_nodes as number) ?? 0,
+              nFind: (t.roll_findings as number) ?? (t.n_findings as number) ?? 0,
+              worst: (t.roll_worst_severity || t.worst_severity)
+                ? (SEV_RANK[(t.roll_worst_severity || t.worst_severity) as string] ?? -1) : -1,
+              bins: (t.child_bins as number) || 0 }
+          : undefined;
+        rooms.push({ id: rid, label: t.label, tkey: t.kind as string, gkind: "target", kind: t.kind as string, skel });
         if (fw && t.id !== fw.id && (!t.parent_id || t.parent_id === fw.id)) parentOf.set(rid, grandparent!);
         else if (fw && t.parent_id && t.parent_id !== fw.id && byId.has(t.parent_id)) parentOf.set(rid, "room:" + t.parent_id);
       }
@@ -332,20 +365,32 @@ export default function GraphView({
   // graph, tier); the user's later manual expand/collapse is preserved until that key changes.
   useEffect(() => {
     if (groupBy === "none") { setExpandedRooms(new Set()); return; }
-    const key = groupBy + "|" + graph.project_id + "|" + graph.nodes.length + "|" + tier;
+    // In skeleton mode `graph.nodes.length` GROWS as interiors load on demand — keying on
+    // it would reset the user's expand state on every room fetch. Key on the room COUNT
+    // (stable) instead so the auto-default runs once per (groupBy, project, structure).
+    const sizeKey = skeletonMode ? "skel:" + model.rooms.length : String(graph.nodes.length);
+    const key = groupBy + "|" + graph.project_id + "|" + sizeKey + "|" + tier;
     if (autoKey.current === key) return;
     autoKey.current = key;
     if (tier === "large") {
       // The SKELETON (design §1): show the rooms but hide their interiors. A firmware
-      // grandparent is EXPANDED so its ~12 child-target rooms are visible as collapsed cards
-      // ("12 boxes inside one box"); every leaf room stays collapsed. So expand only rooms
-      // that PARENT another room (the containers), never the leaves.
-      const parentRooms = new Set(model.rooms.map((r) => model.parentOf.get(r.id)).filter(Boolean) as string[]);
+      // grandparent is EXPANDED so its child-target rooms show as collapsed cards ("12
+      // boxes inside one box") — but ONLY when the child count is small enough to read.
+      // A real firmware with HUNDREDS of children would render as an illegible grid of
+      // cards, so above a ceiling the firmware stays a SINGLE card (expand it to drill in).
+      const childCount = new Map<string, number>();
+      for (const r of model.rooms) {
+        const p = model.parentOf.get(r.id);
+        if (p) childCount.set(p, (childCount.get(p) || 0) + 1);
+      }
+      const parentRooms = new Set(
+        [...childCount.entries()].filter(([, c]) => c <= ROOM_AUTO_EXPAND_CEILING).map(([id]) => id),
+      );
       setExpandedRooms(parentRooms);
     } else {
       setExpandedRooms(new Set(model.rooms.map((r) => r.id)));               // auto-expand (small/med)
     }
-  }, [groupBy, graph, tier, model]);
+  }, [groupBy, graph, tier, model, skeletonMode]);
 
   useEffect(() => {
     if (!ref.current) return;
@@ -416,15 +461,23 @@ export default function GraphView({
     // the visual representative of any endpoint id: itself when visible, else its outermost
     // collapsed ancestor room (for cross-room meta-edge aggregation).
     const rep = (id: string): string => {
-      if (roomById.has(id)) return roomOpen(id) ? id : (collapsedAncestorRoom(id) ?? id);
+      // A bare TARGET id (skeleton meta-edges use target↔target endpoints) maps to its
+      // synthetic room box `room:<id>`, since the target itself is never a content node.
+      const asRoom = "room:" + id;
+      const rid = roomById.has(asRoom) ? asRoom : id;
+      if (roomById.has(rid)) return roomOpen(rid) ? rid : (collapsedAncestorRoom(rid) ?? rid);
       const room = parentOf.get(id);
       if (!room) return id;                       // loose (bus lane) — represents itself
       return collapsedAncestor(id) ?? (roomOpen(room) ? id : room);
     };
 
-    // visible content nodes (not in a collapsed room, not base/manually hidden)
+    // visible content nodes (not in a collapsed room, not base/manually hidden).
+    // When grouping, a `target` is represented by its synthetic `room:<id>` BOX, never
+    // also as a free-floating anchor dot — otherwise a collapsed firmware's child targets
+    // would still render as ~hundreds of loose dots (the bug that defeated skeleton mode).
     const visibleContent = compound
-      ? graph.nodes.filter((n) => !isHidden(n.id) && (() => { const r = parentOf.get(n.id); return r ? roomOpen(r) : true; })())
+      ? graph.nodes.filter((n) => n.type !== "target" && !isHidden(n.id)
+          && (() => { const r = parentOf.get(n.id); return r ? roomOpen(r) : true; })())
       : graph.nodes.filter((n) => !isHidden(n.id));
 
     // visible rooms: shown iff all ancestors are open (a collapsed room is itself shown).
@@ -450,6 +503,14 @@ export default function GraphView({
         const n = model.byId.get(id); if (!n) continue;
         if (n.type === "finding") { nFind++; const r = SEV_RANK[n.severity as string] ?? 0; worst = Math.max(worst, r); wgt += r + 1; }
         else if (n.type === "node") { nNodes++; wgt += 0.25; }
+      }
+      // Skeleton-first: a room whose interior isn't loaded has no live members — fall back
+      // to the backend's pre-computed rollup so the card still shows real counts + the
+      // worst-severity ring (the whole point of the skeleton's countable, hot-tinted rooms).
+      const skel = roomById.get(rid)?.skel;
+      if (skel && nNodes === 0 && nFind === 0) {
+        const sw = (skel.worst >= 0 ? skel.worst + 1 : 0) * skel.nFind + skel.nNodes * 0.25;
+        return { nNodes: skel.nNodes, nFind: skel.nFind, worst: skel.worst, wgt: sw };
       }
       return { nNodes, nFind, worst, wgt };
     };
@@ -484,7 +545,12 @@ export default function GraphView({
       const open = expandedRooms.has(r.id);
       const { nNodes, nFind, worst, wgt } = roomRollup(r.id);
       const sev = worst >= 0 ? SEV_NAME[worst] : "";
-      const chip = nFind > 0 ? `  ${nNodes} · ${nFind}⚠` : nNodes > 0 ? `  ${nNodes}` : "";
+      // A CONTAINER (firmware) card counts its descendant BINARIES; a leaf binary counts
+      // its functions/nodes. So a collapsed firmware reads "251 bins · 90⚠", a binary "44".
+      const bins = r.skel?.bins || 0;
+      const chip = bins > 0
+        ? `  ${bins} bin${bins > 1 ? "s" : ""}${nFind > 0 ? ` · ${nFind}⚠` : ""}`
+        : nFind > 0 ? `  ${nNodes} · ${nFind}⚠` : nNodes > 0 ? `  ${nNodes}` : "";
       const parent = parentOf.get(r.id);
       const showParent = parent && roomById.has(parent) && expandedRooms.has(parent);
       // A room fades (filtered) iff EVERY member it contains is filtered out — so a
@@ -892,15 +958,31 @@ export default function GraphView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [graph, findings, layers, filters, collapsed, hidden, groupBy, expandedRooms, model]);
 
+  // In skeleton mode a room id is "room:<targetId>" — strip to ask the host to fetch
+  // that target's interior (a no-op if already merged into `graph`).
+  const requestRoomInterior = (rid: string) => {
+    if (!skeletonMode || !onRoomExpand) return;
+    if (rid.startsWith("room:")) onRoomExpand(rid.slice(5));
+  };
   // expand/collapse one room (used by double-tap + the room verb menu).
   const toggleRoom = (rid: string) => setExpandedRooms((s) => {
     const x = new Set(s);
     if (x.has(rid)) { x.delete(rid); justExpanded.current = null; }
-    else { x.add(rid); justExpanded.current = rid; }
+    else { x.add(rid); justExpanded.current = rid; requestRoomInterior(rid); }
     return x;
   });
   const collapseAll = () => setExpandedRooms(new Set());
-  const expandAll = () => setExpandedRooms(new Set(model.rooms.map((r) => r.id)));
+  // Expand-all at firmware scale would re-summon the whole graph — in skeleton mode the
+  // host hasn't even loaded the interiors, so expand-all only expands CONTAINER rooms
+  // (the firmware grandparent) to reveal the child-binary cards, never every leaf.
+  const expandAll = () => {
+    if (skeletonMode) {
+      const containers = new Set(model.rooms.map((r) => model.parentOf.get(r.id)).filter(Boolean) as string[]);
+      setExpandedRooms(containers);
+      return;
+    }
+    setExpandedRooms(new Set(model.rooms.map((r) => r.id)));
+  };
 
   // Toggle edgehandles draw mode on the live instance (no graph rebuild needed).
   useEffect(() => {
@@ -934,6 +1016,8 @@ export default function GraphView({
   useEffect(() => {
     const cy = cyRef.current; if (!cy || !scope || focus?.id || groupBy === "none") return;
     const rid = "room:" + scope;
+    // In skeleton mode, scoping to a target loads + opens its interior on demand.
+    if (skeletonMode) { requestRoomInterior(rid); }
     // expand the path to the scoped room so its card/interior is visible
     const need: string[] = [];
     let p: string | undefined = model.parentOf.get(rid);
@@ -1066,10 +1150,25 @@ export default function GraphView({
     <div className="graph-wrap">
       <div id="cy" ref={ref} />
       <div className="graph-meta">
-        <span className="badge">{graph.nodes.length} nodes</span>
+        {/* In skeleton mode the headline count is the ROOMS, not the (deliberately not-loaded)
+            interior node count — the whole point is the browser never holds ~13k nodes. */}
+        {skeletonMode
+          ? <span className="badge" title="Showing the firmware skeleton — expand a room to load its interior on demand">
+              skeleton · {model.rooms.length} rooms
+            </span>
+          : <span className="badge">{graph.nodes.length} nodes</span>}
         {!compound && collapsed.size > 0 && <span className="badge" style={{ marginLeft: 6 }}>{collapsed.size} collapsed</span>}
-        {compound && expandedRooms.size === 0 && model.rooms.length > 0 && <span className="badge" style={{ marginLeft: 6 }}>skeleton · {model.rooms.length} rooms</span>}
+        {!skeletonMode && compound && expandedRooms.size === 0 && model.rooms.length > 0 && <span className="badge" style={{ marginLeft: 6 }}>skeleton · {model.rooms.length} rooms</span>}
+        {skeletonMode && roomLoading && roomLoading.size > 0 && <span className="badge" style={{ marginLeft: 6 }}>loading {roomLoading.size} room{roomLoading.size > 1 ? "s" : ""}…</span>}
       </div>
+      {skeletonMode && (
+        <div className="graph-skeleton-hint"
+             style={{ position: "absolute", left: 10, top: 10, zIndex: 5, maxWidth: 320,
+                      background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: 8,
+                      padding: "6px 9px", fontSize: 11, color: "var(--text-dim, #8893a6)", pointerEvents: "none" }}>
+          Showing the skeleton — {model.rooms.length} rooms. Double-click (or "Expand room") a room to load its interior.
+        </div>
+      )}
       {hidden.size > 0 && (
         <button className="badge hide-chip" title="Restore all hidden nodes"
                 onClick={restoreHidden}

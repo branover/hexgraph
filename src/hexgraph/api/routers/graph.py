@@ -13,7 +13,7 @@ from hexgraph.engine.authoring import (
     create_socket,
 )
 from hexgraph.engine.edge_schemas import SOCKET_KINDS, describe_edges, merge_edge_attrs
-from hexgraph.engine.graph import build_graph
+from hexgraph.engine.graph import build_graph, build_room, build_skeleton, graph_size
 from hexgraph.engine.node_schemas import describe_nodes
 from hexgraph.engine.nodes import normalize_symbol_name
 from hexgraph.engine.removal import archive_node, delete_edge, restore_node
@@ -162,3 +162,36 @@ def api_graph(project_id: str):
         if s.get(Project, project_id) is None:
             raise HTTPException(404, "project not found")
         return build_graph(s, project_id)
+
+
+@router.get("/graph/{project_id}/size")
+def api_graph_size(project_id: str):
+    """Cheap node/edge counts so the client decides skeleton-first vs full load
+    WITHOUT first fetching the whole (possibly ~13k-node) graph."""
+    with session_scope() as s:
+        if s.get(Project, project_id) is None:
+            raise HTTPException(404, "project not found")
+        return graph_size(s, project_id)
+
+
+@router.get("/graph/{project_id}/skeleton")
+def api_graph_skeleton(project_id: str):
+    """The STRUCTURAL SKELETON: rooms (byte targets) with per-room counts +
+    worst-severity rollup, the shared sockets, and aggregated cross-room
+    meta-edges. NO interiors — a ~13k-node firmware collapses to a few hundred
+    countable rooms the browser can render at once. Expand a room → /room/<id>."""
+    with session_scope() as s:
+        if s.get(Project, project_id) is None:
+            raise HTTPException(404, "project not found")
+        return build_skeleton(s, project_id)
+
+
+@router.get("/graph/{project_id}/room/{target_id}")
+def api_graph_room(project_id: str, target_id: str):
+    """One room's INTERIOR on demand: the target's nodes + findings + the edges
+    among them (and to the shared sockets). Loaded when the user expands a room
+    in the skeleton, so the browser never receives every interior at once."""
+    with session_scope() as s:
+        if s.get(Project, project_id) is None:
+            raise HTTPException(404, "project not found")
+        return build_room(s, project_id, target_id)
