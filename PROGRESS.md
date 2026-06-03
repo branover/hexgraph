@@ -575,7 +575,13 @@ then run the resume verifier, then continue at the next unchecked task.
   advisory `pip-audit` lane, and a **Docker lane** that buildx-builds the sandbox image (GHA-cached) and
   runs `just test-ci` + `just demo` so the security-critical egress/exec/rehost/remote paths actually
   execute (a green offline run validates none of them). The rehost/KVM/privileged-FirmAE lanes can't run on
-  GitHub-hosted runners (no `/dev/kvm`, no privileged) — documented as local/self-hosted-only. Added OSS
+  GitHub-hosted runners (no `/dev/kvm`, no privileged) — documented as local/self-hosted-only.
+  **The docker lane surfaced a real portability bug and is ADVISORY (`continue-on-error`) until it's
+  fixed:** `sandbox/runner.py` hardcodes `--user 1000:1000`, so the execution paths (poc/fuzz/build/unpack)
+  can't write the host-owned `/out` bind-mount on any host whose uid != 1000 (works on a uid-1000 dev box,
+  fails on the uid-1001 GitHub runner — and on any real user whose uid != 1000). A separate, security-reviewed
+  `fix/sandbox-uid` change runs the sandbox as the host uid (safe non-root fallback) and flips this lane back
+  to a blocking gate. Added OSS
   hygiene: `SECURITY.md` (threat model + private-reporting via GH advisories/email), `CONTRIBUTING.md` (the
   invariants + the worktree/PR/review gate in human form), issue templates + `config.yml` (blank issues off,
   security routed to the advisory form) + a PR template mirroring the merge checklist. Fixed the README
