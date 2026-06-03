@@ -16,7 +16,7 @@ from hexgraph.engine import campaigns as C
 from hexgraph.engine.fuzzers.base import FuzzCampaignSpec
 from hexgraph.engine.source import create_source_tree, write_source_file
 
-from conftest import fixture_path
+from conftest import SANDBOX_READY, fixture_path
 from test_campaigns import HARNESS, _enable_fuzzing, _mock_env, _project_with_target
 
 
@@ -97,6 +97,10 @@ def test_promote_artifact_confirms_finding(hg_home, monkeypatch):
         assert not ((f.evidence_json.get("extra") or {}).get("verification"))
 
 
+# Runs the REAL crash verification (poc_probe in the sandbox), so it needs the image —
+# unlike its static-only siblings below, which assert the fail-closed path without executing.
+@pytest.mark.skipif(not SANDBOX_READY,
+                    reason="requires Docker + the hexgraph-sandbox image (just sandbox-build)")
 def test_promote_to_poc_seeds_and_verifies_when_enabled(hg_home, monkeypatch):
     # With execution enabled (fuzzing), Promote→PoC seeds the reproducer-backed PoC spec
     # AND immediately re-runs the LLM-free crash verification — one click → a verified PoC.
@@ -202,6 +206,9 @@ def test_api_fuzz_engines_advertised(hg_home, monkeypatch):
         assert c.get("/api/fuzz/engines?surface=bogus").status_code == 400
 
 
+# promote(to_poc) + minimize here drive the REAL verify path (poc_probe in the sandbox).
+@pytest.mark.skipif(not SANDBOX_READY,
+                    reason="requires Docker + the hexgraph-sandbox image (just sandbox-build)")
 def test_api_artifact_actions(hg_home, monkeypatch):
     _mock_env(monkeypatch)
     _enable_fuzzing()
