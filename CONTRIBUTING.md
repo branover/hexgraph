@@ -48,7 +48,7 @@ collide — see `CLAUDE.md` for the full setup). Trivial touch-ups can use a pla
 
 1. **Branch off `main` with a typed name:** `build/<topic>` for features, `fix/<topic>` for bugfixes,
    `docs/<topic>` for docs.
-2. **Ship the whole change together.** Code comes with its tests, a `PROGRESS.md` update, and — this is
+2. **Ship the whole change together.** Code comes with its tests and — this is
    not optional — a migration for any model change (`alembic revision --autogenerate`) and a
    `docs/dev/ux-contract.md` update for any change in UI behavior. A model change without a migration,
    or a UI-behavior change without a contract update, is an incomplete PR.

@@ -29,7 +29,7 @@ Three principles are non-negotiable, and they shape everything else:
 > a structured finding, the graph, and on to the next task it suggests. That includes extracting real
 > vendor firmware, linking the same bug across binaries, coverage-guided fuzzing, and proofs of
 > concept that actually execute and are verified (including foreign-arch MIPS and ARM targets under
-> qemu). Expect rough edges. The phase-by-phase status lives in [`PROGRESS.md`](PROGRESS.md).
+> qemu). Expect rough edges. Release-by-release history lives in [`CHANGELOG.md`](CHANGELOG.md).
 
 ---
 
@@ -249,7 +249,7 @@ just showcase --reset && just capture   # regenerate the doc screenshots (see do
 
 The source lives under `src/hexgraph/` (`models/`, `llm/`, `db/`, `sandbox/`, `engine/`, `api/`,
 `cli.py`, `mcp_server.py`). For the working agreement, the seam rule, and the worktree-and-PR
-discipline, read [`CLAUDE.md`](CLAUDE.md). Build progress is tracked in [`PROGRESS.md`](PROGRESS.md).
+discipline, read [`CLAUDE.md`](CLAUDE.md). Release history is in [`CHANGELOG.md`](CHANGELOG.md).
 
 ---
 

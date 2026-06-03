@@ -4,8 +4,8 @@ This turns [`design-vision.md`](design-vision.md) into sequenced, trackable work
 defines the *what/why*; this defines the *order, the seams, and the acceptance bar*. The MVP
 (M0–M5, branch `build/hexgraph-mvp`) proved the loop; v2 makes it a tool a researcher *wants* to use.
 
-Execution is tracked in `PROGRESS.md` (per-phase checklist). Every phase keeps the contract test
-green, develops mock-first, and **updates `CLAUDE.md`** as part of its definition of done.
+Every phase keeps the contract test green, develops mock-first, and **updates `CLAUDE.md`** as
+part of its definition of done.
 
 ---
 

@@ -3,7 +3,7 @@
 Unit-level: arch detection from the ELF header and locating the FHS root inside a
 nested binwalk extraction. The full path (qemu-mipsel running a real MIPS uClibc
 binary from DVRF with the firmware as sysroot) is exercised manually against real
-firmware — see PROGRESS.md — since the firmware isn't a committed fixture."""
+firmware, since the firmware isn't a committed fixture."""
 
 import struct
 

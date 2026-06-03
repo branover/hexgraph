@@ -15,7 +15,7 @@ analysis tasks using your own model access, and records every result as a struct
 tasks, and triages findings; the same primitives are available to a coding agent over MCP.
 
 Everything below has been built and exercised end to end, but this is pre-1.0 software and
-the rough edges are real. The phase-by-phase history lives in `PROGRESS.md`.
+the rough edges are real.
 
 ### The core loop
 - Ingest a target, run recon, drive AI analysis, emit a structured finding against the

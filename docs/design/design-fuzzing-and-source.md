@@ -325,7 +325,7 @@ Two feature cards (same toggle grammar as the Ghidra/fuzzing cards): **Source & 
 
 ## 7. Phased implementation plan
 
-Each phase is independently shippable through the worktree→PR-review-subagent→merge gate, ships green `just test` (mock `MockFuzzer`/`MockBuilder` fixtures keep it offline/$0; Docker-gated tests skip without the image), updates `PROGRESS.md`, and ships its Alembic migration with any model change.
+Each phase is independently shippable through the worktree→PR-review-subagent→merge gate, ships green `just test` (mock `MockFuzzer`/`MockBuilder` fixtures keep it offline/$0; Docker-gated tests skip without the image), and ships its Alembic migration with any model change.
 
 **Phase 0 — Instrument the target + better triage (immediate, biggest bang-for-buck, no new subsystem). — ✅ DONE.** When a `.so`/source is present, build the *target* with `-fsanitize=fuzzer-no-link,address` so SanCov+ASan are in the target's own objects. Replace `(kind, frame0)` dedup with the normalized stack-hash + bucketing; add `afl-tmin` reproducer minimization; add the deterministic exploitability classifier. All in `engine/fuzzing.py` + `fuzz_probe.py` on the existing image (clang already present). *No schema change.* Makes today's fuzzing immediately less coverage-blind and far less noisy. *Risk:* low.
 
