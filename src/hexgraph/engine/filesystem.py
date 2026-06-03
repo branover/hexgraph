@@ -83,7 +83,7 @@ def read_file(project: Project, firmware: Target, rel: str, *, max_bytes: int = 
     fs = (firmware.metadata_json or {}).get("filesystem")
     if not fs:
         raise FilesystemError("this target has no unpacked filesystem")
-    entry = next((f for f in fs["files"] if f["rel"] == rel), None)
+    entry = next((f for f in fs.get("files", []) if f.get("rel") == rel), None)
     if entry is None:
         raise FilesystemError(f"{rel!r} is not in the unpacked filesystem")
 
@@ -123,7 +123,7 @@ def add_file_as_target(session: Session, project: Project, firmware: Target, rel
     fs = (firmware.metadata_json or {}).get("filesystem")
     if not fs:
         raise FilesystemError("this target has no unpacked filesystem")
-    entry = next((f for f in fs["files"] if f["rel"] == rel), None)
+    entry = next((f for f in fs.get("files", []) if f.get("rel") == rel), None)
     if entry is None:
         raise FilesystemError(f"{rel!r} is not in the unpacked filesystem")
     if entry.get("child_target_id"):

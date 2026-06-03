@@ -554,9 +554,12 @@ def resume_fuzz_campaign(campaign_id: str) -> dict:
         try:
             return C.campaign_to_dict(C.resume_campaign(s, c))
         except PolicyViolation as exc:
-            return {"error": f"not permitted — {exc} (enable features.fuzzing/poc to resume an "
-                             "exec campaign; features.network for a live-socket one)"}
+            return {"error": f"not permitted — {exc}; enable the matching gate in Settings "
+                             "(features.fuzzing/poc to execute a binary/source campaign, "
+                             "features.network for a live-socket one)"}
         except (C.CampaignError, ValueError) as exc:
+            # A network-tier egress denial arrives here wrapped as CampaignError (start_campaign
+            # re-applies the gate); its message already states the reason, so surface it as-is.
             return {"error": str(exc)}
 
 
