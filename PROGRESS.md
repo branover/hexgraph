@@ -559,7 +559,14 @@ then run the resume verifier, then continue at the next unchecked task.
   missing target-detail view, no live task feedback, no cost display.
 
 ## Project-specific skills created (note here as added)
-- _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
+- **`ux-assessment`** (`.claude/skills/ux-assessment/SKILL.md`) — the two-role, agent-driven UX
+  walkthrough. Role 1 (VR analyst) drives HexGraph via MCP/CLI through a deliberate ordered
+  sequence (A0–A15) that populates every surface; Role 2 (a separate cold researcher agent) opens
+  the UI with Playwright and walks `docs/dev/ux-contract.md` (the living behavior contract) entry by
+  entry, scoring each interaction on the functional + qualitative dimensions, verifying backend
+  effects, and flagging contract drift. Re-run on every major UI change / fix evaluation / release.
+  Paired with the CLAUDE.md rule that any UI-behavior PR updates `docs/dev/ux-contract.md`.
+- _(candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
 - 2026-06-03: **feat: hard-delete a finding (distinct from dismiss)** (branch `build/delete-findings`).
