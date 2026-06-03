@@ -5,7 +5,9 @@ Two flavours, matching how each entity behaves:
   the edges touching it are hidden from the graph/search, and re-adding the same node
   (`get_or_create_node`) un-archives it so its edges reappear (edges are never deleted).
   Targets archive their whole subtree (see `engine/targets.py`).
-- **Hard delete** for a specific edge (cheap to recreate) and for a whole project
+- **Hard delete** for a specific edge (cheap to recreate), for a single finding
+  (the irreversible counterpart to *dismissing* it — `delete_finding` removes the
+  row plus everything that polymorphically references it), and for a whole project
   (durable removal of the project's rows + its on-disk data dir).
 """
 
@@ -13,11 +15,12 @@ from __future__ import annotations
 
 import shutil
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import (
     AnalysisRun, Annotation, ContextBundle, ContextItem, Edge, EgressEvent,
-    Finding, Node, Project, Target, Task,
+    Finding, FuzzArtifact, Node, Project, Target, Task,
 )
 
 
@@ -47,6 +50,68 @@ def delete_edge(session: Session, edge_id: str) -> bool:
     session.delete(e)
     session.flush()
     return True
+
+
+def delete_finding(session: Session, finding_id: str) -> dict:
+    """Permanently delete ONE finding and every polymorphic reference to it.
+
+    This is the HARD counterpart to *dismissing* a finding (`status="dismissed"`,
+    which keeps the row, reversibly greyed). Deleting is irreversible: the row is
+    gone. Because foreign-key enforcement is OFF and edges/annotations are
+    polymorphic string refs, we clean up each referencing thing explicitly so no
+    dangling ref survives:
+      - edges where the finding is the src OR the dst endpoint (`about`,
+        `located_in`, hypothesis `link_evidence`, …);
+      - annotations keyed to it (`node_kind="finding"`);
+      - any task spawned from it (`parent_finding_id`) is detached, not deleted —
+        the task ran and its log/result stand on their own (mirrors how we never
+        orphan-cascade a run);
+      - any fuzz artifact that produced it (`FuzzArtifact.finding_id`, a column ref,
+        not an edge) is detached the same way — the artifact row and its crash bytes
+        in CAS stand on their own; we just NULL the dangling finding pointer so the
+        triage UI doesn't surface a stale id (and promote/verify don't wedge).
+
+    Idempotent: deleting an already-gone finding is a safe no-op. Returns a small
+    summary of what was removed, like the other removal fns."""
+    f = session.get(Finding, finding_id)
+    if f is None:
+        return {"deleted_finding": finding_id, "found": False, "edges": 0,
+                "annotations": 0, "tasks_detached": 0, "artifacts_detached": 0}
+
+    edges = (
+        session.query(Edge)
+        .filter(or_(
+            (Edge.src_kind == "finding") & (Edge.src_id == finding_id),
+            (Edge.dst_kind == "finding") & (Edge.dst_id == finding_id),
+        ))
+        .delete(synchronize_session=False)
+    )
+    annotations = (
+        session.query(Annotation)
+        .filter(Annotation.node_kind == "finding", Annotation.node_id == finding_id)
+        .delete(synchronize_session=False)
+    )
+    # Tasks spawned from this finding keep their own history; just drop the dangling
+    # pointer so the column doesn't reference a deleted row.
+    tasks_detached = (
+        session.query(Task)
+        .filter(Task.parent_finding_id == finding_id)
+        .update({Task.parent_finding_id: None}, synchronize_session=False)
+    )
+    # A fuzz_crash finding is OWNED by its crash artifact, which stores the finding id
+    # in a plain COLUMN (FuzzArtifact.finding_id) — invisible to the edge/annotation
+    # cleanup above. Detach it symmetrically with the task pointer: keep the artifact
+    # row + its crash bytes, just NULL the dangling reference.
+    artifacts_detached = (
+        session.query(FuzzArtifact)
+        .filter(FuzzArtifact.finding_id == finding_id)
+        .update({FuzzArtifact.finding_id: None}, synchronize_session=False)
+    )
+    session.delete(f)
+    session.flush()
+    return {"deleted_finding": finding_id, "found": True, "edges": edges,
+            "annotations": annotations, "tasks_detached": tasks_detached,
+            "artifacts_detached": artifacts_detached}
 
 
 def delete_project(session: Session, project_id: str) -> dict:

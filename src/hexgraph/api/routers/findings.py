@@ -39,6 +39,19 @@ def api_set_finding_status(finding_id: str, body: StatusUpdate):
         return {"id": f.id, "status": new_status.value}
 
 
+@router.delete("/api/findings/{finding_id}")
+def api_delete_finding(finding_id: str):
+    """Permanently delete a finding (HARD delete — irreversible). Distinct from
+    setting status='dismissed', which keeps the row, reversibly greyed. Cleans up
+    every polymorphic reference (edges/annotations) so nothing dangles."""
+    from hexgraph.engine.removal import delete_finding
+
+    with session_scope() as s:
+        if s.get(Finding, finding_id) is None:
+            raise HTTPException(404, "finding not found")
+        return delete_finding(s, finding_id)
+
+
 @router.patch("/api/findings/{finding_id}")
 def api_patch_finding(finding_id: str, body: FindingPatch):
     with session_scope() as s:

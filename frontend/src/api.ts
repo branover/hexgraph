@@ -161,6 +161,7 @@ export const api = {
   capabilities: () => getJSON<{ target: Record<string, string[]>; node: Record<string, string[]>; edge: Record<string, string[]>; features?: { build?: boolean; build_fetch?: boolean; source_edit?: boolean; fuzzing?: boolean; poc?: boolean } }>("/api/capabilities"),
   suggestions: (fid: string) => getJSON<any[]>(`/api/findings/${fid}/suggestions`),
   setStatus: (fid: string, status: string) => postJSON(`/api/findings/${fid}/status`, { status }),
+  deleteFinding: (fid: string) => delJSON<{ deleted_finding: string; found: boolean; edges: number; annotations: number; tasks_detached: number }>(`/api/findings/${fid}`),
   patchFinding: (fid: string, body: Partial<{ title: string; severity: string; confidence: string; category: string; summary: string; reasoning: string; status: string; human_notes: string; evidence: any }>) => patchJSON<Finding>(`/api/findings/${fid}`, body),
   verifyFinding: (fid: string) => postJSON<Finding & { verified: boolean; detail: string }>(`/api/findings/${fid}/verify`, {}),
   launch: (body: any) => postJSON<{ task_id: string; status: string }>("/api/tasks", body),

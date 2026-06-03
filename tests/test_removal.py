@@ -2,6 +2,7 @@
 - nodes are soft-archived (node + its edges hidden; re-adding the node, or restore,
   brings them back) — reversible, nothing deleted;
 - a single edge is hard-deleted;
+- a single finding is hard-deleted (the irreversible counterpart to dismissing it);
 - a whole project is hard-deleted (rows + on-disk data dir).
 """
 
@@ -10,14 +11,16 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from hexgraph.api.app import create_app
-from hexgraph.db.models import Edge, EdgeType, Finding, Node, Project, Target
+from hexgraph.db.models import Annotation, Edge, EdgeType, Finding, Node, Project, Target
 from hexgraph.db.session import session_scope
 from hexgraph.engine.edges import add_edge
 from hexgraph.engine.findings import persist_finding
 from hexgraph.engine.graph import build_graph
 from hexgraph.engine.ingest import create_project, ingest_file
 from hexgraph.engine.nodes import get_or_create_node, materialize_function
-from hexgraph.engine.removal import archive_node, delete_edge, delete_project, restore_node
+from hexgraph.engine.removal import (
+    archive_node, delete_edge, delete_finding, delete_project, restore_node,
+)
 from hexgraph.engine.tasks import create_task
 from hexgraph.models.finding import Evidence, Finding as FModel
 
@@ -180,6 +183,141 @@ def test_node_removal_via_api(hg_home):
     # hard edge delete
     assert c.delete(f"/api/edges/{eid}").json()["deleted"] is True
     assert c.delete(f"/api/edges/{eid}").status_code == 404
+
+
+def _persist_a_finding(s, p, t, *, function="system"):
+    task = create_task(s, project=p, target_id=t.id, type="static_analysis")
+    return persist_finding(s, project_id=p.id, target_id=t.id, task_id=task.id, finding=FModel(
+        title="rce", severity="critical", confidence="high", category="command-injection",
+        summary="s", reasoning="r", evidence=Evidence(function=function)))
+
+
+def test_delete_finding_removes_finding_and_all_refs(hg_home):
+    """Hard delete: the finding row + every polymorphic ref (an `about` edge it owns,
+    a `located_in` source-link edge, an annotation keyed to it) are gone, with NO
+    dangling references left behind. The endpoints the edges pointed at survive."""
+    from hexgraph.engine.annotations import create_annotation
+    from hexgraph.engine.source import create_source_tree, link_finding_to_source
+
+    with session_scope() as s:
+        p, t, caller, callee, edge = _seed(s)
+        f = _persist_a_finding(s, p, t)  # persist_finding adds an `about` edge -> node
+        fid = f.id
+        # an annotation keyed to the finding
+        create_annotation(s, p.id, node_kind="finding", node_id=fid, kind="note", value="junk")
+        # a source-link (located_in edge + materializes a source_file node)
+        tree = create_source_tree(s, p, name="src", origin="scratch")
+        from hexgraph.engine.source import write_source_file
+        write_source_file(s, p, tree, "a.c", "int main(){}\n")
+        link_finding_to_source(s, p, finding_id=fid, tree=tree, rel="a.c", line=1)
+
+        # precondition: the finding owns at least the about + located_in edges
+        before = (s.query(Edge).filter(
+            ((Edge.src_kind == "finding") & (Edge.src_id == fid))
+            | ((Edge.dst_kind == "finding") & (Edge.dst_id == fid))).count())
+        assert before >= 2
+        assert s.query(Annotation).filter(
+            Annotation.node_kind == "finding", Annotation.node_id == fid).count() == 1
+
+        out = delete_finding(s, fid)
+        assert out["found"] is True and out["deleted_finding"] == fid
+        assert out["edges"] >= 2 and out["annotations"] == 1
+
+        # the finding row is gone
+        assert s.get(Finding, fid) is None
+        # NO dangling edge references the finding either as src or dst
+        assert s.query(Edge).filter(
+            ((Edge.src_kind == "finding") & (Edge.src_id == fid))
+            | ((Edge.dst_kind == "finding") & (Edge.dst_id == fid))).count() == 0
+        # NO dangling annotation
+        assert s.query(Annotation).filter(
+            Annotation.node_kind == "finding", Annotation.node_id == fid).count() == 0
+        # the entities the edges pointed at survive (only the finding-touching edges went)
+        assert s.get(Node, callee.id) is not None
+        # gone from the rendered graph
+        g = build_graph(s, p.id)
+        assert not any(n["id"] == fid for n in g["nodes"])
+
+
+def test_delete_finding_detaches_followup_task(hg_home):
+    """A task spawned from a finding (parent_finding_id) is NOT deleted — its pointer
+    is just nulled so it doesn't reference a removed row."""
+    with session_scope() as s:
+        p, t, caller, callee, edge = _seed(s)
+        f = _persist_a_finding(s, p, t)
+        child = create_task(s, project=p, target_id=t.id, type="static_analysis")
+        child.parent_finding_id = f.id
+        s.flush()
+        cid = child.id
+
+        out = delete_finding(s, f.id)
+        assert out["tasks_detached"] == 1
+        from hexgraph.db.models import Task
+        s.expire_all()  # bulk UPDATE used synchronize_session=False; refresh from DB
+        again = s.get(Task, cid)
+        assert again is not None and again.parent_finding_id is None
+
+
+def test_delete_finding_detaches_fuzz_artifact(hg_home):
+    """A fuzz_crash finding is OWNED by its crash artifact via a COLUMN ref
+    (FuzzArtifact.finding_id), not an edge. Deleting the finding must NULL that
+    pointer (symmetric with the task detach) so the artifact row + crash bytes
+    survive with no dangling reference (else triage serializes a stale id and
+    promote/verify wedge the inbox)."""
+    from hexgraph.db.models import FuzzArtifact
+    with session_scope() as s:
+        p, t, caller, callee, edge = _seed(s)
+        f = _persist_a_finding(s, p, t)
+        art = FuzzArtifact(project_id=p.id, campaign_id="camp-1", kind="crash",
+                           finding_id=f.id)
+        s.add(art)
+        s.flush()
+        aid = art.id
+
+        out = delete_finding(s, f.id)
+        assert out["artifacts_detached"] == 1
+
+        s.expire_all()  # bulk UPDATE used synchronize_session=False; refresh from DB
+        again = s.get(FuzzArtifact, aid)
+        assert again is not None and again.finding_id is None  # row + bytes survive, no dangling ref
+        assert s.get(Finding, f.id) is None  # the finding itself is gone
+
+
+def test_delete_nonexistent_finding_is_safe_noop(hg_home):
+    with session_scope() as s:
+        out = delete_finding(s, "does-not-exist")
+        assert out["found"] is False
+        assert out["edges"] == 0 and out["annotations"] == 0
+
+
+def test_dismiss_still_works_and_is_unchanged(hg_home):
+    """The reversible soft path (status='dismissed') keeps the row, untouched by the
+    new hard delete."""
+    with session_scope() as s:
+        p, t, caller, callee, edge = _seed(s)
+        f = _persist_a_finding(s, p, t)
+        fid = f.id
+
+    c = TestClient(create_app())
+    r = c.post(f"/api/findings/{fid}/status", json={"status": "dismissed"})
+    assert r.status_code == 200 and r.json()["status"] == "dismissed"
+    with session_scope() as s:
+        row = s.get(Finding, fid)
+        assert row is not None and row.status == "dismissed"  # row persists
+
+
+def test_delete_finding_via_api(hg_home):
+    with session_scope() as s:
+        p, t, caller, callee, edge = _seed(s)
+        f = _persist_a_finding(s, p, t)
+        fid = f.id
+
+    c = TestClient(create_app())
+    r = c.delete(f"/api/findings/{fid}")
+    assert r.status_code == 200 and r.json()["deleted_finding"] == fid
+    # gone now -> 404, and a second delete is also 404 (idempotent at the API edge)
+    assert c.get(f"/api/findings/{fid}").status_code == 404
+    assert c.delete(f"/api/findings/{fid}").status_code == 404
 
 
 def test_project_delete_via_api(hg_home):

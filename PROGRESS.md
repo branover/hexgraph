@@ -562,6 +562,31 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-03: **feat: hard-delete a finding (distinct from dismiss)** (branch `build/delete-findings`).
+  Findings could only be *dismissed* (the row persists, reversibly greyed). Added a true, irreversible
+  HARD delete alongside it. `engine/removal.delete_finding(session, finding_id)` removes the Finding row
+  and cleans up every polymorphic reference (FK enforcement is off): edges where the finding is src OR
+  dst (`about`/`located_in`/hypothesis evidence/…), its `node_kind="finding"` annotations, and it nulls
+  any task's dangling `parent_finding_id` (the task's own history stands). Idempotent — a missing finding
+  is a safe no-op returning `found=False`. Wired up as `DELETE /api/findings/{id}` (distinct from the
+  reversible `/status` dismiss path), an MCP **write** tool `delete_finding` (gated under
+  `features.mcp.write` like the other write tools; dismiss stays via `update_finding(status='dismissed')`),
+  and a frontend **Delete** action in the finding Inspector — set apart on its own row, right-aligned with
+  a dashed danger border, behind a two-step inline "delete permanently?" confirm so it can't be a foot-gun
+  next to the benign Dismiss. No schema change, no migration (removal logic only). Verified: 5 new tests in
+  `tests/test_removal.py` (delete removes finding + an about edge + a located_in source-link + an
+  annotation with NO dangling refs; follow-up task detached not deleted; nonexistent is a no-op; dismiss
+  still works unchanged; API delete → 404 + idempotent) plus full `just test`; Playwright screenshots
+  confirmed the Delete/confirm UX and an end-to-end UI delete dropped the graph finding count 10→9.
+  **Review fix (PR #99):** `delete_finding` also missed `FuzzArtifact.finding_id` (a COLUMN ref, not an
+  edge, so invisible to the edge/annotation cleanup) — a `fuzz_crash` finding is owned by its crash
+  artifact, so after delete the artifact kept a dangling `finding_id` and wedged the triage inbox
+  (`promote_artifact`/`verify_artifact` raised "linked finding not found"). Now NULLs `FuzzArtifact.finding_id`
+  symmetric with the `Task.parent_finding_id` detach (artifact row + crash bytes survive), reports it as
+  `artifacts_detached`, with a new test in `test_removal.py`. Confirmed Task + FuzzArtifact are the ONLY
+  two column refs to a finding id (no other dangling type). Also fixed a `docs/mcp.md` nit: the
+  removal tools (`delete_edge`/`archive_target`/`restore_target`/`archive_node`/`restore_node`) are
+  **write** tools, were wrongly listed under read.
 - 2026-06-03: **feat: deeper, staged showcase fuzz target so coverage visibly CLIMBS** (branch
   `build/deeper-fuzz`). The showcase's fuzz entrypoint was `parse_host_header`, which overflows a
   64-byte buffer on basically input #1, so a coverage-guided campaign crashed immediately and the

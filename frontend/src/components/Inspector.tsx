@@ -92,9 +92,9 @@ function PocSteps({ poc }: { poc: any }) {
 }
 
 // Detail + triage + follow-on launch + provenance for a selected finding.
-export default function Inspector({ finding, projectId, hypotheses = [], onChanged, onLaunch, onOpenLaunch, onViewTask, onHighlight, fuzzingEnabled, onOpenSource }: {
+export default function Inspector({ finding, projectId, hypotheses = [], onChanged, onDeleted, onLaunch, onOpenLaunch, onViewTask, onHighlight, fuzzingEnabled, onOpenSource }: {
   finding: Finding | null; projectId?: string; hypotheses?: { id: string; statement: string }[];
-  onChanged: () => void; onLaunch: (taskId: string) => void;
+  onChanged: () => void; onDeleted?: () => void; onLaunch: (taskId: string) => void;
   onOpenLaunch?: (type: string, opts?: { objective?: string; params?: any }) => void;
   onViewTask?: (taskId: string) => void; onHighlight?: (ids: string[]) => void; fuzzingEnabled?: boolean;
   onOpenSource?: (ref: { tree_id?: string; rel?: string; line?: number }) => void;
@@ -110,9 +110,12 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
   const [verifyMsg, setVerifyMsg] = useState<string>();
   const [pocOpen, setPocOpen] = useState(false);
   const [reproCopied, setReproCopied] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   useEffect(() => {
     setSugg([]); setCopied(false); setHypId("");
     setEditing(false); setEditErr(undefined); setVerifyMsg(undefined); setPocOpen(false); setReproCopied(false);
+    setConfirmDelete(false); setDeleting(false);
     if (finding) api.suggestions(finding.id).then(setSugg).catch(() => setSugg([]));
   }, [finding?.id]);
 
@@ -127,6 +130,18 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
   const reproStr = Array.isArray(reproCommand) ? reproCommand.join(" ") : reproCommand;
 
   const setStatus = async (s: string) => { await api.setStatus(finding.id, s); onChanged(); };
+
+  // HARD delete — irreversible, behind an inline confirm. Distinct from Dismiss
+  // (which keeps the row, reversibly). On success the finding is gone from the
+  // graph/list, so we ask the parent to clear the selection.
+  const doDelete = async () => {
+    setDeleting(true);
+    try {
+      await api.deleteFinding(finding.id);
+      setConfirmDelete(false);
+      (onDeleted || onChanged)();
+    } finally { setDeleting(false); }
+  };
 
   const startEdit = () => {
     setForm({
@@ -210,7 +225,8 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
       <div className="actions">
         {!editing && <button className="btn sm ghost" onClick={startEdit}><Icon name="sliders" size={12} /> Edit</button>}
         <button className="btn sm" onClick={() => setStatus("confirmed")}><Icon name="check" size={12} /> Confirm</button>
-        <button className="btn sm danger" onClick={() => setStatus("dismissed")}><Icon name="x" size={12} /> Dismiss</button>
+        <button className="btn sm danger" title="Set aside reversibly — keeps the finding, greyed; you can restore it"
+                onClick={() => setStatus("dismissed")}><Icon name="x" size={12} /> Dismiss</button>
         {onViewTask && <button className="btn sm ghost" onClick={() => onViewTask(finding.task_id)}><Icon name="task" size={12} /> Task</button>}
         {onHighlight && (
           <button className="btn sm ghost" onClick={async () => {
@@ -221,6 +237,22 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
         {finding.task_type === "harness_generation" && fuzzingEnabled && onOpenLaunch && (
           <button className="btn sm primary" title="Fuzz using this harness"
                   onClick={() => onOpenLaunch("fuzzing")}><Icon name="run" size={12} /> Fuzz this harness</button>
+        )}
+        {/* HARD delete, deliberately set apart from the benign Dismiss above: pushed to
+            the right, opens a two-step inline confirm before anything is destroyed. */}
+        <span style={{ flex: 1 }} />
+        {!confirmDelete ? (
+          <button className="btn sm danger" style={{ borderStyle: "dashed" }}
+                  title="Permanently delete this finding — IRREVERSIBLE (use Dismiss to set it aside reversibly)"
+                  onClick={() => setConfirmDelete(true)}><Icon name="trash" size={12} /> Delete</button>
+        ) : (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "2px 8px",
+                         border: "1px solid var(--danger, #f85149)", borderRadius: 8 }}>
+            <span className="muted" style={{ fontSize: 11, color: "var(--danger, #f85149)" }}>Delete permanently?</span>
+            <button className="btn sm danger" disabled={deleting} onClick={doDelete}>
+              <Icon name="trash" size={12} /> {deleting ? "Deleting…" : "Yes, delete"}</button>
+            <button className="btn sm ghost" disabled={deleting} onClick={() => setConfirmDelete(false)}>Cancel</button>
+          </span>
         )}
       </div>
 
