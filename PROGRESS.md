@@ -569,6 +569,23 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-03: **fix: sandbox runs the /out bind-mount writable for any host uid** (branch `fix/sandbox-uid`).
+  The new CI's docker lane surfaced a real portability bug: `sandbox/runner.py` ran the container as
+  `--user 1000:1000` (correct — unprivileged, never root) but created the host-side `/out` bind-mount as the
+  HOST process's own uid, which equals 1000 only by luck. On any host whose uid != 1000 (a fresh account, a
+  CI runner = uid 1001, a packaged service) the container couldn't create `/out/<file>` and EVERY
+  extract/exec path (poc/fuzz/build/unpack) died with `PermissionError: '/out/...'`. Fix grants access by
+  uid/gid WITHOUT weakening the container OR exposing the dir to other local users: new
+  `_ensure_outdir_writable()` runs after each out-dir `mkdir` — no-op when the host euid is 1000, `chown` to
+  1000 when we're root (tightest), else make the per-run dir `0o770` (group-writable, NO "other") and add the
+  host's own gid to the container via `--group-add` so it writes through the group. (A bare `0o777` would
+  expose extracted firmware / poc / fuzz output, because the real out-dir roots are NOT private — poc/fuzz/
+  build `mkdtemp` under `/tmp`, and `HEXGRAPH_HOME`/`projects/` are 0o755 — caught in review.) `--user
+  1000:1000` stays byte-identical (now from `SANDBOX_UID/GID` constants); `--group-add` is never the root
+  group; dropped caps / read-only / `--network none` all untouched. The remote executor uses a root-only
+  docker volume (not a host bind-mount), so it needed no change. Tests `tests/test_sandbox_uid.py` (the 3 dir
+  branches + `--group-add` gating + the `--user` constant). **This PR also flips the CI docker lane back to a blocking gate** (removes the
+  `continue-on-error` added in #101) — its run on the uid-1001 GitHub runner is the end-to-end proof.
 - 2026-06-03: **chore: pre-release CI + OSS project hygiene** (branch `build/release-prep`). First step of
   the pre-release plan. Added the missing **CI** (`.github/workflows/ci.yml`): a fast offline lane
   (`pytest -q -rs` on Python 3.11 + 3.12, Docker-gated tests skip), a frontend type-check+build lane, an
