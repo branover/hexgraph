@@ -348,7 +348,13 @@ def _afl_crash_files(work):
 
 
 def _afl_stats(work):
-    """(execs, edges_covered) from afl's fuzzer_stats across instances."""
+    """(execs, edges_covered) from afl's fuzzer_stats across instances.
+
+    `edges_covered` is afl's `edges_found` — the number of edges the campaign has actually
+    REACHED (the live-coverage figure the card shows), NOT `total_edges` (the whole bitmap
+    size, ~constant). Both engines surface the same field: edges *covered*. execs_done is
+    summed across the master + secondaries; edges_found is the max across them (they share
+    one coverage bitmap, so the leader's count is the campaign's)."""
     execs = edges = 0
     for sp in glob.glob(os.path.join(work, "*", "fuzzer_stats")):
         try:
@@ -360,7 +366,7 @@ def _afl_stats(work):
                     k, v = k.strip(), v.strip()
                     if k == "execs_done":
                         execs += int(float(v))
-                    elif k in ("edges_found", "total_edges"):
+                    elif k == "edges_found":
                         edges = max(edges, int(float(v)))
         except (OSError, ValueError):
             pass

@@ -325,10 +325,66 @@ def _flag_all(args: list[str], name: str) -> list[str]:
     return [a.split("=", 1)[1] for a in args if a.startswith(name + "=")]
 
 
+# libFuzzer progress / final-stats parsing. A `-fork=1` run prints periodic
+#   #NNN: cov: C ft: F corp: ... exec/s: ...
+# lines (the LAST `#NNN:` is the cumulative exec count; `cov:`/`ft:` are the edges /
+# features reached so far — monotonic, so the MAX seen is the coverage). A single-process
+# run ends with `#N DONE` / `stat::number_of_executed_units: N`. We parse all of them so
+# a fork-mode run reports both real execs AND real edge coverage (else the campaign showed
+# 0 edges forever — that field was never collected).
+_PROGRESS = re.compile(r"^#(\d+):", re.MULTILINE)
+_COV = re.compile(r"\bcov:\s*(\d+)")
+_FT = re.compile(r"\bft:\s*(\d+)")
+_DONE = re.compile(r"#(\d+)\s+DONE")
+_UNITS = re.compile(r"stat::number_of_executed_units:\s*(\d+)")
+
+
+def parse_libfuzzer_progress(out: str) -> dict:
+    """Pull (executions, edges_covered, features) out of libFuzzer's output (pure, testable).
+
+    `executions` is the final `#N DONE` / `number_of_executed_units` count, else the LAST
+    fork-mode `#NNN:` progress line. `edges_covered` is the MAX `cov:` seen and `features`
+    the MAX `ft:` seen (both monotonic in libFuzzer). Missing values come back as None so a
+    caller can fall through to other evidence (corpus growth, AFL stats, …)."""
+    text = out or ""
+    execs = None
+    em = _DONE.search(text) or _UNITS.search(text)
+    if em:
+        execs = int(em.group(1))
+    else:
+        counts = _PROGRESS.findall(text)
+        if counts:
+            execs = max(int(c) for c in counts)
+    covs = [int(c) for c in _COV.findall(text)]
+    fts = [int(c) for c in _FT.findall(text)]
+    return {
+        "executions": execs,
+        "edges_covered": max(covs) if covs else None,
+        "features": max(fts) if fts else None,
+    }
+
+
+def _write_status(outdir: str, obj: dict) -> None:
+    """Atomically replace `<outdir>/status.json` with the current progress (NO DONE marker).
+    Called PERIODICALLY mid-run so the reaper sees live execs/edges/crashes (matching the
+    AFL probe's streaming). The reaper's `_update_stats` is monotonic + crash dedup is by
+    `dedup_key`, so re-emitting a partial status repeatedly is safe (no double-ingest, no
+    early finalize — finalize is gated on the DONE marker, written only by `_emit`)."""
+    obj.setdefault("tool", "fuzz_probe")
+    obj.setdefault("engine", "libfuzzer")
+    try:
+        tmp = os.path.join(outdir, "status.json.tmp")
+        with open(tmp, "w") as fh:
+            json.dump(obj, fh)
+        os.replace(tmp, os.path.join(outdir, "status.json"))
+    except OSError:
+        pass
+
+
 def _emit(obj: dict, *, outdir: str | None = None) -> int:
     """Print the result JSON to stdout (the single-pass `fuzzing` task reads stdout).
     When `outdir` is given (a detached campaign), ALSO write it to `<outdir>/status.json`
-    + a `DONE` marker so the reaper ingests it — the same shape from either path."""
+    + a `DONE` marker so the reaper ingests it + finalizes — the same shape from either path."""
     obj.setdefault("tool", "fuzz_probe")
     obj.setdefault("engine", "libfuzzer")
     if outdir:
@@ -421,27 +477,64 @@ def main() -> int:
         except OSError:
             pass
 
-    # Fork mode keeps fuzzing through crashes, saving each crashing input to /out.
-    run = subprocess.run(
+    # Fork mode keeps fuzzing through crashes, saving each crashing input to /out. We run it
+    # NON-BLOCKING (Popen, stdout/stderr → a log file) and PERIODICALLY parse the partial log
+    # + count crash artifacts to stream a live status.json — so a long campaign's execs/edges/
+    # crashes advance on the card mid-run instead of looking idle until completion. The final
+    # authoritative parse happens after the process exits.
+    log_path = os.path.join(outdir, "libfuzzer.log")
+    logfh = open(log_path, "wb")
+    proc = subprocess.Popen(
         [FUZZER, "-fork=1", "-ignore_crashes=1", "-ignore_timeouts=1", "-ignore_ooms=1",
          f"-max_total_time={max_total_time}", f"-max_len={max_len}",
          "-rss_limit_mb=2048", f"-artifact_prefix={outdir.rstrip('/')}/", corpus_dir],
-        capture_output=True, text=True, cwd=outdir,
+        stdout=logfh, stderr=subprocess.STDOUT, cwd=outdir,
     )
-    out = (run.stdout or "") + "\n" + (run.stderr or "")
-    # Total executions. Single-process libFuzzer ends with `#N DONE` /
-    # `stat::number_of_executed_units: N`; FORK mode (-fork=1, our default) never prints
-    # those — its progress lines are `#NNN: cov: .. exec/s ..` and the LAST `#NNN:` is the
-    # cumulative exec count. Parse all three so a fork-mode run reports real execs (else the
-    # campaign was wrongly finalized `degraded` as a 0-exec no-op — battle-test live-stats).
-    execs = None
-    em = re.search(r"#(\d+)\s+DONE", out) or re.search(r"stat::number_of_executed_units:\s*(\d+)", out)
-    if em:
-        execs = int(em.group(1))
+
+    def _read_log() -> str:
+        try:
+            with open(log_path, "rb") as fh:
+                return fh.read().decode("utf-8", "replace")
+        except OSError:
+            return ""
+
+    # Stream live progress while libFuzzer runs (so the card isn't idle until the end).
+    # A generous deadline (the run self-limits via -max_total_time) keeps us from spinning
+    # forever if the process wedges; we still wait + parse the final log below either way.
+    deadline = time.monotonic() + int(max_total_time) + 60
+    interval = min(5, max(2, int(max_total_time) // 6))
+    while proc.poll() is None and time.monotonic() < deadline:
+        prog = parse_libfuzzer_progress(_read_log())
+        crash_n = len(glob.glob(os.path.join(outdir, "crash-*")))
+        partial = {"compiled": True, "ran": True, "engine": "libfuzzer",
+                   "executions": prog["executions"], "edges_covered": prog["edges_covered"],
+                   "coverage_instrumented": coverage_instrumented,
+                   "max_total_time": max_total_time, "crash_count": crash_n}
+        if prog["features"] is not None:
+            partial["features"] = prog["features"]
+        _write_status(outdir, partial)
+        time.sleep(interval)
+    if proc.poll() is None:  # past the deadline — stop it and reap what ran
+        proc.terminate()
+        try:
+            proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            proc.kill()
     else:
-        fork_counts = re.findall(r"^#(\d+):\s+cov:", out, re.MULTILINE)
-        if fork_counts:
-            execs = max(int(c) for c in fork_counts)
+        proc.wait()
+    logfh.close()
+
+    out = _read_log()
+    # Total executions + edge coverage. Single-process libFuzzer ends with `#N DONE` /
+    # `stat::number_of_executed_units: N`; FORK mode (-fork=1, our default) never prints
+    # those — its progress lines are `#NNN: cov: C ft: F exec/s ..`, the LAST `#NNN:` is the
+    # cumulative exec count and the MAX `cov:` the edges reached. Parse all so a fork-mode run
+    # reports real execs AND real edge coverage (the latter was previously discarded → the
+    # campaign showed 0 edges forever, and was sometimes wrongly finalized `degraded`).
+    prog = parse_libfuzzer_progress(out)
+    execs = prog["executions"]
+    edges_covered = prog["edges_covered"]
+    features = prog["features"]
 
     # Each saved artifact is a crashing input; reproduce it for its report, then
     # bucket by the normalized stack-hash (keeping one representative per bucket) and
@@ -541,8 +634,11 @@ def main() -> int:
             execs = max(execs or 0, corpus_n + crash_n, 1)
 
     out_obj = {"compiled": True, "ran": True, "executions": execs,
+               "edges_covered": edges_covered,
                "coverage_instrumented": coverage_instrumented, "done": True,
                "max_total_time": max_total_time, "crash_count": len(crashes), "crashes": crashes}
+    if features is not None:
+        out_obj["features"] = features
     if coverage_percent is not None:
         out_obj["coverage_percent"] = coverage_percent
     return _emit(out_obj, outdir=outdir)
