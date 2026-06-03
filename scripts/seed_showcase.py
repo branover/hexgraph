@@ -93,6 +93,7 @@ HTTPD_C = """\
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdint.h>
 
 /* Parse one CGI parameter out of the query string. */
 static char *get_param(const char *qs, const char *key) {
@@ -124,13 +125,36 @@ int diagnostics(const char *query) {
     return cgi_handler(buf);
 }
 
-/* Copy the raw Host header into a fixed field — the libFuzzer/AFL entrypoint. */
-int parse_host_header(const char *data, size_t len) {
-    char field[64];
-    /* BUG: no bound check — overflows `field` for inputs > 64 bytes (CWE-787). */
-    for (size_t i = 0; i < len; i++)
-        field[i] = data[i];
-    return field[0];
+/* A tiny length-prefixed command protocol — the libFuzzer/AFL entrypoint. The
+   stack overflow is gated behind a magic prefix, an opcode branch, and a flag
+   check, so a coverage-guided fuzzer must DISCOVER each stage in turn before it
+   can reach the bug: edge coverage climbs in distinct steps, then it crashes.
+   Pure: every READ is bounds-checked (we require len >= 6 + klen before reading
+   klen bytes), so only the WRITE into key[16] overflows, and only on the deep path. */
+int parse_request(const uint8_t *data, size_t len) {
+    if (len < 4) return 0;
+    if (data[0] != 'C' || data[1] != 'M' || data[2] != 'D')
+        return 1;                            /* stage 1: magic gate "CMD" */
+    uint8_t op = data[3];
+    if (op == 0x01) {                        /* GET */
+        return 10;
+    } else if (op == 0x02) {                 /* SET — the deep path */
+        if (len < 6) return 2;
+        uint8_t flag = data[4];
+        uint8_t klen = data[5];
+        if (flag != 0xAA)                    /* stage 2: deeper flag gate */
+            return 3;
+        if (len < (size_t)6 + klen)          /* require klen bytes present so every */
+            return 5;                        /*   read below stays in-bounds */
+        char key[16];
+        for (uint8_t i = 0; i < klen; i++)
+            key[i] = (char)data[6 + i];      /* BUG (CWE-787): no klen<=16 bound,
+                                                so klen>16 overflows the stack buffer */
+        return key[0];
+    } else if (op == 0x03) {                 /* DEL */
+        return 20;
+    }
+    return 4;
 }
 """
 
@@ -179,14 +203,16 @@ clean:
 """
 
 HARNESS_C = """\
-/* fuzz_cgi.c — a libFuzzer/AFL harness driving the Host-header parser directly. */
+/* fuzz_cgi.c — a libFuzzer/AFL harness driving the staged command parser directly.
+   The parser gates its stack overflow behind a magic prefix → opcode → flag → length,
+   so a coverage-guided run discovers each stage before reaching the bug (cov climbs). */
 #include <stddef.h>
 #include <stdint.h>
 
-extern int parse_host_header(const char *data, size_t len);
+extern int parse_request(const uint8_t *data, size_t len);
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
-    return parse_host_header((const char *)data, size);
+    return parse_request(data, size);
 }
 """
 
@@ -495,7 +521,7 @@ def seed(session, *, reset: bool) -> dict:
         status=FindingStatus.confirmed,
         finding_type="poc")
     # Jump-to-source link for the PoC finding (located_in → src/httpd.c at the sink line).
-    link_finding_to_source(session, project, finding_id=f_poc.id, tree=tree, rel="src/httpd.c", line=27)
+    link_finding_to_source(session, project, finding_id=f_poc.id, tree=tree, rel="src/httpd.c", line=28)
 
     # 3) Static memory-safety vuln — code_present/static (the FLOOR).
     f_static = persist_finding(
@@ -513,7 +539,7 @@ def seed(session, *, reset: bool) -> dict:
                                   "char *tgt = get_param(query, \"target\");\n"
                                   "strcpy(buf, tgt);  // unbounded\n"))),
         finding_type="vulnerability")
-    link_finding_to_source(session, project, finding_id=f_static.id, tree=tree, rel="src/httpd.c", line=33)
+    link_finding_to_source(session, project, finding_id=f_static.id, tree=tree, rel="src/httpd.c", line=34)
 
     # 4) Argued-reachable vuln — input_reachable/static (the SSDP memcpy).
     ev4 = Evidence(function="ssdp_dispatch", sink="memcpy", file="/lib/libupnp.so", address="0x8c0",
@@ -607,7 +633,7 @@ def seed(session, *, reset: bool) -> dict:
         sha = _hl.sha256(payload).hexdigest()
         report = (f"==1==ERROR: AddressSanitizer: {kind}\n"
                   f"    #0 0x401a in {function} /src/{file}:{line}\n"
-                  f"    #1 0x4020 in diagnostics /src/httpd.c:33\n"
+                  f"    #1 0x4020 in diagnostics /src/httpd.c:34\n"
                   f"    #2 0x4030 in LLVMFuzzerTestOneInput /fuzz/fuzz_cgi.c:9\n"
                   f"SUMMARY: AddressSanitizer: {kind} /src/{file}:{line} in {function}\n")
         return {
@@ -625,10 +651,10 @@ def seed(session, *, reset: bool) -> dict:
         }
 
     crashes = [
-        _crash(kind="heap-buffer-overflow", function="cgi_handler", file="httpd.c", line=27,
+        _crash(kind="heap-buffer-overflow", function="cgi_handler", file="httpd.c", line=28,
                rating="likely_exploitable", access="WRITE",
                signals=["out-of-bounds WRITE can corrupt adjacent heap metadata"], dupes=4),
-        _crash(kind="stack-buffer-overflow", function="diagnostics", file="httpd.c", line=33,
+        _crash(kind="stack-buffer-overflow", function="diagnostics", file="httpd.c", line=34,
                rating="likely_exploitable", access="WRITE",
                signals=["return address overwrite reachable via unbounded strcpy"], dupes=11),
         _crash(kind="global-buffer-overflow", function="get_param", file="httpd.c", line=18,
