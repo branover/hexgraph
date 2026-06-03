@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Guidance for Claude Code working in this repo. These instructions override default behavior — follow them exactly. This file is durable orientation + rules, **not** a changelog. Per-phase status and history live in `PROGRESS.md`.
+Guidance for Claude Code working in this repo. These instructions override default behavior — follow them exactly. This file is durable orientation + rules, **not** a changelog. Per-release history lives in `CHANGELOG.md`; current state is whatever `main` + the open PRs say.
 
 ## What HexGraph is
 
@@ -8,9 +8,9 @@ A self-hosted, **local-only** agentic vulnerability-research workbench. Point it
 
 ## ▶ Start every session here
 
-1. Read **`PROGRESS.md`** — its `▶ RESUME HERE` block is the source of truth for current state, next task, and how to re-verify.
+1. Orient from `main`: read this file + `README.md`, then `git log` / the open PRs for what's in flight.
 2. Re-verify with `just test` (full suite, mock backend, offline) and `just demo` (full loop; needs Docker + sandbox image).
-3. **Update `PROGRESS.md` as work lands** (checklist + `▶ RESUME HERE` + session log) and commit it with the code. Keep this file current only when a *durable rule or fact* changes — never add feature history here.
+3. Keep this file current only when a *durable rule or fact* changes — never add feature history here; user-facing release notes go in `CHANGELOG.md`.
 
 ## How we work: git worktrees, PRs, and concurrency
 
@@ -20,7 +20,7 @@ Post-MVP, **every new feature or major atomic change happens on its own branch i
 - **Never commit or push to `main`.** `main` only changes by **merging a reviewed PR**. (There is no automated push guard or branch protection — this is a discipline you must keep, not something the repo enforces for you.)
 - Branch off `main` with a typed name: **`build/<topic>`** (code), **`fix/<topic>`** (bugfix), **`docs/<topic>`** (docs).
 - Commits: imperative, lowercase-prefixed subject (`feat:`/`fix:`/`docs:`/`db:`/…); end every commit with the trailer `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
-- **Ship the whole change together:** code + its tests + `PROGRESS.md` update + (for any model change) an `alembic revision --autogenerate` migration. A PR that changes a model without a migration is incomplete. **Analogously, any PR that changes UI behavior MUST update `docs/dev/ux-contract.md` in the same PR** (add/edit/retire the affected interaction entries) — a UI-behavior change without a contract update is incomplete, and the review gate checks for it.
+- **Ship the whole change together:** code + its tests + (for any model change) an `alembic revision --autogenerate` migration. A PR that changes a model without a migration is incomplete. **Analogously, any PR that changes UI behavior MUST update `docs/dev/ux-contract.md` in the same PR** (add/edit/retire the affected interaction entries) — a UI-behavior change without a contract update is incomplete, and the review gate checks for it.
 - Open the PR with `gh pr create --base main`; write a real description (what/why, verification).
 
 **The merge gate — a PR-review subagent, every time.** Before a worktree branch merges:
@@ -106,8 +106,8 @@ frontend/                      # React+Vite+TS SPA → built to src/hexgraph/web
 migrations/                    # Alembic; baseline bbdb1d98bf54. prepare_database() in db/migrate.py
 tests/                         # pytest; fixtures under tests/fixtures (built by build.sh / `just fixtures`).
                                #   Internal VR-test engagement scenarios live beside their fixture/script:
-                               #   tests/fixtures/eval_fw/engagement-brief.md + engagement-answer-key.md (the
-                               #   Aria Router blind pair), scripts/engagement-{vulnrouter,rehosted}.md
+                               #   tests/fixtures/eval_fw/engagement-brief.md (the Aria Router blind brief),
+                               #   scripts/engagement-{vulnrouter,rehosted}.md
 docs/                          # USER-FACING feature docs only: setup.md, graph-ui.md, fuzzing.md,
                                #   build-from-source.md, verification-assurance.md,
                                #   dynamic-surfaces-rehosting-remote.md, mcp.md + images/ + design/;
@@ -172,7 +172,7 @@ LLM tasks themselves use a tool-use **agent loop** (above) over a plain BYOK key
 
 User-facing docs (`README.md`, the feature docs in `docs/`, `DISCLAIMER.md`, `THIRD_PARTY_NOTICES.md`) are written in natural human prose, for people, not as machine output. When you write or edit one, read each line back and ask: would a person actually write it this way, and would a person want to read it? Avoid the usual LLM tells — em-dashes in every other sentence (reach for a comma, a period, parentheses, or "and"/"but" instead), stacked terse fragments, the "Label: punchy phrase" staccato, dense bullet lists of fragments, and the robotic "X, Y, and Z, all bounded/audited/gated" parallelism. Prefer flowing sentences with connective tissue, vary short and long, and add the transitions that make sections read as a whole rather than disconnected notes. Keep every technical fact exact; change the voice, not the substance. Judge a doc by whether a newcomer feels invited in, not merely by whether it's complete. (The `docs/design/` reference docs get a lighter touch — fix egregious slop, but they need not be fully rewritten.)
 
-When a workflow becomes repetitive, capture it as a skill under `.claude/skills/` and note it in `PROGRESS.md`.
+When a workflow becomes repetitive, capture it as a skill under `.claude/skills/`.
 
 ## Assessing the UI visually (Playwright)
 
