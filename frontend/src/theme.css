@@ -239,21 +239,26 @@ select.sel:focus, .settings select.sel:focus { outline: none; border-color: var(
   radial-gradient(circle at 1px 1px, rgba(120,135,170,.10) 1px, transparent 0) 0 0 / 26px 26px; }
 .graph-wrap { position: relative; flex: 1; display: flex; min-height: 0; }
 .graph-controls { position: absolute; right: 12px; bottom: 12px; display: flex; flex-direction: column;
-  align-items: stretch; gap: 6px; z-index: 5; width: 132px; }
-/* Every control on the rail shares one width + height so the column reads as aligned
-   (issue 11) — icon buttons, the group-by pill and the zoom cluster all line up. */
+  align-items: flex-end; gap: 6px; z-index: 5; }
 .graph-controls .btn { background: rgba(22,26,38,.85); backdrop-filter: blur(6px); justify-content: center; }
-/* the layers/filter buttons sit in a position:relative wrapper (so their popover anchors) —
-   make the wrapper full width and the button fill it, so they match the bare icon buttons. */
-.graph-controls > div { width: 100%; }
-.graph-controls > .btn.icon, .graph-controls > div > .btn.icon { width: 100%; height: 32px; padding: 0; }
-.graph-controls .group-by-sel { width: 100%; height: 32px; padding: 0 28px 0 11px; font-size: 12px;
+/* group-by: a LABELLED selector sized to its own content — it no longer dictates the rail width. */
+.gb-group { display: flex; flex-direction: column; align-items: stretch; gap: 2px; }
+.gb-label { font-size: 9px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--fg-dim); padding-left: 3px; }
+.graph-controls .group-by-sel { height: 30px; min-width: 122px; padding: 0 26px 0 10px; font-size: 12px;
   background-color: rgba(22,26,38,.85); backdrop-filter: blur(6px); }
-/* The zoom cluster is a single segmented control (+ / fit / −) so the one remaining +/- pair
-   reads as a deliberate group, not a stray pair (issue 4). */
-.graph-controls .zoom-cluster { display: flex; gap: 0; width: 100%; height: 32px;
+/* one flat row along the bottom holding ALL the buttons — the action icons + the zoom cluster —
+   with the group-by selector the only thing on the row above it. */
+.button-row { display: flex; align-items: center; gap: 6px; }
+/* the action icons (layers / filter / skeleton / draw), each a 32px square, NOT stretched to the
+   group-by width (issue 11 revisited). */
+.ctrl-cluster { display: flex; gap: 4px; }
+.ctrl-cluster > div { position: relative; }
+.graph-controls .btn.icon { width: 32px; height: 32px; padding: 0; }
+/* The zoom cluster is a single segmented control (+ / fit / −), sized to its three buttons. */
+.graph-controls .zoom-cluster { display: flex; gap: 0; height: 32px;
   border-radius: 8px; overflow: hidden; box-shadow: var(--sh-1); }
-.graph-controls .zoom-cluster .btn.icon { flex: 1; height: 32px; padding: 0; border-radius: 0;
+.graph-controls .zoom-cluster .btn.icon { width: 34px; height: 32px; padding: 0; border-radius: 0;
   border-left-width: 0; }
 .graph-controls .zoom-cluster .btn.icon:first-child { border-left-width: 1px; border-radius: 8px 0 0 8px; }
 .graph-controls .zoom-cluster .btn.icon:last-child { border-radius: 0 8px 8px 0; }
