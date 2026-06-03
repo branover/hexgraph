@@ -1401,7 +1401,7 @@ export default function GraphView({
             A firmware/chip glyph reads as "the rooms", never as a zoom control. */}
         {compound && (
           expandedRooms.size > 0
-            ? <button className="btn icon" title="Collapse all rooms (back to the skeleton)" onClick={collapseAll}><Icon name="firmware_image" /></button>
+            ? <button className="btn icon" title="Collapse all rooms (back to the skeleton)" onClick={collapseAll}><Icon name="chip" /></button>
             : <button className="btn icon" title="Expand all rooms"
                       onClick={() => { if (model.rooms.length && (graph.nodes.length <= 200 || window.confirm(`Expand all rooms? This reveals ~${graph.nodes.length} nodes.`))) expandAll(); }}>
                 <Icon name="chip" />
