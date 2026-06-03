@@ -124,9 +124,13 @@ int diagnostics(const char *query) {
     return cgi_handler(buf);
 }
 
-int main(int argc, char **argv) {
-    if (argc > 1) return diagnostics(argv[1]);
-    return 0;
+/* Copy the raw Host header into a fixed field — the libFuzzer/AFL entrypoint. */
+int parse_host_header(const char *data, size_t len) {
+    char field[64];
+    /* BUG: no bound check — overflows `field` for inputs > 64 bytes (CWE-787). */
+    for (size_t i = 0; i < len; i++)
+        field[i] = data[i];
+    return field[0];
 }
 """
 
@@ -161,18 +165,28 @@ clean:
 """
 
 HARNESS_C = """\
-/* fuzz_cgi.c — a libFuzzer/AFL harness driving the CGI parser directly. */
+/* fuzz_cgi.c — a libFuzzer/AFL harness driving the Host-header parser directly. */
 #include <stddef.h>
 #include <stdint.h>
 
-extern int cgi_handler(const char *query);
+extern int parse_host_header(const char *data, size_t len);
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
-    char q[512];
-    size_t n = size < sizeof(q) - 1 ? size : sizeof(q) - 1;
-    __builtin_memcpy(q, data, n);
-    q[n] = 0;
-    return cgi_handler(q);
+    return parse_host_header((const char *)data, size);
+}
+"""
+
+TARGET_C = """\
+/* target.c — a request-logging helper linked into the instrumented fuzz target.
+   Kept symbol-distinct from httpd.c so the harness build links cleanly (one
+   definition per symbol); the mock coverage map shades this file. */
+#include <stddef.h>
+
+int log_request_line(const char *line, size_t len) {
+    size_t n = 0;
+    while (n < len && line[n] != '\\n')
+        n++;
+    return (int)n;
 }
 """
 
@@ -327,8 +341,9 @@ def seed(session, *, reset: bool) -> dict:
     write_source_file(session, project, tree, "src/httpd.c", HTTPD_C, role="code")
     write_source_file(session, project, tree, "src/upnp.c", UPNP_C, role="code")
     write_source_file(session, project, tree, "fuzz/fuzz_cgi.c", HARNESS_C, role="harness")
-    # The mock fuzzer's coverage map keys "target.c" — give it a real file to shade.
-    write_source_file(session, project, tree, "target.c", HTTPD_C, role="code")
+    # The mock fuzzer's coverage map keys "target.c" — give it a real, symbol-distinct
+    # file to shade (must link cleanly alongside httpd.c, hence its own unique symbol).
+    write_source_file(session, project, tree, "target.c", TARGET_C, role="code")
     # Link the source tree to the httpd binary it builds (target → source_tree).
     create_edge(session, project, src_kind="target", src_id=httpd.id,
                 dst_kind="source_tree", dst_id=tree.id, type="built_from",
@@ -484,7 +499,7 @@ def seed(session, *, reset: bool) -> dict:
                                   "char *tgt = get_param(query, \"target\");\n"
                                   "strcpy(buf, tgt);  // unbounded\n"))),
         finding_type="vulnerability")
-    link_finding_to_source(session, project, finding_id=f_static.id, tree=tree, rel="src/httpd.c", line=37)
+    link_finding_to_source(session, project, finding_id=f_static.id, tree=tree, rel="src/httpd.c", line=33)
 
     # 4) Argued-reachable vuln — input_reachable/static (the SSDP memcpy).
     ev4 = Evidence(function="ssdp_dispatch", sink="memcpy", file="/lib/libupnp.so", address="0x8c0",
@@ -578,7 +593,7 @@ def seed(session, *, reset: bool) -> dict:
         sha = _hl.sha256(payload).hexdigest()
         report = (f"==1==ERROR: AddressSanitizer: {kind}\n"
                   f"    #0 0x401a in {function} /src/{file}:{line}\n"
-                  f"    #1 0x4020 in diagnostics /src/httpd.c:37\n"
+                  f"    #1 0x4020 in diagnostics /src/httpd.c:33\n"
                   f"    #2 0x4030 in LLVMFuzzerTestOneInput /fuzz/fuzz_cgi.c:9\n"
                   f"SUMMARY: AddressSanitizer: {kind} /src/{file}:{line} in {function}\n")
         return {
@@ -599,7 +614,7 @@ def seed(session, *, reset: bool) -> dict:
         _crash(kind="heap-buffer-overflow", function="cgi_handler", file="httpd.c", line=27,
                rating="likely_exploitable", access="WRITE",
                signals=["out-of-bounds WRITE can corrupt adjacent heap metadata"], dupes=4),
-        _crash(kind="stack-buffer-overflow", function="diagnostics", file="httpd.c", line=37,
+        _crash(kind="stack-buffer-overflow", function="diagnostics", file="httpd.c", line=33,
                rating="likely_exploitable", access="WRITE",
                signals=["return address overwrite reachable via unbounded strcpy"], dupes=11),
         _crash(kind="global-buffer-overflow", function="get_param", file="httpd.c", line=18,

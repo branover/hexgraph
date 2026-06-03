@@ -651,6 +651,31 @@ then run the resume verifier, then continue at the next unchecked task.
   offering is PR #86); this PR doesn't worsen that and the runner guard broadly protects the byte-sandbox
   crash class. Reviewed offline (583 passed / 2 skipped on the offline suite; relevant modules 58 passed);
   Docker-gated subset left to the sibling fuzz/graph-scale agents' runs.
+- 2026-06-03: **fix: showcase fuzz target links cleanly + finds a real crash** (branch
+  `fix/fuzz-showcase-link`). A REAL (Docker) fuzz campaign on the showcase's instrumented
+  `sbin/httpd` died at link time — `multiple definition of main`/`cgi_handler`/`diagnostics` —
+  and AFL showed "degraded · 0 executions". Two seed-data bugs in `scripts/seed_showcase.py`'s
+  embedded C tree: (1) `HTTPD_C` defined its own `int main()`, colliding with libFuzzer/AFL's
+  driver `main`; (2) `target.c` was a verbatim COPY of `HTTPD_C`, and `builds.py`
+  `_instrumented_target_sources` globs every code-role `.c` into `fuzz_target_sources`, so
+  `httpd.c` + `target.c` both compiled → duplicate `cgi_handler`/`diagnostics`/`get_param`.
+  Latent third issue: the harness drove `cgi_handler`, which `system("ping … %s")` per input —
+  a process spawn per exec, useless for a campaign. **Fix (seed data only):** dropped `main`
+  from `HTTPD_C` and added a pure, side-effect-free `parse_host_header()` with a planted
+  unbounded copy into `field[64]` (CWE-787) as the libFuzzer/AFL entrypoint; rewrote `HARNESS_C`
+  to drive it; replaced the `target.c` write with a NEW distinct `TARGET_C` (unique symbol
+  `log_request_line`, no `main`, links cleanly) — `target.c` must still EXIST because the mock
+  coverage map + `capture_screenshots.py` key on it. `cgi_handler`/`system()` stay in the binary
+  (static/PoC findings + graph nodes reference them) but are simply uncalled by the harness.
+  Fixed now-stale `httpd.c:37` source refs (old `main` line) → `:33` (the `diagnostics` strcpy);
+  PoC link stays at `:27` (the `system()` sink). **Verified:** `test_showcase_seed.py` green;
+  `cc -fsanitize=address fuzz_cgi.c httpd.c upnp.c target.c stubmain.c` links with NO duplicate
+  symbols (clang unavailable on host → cc + a stub `main` standing in for FuzzerMain) and running
+  it trips an ASan `stack-buffer-overflow` in `parse_host_header` via `LLVMFuzzerTestOneInput` —
+  proving the real campaign now both links AND finds a crash fast. Full suite green (717 passed)
+  except the desock-AFL real-fuzz e2e, which flakes ONLY under self-induced concurrent-Docker
+  contention (passes clean in isolation here and on main; unrelated — it uses its own fixture).
+  **Existing showcase projects keep the broken tree until `just showcase --reset` re-seeds.**
 - 2026-06-02: **build: make `just showcase` genuinely RUNNABLE** (branch `build/showcase-runnable`).
   The showcase project stays a "show off every feature" swiss-army knife for the UI/screenshots, but
   the common **Run actions now WORK against it** instead of dead-ending on seeded rows:
