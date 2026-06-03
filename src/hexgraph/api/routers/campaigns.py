@@ -149,6 +149,18 @@ def api_list_campaigns(project_id: str, target_id: str | None = None):
         p = s.get(Project, project_id)
         if p is None:
             raise HTTPException(404, "project not found")
+        # Reap NON-TERMINAL campaigns on read (mirrors api_get_campaign) so the SPA's 4s
+        # list poll shows fresh execs/edges/crashes even before the per-campaign SSE mounts
+        # — without it the card looked idle until completion. Cheap: only running/building
+        # rows are polled, and a reap hiccup must never fail the listing.
+        live = (s.query(FuzzCampaign)
+                .filter(FuzzCampaign.project_id == project_id,
+                        FuzzCampaign.status.in_(["running", "building"])).all())
+        for row in live:
+            try:
+                C.reap_campaign(s, row)
+            except Exception:  # noqa: BLE001 — a list read must survive a reap hiccup
+                s.rollback()
         return {"campaigns": C.list_campaigns(s, p, target_id=target_id)}
 
 

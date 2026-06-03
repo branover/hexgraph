@@ -565,6 +565,30 @@ then run the resume verifier, then continue at the next unchecked task.
   New `tests/test_setup_wizard.py` covers registration per agent/scope, idempotency, JSON/TOML
   preservation, the skill install, the wizard step driven with fakes, and the non-interactive guard.
   Docs updated (README setup, `docs/setup.md`, `docs/mcp.md`). `just test` green.
+- 2026-06-03: **fix: fuzz campaign live metrics — edges_covered + mid-run progress** (branch
+  `fix/fuzz-live-metrics`). Two related fuzz-campaign bugs, fixed as one PR. **(A) Campaigns
+  reported "0 edges" forever despite millions of execs.** ROOT CAUSE: the libFuzzer probe
+  (`fuzz_probe.py`) parsed only the exec count from `#NNN: cov: C ft: F` progress lines and
+  discarded `cov:`/`ft:`, never writing `edges_covered` into status.json — so the reaper's
+  `_update_stats` read None → 0. Added a pure, tested `parse_libfuzzer_progress()` (max `cov:`
+  = edges, max `ft:` = features, both monotonic; last `#NNN:` / `DONE` / `number_of_executed_units`
+  = execs) and now emit `edges_covered` (+ `features`) in the status. Also fixed the AFL path's
+  `_afl_stats` to read `edges_found` (edges *covered*) and NOT fall back to `total_edges` (the
+  whole bitmap size) — both engines now populate the same `edges_covered` field. **(B) No live
+  progress mid-run — the card looked idle until completion.** ROOT CAUSE 1: libFuzzer ran in one
+  blocking `subprocess.run(capture_output=True)` writing status.json only at the end. Switched to
+  a non-blocking `Popen` (output → a log file) with a periodic (~2–5s) parse loop that streams a
+  partial status.json (execs/edges/crash_count, NO DONE marker) — mirroring what the AFL probe
+  already did. ROOT CAUSE 2: `GET /api/projects/{id}/campaigns` (the 4s list poll) never reaped, so
+  rows were stale until the per-campaign SSE mounted; `api_list_campaigns` now reaps non-terminal
+  campaigns on read (mirroring `api_get_campaign`). No frontend change (it already reads
+  `stats.edges_covered`); no schema/policy/migration change (stats live in `stats_json`; sandbox
+  hardening untouched). **Verified:** `just test` green (725 passed, 2 Docker-skipped); new unit
+  tests for the libFuzzer progress parser (fork + single-process + empty) and the AFL fuzzer_stats
+  parser, plus a reaper streaming test (partial status → live `running` + advancing stats, final
+  DONE → finalize, crash not double-ingested). REAL libFuzzer run in the fuzz image against a
+  coverage-reaching target: `edges_covered: 8`, `features: 8` (was always 0), and mid-run status
+  showed execs climbing 1.09M→3.69M with edges>0 while still `running` (no DONE marker).
 - 2026-06-03: **feat: curatable targets — Phase 1 (FS-hierarchical targets pane)** (branch
   `build/curatable-targets`). Two deliverables in one PR. **(A)** New design doc
   [`docs/design/design-curatable-targets.md`](docs/design/design-curatable-targets.md) — the
