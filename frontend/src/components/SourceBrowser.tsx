@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { BuildRow, SourceFileEntry, SourceTreeRow, api } from "../api";
 import { Icon } from "./Icon";
 import BuildModal from "./BuildModal";
+import BuildDetailModal from "./BuildDetailModal";
 import { highlightLines, langForFile } from "../highlight";
 
 // The read-only Source/IDE mode (Phase 1). A multi-tree file explorer (a dropdown
@@ -48,6 +49,8 @@ export default function SourceBrowser({ projectId, open, onPickedTarget, buildEn
   const [coverage, setCoverage] = useState<import("../api").Coverage | null>(null);
   const [showBuild, setShowBuild] = useState(false);
   const [builds, setBuilds] = useState<BuildRow[]>([]);
+  // The clicked build whose detail (error + full log, or artifacts + provenance) is open.
+  const [detailBuild, setDetailBuild] = useState<BuildRow | null>(null);
   // Editable IDE (Phase 7): per-file edit mode + revision history.
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -245,18 +248,22 @@ export default function SourceBrowser({ projectId, open, onPickedTarget, buildEn
           <div style={{ borderTop: "1px solid var(--border)", padding: "6px 8px", maxHeight: 140, overflow: "auto" }}>
             <div className="sec-label" style={{ fontSize: 10.5 }}>Builds</div>
             {builds.map((b) => (
-              <div key={b.id} style={{ fontSize: 10.5, display: "flex", gap: 6, alignItems: "center", padding: "2px 0" }}
-                   title={b.error || (b.recipe_sha ? `recipe ${b.recipe_sha.slice(0, 12)}` : "")}>
+              <button key={b.id} className="buildrow" onClick={() => setDetailBuild(b)}
+                   style={{ fontSize: 10.5, display: "flex", gap: 6, alignItems: "center", padding: "3px 4px", width: "100%",
+                            background: "none", border: "none", borderRadius: 4, cursor: "pointer", textAlign: "left", color: "inherit" }}
+                   title={b.status === "failed" ? "Build failed — click to see why (error + full log)" : "Click to view the build log, artifacts, and provenance"}>
                 <span className={"tag"} style={{ color: b.status === "succeeded" ? "var(--ok, #6c6)" : b.status === "failed" ? "var(--accent)" : "var(--fg)" }}>{b.status}</span>
                 <span className="muted" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
-                  {Object.keys(b.artifacts || {}).join(", ") || (b.error ? "(failed)" : "—")}
+                  {b.status === "failed"
+                    ? <span style={{ color: "var(--accent)" }}>view error &amp; log →</span>
+                    : (Object.keys(b.artifacts || {}).join(", ") || "—")}
                 </span>
                 {/* Reproducibility badge + supply-chain posture (Phase 7) */}
                 {b.reproducible && <span className="tag" title="recipe_sha + source_content_hash + toolchain_digest (+ lockfile) all recorded ⇒ replayable" style={{ color: "var(--ok, #6c6)" }}>reproducible</span>}
                 {b.cache_hit && <span className="tag" title="reused a prior identical build's artifact (cache hit) — no rebuild" style={{ color: "var(--fg)" }}>cached</span>}
                 {b.lockfile && Object.keys(b.lockfile).length > 0 && <span className="tag" title={`${Object.keys(b.lockfile).length} hash-pinned deps (fetch tier)`} style={{ color: "var(--accent)" }}>locked</span>}
                 {b.derived_target_id && <span className="tag" style={{ color: "var(--accent)" }}>instrumented</span>}
-              </div>
+              </button>
             ))}
           </div>
         )}
@@ -265,6 +272,9 @@ export default function SourceBrowser({ projectId, open, onPickedTarget, buildEn
         <BuildModal projectId={projectId} tree={tree} fetchEnabled={buildFetchEnabled}
                     onClose={() => setShowBuild(false)}
                     onBuilt={() => { loadBuilds(); loadTrees(); onChanged?.(); }} />
+      )}
+      {detailBuild && (
+        <BuildDetailModal build={detailBuild} onClose={() => setDetailBuild(null)} />
       )}
 
       <div className="srcview" style={{ flex: 1, overflow: "auto", minWidth: 0 }}>

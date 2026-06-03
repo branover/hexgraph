@@ -577,6 +577,10 @@ select.sel:focus, .settings select.sel:focus { outline: none; border-color: var(
 .build .recipe .rc-sha { margin-top: 8px; padding-top: 7px; border-top: 1px dashed var(--border);
   color: var(--muted); letter-spacing: .02em; }
 
+/* clickable build rows in the Builds list (open the build-detail modal) */
+.buildrow:hover { background: var(--surface-2, rgba(255,255,255,0.05)); }
+.buildrow:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+
 /* addable export chips + firmware filesystem browser */
 .tag.addable { cursor: pointer; border: 1px dashed var(--border-strong); background: transparent; display: inline-flex; align-items: center; gap: 3px; }
 .tag.addable:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }

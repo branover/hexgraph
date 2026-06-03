@@ -546,6 +546,38 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-03: **fix: from-source build UX** (branch `fix/build-ux`). Two related defects in the
+  "build instrumented target from source" experience, fixed as ONE PR. **(1) A REAL build of the
+  showcase source tree FAILED (a regression from PR #92).** PR #92 dropped `int main()` from the
+  showcase's embedded `httpd.c` so the libFuzzer harness links cleanly, but the showcase Makefile's
+  default `all: httpd` still tried to link the now-main-less library into a standalone program →
+  `undefined reference to main`. (Only the offline MockBuilder hid this — it fabricates artifacts
+  without compiling.) The Makefile also ignored the injected `$(CFLAGS)` (used a hardcoded
+  `-O0`, so ASan/SanCov were never applied) and the `fuzz_target` rule linked no fuzzer driver.
+  **Rewrote the `MAKEFILE` constant in `scripts/seed_showcase.py`:** default target is now
+  `fuzz_target`, which compiles the harness + the library sources (httpd.c/upnp.c) + target.c with
+  the injected `$(CC) $(CFLAGS)` plus `-fsanitize=fuzzer` — the driver supplies `main()` for BOTH
+  engines (clang/libFuzzer and afl-clang-lto's libFuzzer-compat driver). Dropped the broken `httpd`
+  rule. **Root infra fix uncovered while verifying:** `SandboxBuilder` computed the dedicated
+  `hexgraph-build` image but `executor.run_probe` had no `image=` param, so EVERY build ran in the
+  shared `hexgraph-sandbox` image — which has plain `clang` (so libFuzzer accidentally worked) but
+  NO `afl-clang-lto`, so an AFL build could never find its compiler. Added an `image=` override to
+  `run_probe` (both the local + remote executors, the Executor protocol) and wired `SandboxBuilder`
+  to pass `self.image` for the compile + fetch runs. **Proven via the full `engine.builds.run_build`
+  flow with the real SandboxBuilder against `hexgraph-build:latest`: BOTH libfuzzer AND afl now build
+  status=succeeded, producing runnable instrumented binaries** (AFL one carries `__afl_area_ptr` /
+  `__afl_manual_init`; libFuzzer one responds to `-help=1`). **(2) A FAILED build was a dead end in
+  the UI** — only a tiny status badge + a `title` tooltip, no way to read the error/log. New
+  `frontend/src/components/BuildDetailModal.tsx`: clicking any build row (now a `.buildrow` button
+  with a hover affordance) opens a modal in the Build/Fuzz modal idiom — for a failure it leads with
+  the recorded `error` + the full log fetched from `GET /api/builds/{id}/log` (CAS-backed; the
+  `api.buildLog` method already existed); a success shows captured artifacts + the reproducibility
+  triple + provenance. The failed row reads "view error & log →" in accent so it's clearly
+  actionable. Verified live (Playwright, isolated home, mock/offline): both the failed-build and
+  succeeded-build detail modals render legibly. **NOTE: the maintainer must `just showcase --reset`
+  to pick up the new Makefile (existing projects keep the old one); the build-error UI works without
+  re-seeding.** Tests: `test_showcase_seed.py` + the build/executor/sandbox suite green; `just test`
+  green (offline, mock).
 - 2026-06-03: **fix: graph-canvas UX round 2** (branch `build/graph-ux-round2`). Five hands-on
   graph-canvas issues the maintainer found after PR #89 — some were RESIDUALS where #89's fix
   didn't fully take, so each was re-verified LIVE (Playwright, isolated `HEXGRAPH_HOME`, mock,

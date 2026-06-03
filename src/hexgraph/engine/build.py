@@ -409,6 +409,12 @@ class SandboxBuilder(Builder):
                 "build_probe.py", None, outdir=outdir,
                 extra_args=["--spec", json.dumps(probe_payload)],
                 extra_ro_mounts=extra_ro,
+                # The dedicated build image (clang/LLVM + the AFL++ toolchain), NOT the
+                # shared analysis sandbox — an AFL++ instrumentation profile compiles with
+                # afl-clang-lto, which only the build image carries (the sandbox image has
+                # plain clang, so a libFuzzer build happened to work there but an AFL build
+                # could never find its compiler).
+                image=self.image,
                 # The COMPILE phase runs --network none (requires_execution=False keeps the
                 # exec gate independent of the build gate, and never opts into network — so
                 # even with features.build_fetch on, compile has NO network). A malicious dep
@@ -474,6 +480,7 @@ class SandboxBuilder(Builder):
                 "build_fetch_probe.py", None, outdir=fetch_out,
                 extra_args=["--spec", json.dumps(fetch_payload)],
                 extra_ro_mounts=[(str(root), "/src")],
+                image=self.image,  # the dedicated build image (package managers + toolchain)
                 allow_network=True, network_gate="build_fetch",  # the SEPARATE fetch gate, NOT features.network
                 resources=ResourceSpec(timeout=timeout),
             )

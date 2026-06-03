@@ -229,7 +229,8 @@ class RemoteDockerExecutor(SandboxRunner):
     # ── one-shot probe ──────────────────────────────────────────────────────────────
     def run_probe(self, probe, artifact, *, outdir=None, extra_args=None,
                   requires_execution=False, extra_ro_mounts=None, allow_network=False,
-                  net_container=None, secret=None, resources=None, network_gate="network") -> RunResult:
+                  net_container=None, secret=None, resources=None, network_gate="network",
+                  image=None) -> RunResult:
         if requires_execution:
             from hexgraph.policy import assert_allows_execution
             assert_allows_execution()
@@ -253,7 +254,7 @@ class RemoteDockerExecutor(SandboxRunner):
                *self._hardening_args(allow_network=allow_network, net_container=net_container,
                                      resources=resources, secret=bool(secret)),
                *self._tmpfs_for_extras(staged.extras),
-               "-v", f"{staged.vol}:/stage", self.image, *wrap]
+               "-v", f"{staged.vol}:/stage", image or self.image, *wrap]
         # HG_CHANNEL_SECRET rides the docker subprocess env (the `-e` flag was declared by
         # _hardening_args); it lives ONLY in the child docker process env, never on argv.
         env = self._env()
