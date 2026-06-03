@@ -39,6 +39,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+          # No requirements.txt in this repo — hash pyproject.toml so the cache
+          # key resolves instead of erroring on the default **/requirements.txt glob.
+          cache-dependency-path: pyproject.toml
       - name: Install (server + dev extras)
         run: python -m pip install -e ".[server,dev]"
       - name: Run the offline suite
@@ -91,6 +94,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: pyproject.toml
       - uses: extractions/setup-just@v2
       - uses: docker/setup-buildx-action@v3
       - name: Build the sandbox image (layer-cached)
