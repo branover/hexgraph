@@ -20,6 +20,7 @@ const P: Record<string, ReactNode> = {
   lib: <><path d="M4 19V5l4 2 4-2 4 2 4-2v14l-4-2-4 2-4-2-4 2z" /></>,
   chip: <><rect x="6" y="6" width="12" height="12" rx="1.5" /><path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3" /></>,
   bug: <><rect x="8" y="8" width="8" height="11" rx="4" /><path d="M12 4v4M5 9l3 1M19 9l-3 1M4 15h4M16 15h4M6 20l3-2M18 20l-3-2" /></>,
+  folder: <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />,
   task: <><path d="M9 11l3 3 8-8" /><path d="M20 12v7H4V5h11" /></>,
   copy: <><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5h10" /></>,
   target: <><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="4" /></>,

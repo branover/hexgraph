@@ -169,6 +169,17 @@ code { font-family: var(--mono); }
 .tree-row .trash { color: var(--muted); transition: color .12s; }
 .tree-row .trash:hover { color: #ff6b6b; }
 
+/* Phase 1: filesystem directory folders (pure-UI grouping of a firmware's path-named
+   children). A folder is a single-line row — tighter than a target row, no .mt subline. */
+.tree-row.dir { padding: 6px 10px; }
+.tree-row.dir .nm { font-weight: 600; color: var(--fg-dim); }
+.tree-row.dir:hover .nm { color: var(--fg); }
+.tree-row.dir .dir-chev { color: var(--muted); transition: transform .12s; margin-left: -2px; }
+.tree-row.dir .dir-slash { color: var(--muted); font-weight: 600; margin-left: -2px; }
+.tree-row.dir .dir-count { font-size: 10px; font-weight: 700; color: var(--muted);
+  background: var(--surface-3); border-radius: 999px; padding: 0 6px; margin-left: 6px; }
+.tree-row.dir .tbadge { margin-left: auto; }
+
 /* popover menu */
 .menu { position: absolute; z-index: 40; right: 8px; top: 34px; background: var(--surface-2);
   border: 1px solid var(--border-strong); border-radius: var(--radius-sm); box-shadow: var(--sh-2); padding: 6px; min-width: 190px; }

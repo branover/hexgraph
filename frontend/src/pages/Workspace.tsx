@@ -104,6 +104,14 @@ export default function Workspace() {
   });
   const searchTimer = useRef<any>();
   const fileRef = useRef<HTMLInputElement>(null);
+  // ── Phase 1 (curatable targets, docs/design/design-curatable-targets.md): the firmware
+  // TARGETS pane groups path-named children (e.g. "usr/sbin/telnetd") into collapsible FS
+  // directory folders. Folders are PURE UI grouping — derived client-side, no target rows,
+  // no backend. `expandedDirs` tracks which folder keys are open; the default-collapse
+  // heuristic (a large firmware opens collapsed) is applied once per firmware via
+  // `dirDefaultsApplied`.
+  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
+  const dirDefaultsApplied = useRef<Set<string>>(new Set());
   // Apply a deep-linked ?lens=<name> exactly once on first load (the live applyLens is
   // defined below, so route through a ref the settings-load effect can call).
   const lensApplied = useRef(false);
@@ -226,6 +234,35 @@ export default function Workspace() {
       }
     }).catch(() => {});
   }, [load]);
+
+  // ── Phase 1: default folder-expansion heuristic (design-curatable-targets.md §2.1). Run
+  // once per firmware (a target with path-named children): a SMALL firmware (≤12 binaries)
+  // opens its top-level folders so the structure is visible at a glance; a LARGE firmware
+  // opens fully collapsed so the pane is calm. Done in an effect (not during render) so we
+  // never set state mid-render; the `dirDefaultsApplied` ref makes it idempotent.
+  useEffect(() => {
+    if (!detail) return;
+    const childrenByParent = new Map<string, TargetNode[]>();
+    for (const t of detail.targets) {
+      if (!t.parent_id) continue;
+      (childrenByParent.get(t.parent_id) ?? childrenByParent.set(t.parent_id, []).get(t.parent_id)!).push(t);
+    }
+    const toOpen: string[] = [];
+    for (const [pid, kids] of childrenByParent) {
+      if (dirDefaultsApplied.current.has(pid)) continue;
+      // grouped firmware = has FS byte children with rootfs paths (surfaces excluded)
+      const fsKids = kids.filter((c) => !["web_app", "service", "remote"].includes(c.kind) && (c.name || "").includes("/"));
+      if (!fsKids.length) continue;
+      dirDefaultsApplied.current.add(pid);
+      if (kids.length <= 12) {
+        // open just the top-level directory segment of each FS child
+        const top = new Set<string>();
+        for (const c of fsKids) { const seg = (c.name || "").split("/").filter(Boolean); if (seg.length > 1) top.add(seg[0]); }
+        for (const seg of top) toOpen.push(pid + "::" + seg);
+      }
+    }
+    if (toOpen.length) setExpandedDirs((prev) => { const next = new Set(prev); for (const k of toOpen) next.add(k); return next; });
+  }, [detail]);
 
   const pollThenReload = async (taskId: string) => {
     setBusy("running task…");
@@ -456,6 +493,18 @@ export default function Workspace() {
   const isMock = detail.project.backend === "mock";
   const roots = detail.targets.filter((t) => !t.parent_id);
   const childrenOf = (id: string) => detail.targets.filter((t) => t.parent_id === id);
+  // Only FILESYSTEM byte targets carry a meaningful rootfs path in their name. A dynamic
+  // SURFACE child (web_app/service/remote) may have a slash in its label by coincidence
+  // (e.g. "upnpd control (tcp/5000)") — never fold those into folders.
+  const SURFACE_KIND_SET = new Set(["web_app", "service", "remote"]);
+  const isFsChild = (t: TargetNode) => !SURFACE_KIND_SET.has(t.kind) && (t.name || "").includes("/");
+  // The display label for a leaf target inside its FS folder: the final path segment of an
+  // FS byte child ("usr/sbin/telnetd" → "telnetd"). Surfaces and plain names pass through.
+  const leafName = (t: TargetNode) => {
+    if (SURFACE_KIND_SET.has(t.kind)) return t.name;
+    const s = (t.name || "").split("/").filter(Boolean);
+    return s.length ? s[s.length - 1] : t.name;
+  };
   // The best DEFAULT fuzz target for the Campaigns-tab launch button: the raw ingested
   // root (roots[0]) is usually the WRONG choice (it's the source, not the live/instrumented
   // surface). Prefer, in order: an instrumented derived target → a live web_app/remote/service
@@ -469,31 +518,133 @@ export default function Workspace() {
         || roots[0];
   };
 
-  const TreeRow = (t: TargetNode, child: boolean) => {
+  // ── Phase 1: filesystem-hierarchical targets pane (design-curatable-targets.md §2) ──────
+  // A firmware names each extracted child by its rootfs-relative path ("usr/sbin/telnetd"),
+  // so its children otherwise render as a flat wall of hundreds of siblings. We split those
+  // names on "/" and present the leading segments as collapsible directory FOLDERS. Folders
+  // are pure UI grouping derived here, client-side — never target rows, never a backend hit.
+  interface DirNode { name: string; path: string; subdirs: DirNode[]; files: TargetNode[] }
+
+  // Build a directory tree from a target's children. An FS child's `name` is split on "/":
+  // the leading segments nest folders, the final segment is the leaf label. Anything that
+  // isn't an FS child (a surface, or a plain-named binary) sits as a file at the root.
+  const buildDirTree = (children: TargetNode[]): DirNode => {
+    const root: DirNode = { name: "", path: "", subdirs: [], files: [] };
+    for (const c of children) {
+      const segs = isFsChild(c) ? (c.name || "").split("/").filter(Boolean) : [];
+      if (segs.length <= 1) { root.files.push(c); continue; }
+      let cur = root;
+      for (let i = 0; i < segs.length - 1; i++) {
+        const seg = segs[i];
+        const p = cur.path ? cur.path + "/" + seg : seg;
+        let next = cur.subdirs.find((d) => d.name === seg);
+        if (!next) { next = { name: seg, path: p, subdirs: [], files: [] }; cur.subdirs.push(next); }
+        cur = next;
+      }
+      cur.files.push(c);
+    }
+    return root;
+  };
+  // Does this firmware's child set actually carry path-style names worth grouping?
+  const hasDirNames = (children: TargetNode[]) => children.some(isFsChild);
+  // Every leaf target reachable under a folder (for counts + a status rollup).
+  const dirLeaves = (d: DirNode): TargetNode[] => [...d.files, ...d.subdirs.flatMap(dirLeaves)];
+  // Worst finding heat under a folder → the rolled-up status badge (count + hot flag).
+  const dirRollup = (d: DirNode) => {
+    let n = 0, hot = false;
+    for (const leaf of dirLeaves(d)) { const fc = findingCounts[leaf.id]; if (fc) { n += fc.n; hot = hot || fc.hot; } }
+    return { n, hot };
+  };
+  const toggleDir = (key: string) => setExpandedDirs((prev) => {
+    const next = new Set(prev); next.has(key) ? next.delete(key) : next.add(key); return next;
+  });
+
+  // The bare leaf-target row (everything below the name). `displayName` is the FS leaf
+  // ("telnetd") when grouped under a folder; `title` keeps the full path on hover. `depth`
+  // sets indentation in units of the existing 16px `child` step, so a binary three folders
+  // deep still aligns with its folder. All existing per-target behavior is preserved.
+  const TargetRow = (t: TargetNode, depth: number, displayName?: string) => {
     const allowed = targetCaps(t.kind);
     const fc = findingCounts[t.id];
     return (
-      <div key={t.id}>
-        <div className={"tree-row" + (child ? " child" : "") + (selGraphId === t.id ? " sel" : "") + (scope === t.id ? " scoped" : "")}
-             onClick={() => { onGraphSelect(t.id, "target"); if (view !== "source" && view !== "matrix") scopeToTarget(t.id); }}>
+      <div className={"tree-row" + (depth > 0 ? " child" : "") + (selGraphId === t.id ? " sel" : "") + (scope === t.id ? " scoped" : "")}
+           style={depth > 1 ? { marginLeft: depth * 16 } : undefined}
+           title={displayName && displayName !== t.name ? t.name : undefined}
+           onClick={() => { onGraphSelect(t.id, "target"); if (view !== "source" && view !== "matrix") scopeToTarget(t.id); }}>
+        <div className="nm">
+          <Icon name={NODE_ICON[t.kind] || "binary"} size={15} /> {displayName || t.name}
+          {fc && <span className={"tbadge" + (fc.hot ? " hot" : "")} style={{ marginLeft: "auto" }}>{fc.n}</span>}
+        </div>
+        <div className="mt">{t.kind}{t.arch ? " · " + t.arch : ""}</div>
+        {/* Action cluster: Run (+ its in-menu Fuzz row) and Remove, in one aligned top-right
+            row. The standalone fuzz button was removed — it duplicated the Launcher menu's
+            "Fuzz campaign…" row and the two absolutely-positioned controls collided (issue 7). */}
+        <div className="row-actions" onClick={(e) => e.stopPropagation()}>
+          <Launcher allowed={allowed} onChoose={(type) => setLaunchFor({ target: t, type })}
+                    onFuzz={caps.features?.fuzzing && t.kind !== "firmware_image" ? () => setFuzzFor(t) : undefined} />
+          <button className="btn sm icon ghost trash" title="Remove target (hides its nodes/findings)"
+                  onClick={(e) => { e.stopPropagation(); removeTarget(t); }}>
+            <Icon name="x" size={12} />
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // A collapsible directory folder + (when open) its sorted contents: subdirs first
+  // (alpha), then leaf files (alpha). `keyPrefix` scopes the folder's expand key to its
+  // firmware so two firmwares' "lib/" don't share collapse state.
+  const FolderRow = (d: DirNode, depth: number, keyPrefix: string): React.ReactNode => {
+    const key = keyPrefix + "::" + d.path;
+    const open = expandedDirs.has(key);
+    const roll = dirRollup(d);
+    const count = dirLeaves(d).length;
+    const subdirs = [...d.subdirs].sort((a, b) => a.name.localeCompare(b.name));
+    const files = [...d.files].sort((a, b) => leafName(a).localeCompare(leafName(b)));
+    return (
+      <div key={key}>
+        <div className={"tree-row dir" + (open ? " open" : "")} style={depth > 1 ? { marginLeft: depth * 16 } : undefined}
+             onClick={() => toggleDir(key)} title={d.path + "/"}>
           <div className="nm">
-            <Icon name={NODE_ICON[t.kind] || "binary"} size={15} /> {t.name}
-            {fc && <span className={"tbadge" + (fc.hot ? " hot" : "")} style={{ marginLeft: "auto" }}>{fc.n}</span>}
-          </div>
-          <div className="mt">{t.kind}{t.arch ? " · " + t.arch : ""}</div>
-          {/* Action cluster: Run (+ its in-menu Fuzz row) and Remove, in one aligned top-right
-              row. The standalone fuzz button was removed — it duplicated the Launcher menu's
-              "Fuzz campaign…" row and the two absolutely-positioned controls collided (issue 7). */}
-          <div className="row-actions" onClick={(e) => e.stopPropagation()}>
-            <Launcher allowed={allowed} onChoose={(type) => setLaunchFor({ target: t, type })}
-                      onFuzz={caps.features?.fuzzing && t.kind !== "firmware_image" ? () => setFuzzFor(t) : undefined} />
-            <button className="btn sm icon ghost trash" title="Remove target (hides its nodes/findings)"
-                    onClick={(e) => { e.stopPropagation(); removeTarget(t); }}>
-              <Icon name="x" size={12} />
-            </button>
+            <span className="dir-chev" style={{ transform: open ? "none" : "rotate(-90deg)", display: "inline-flex" }}>
+              <Icon name="chevron" size={13} />
+            </span>
+            <Icon name="folder" size={15} /> {d.name}<span className="dir-slash">/</span>
+            <span className="dir-count">{count}</span>
+            {roll.n > 0 && <span className={"tbadge" + (roll.hot ? " hot" : "")}>{roll.n}</span>}
           </div>
         </div>
-        {childrenOf(t.id).map((c) => TreeRow(c, true))}
+        {open && (
+          <>
+            {subdirs.map((s) => FolderRow(s, depth + 1, keyPrefix))}
+            {files.map((f) => TargetRow(f, depth + 1, leafName(f)))}
+          </>
+        )}
+      </div>
+    );
+  };
+
+  // A target row + its children. Firmware children with path-style names group into folders;
+  // everything else renders flat exactly as before.
+  const TreeRow = (t: TargetNode, depth: number): React.ReactNode => {
+    const kids = childrenOf(t.id);
+    const grouped = kids.length > 0 && hasDirNames(kids);
+    if (grouped) {
+      const tree = buildDirTree(kids);
+      const subdirs = [...tree.subdirs].sort((a, b) => a.name.localeCompare(b.name));
+      const files = [...tree.files].sort((a, b) => leafName(a).localeCompare(leafName(b)));
+      return (
+        <div key={t.id}>
+          {TargetRow(t, depth)}
+          {subdirs.map((s) => FolderRow(s, depth + 1, t.id))}
+          {files.map((f) => TargetRow(f, depth + 1, leafName(f)))}
+        </div>
+      );
+    }
+    return (
+      <div key={t.id}>
+        {TargetRow(t, depth)}
+        {kids.map((c) => TreeRow(c, depth + 1))}
       </div>
     );
   };
@@ -626,7 +777,7 @@ export default function Workspace() {
           </div>
           <div className="scroll">
             {roots.length === 0 && <div className="empty">No targets. Click <b>Add</b> to upload a binary or firmware image.</div>}
-            {roots.map((t) => TreeRow(t, false))}
+            {roots.map((t) => TreeRow(t, 0))}
           </div>
         </aside>
         )}
