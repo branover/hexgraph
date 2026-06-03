@@ -657,7 +657,23 @@ export default function GraphView({
     // territory links (links_against / connects_to / shared sockets) draw — the overview reads
     // as "which binaries relate", not the full structural cobweb.
     const metaShown = mapMode ? metaEdgeElements.filter((e) => e.data.eclass === "meta") : metaEdgeElements;
-    const elements = [...roomElements, ...contentElements, ...directEdgeElements, ...metaShown];
+    // Cytoscape THROWS ("Can not create edge … with nonexistent source") if any edge references
+    // a node id not in the element set. Under some group-by/expand states (notably by-type +
+    // expanding a web_app, whose routes_to/contains edges resolve to a target that isn't a
+    // rendered node in that view) the aggregation can emit such a dangling edge. Drop any edge
+    // whose source OR target isn't present, so the view renders instead of crashing — an edge to
+    // a node that isn't shown can't be drawn anyway.
+    const presentNodeIds = new Set<string>(
+      [...roomElements, ...contentElements].map((n) => n.data.id as string),
+    );
+    const endpointsPresent = (e: { data: { source: string; target: string } }) =>
+      presentNodeIds.has(e.data.source) && presentNodeIds.has(e.data.target);
+    const elements = [
+      ...roomElements,
+      ...contentElements,
+      ...directEdgeElements.filter(endpointsPresent),
+      ...metaShown.filter(endpointsPresent),
+    ];
 
     const cy = cytoscape({
       // Scroll-to-zoom sensitivity (issue 5, round 2). 0.25→0.6 (PR #89) was STILL sluggish —
@@ -1401,15 +1417,23 @@ export default function GraphView({
         </div>
       )}
       <div className="graph-controls">
-        {/* group-by control — a full-width pill atop the rail, sized in CSS so the rail reads
-            as one aligned column (issue 11) rather than a wide pill over mismatched icons. */}
-        <select className="sel group-by-sel" value={groupBy} title="Group by (compound rooms)"
-                onChange={(e) => setGroupBy(e.target.value as GroupBy)}>
-          <option value="target">by target</option>
-          <option value="type">by type</option>
-          <option value="finding">by finding</option>
-          <option value="none">flat (none)</option>
-        </select>
+        {/* group-by — a LABELLED selector (the bare "by target" pill never said WHAT it did),
+            sized to its own content so it no longer forces the icon buttons to its width. */}
+        <div className="gb-group">
+          <span className="gb-label">group by</span>
+          <select className="sel group-by-sel" value={groupBy} title="Reorganize the canvas into compound rooms"
+                  onChange={(e) => setGroupBy(e.target.value as GroupBy)}>
+            <option value="target">target</option>
+            <option value="type">type</option>
+            <option value="finding">finding</option>
+            <option value="none">none (flat)</option>
+          </select>
+        </div>
+        {/* ALL controls sit in ONE flat row along the bottom — the action icons (layers /
+            filter / skeleton / draw) then the zoom cluster. The group-by selector is the only
+            thing on the row above it. */}
+        <div className="button-row">
+        <div className="ctrl-cluster">
         {/* ── LAYER PANEL: show/hide each node TYPE and edge CLASS independently (§2.2). */}
         <div style={{ position: "relative" }}>
           <button className={"btn icon" + (layersDefault ? "" : " primary")} title="Layers — show/hide node types & edge classes" onClick={() => { setLayersOpen((o) => !o); setFilterOpen(false); }}>
@@ -1483,11 +1507,13 @@ export default function GraphView({
                   title={drawMode ? "Draw edge: drag from a source node to a target node (click to cancel)" : "Draw an edge: drag from one node to another"}
                   onClick={() => setDrawMode((d) => !d)}><Icon name="link" /></button>
         )}
+        </div>
         {/* zoom cluster — the ONLY +/- pair on the rail now. */}
         <div className="zoom-cluster">
           <button className="btn icon" title="Zoom in" onClick={() => zoom(1.25)}><Icon name="plus" /></button>
           <button className="btn icon" title="Fit to view" onClick={fit}><Icon name="fit" /></button>
           <button className="btn icon" title="Zoom out" onClick={() => zoom(0.8)}><Icon name="minus" /></button>
+        </div>
         </div>
       </div>
     </div>
