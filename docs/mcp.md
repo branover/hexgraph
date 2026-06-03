@@ -32,7 +32,8 @@ The tools are grouped into **read**, **write**, and **run**, and each group is g
 agent's context small:
 
 - **read** covers the `list_*` family, `get_node`, `get_finding`, `xrefs`, `list_sockets`,
-  `list_filesystem`/`read_file`, `list_source_trees`/`read_source_file`, and `list_builds`/`coverage_diff`.
+  `list_filesystem`/`read_file`, `list_source_trees`/`read_source_file`, and
+  `list_builds`/`build_log`/`coverage_diff`.
 - **write** covers `record_finding`, `update_finding`, `create_node`, `create_edge`, `create_socket`,
   `create_hypothesis`, `link_same_code`, `propagate_finding`, `import_source_tree`,
   `link_finding_to_source`, `save_source_revision`, `import_oss_fuzz`, and more. It also
@@ -41,8 +42,9 @@ agent's context small:
   (a hard, irreversible delete that also removes the edges and annotations touching it, and
   detaches any task or fuzz artifact that referenced it); to set a finding aside reversibly
   instead, call `update_finding(status='dismissed')`.
-- **run** covers `ingest`, `run_task`, `verify_poc`, `verify_fuzz_artifact`, `start_fuzz_campaign`,
-  `build_target`, and more.
+- **run** covers `ingest`, `add_file_as_target` (promote a file from an unpacked firmware into
+  its own target), `run_task`, `verify_poc`, `verify_fuzz_artifact`,
+  `start_fuzz_campaign`/`resume_fuzz_campaign`, `build_target`, and more.
 
 Call **`get_schemas` first.** It advertises the Finding shape, the node and edge vocabulary, the
 per-type node-attribute schemas (including the sink-versus-symbol rule), the edge-attribute schemas,

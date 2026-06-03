@@ -7,7 +7,8 @@ import os
 import pytest
 
 from hexgraph.api.app import create_app, run_server
-from hexgraph.api.loopback import OVERRIDE_ENV
+from hexgraph.api import loopback as _loopback
+from hexgraph.api.loopback import CONTAINER_ENV, OVERRIDE_ENV, assert_loopback
 from hexgraph.db.session import session_scope
 from hexgraph.engine.ingest import create_project, ingest_file
 from hexgraph.engine.tasks import create_task
@@ -68,3 +69,24 @@ def test_run_server_override_allows_non_loopback(monkeypatch):
     monkeypatch.setattr(uvicorn, "run", lambda app, host=None, port=None, **k: reached.update(host=host))
     run_server(host="0.0.0.0", port=8765)
     assert reached["host"] == "0.0.0.0"  # override lets it through to bind
+
+
+def test_container_bind_outside_a_container_warns_loudly(monkeypatch, capsys):
+    # HEXGRAPH_IN_CONTAINER=1 set OUTSIDE a real container would silently bind all interfaces
+    # (no compose publish boundary). It still binds (best-effort check, never a hard refusal),
+    # but it must NOT be silent — warn loudly so an accidental/misused flag isn't a quiet leak.
+    monkeypatch.delenv(OVERRIDE_ENV, raising=False)
+    monkeypatch.setenv(CONTAINER_ENV, "1")
+    monkeypatch.setattr(_loopback, "_looks_like_container", lambda: False)
+    assert_loopback("0.0.0.0")  # honored — does NOT raise
+    err = capsys.readouterr().err
+    assert "WARNING" in err and "0.0.0.0" in err and CONTAINER_ENV in err
+
+
+def test_container_bind_inside_a_real_container_is_silent(monkeypatch, capsys):
+    # The supported compose path (an actual container): accepted with no warning noise.
+    monkeypatch.delenv(OVERRIDE_ENV, raising=False)
+    monkeypatch.setenv(CONTAINER_ENV, "1")
+    monkeypatch.setattr(_loopback, "_looks_like_container", lambda: True)
+    assert_loopback("0.0.0.0")
+    assert capsys.readouterr().err == ""  # no warning on the legitimate container path

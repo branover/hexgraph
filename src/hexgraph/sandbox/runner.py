@@ -28,6 +28,12 @@ DEFAULT_IMAGE = "hexgraph-sandbox:latest"
 DEFAULT_TIMEOUT = 300  # seconds
 PROBES_DIR = Path(__file__).resolve().parent / "probes"
 CONTAINER_PROBES = "/opt/hexgraph"
+# The unprivileged uid:gid every sandbox container runs as — UNCONDITIONAL hardening,
+# never root. Kept as a constant (not a bare literal) so the host-side `/out` bind-mount
+# can be made writable by exactly this uid no matter what the host process's own uid is
+# (see _ensure_outdir_writable). The remote executor stages its volume for this same uid.
+SANDBOX_UID = 1000
+SANDBOX_GID = 1000
 # A minimal seccomp profile: byte-for-byte Docker's default deny-by-errno profile PLUS a
 # single extra rule allowing `personality(ADDR_NO_RANDOMIZE)`. Used ONLY by the ASan
 # source-fuzz path (disable_aslr) so `setarch -R` can turn ASLR off for the instrumented
@@ -43,6 +49,47 @@ def _seccomp_aslr_profile() -> str:
     if not SECCOMP_ASLR_PROFILE.is_file():
         raise SandboxError(f"seccomp profile not found: {SECCOMP_ASLR_PROFILE}")
     return str(SECCOMP_ASLR_PROFILE)
+
+
+def _ensure_outdir_writable(path: Path) -> None:
+    """Make the host-side `/out` bind-mount writable by the sandbox container's uid.
+
+    The container always runs as ``--user 1000:1000`` (non-root, UNCONDITIONAL). The host
+    process, though, creates the out-dir as ITS OWN uid/gid — which equals 1000 only by
+    luck. On any host whose uid != 1000 (a fresh user account, a CI runner, a packaged
+    service) the container then can't create ``/out/<file>`` and every extract/exec path
+    dies with EACCES. Grant access by uid/gid, WITHOUT weakening the container and WITHOUT
+    opening the dir to other local users:
+
+      * effective uid == 1000 → already owned by the container uid; nothing to do.
+      * effective uid is root → chown the dir to 1000 (we hold the privilege; tightest).
+      * otherwise             → make the dir group-writable at ``0o770`` (owner+group only,
+                                no "other"). The dir's group is the host's own gid, and
+                                ``_hardening_args`` adds that gid to the container with
+                                ``--group-add`` so the container writes via the group.
+
+    The ``0o770`` matters: a bare ``0o777`` would expose the per-run out-dir (extracted
+    firmware, PoC/fuzz output) to ANY local user, because the real out-dir roots are not
+    private — poc/fuzz/build use ``tempfile.mkdtemp()`` under ``/tmp`` (1777), and
+    ``HEXGRAPH_HOME``/``projects/`` are created at 0o755. Group-write keeps access to the
+    host user + the container's added gid only. (Caveat: on a host whose effective gid is a
+    BROAD shared primary group — uncommon under modern per-user-group defaults — that
+    group's members could also reach the per-run dir; a packaged/multi-user deployment
+    should run HexGraph under a private group.) Only the host-side bind-mount dir changes;
+    the container's ``--user``, dropped caps, read-only rootfs and ``--network none`` are
+    untouched.
+    """
+    if not hasattr(os, "geteuid"):  # non-POSIX host: bind-mount uid semantics don't apply
+        return
+    euid = os.geteuid()
+    if euid == SANDBOX_UID:
+        return
+    if euid == 0:
+        os.chown(path, SANDBOX_UID, SANDBOX_GID)
+    else:
+        # The dir's group is the host's egid (set at mkdir); the container joins that gid
+        # via --group-add (see _hardening_args). Group-write, NO "other" — so no exposure.
+        os.chmod(path, 0o770)
 
 
 class SandboxError(RuntimeError):
@@ -142,7 +189,14 @@ class SandboxRunner:
             # minimal profile = Docker's default + ONE personality(ADDR_NO_RANDOMIZE)
             # allow (see _seccomp_aslr_profile). The single, narrow, documented relaxation.
             *(["--security-opt", f"seccomp={_seccomp_aslr_profile()}"] if disable_aslr else []),
-            "--user", "1000:1000",
+            "--user", f"{SANDBOX_UID}:{SANDBOX_GID}",
+            # When the host uid != 1000 (a fresh account / CI runner / packaged service) the
+            # container can't write the host-owned /out bind-mount as uid 1000. Add the host's
+            # OWN gid as a supplementary group so it writes a 0o770 group-writable out-dir
+            # (see _ensure_outdir_writable) without granting "other" access — and WITHOUT
+            # adding the root group (skipped when host is root; that path chowns /out instead).
+            *(["--group-add", str(os.getegid())]
+              if (hasattr(os, "geteuid") and os.geteuid() not in (0, SANDBOX_UID)) else []),
             # Resource ceilings — the ONLY flags a ResourceSpec governs (empty under
             # `unconstrained`, so the container can use the whole host).
             *resources.docker_resource_args(),
@@ -253,6 +307,7 @@ class SandboxRunner:
         if outdir is not None:
             outdir = Path(outdir).resolve()
             outdir.mkdir(parents=True, exist_ok=True)
+            _ensure_outdir_writable(outdir)  # so the --user 1000 container can write /out
             cmd += ["-v", f"{outdir}:/out:rw"]
             probe_args.append("/out")
         # Extra read-only inputs (e.g. the target library a fuzz harness links against).
@@ -399,6 +454,7 @@ class SandboxRunner:
         resources = resources or ResourceSpec()
         outdir = Path(outdir).resolve()
         outdir.mkdir(parents=True, exist_ok=True)
+        _ensure_outdir_writable(outdir)  # so the --user 1000 container can write /out
         cmd = [
             "docker", "run", "-d", "--name", name,
             # NOT --rm: a detached campaign container is reaped explicitly so its exit

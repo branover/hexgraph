@@ -587,7 +587,52 @@ then run the resume verifier, then continue at the next unchecked task.
   `--network none` and detected via the real ASan/signal oracle — nothing weakened, nothing skipped. Verified
   7/7 green (incl. one run under bounded background CPU load) where the underlying AFL run was ~50% before;
   all 3 phase5-e2e tests + 148 fuzz/campaign unit tests pass. Probe edit is mounted at runtime (no image
-  rebuild); no model change, no migration.
+  rebuild); no model change, no migration. Review-nit follow-up (commit `efd58ba`): the test now also
+  asserts `execs > 50` so it proves AFL genuinely fuzzed the loop (not just replayed the seeds on
+  calibration — closes the "would pass with a broken mutation engine" gap), the `-S` secondaries launch only
+  when the `-M` main came up, and two probe comments were corrected; re-verified 3/3 more green.
+- 2026-06-03: **fix: warn on the container bind bypass + onboarding doc fixes** (branch
+  `fix/loopback-container-warning`). Closes the pre-release audit's one actionable finding plus the
+  clean-machine test's doc gaps. **F1 (loopback LOW):** `HEXGRAPH_IN_CONTAINER=1` set OUTSIDE a real
+  container silently bound all interfaces; `assert_loopback` now warns loudly when the container bind is
+  honored but `_looks_like_container()` (best-effort `/.dockerenv` / `/run/.containerenv`) is false — still
+  binds (never a hard refusal, so a legit container deployment can't break), just no longer silent. Tests in
+  `test_security_invariants.py` (warns outside / silent inside). **Clean-machine doc fixes:** README now
+  lists Node.js+npm as a prerequisite (the default `just setup` builds the SPA), and `docs/setup.md` notes
+  the `XDG_RUNTIME_DIR` gotcha that bites minimal/CI/`cron`/`su` contexts (`just` needs a writable runtime
+  dir for nested recipes — `export XDG_RUNTIME_DIR=$(mktemp -d)` if you hit `I/O error in runtime dir`).
+  Phase 4 clean-machine validation otherwise PASSED end-to-end (setup yes=1 exit 0, 751 tests green, serve
+  loopback-only).
+- 2026-06-03: **chore: v0.1.0 release packaging + pre-release security audit** (branch
+  `build/release-packaging`). Pre-release Phases 3 + 6. Bumped `pyproject.toml` `0.0.1`→`0.1.0` (dropped the
+  stale "(MVP)" from the description); added `CHANGELOG.md` (the 0.1.0 entry) and `docs/dev/releasing.md` (the
+  release checklist — notably: **`just ui` MUST run before building the wheel**, since `web/dist/` is
+  gitignored and not produced by `just install`; verified a wheel built after `just ui` bundles the SPA +
+  the frozen schema + mock fixtures + probes + seccomp = 168 files, while one built without it ships no UI).
+  **Pre-release security audit** (`docs/dev/security-audit-2026-06-03.md`): three independent adversarial
+  read-only passes — **loopback**, **policy-seam + sandbox**, **secrets** — all **PASS**. No high/medium
+  findings. One LOW (F1: `HEXGRAPH_IN_CONTAINER=1` set outside a real container is a silent un-warned
+  non-loopback bypass — not API-reachable; fix = warn when the container bind is honored) → a small
+  follow-up hardening PR. A few informational notes (operator-supplied `host_descriptor` echo; remote
+  staging helpers intentionally unhardened as they run no hostile bytes) → doc/comment only. The actual
+  `v0.1.0` tag + the PyPI decision are held for explicit go.
+- 2026-06-03: **fix: sandbox runs the /out bind-mount writable for any host uid** (branch `fix/sandbox-uid`).
+  The new CI's docker lane surfaced a real portability bug: `sandbox/runner.py` ran the container as
+  `--user 1000:1000` (correct — unprivileged, never root) but created the host-side `/out` bind-mount as the
+  HOST process's own uid, which equals 1000 only by luck. On any host whose uid != 1000 (a fresh account, a
+  CI runner = uid 1001, a packaged service) the container couldn't create `/out/<file>` and EVERY
+  extract/exec path (poc/fuzz/build/unpack) died with `PermissionError: '/out/...'`. Fix grants access by
+  uid/gid WITHOUT weakening the container OR exposing the dir to other local users: new
+  `_ensure_outdir_writable()` runs after each out-dir `mkdir` — no-op when the host euid is 1000, `chown` to
+  1000 when we're root (tightest), else make the per-run dir `0o770` (group-writable, NO "other") and add the
+  host's own gid to the container via `--group-add` so it writes through the group. (A bare `0o777` would
+  expose extracted firmware / poc / fuzz output, because the real out-dir roots are NOT private — poc/fuzz/
+  build `mkdtemp` under `/tmp`, and `HEXGRAPH_HOME`/`projects/` are 0o755 — caught in review.) `--user
+  1000:1000` stays byte-identical (now from `SANDBOX_UID/GID` constants); `--group-add` is never the root
+  group; dropped caps / read-only / `--network none` all untouched. The remote executor uses a root-only
+  docker volume (not a host bind-mount), so it needed no change. Tests `tests/test_sandbox_uid.py` (the 3 dir
+  branches + `--group-add` gating + the `--user` constant). **This PR also flips the CI docker lane back to a blocking gate** (removes the
+  `continue-on-error` added in #101) — its run on the uid-1001 GitHub runner is the end-to-end proof.
 - 2026-06-03: **chore: pre-release CI + OSS project hygiene** (branch `build/release-prep`). First step of
   the pre-release plan. Added the missing **CI** (`.github/workflows/ci.yml`): a fast offline lane
   (`pytest -q -rs` on Python 3.11 + 3.12, Docker-gated tests skip), a frontend type-check+build lane, an
@@ -610,6 +655,34 @@ then run the resume verifier, then continue at the next unchecked task.
   review), the PyPI-vs-clone-only decision (Phase 6), and an optional self-hosted runner for the rehost/KVM
   lanes. Remaining pre-release phases: security-invariant audit, clean-machine install test, release
   packaging/tagging (`0.0.1`→`0.1.0`). (UX evaluation is being handled in a separate session.)
+- 2026-06-03: **feat: close agent-surface gaps from a VR-agent tool/skill audit** (branch
+  `build/agent-surface`). Audited every agent-facing surface — the 70 MCP tools
+  (`engine/mcp_catalog.py`), the generated `hexgraph-vr` SKILL (`agent_setup.SKILL`, also the
+  delegate prompt), and `docs/mcp.md` — against the full engine/REST capability set, asking the
+  two audit questions: what does a VR agent *want to do but can't reach*, and what *can it do but
+  isn't told about*. **Added 3 MCP tools** (now 73): **`build_log`** (read — the full CAS build
+  log, so a FAILED `build_target` is debuggable instead of a blind wall), **`add_file_as_target`**
+  (run — promote a file from an unpacked firmware FS into its own child target, the bridge from
+  browsing the rootfs to analyzing a binary in it), **`resume_fuzz_campaign`** (run — the missing
+  half of stop's "resumable"; pick a finished/stopped campaign back up from its preserved corpus).
+  **SKILL gaps closed:** a new **§2a firmware-filesystem-browsing** workflow (`list_filesystem` /
+  `read_file` / `add_file_as_target` — configs/keys/scripts/`/etc/shadow` are where many firmware
+  bugs live and the skill never mentioned them); the read-back/confirm tools woven into §3
+  (`get_node`/`list_nodes`/`list_edges`/`list_egress`/`set_hypothesis_status`/`update_edge`) and
+  `list_projects` into §1; `build_log`/`resume_fuzz_campaign` into §2g/§2h. **A deliberately strict
+  "you SURFACE, you don't PRUNE" stance** in §3 (per the product owner): the agent's job is to
+  surface for the human to triage — it removes things ONLY to correct its OWN error/hallucination/
+  bad-info (dismiss > delete), never to declutter. Did NOT add: promote-crash-to-PoC or
+  extra LLM-task types (the agent *is* the LLM task), and kept operator-only surfaces
+  (delete_project, settings, fuzz-env registration) out. **Bug fixed along the way:**
+  `filesystem.add_file_as_target` marked the manifest entry via a shallow-copy mutation that never
+  persisted (JSON column unchanged-by-identity), so add-from-fs was NOT idempotent across sessions
+  — an agent's repeat call (each its own session) made duplicate child targets. Now rebuilds the
+  manifest with fresh dicts + `flag_modified`. No schema change/migration (additive tools + a
+  persistence fix). Verified: 6 new tests in `tests/test_mcp.py` (catalog membership + groups,
+  build_log happy/empty/not-found, add_file_as_target promote/idempotent/error, resume guards,
+  skill-content) + full `just test` green (751 passed, 2 skipped). `docs/mcp.md` group bullets
+  updated to list the new tools.
 - 2026-06-03: **feat: hard-delete a finding (distinct from dismiss)** (branch `build/delete-findings`).
   Findings could only be *dismissed* (the row persists, reversibly greyed). Added a true, irreversible
   HARD delete alongside it. `engine/removal.delete_finding(session, finding_id)` removes the Finding row

@@ -83,7 +83,7 @@ def read_file(project: Project, firmware: Target, rel: str, *, max_bytes: int = 
     fs = (firmware.metadata_json or {}).get("filesystem")
     if not fs:
         raise FilesystemError("this target has no unpacked filesystem")
-    entry = next((f for f in fs["files"] if f["rel"] == rel), None)
+    entry = next((f for f in fs.get("files", []) if f.get("rel") == rel), None)
     if entry is None:
         raise FilesystemError(f"{rel!r} is not in the unpacked filesystem")
 
@@ -123,7 +123,7 @@ def add_file_as_target(session: Session, project: Project, firmware: Target, rel
     fs = (firmware.metadata_json or {}).get("filesystem")
     if not fs:
         raise FilesystemError("this target has no unpacked filesystem")
-    entry = next((f for f in fs["files"] if f["rel"] == rel), None)
+    entry = next((f for f in fs.get("files", []) if f.get("rel") == rel), None)
     if entry is None:
         raise FilesystemError(f"{rel!r} is not in the unpacked filesystem")
     if entry.get("child_target_id"):
@@ -143,10 +143,19 @@ def add_file_as_target(session: Session, project: Project, firmware: Target, rel
         analyze_target(session, project, child, runner or get_executor())
         build_links_against(session, project)
 
-    # mark the manifest entry so the UI shows it as added
+    # Mark the manifest entry as added so the UI shows it AND add-from-fs is idempotent
+    # across sessions (an agent's repeat call must return this child, not make a dupe).
+    # Rebuild with fresh dicts + flag_modified: a shallow copy that mutates the shared
+    # nested entries leaves the JSON column unchanged-by-identity, so it never persists.
+    from sqlalchemy.orm.attributes import flag_modified
+
     meta = dict(firmware.metadata_json or {})
-    for f in meta["filesystem"]["files"]:
-        if f["rel"] == rel:
-            f["child_target_id"] = child.id
+    fsmeta = dict(meta.get("filesystem") or {})
+    fsmeta["files"] = [
+        {**f, "child_target_id": child.id} if f.get("rel") == rel else f
+        for f in fsmeta.get("files", [])
+    ]
+    meta["filesystem"] = fsmeta
     firmware.metadata_json = meta
+    flag_modified(firmware, "metadata_json")
     return child
