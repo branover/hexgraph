@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hexgraph"
-version = "0.0.1"
-description = "Self-hosted, local-only agentic vulnerability-research workbench (MVP)"
+version = "0.1.0"
+description = "Self-hosted, local-only agentic vulnerability-research workbench"
 requires-python = ">=3.11"
 license = "AGPL-3.0-or-later"
 dependencies = [
