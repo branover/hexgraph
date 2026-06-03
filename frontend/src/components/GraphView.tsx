@@ -87,7 +87,12 @@ function glyphDataUri(ch: string): string {
 //   MID  (LOD_MID ≤ z < LOD_NEAR): structure — node shapes + hub/anchor labels, semantic-edge labels.
 //   NEAR (z ≥ LOD_NEAR): full detail — every label, edge labels, attr hints (today's behaviour).
 const LOD_MID = 0.5;
-const LOD_NEAR = 1.35;
+// NEAR was 1.35 — far too high: across the whole MID band (z≈0.5–1.35) leaf nodes are already
+// large and clearly individuated (a single binary's call graph at z≈0.7–1.0) yet ALL their
+// labels were suppressed, so a zoomed-in graph read as anonymous dots while only findings
+// stayed labelled (issue 6). Drop NEAR so full per-node detail returns once nodes are
+// resolvable; MID is now a narrow transitional band, not a label dead-zone.
+const LOD_NEAR = 0.85;
 // Above this many direct child rooms, a container (e.g. a firmware with hundreds of
 // child binaries) does NOT auto-expand its children on open — it stays a single card so
 // the default frame is a handful of countable rooms, never a grid of hundreds of cards.
@@ -117,7 +122,7 @@ export default function GraphView({
   focus, onFocus, onClearFocus,
   groupBy: groupByProp, onGroupBy, layers: layersProp, onLayers,
   filters: filtersProp, onFilters, findings: findingsProp, onFindings, scope,
-  skeletonMode, onRoomExpand, roomLoading,
+  skeletonMode, onRoomExpand, roomLoading, mapMode, onRoomDrill,
 }: {
   graph: Graph;
   onSelect: (id: string, type: string) => void;
@@ -154,6 +159,15 @@ export default function GraphView({
   skeletonMode?: boolean;
   onRoomExpand?: (targetId: string) => void;
   roomLoading?: Set<string>;
+  // ── Map view (§6.1 / issue 8): a genuinely DISTINCT collapsed-skeleton "territory" overview,
+  // NOT the by-target Graph in disguise. When on: ALL rooms stay collapsed to finding-weighted
+  // cards regardless of tier (the §1 skeleton, surfaced as its own view), intra-room detail is
+  // never drawn, and structural meta-edges are dropped so only the cross-target SEMANTIC ribbons
+  // + the socket bus remain — the firmware's territory at a glance.
+  mapMode?: boolean;
+  // In Map view, double-tapping a target card DRILLS into the scoped Graph for that binary
+  // (design §6.1) instead of expanding its interior in place.
+  onRoomDrill?: (targetId: string) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const cyRef = useRef<cytoscape.Core>();
@@ -365,6 +379,16 @@ export default function GraphView({
   // graph, tier); the user's later manual expand/collapse is preserved until that key changes.
   useEffect(() => {
     if (groupBy === "none") { setExpandedRooms(new Set()); return; }
+    // Map view (issue 8): force the pure collapsed skeleton — every room a card, a firmware
+    // grandparent expanded only enough to show its child-binary cards (when few), interiors
+    // never auto-shown. This is what makes Map distinct from the by-target Graph.
+    if (mapMode) {
+      const childCount = new Map<string, number>();
+      for (const r of model.rooms) { const p = model.parentOf.get(r.id); if (p) childCount.set(p, (childCount.get(p) || 0) + 1); }
+      setExpandedRooms(new Set([...childCount.entries()].filter(([, c]) => c <= ROOM_AUTO_EXPAND_CEILING).map(([id]) => id)));
+      autoKey.current = "map|" + graph.project_id;
+      return;
+    }
     // In skeleton mode `graph.nodes.length` GROWS as interiors load on demand — keying on
     // it would reset the user's expand state on every room fetch. Key on the room COUNT
     // (stable) instead so the auto-default runs once per (groupBy, project, structure).
@@ -390,7 +414,7 @@ export default function GraphView({
     } else {
       setExpandedRooms(new Set(model.rooms.map((r) => r.id)));               // auto-expand (small/med)
     }
-  }, [groupBy, graph, tier, model, skeletonMode]);
+  }, [groupBy, graph, tier, model, skeletonMode, mapMode]);
 
   useEffect(() => {
     if (!ref.current) return;
@@ -611,16 +635,25 @@ export default function GraphView({
                        w: Math.max(1.4, Math.min(7, 1 + m.count * 0.5)) } };
     });
 
-    const elements = [...roomElements, ...contentElements, ...directEdgeElements, ...metaEdgeElements];
+    // Map view (issue 8): drop the purely-structural cross-target ribbons so only the SEMANTIC
+    // territory links (links_against / connects_to / shared sockets) draw — the overview reads
+    // as "which binaries relate", not the full structural cobweb.
+    const metaShown = mapMode ? metaEdgeElements.filter((e) => e.data.eclass === "meta") : metaEdgeElements;
+    const elements = [...roomElements, ...contentElements, ...directEdgeElements, ...metaShown];
 
     const cy = cytoscape({
-      container: ref.current, elements, wheelSensitivity: 0.25,
+      // wheelSensitivity 0.25 made scroll-to-zoom feel sluggish (issue 5) — a full wheel
+      // notch barely changed scale. 0.6 is a comfortable, responsive feel without overshooting.
+      container: ref.current, elements, wheelSensitivity: 0.6,
       style: [
         {
           selector: "node",
           style: {
             label: "data(label)", color: "#cdd5e2", "font-size": "9px", "font-weight": 600,
-            "text-opacity": "mapData(degc, 8, 24, 0.0, 0.55)" as any,
+            // Floor the resting label opacity at 0.5 so even a degree-2 leaf is LABELLED once
+            // it's resolvable (issue 6: low-degree functions/endpoints/strings were mapped to
+            // text-opacity 0 and stayed anonymous at every zoom). Hubs still ramp brighter.
+            "text-opacity": "mapData(degc, 8, 24, 0.5, 0.85)" as any,
             "min-zoomed-font-size": 7,
             "text-valign": "bottom", "text-margin-y": 5, "text-wrap": "ellipsis", "text-max-width": "104px",
             "text-background-color": "#0a0c12", "text-background-opacity": 0.9, "text-background-padding": "3px",
@@ -666,7 +699,7 @@ export default function GraphView({
         // Hubs (degree ≥ 8): a degree-driven 30→40px ramp + a slight glow.
         { selector: "node[tier = 'hub']", style: {
             width: "mapData(degc, 8, 24, 30, 40)" as any, height: "mapData(degc, 8, 24, 30, 40)" as any,
-            "text-opacity": "mapData(degc, 8, 24, 0.55, 0.95)" as any,
+            "text-opacity": "mapData(degc, 8, 24, 0.85, 1.0)" as any,
             "underlay-opacity": 0.18, "underlay-padding": 6,
         } },
         // Anchors (targets / firmware root in flat mode): big, crisp, always-labelled, glyph.
@@ -752,7 +785,9 @@ export default function GraphView({
 
         // MID: structure — the skeleton's default frame often lands HERE (LARGE), so collapsed
         // room cards keep a readable below-card label (smaller than FAR since zoom is higher);
-        // hub/anchor labels show, semantic + meta edge labels return, leaf labels stay suppressed.
+        // hub/anchor labels show and LEAF labels now appear too (the MID band starts at z=0.5,
+        // where a single binary's nodes are already individuated — issue 6: leaves were blanked
+        // here). min-zoomed-font-size still drops a label cleanly if the node is genuinely tiny.
         { selector: "node[gtype = 'room'][roomOpen = 0].lod-mid", style: {
             "font-size": "18px", "min-zoomed-font-size": 0, "text-opacity": 1,
             color: "#e8edf6", "font-weight": 800,
@@ -760,8 +795,10 @@ export default function GraphView({
             "text-background-color": "#0a0c12", "text-background-opacity": 0.7, "text-background-padding": "3px",
             "text-background-shape": "roundrectangle",
         } },
-        { selector: "node[gtype = 'node'].lod-mid", style: { "text-opacity": 0 } },
-        { selector: "node[tier = 'hub'].lod-mid", style: { "text-opacity": 0.9 } },
+        // leaf labels keep their resting opacity at MID (do NOT zero them) — only the
+        // min-zoomed-font-size floor hides them when too small to read.
+        { selector: "node[gtype = 'node'].lod-mid", style: { "min-zoomed-font-size": 8 } },
+        { selector: "node[tier = 'hub'].lod-mid", style: { "text-opacity": 1 } },
         { selector: "node[tier = 'anchor'].lod-mid", style: { "text-opacity": 1 } },
         { selector: "edge[persist = 1].lod-mid, edge[eclass = 'meta'].lod-mid", style: { "min-zoomed-font-size": 6 } },
         // NEAR (z ≥ LOD_NEAR): full detail is the base style — every label, edge labels, attr
@@ -783,9 +820,26 @@ export default function GraphView({
         { selector: "edge.focus", style: { opacity: 1, width: 2.4, label: "data(elabel)", "target-arrow-shape": "triangle", "z-index": 25 } },
         { selector: "node.hl", style: { "border-color": "#6aa3ff", "border-width": 2.5, "text-opacity": 1, "z-index": 28, "underlay-opacity": 0.3 } },
         { selector: "edge.hl", style: { opacity: 0.95, width: 2.2, label: "data(elabel)", "target-arrow-shape": "triangle", "z-index": 24 } },
-        { selector: ".hl-dim", style: { opacity: 0.12 } as any },
+        // hl-dim recedes everything that isn't the hovered neighborhood. A gentle 0.28 (not a
+        // near-invisible 0.12) so the rest stays a present, parseable backdrop — the hovered
+        // node should POP by contrast, never leave the rest looking deleted (issue 2).
+        { selector: ".hl-dim", style: { opacity: 0.28 } as any },
         { selector: "node.type-dim", style: { opacity: 0.1, "text-opacity": 0, "underlay-opacity": 0 } },
         { selector: "edge.type-dim", style: { opacity: 0.05, label: "" } },
+        // ── A compound ROOM parent must NEVER take an underlay-fill or a blacken/opacity
+        // blob from the focus / hover / context classes — its tinted background is a huge
+        // bounding box, so a 0.3-opacity underlay or a dim renders as a big filled ellipse
+        // smothering the whole group (issues 1 & 2). Rooms emphasize/recede with their BORDER
+        // and label only; their fill stays the clean faint tint. These rules sit LAST so they
+        // win over .hl / .focus / .context / .hl-dim for room parents specifically.
+        { selector: "node[gtype = 'room'].hl, node[gtype = 'room'].focus", style: {
+            "underlay-opacity": 0, "background-blacken": 0,
+            "border-color": "#6aa3ff", "border-width": 2, "border-opacity": 1, opacity: 1,
+        } },
+        { selector: "node[gtype = 'room'].hl-dim, node[gtype = 'room'].context", style: {
+            "underlay-opacity": 0, "background-blacken": 0, opacity: 1,
+            "background-opacity": 0.04, "border-opacity": 0.28, "text-opacity": 0.3,
+        } },
         // ── Phase 5: FADE-FIRST filter (design §2.3). A filtered-out element fades to
         // context opacity (hue PRESERVED — never de-colored, D8) so "there's more behind
         // this" stays visible; the hard-hide path removes it via baseHidden, not here.
@@ -899,7 +953,13 @@ export default function GraphView({
         const realId = id.startsWith("room:") ? id.slice(5) : id;
         if (model.byId.get(realId)?.type === "target") onSelect(realId, "target");
         onEdgeSelect?.(null); setMenu(null);
-        if (tapRef.current.id === id && now - tapRef.current.t < 350) { toggleRoom(id); tapRef.current = { id: null, t: 0 }; }
+        if (tapRef.current.id === id && now - tapRef.current.t < 350) {
+          // Map view: double-tap DRILLS into the scoped Graph for that binary (issue 8); the
+          // by-target Graph keeps the in-place expand/collapse.
+          if (mapMode && onRoomDrill && model.byId.get(realId)?.type === "target") onRoomDrill(realId);
+          else toggleRoom(id);
+          tapRef.current = { id: null, t: 0 };
+        }
         else tapRef.current = { id, t: now };
         return;
       }
@@ -912,11 +972,18 @@ export default function GraphView({
     });
     cy.on("tap", (evt) => { if (evt.target === cy) { cy.edges().removeClass("lit"); onEdgeSelect?.(null); setMenu(null); } });
 
+    // Hover preview (design §4: EMPHASIZE the hovered thing + its neighborhood, gently recede
+    // the rest — never dim what you're pointing at). Hovering a ROOM highlights the room + its
+    // whole subtree (not just graph-edge neighbors, which a compound parent has none of), so a
+    // room lights up cleanly instead of dimming its own contents into a blob (issues 1 & 2).
     cy.on("mouseover", "node", (evt) => {
       if (cy.elements(".focus, .context").nonempty()) return;
       const n = evt.target;
+      const keep = n.data("gtype") === "room"
+        ? n.union(n.descendants()).union(n.descendants().connectedEdges()).union(n.connectedEdges())
+        : n.closedNeighborhood().union(n.parent());   // include the parent room so its border lights
       cy.elements().addClass("hl-dim");
-      n.closedNeighborhood().removeClass("hl-dim").addClass("hl");
+      keep.removeClass("hl-dim").addClass("hl");
     });
     cy.on("mouseout", "node", () => {
       if (cy.elements(".focus, .context").nonempty()) return;
@@ -931,6 +998,13 @@ export default function GraphView({
     });
     cy.on("cxttap", (evt) => { if (evt.target === cy) setMenu(null); });
     cy.on("pan zoom drag", () => setMenu(null));
+    // Cytoscape's cxttap fires AFTER the browser's native contextmenu and only over nodes —
+    // right-clicking an EDGE or empty canvas (and sometimes a node, depending on timing) still
+    // popped the native menu (issue 10). Suppress it unconditionally at the container so ONLY
+    // the app verb menu ever shows. Listener is on the canvas element, removed on teardown.
+    const container = ref.current;
+    const suppressCtx = (e: Event) => e.preventDefault();
+    container.addEventListener("contextmenu", suppressCtx);
 
     cyRef.current = cy;
     (window as any).__cy = cy;
@@ -952,11 +1026,12 @@ export default function GraphView({
       try { eh.destroy(); } catch { /* ignore */ }
       ehRef.current = null;
       savedPos.current.clear();
+      container.removeEventListener("contextmenu", suppressCtx);
       if ((window as any).__cy === cy) (window as any).__cy = undefined;
       cy.destroy();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [graph, findings, layers, filters, collapsed, hidden, groupBy, expandedRooms, model]);
+  }, [graph, findings, layers, filters, collapsed, hidden, groupBy, expandedRooms, model, mapMode]);
 
   // In skeleton mode a room id is "room:<targetId>" — strip to ask the host to fetch
   // that target's interior (a no-op if already merged into `graph`).
@@ -1192,7 +1267,7 @@ export default function GraphView({
       )}
       {menu && (
         <div className="menu graph-cxt"
-             style={{ position: "absolute", left: Math.max(4, Math.min(menu.x, 1100)), top: Math.max(4, menu.y), zIndex: 20, minWidth: 178 }}
+             style={{ position: "absolute", left: Math.max(4, Math.min(menu.x, 1100)), top: Math.max(4, menu.y), zIndex: 20, width: 200 }}
              onMouseLeave={() => setMenu(null)}>
           {menuIsRoom ? (
             <>
@@ -1255,10 +1330,10 @@ export default function GraphView({
         </div>
       )}
       <div className="graph-controls">
-        {/* group-by control */}
-        <select className="btn sm sel" value={groupBy} title="Group by (compound rooms)"
-                onChange={(e) => setGroupBy(e.target.value as GroupBy)}
-                style={{ width: "auto", minWidth: 96 }}>
+        {/* group-by control — a full-width pill atop the rail, sized in CSS so the rail reads
+            as one aligned column (issue 11) rather than a wide pill over mismatched icons. */}
+        <select className="sel group-by-sel" value={groupBy} title="Group by (compound rooms)"
+                onChange={(e) => setGroupBy(e.target.value as GroupBy)}>
           <option value="target">by target</option>
           <option value="type">by type</option>
           <option value="finding">by finding</option>
@@ -1320,24 +1395,29 @@ export default function GraphView({
             </div>
           )}
         </div>
-        {/* Quick collapse/expand-all when grouped (one-click skeleton ⇆ full). */}
+        {/* Skeleton toggle when grouped: ONE button (collapse-all ⇆ expand-all). Replaces the
+            old standalone −/+ collapse/expand pair, which both duplicated the zoom −/+ visually
+            (issue 4 — two identical +/- pill pairs) and the filter-menu's expand/collapse rows.
+            A firmware/chip glyph reads as "the rooms", never as a zoom control. */}
         {compound && (
-          <>
-            <button className="btn icon" title="Collapse all rooms (back to the skeleton)" onClick={collapseAll}><Icon name="minus" /></button>
-            <button className="btn icon" title="Expand all rooms"
-                    onClick={() => { if (model.rooms.length && (graph.nodes.length <= 200 || window.confirm(`Expand all rooms? This reveals ~${graph.nodes.length} nodes.`))) expandAll(); }}>
-              <Icon name="plus" />
-            </button>
-          </>
+          expandedRooms.size > 0
+            ? <button className="btn icon" title="Collapse all rooms (back to the skeleton)" onClick={collapseAll}><Icon name="chip" /></button>
+            : <button className="btn icon" title="Expand all rooms"
+                      onClick={() => { if (model.rooms.length && (graph.nodes.length <= 200 || window.confirm(`Expand all rooms? This reveals ~${graph.nodes.length} nodes.`))) expandAll(); }}>
+                <Icon name="chip" />
+              </button>
         )}
         {onDrawEdge && (
           <button className={"btn icon" + (drawMode ? " primary" : "")}
                   title={drawMode ? "Draw edge: drag from a source node to a target node (click to cancel)" : "Draw an edge: drag from one node to another"}
                   onClick={() => setDrawMode((d) => !d)}><Icon name="link" /></button>
         )}
-        <button className="btn icon" title="Fit" onClick={fit}><Icon name="fit" /></button>
-        <button className="btn icon" title="Zoom in" onClick={() => zoom(1.25)}><Icon name="plus" /></button>
-        <button className="btn icon" title="Zoom out" onClick={() => zoom(0.8)}><Icon name="minus" /></button>
+        {/* zoom cluster — the ONLY +/- pair on the rail now. */}
+        <div className="zoom-cluster">
+          <button className="btn icon" title="Zoom in" onClick={() => zoom(1.25)}><Icon name="plus" /></button>
+          <button className="btn icon" title="Fit to view" onClick={fit}><Icon name="fit" /></button>
+          <button className="btn icon" title="Zoom out" onClick={() => zoom(0.8)}><Icon name="minus" /></button>
+        </div>
       </div>
     </div>
   );

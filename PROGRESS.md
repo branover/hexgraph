@@ -87,6 +87,20 @@ then run the resume verifier, then continue at the next unchecked task.
   view switcher (Map/Graph/Table/Matrix/Source), Table + Matrix views, Map-as-named-view,
   Saved Lenses (managed `ui.lenses` in `settings.json`, no migration), and panels-drive-scope.**
   All client-side over `/graph` except the one validated `ui.lenses` settings field (+tests).
+  **Graph-canvas interaction/layout fixes (`build/graph-canvas-fixes`, this work):** a batch of
+  hands-on bugs on top of the redesign, re-verified LIVE then fixed — room-hover no longer draws a
+  filled blob (room compounds emphasize via border, never an underlay-fill); hover now emphasizes
+  the hovered node + neighborhood instead of inverting; scroll-zoom `wheelSensitivity` 0.25→0.6;
+  semantic-zoom `LOD_NEAR` 1.35→0.85 + leaf-label opacity floor so labels show once nodes are
+  individuated (was findings-only); the left control rail deduped to ONE +/- (zoom, a segmented
+  cluster) on an aligned fixed-width column; **Map** is now a genuinely distinct collapsed-skeleton
+  territory view (force-collapsed cards, semantic ribbons only, double-tap → drill into scoped
+  Graph) not the by-target Graph in disguise; right-click verb menu sized compact; native
+  contextmenu suppressed on the whole canvas (not just nodes); target tree-row run/fuzz/trash
+  de-cramped (standalone fuzz button removed — Run menu owns the fuzz path). `#88`/`#86` had already
+  resolved the loose-target-dot disconnect and the inspector-card Run overlap. Color untouched (D8).
+  Client-side only (`GraphView.tsx`/`Workspace.tsx`/`theme.css`); recurring hover/zoom/right-click/
+  view-switch assessment checks added to `docs/dev/ui-backlog.md`. `just test` green (717 passed).
 - **Current state:** **P0–P8 all delivered** (core) + **researcher depth (P6/P7) complete**: annotations
   (rename/note/tag, agent-proposed→confirm, confirmed facts feed context), hypothesis lifecycle
   (evidence-derived status, sticky human verdict, open hypotheses feed context), in-app report viewer +
