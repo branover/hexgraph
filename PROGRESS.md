@@ -77,6 +77,22 @@ then run the resume verifier, then continue at the next unchecked task.
   `--build-arg WITH_GHIDRA`. UI: PoC verification panel + re-verify, edit-any-field (finding+node),
   firmware file viewer, search-includes-targets, edge inspector, Author modals (`name·type·target` +
   type help + draw-to-connect), tighter Settings inputs.
+- **Fix: "Promote PoC" on a fuzz crash now actually proves it (`fix/promote-poc`).** Previously
+  `promote_artifact(to_poc=True)` only SEEDED a reproducer-backed PoC spec into `evidence.extra.poc`
+  (no verification) and the UI hardcoded "promoted → PoC (confirmed)" regardless — and it never checked
+  the policy seam, so with PoC disabled it silently seeded a PoC that could never verify (verify_artifact
+  refuses static-only): a misleading dead end. Now Promote→PoC is gated at the policy seam
+  (`assert_allows_execution()` BEFORE seeding — under static-only it raises `PolicyViolation`, mapped to a
+  403 with guidance to enable PoC verification in Settings; nothing is seeded/executed, fail-closed) and,
+  when execution IS allowed, it seeds the spec AND inline-runs the SAME LLM-free crash re-run
+  `verify_artifact` uses (stored minimized reproducer vs the instrumented harness, unforgeable `crash`
+  oracle, in the locked-down sandbox), persisting the result to `evidence.extra.verification` and returning
+  `{verified, verify_detail, assurance}`. `ArtifactsView.tsx` now shows the honest outcome — a distinct
+  green "Verified PoC" banner (with the assurance standard/method), a muted "couldn't re-confirm" note, or
+  the policy-guidance error. Plain Promote (to_poc=false) is unchanged and needs no gate. NO policy
+  relaxation outside policy.py, no schema/migration change (PoC + verification live in evidence.extra).
+  Tests in `tests/test_campaigns_phase4.py`: disabled→refuses+seeds-nothing (engine + API 403 guidance),
+  enabled→seeds+verifies+persists assurance, plain promote still just confirms. `just test` green.
 - **Graph-presentation redesign — ALL 5 PHASES DONE** (`docs/design/design-graph-presentation.md`;
   detail + human-eyes verdicts per phase in `docs/ui-backlog.md`): P1 visual legibility (edge-ink
   recede, importance sizing, shape/glyph redundancy, label discipline, interactive legend); P2

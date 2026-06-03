@@ -261,12 +261,25 @@ class PromoteBody(BaseModel):
 @router.post("/api/artifacts/{artifact_id}/promote")
 def api_promote_artifact(artifact_id: str, body: PromoteBody | None = None):
     """Promote a crash artifact into tracked work: confirm its fuzz_crash finding (so it
-    leaves the triage inbox) and — with `to_poc` — seed a reproducer-backed PoC spec the
-    one-click verify path can re-prove. No finding is duplicated."""
+    leaves the triage inbox) and — with `to_poc` — seed a reproducer-backed PoC spec AND
+    immediately re-run the LLM-free crash verification, returning the outcome
+    ({verified, verify_detail, assurance}) so the UI reflects a real verified PoC.
+
+    `to_poc` executes the target, so it is gated by the execution policy: under
+    static-only (PoC/fuzzing disabled) it returns 403 with guidance to enable PoC
+    verification in Settings, rather than silently seeding a PoC that can never verify."""
     with session_scope() as s:
         a = _get_artifact(s, artifact_id)
         try:
             return C.promote_artifact(s, a, to_poc=bool(body and body.to_poc))
+        except PolicyViolation:
+            raise HTTPException(
+                403,
+                "Promoting a crash to a verifiable PoC re-runs it (executes the target), "
+                "which is not permitted under the static-only policy. Enable PoC "
+                "verification (features.poc) in Settings to promote a crash to a verified "
+                "PoC; or use plain Promote to just confirm the finding without re-running it.",
+            )
         except C.CampaignError as exc:
             raise HTTPException(400, str(exc))
 
