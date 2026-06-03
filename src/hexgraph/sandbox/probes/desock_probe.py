@@ -95,6 +95,69 @@ def _find_desock():
     return None
 
 
+# The unambiguous AFL++ message when the forkserver's pre-fuzz calibration run crashed
+# BEFORE any fuzzer input — i.e. the target died on a benign seed during startup. With
+# desock that is preeny's socket-pump-thread race (a fresh exec usually starts cleanly),
+# NOT a real finding, so we retry the launch on exactly this signal (and nothing else).
+_FORKSERVER_RACE = "before receiving any input"
+_FORKSERVER_ABORT = "Fork server crashed"
+_MAX_FORKSERVER_RETRIES = 8
+
+
+def _launch_afl(cmd, env, outdir):
+    """Start one AFL++ instance, capturing its stderr to a file so we can detect a
+    spurious forkserver-startup crash. Returns (proc, stderr_path)."""
+    errp = os.path.join(outdir, f"afl_stderr_{os.getpid()}_{time.monotonic_ns()}.log")
+    errf = open(errp, "wb")
+    p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=errf, env=env, cwd=outdir)
+    p._hg_errfile = errf  # keep the handle alive for the process lifetime
+    return p, errp
+
+
+def _forkserver_raced(proc, errp) -> bool:
+    """True iff AFL exited (quickly) reporting the forkserver crashed during pre-fuzz
+    calibration — the preeny/desock startup race we retry on. Any OTHER early exit (a real
+    config/target error) is NOT retried, so a genuine breakage still surfaces."""
+    if proc.poll() is None:
+        return False
+    try:
+        with open(errp, "rb") as fh:
+            tail = fh.read()[-4000:].decode("utf-8", "replace")
+    except OSError:
+        return False
+    return _FORKSERVER_ABORT in tail and _FORKSERVER_RACE in tail
+
+
+def _launch_with_forkserver_retry(cmd, env, outdir, work):
+    """Launch AFL++, retrying ONLY the preeny/desock forkserver-startup race (the target
+    SIGSEGVs on a benign seed during AFL's calibration, before any fuzzing). Each retry
+    wipes the `-o` dir and re-execs from scratch — a fresh process almost always starts
+    cleanly, and wiping ensures a clean attempt rather than an AFL_AUTORESUME (set below) of
+    the crashed session. Returns (running_proc, note_or_None). `note` is set
+    iff we exhausted the retries still racing (a real degradation reason); on success it's
+    None. Bounded so a genuinely-always-crashing target can't loop forever."""
+    note = None
+    for attempt in range(_MAX_FORKSERVER_RETRIES):
+        if attempt:
+            shutil.rmtree(work, ignore_errors=True)
+            os.makedirs(work, exist_ok=True)
+        proc, errp = _launch_afl(cmd, env, outdir)
+        # Give the forkserver a moment to come up (or die on the calibration run). The race
+        # manifests within the first ~couple seconds; a healthy forkserver is still running.
+        settle = time.monotonic() + 6
+        while time.monotonic() < settle and proc.poll() is None:
+            time.sleep(0.25)
+        if not _forkserver_raced(proc, errp):
+            return proc, None  # forkserver is up (or exited for a non-race reason) → proceed
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        note = (f"desock forkserver crashed on calibration (preeny socket-thread startup "
+                f"race) — gave up after {attempt + 1} attempts")
+    return proc, note
+
+
 def main() -> int:
     if len(sys.argv) < 3:
         return _emit({"error": "usage: desock_probe.py <server-elf> <outdir> [flags]"})
@@ -167,19 +230,23 @@ def main() -> int:
 
     common = [afl, *qemu, "-i", seed_dir, "-o", work, "-m", "none",
               "-V", str(max_total_time), *dict_args]
-    procs = []
+    note = None
     if instances <= 1:
-        procs.append(subprocess.Popen([*common, *run_argv],
-                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                      env=afl_env, cwd=outdir))
+        p, note = _launch_with_forkserver_retry([*common, *run_argv], afl_env, outdir, work)
+        procs = [p]
     else:
-        procs.append(subprocess.Popen([*common, "-M", "fuzzer00", *run_argv],
-                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                      env=afl_env, cwd=outdir))
-        for i in range(1, instances):
-            procs.append(subprocess.Popen([*common, "-S", f"fuzzer{i:02d}", *run_argv],
-                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                          env=afl_env, cwd=outdir))
+        p0, note = _launch_with_forkserver_retry([*common, "-M", "fuzzer00", *run_argv],
+                                                 afl_env, outdir, work)
+        procs = [p0]
+        # Only bring up the `-S` secondaries if the `-M` main actually came up. If the main
+        # exhausted its forkserver-startup retries and died, the secondaries (which sync off
+        # the main's queue dir) have nothing to attach to — launching them just spawns more
+        # racing instances; let the run finalize as degraded with the note instead.
+        if p0.poll() is None:
+            for i in range(1, instances):
+                procs.append(subprocess.Popen([*common, "-S", f"fuzzer{i:02d}", *run_argv],
+                                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                              env=afl_env, cwd=outdir))
 
     deadline = time.monotonic() + max_total_time + 5
     while time.monotonic() < deadline and any(p.poll() is None for p in procs):
@@ -197,6 +264,14 @@ def main() -> int:
 
     final = _collect(outdir, work, target, desock, sysroot if foreign else None, arch, mode,
                      max_crashes, done=True)
+    # A diagnostic about a flaky forkserver startup (preeny/desock's socket-pump threads
+    # can SIGSEGV during AFL's pre-fuzz calibration on a benign input — a startup race, not
+    # a target bug). We bounded-retry the launch on exactly that signal; if EVERY retry hit
+    # it we never got past calibration → surface it as the degradation reason (so the
+    # campaign's `degraded`-with-0-execs carries WHY). When AFL DID recover and fuzz, the
+    # note stays out of the status so the run finalizes as a clean `completed`.
+    if note and int(final.get("executions") or 0) <= 0:
+        final["engine_note"] = note
     _write_status(outdir, final)
     with open(os.path.join(outdir, "DONE"), "w") as fh:
         fh.write(mode)

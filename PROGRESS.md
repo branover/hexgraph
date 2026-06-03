@@ -569,6 +569,28 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-03: **fix: deflake `test_desock_afl_fuzzes_local_server_no_network`** (branch `fix/desock-afl-flake`).
+  Root cause was NOT CPU starvation (the concurrent-fuzzing correlation was a red herring): the
+  preeny/desock `desock.so` socket-pump threads intermittently SIGSEGV (~40-50%, even fully unloaded) when
+  the instrumented target runs on a *benign* seed during AFL++'s pre-fuzz **forkserver calibration**, so AFL
+  aborts with "Fork server crashed … before receiving any input" → 0 execs → the campaign finalizes
+  `degraded` with no artifact → the assertion fails. A second, lesser brittleness: even when the forkserver
+  came up, reaching the planted `line[64]` overflow depended on AFL mutating a 6-byte seed past 64 bytes
+  inside the time budget. Two surgical fixes, both keeping the test a *real* desock+AFL+`--network none`
+  end-to-end proof: (1) `sandbox/probes/desock_probe.py` now **bounded-retries the AFL launch ONLY on the
+  exact forkserver-startup-race signal** (captures AFL stderr, re-execs with a fresh `-o` dir up to 8x; any
+  other early exit is NOT retried, so a genuine breakage still surfaces; if every retry races it surfaces an
+  `engine_note` so a true 0-work run still reports WHY). (2) the test seeds the corpus with a long-line input
+  (`A`*100) alongside the benign one — AFL runs every seed through the real desock'd socket on its first
+  calibration cycle, so the genuine ASan overflow is hit in a handful of execs regardless of CPU. The crash
+  is still found by executing the real instrumented target through the real desock socket under
+  `--network none` and detected via the real ASan/signal oracle — nothing weakened, nothing skipped. Verified
+  7/7 green (incl. one run under bounded background CPU load) where the underlying AFL run was ~50% before;
+  all 3 phase5-e2e tests + 148 fuzz/campaign unit tests pass. Probe edit is mounted at runtime (no image
+  rebuild); no model change, no migration. Review-nit follow-up (commit `efd58ba`): the test now also
+  asserts `execs > 50` so it proves AFL genuinely fuzzed the loop (not just replayed the seeds on
+  calibration — closes the "would pass with a broken mutation engine" gap), the `-S` secondaries launch only
+  when the `-M` main came up, and two probe comments were corrected; re-verified 3/3 more green.
 - 2026-06-03: **fix: warn on the container bind bypass + onboarding doc fixes** (branch
   `fix/loopback-container-warning`). Closes the pre-release audit's one actionable finding plus the
   clean-machine test's doc gaps. **F1 (loopback LOW):** `HEXGRAPH_IN_CONTAINER=1` set OUTSIDE a real
