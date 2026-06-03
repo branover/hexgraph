@@ -36,8 +36,9 @@ Three principles are non-negotiable, and they shape everything else:
 ## Install
 
 You will need Python 3.11 or newer, a Docker daemon your user can talk to (check with `docker run
---rm hello-world`), [`just`](https://just.systems), and Linux or macOS. No API key is required, since
-the default mock backend runs fully offline.
+--rm hello-world`), [`just`](https://just.systems), Node.js 18+ with npm (the default `just setup`
+builds the web UI), and Linux or macOS. No API key is required, since the default mock backend runs
+fully offline.
 
 ```bash
 git clone https://github.com/branover/hexgraph.git hexgraph && cd hexgraph

@@ -33,6 +33,14 @@ def _in_container_bind(host: str) -> bool:
     return host == _CONTAINER_BIND and os.environ.get(CONTAINER_ENV) == "1"
 
 
+def _looks_like_container() -> bool:
+    """Best-effort check that we're ACTUALLY inside a container (Docker writes `/.dockerenv`;
+    Podman writes `/run/.containerenv`). Used only to decide whether to WARN about a
+    `CONTAINER_ENV` bind — never to refuse one — so a false negative is just an extra warning,
+    never a broken legitimate deployment."""
+    return os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
+
+
 def is_loopback(host: str) -> bool:
     if host in _LOOPBACK_NAMES:
         return True
@@ -93,7 +101,21 @@ def assert_loopback(host: str) -> None:
         return
     if _in_container_bind(host):
         # Recognized container mode: 0.0.0.0 inside a namespace whose only ingress is the
-        # host-loopback-published port. No warning — this is the supported compose path.
+        # host-loopback-published port — the supported compose path, no warning. BUT the same
+        # flag set on a host that is NOT actually a container would SILENTLY bind every
+        # interface (no compose publish boundary to contain it). Warn loudly in that case so an
+        # accidental or misused CONTAINER_ENV isn't a quiet external exposure (still bind — the
+        # check is best-effort and must never break a legitimate container deployment).
+        if not _looks_like_container():
+            print(
+                f"\n*** WARNING: binding HexGraph to {host!r} (ALL interfaces) because "
+                f"{CONTAINER_ENV}=1 is set, ***\n"
+                f"*** but this process does not appear to be inside a container. If you are not "
+                f"running the ***\n"
+                f"*** official HexGraph container, this exposes a workbench that handles hostile "
+                f"targets to your network. ***\n",
+                file=sys.stderr,
+            )
         return
     if os.environ.get(OVERRIDE_ENV) == "1":
         print(
