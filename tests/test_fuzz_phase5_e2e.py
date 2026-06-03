@@ -332,3 +332,10 @@ def test_desock_afl_fuzzes_local_server_no_network(hg_home):
         # qemu-mode (still coverage-guided) — either way it should reach the overflow.
         assert arts, f"desock/AFL found no crash (status={c.status}, err={c.error})"
         assert arts[0].content_cas and arts[0].finding_id
+        # Seeding the overflow makes the crash RELIABLE, but the test must still prove AFL
+        # genuinely fuzzed the loop (not merely replayed the two corpus seeds on calibration),
+        # or it would pass even with a broken mutation engine. Over the 90s budget the campaign
+        # executes far more than the 2 seeds — require real exec volume so the desock+AFL path
+        # is proven to actually run, not just deliver a known-crashing input.
+        execs = int((c.stats_json or {}).get("execs") or 0)
+        assert execs > 50, f"AFL didn't fuzz (execs={execs}) — only the seeds ran?"

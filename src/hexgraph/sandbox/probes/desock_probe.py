@@ -131,8 +131,9 @@ def _forkserver_raced(proc, errp) -> bool:
 def _launch_with_forkserver_retry(cmd, env, outdir, work):
     """Launch AFL++, retrying ONLY the preeny/desock forkserver-startup race (the target
     SIGSEGVs on a benign seed during AFL's calibration, before any fuzzing). Each retry
-    clears the `-o` dir (AFL refuses a dirty out dir without resume) and re-execs — a fresh
-    process almost always starts cleanly. Returns (running_proc, note_or_None). `note` is set
+    wipes the `-o` dir and re-execs from scratch — a fresh process almost always starts
+    cleanly, and wiping ensures a clean attempt rather than an AFL_AUTORESUME (set below) of
+    the crashed session. Returns (running_proc, note_or_None). `note` is set
     iff we exhausted the retries still racing (a real degradation reason); on success it's
     None. Bounded so a genuinely-always-crashing target can't loop forever."""
     note = None
@@ -153,7 +154,7 @@ def _launch_with_forkserver_retry(cmd, env, outdir, work):
         except subprocess.TimeoutExpired:
             proc.kill()
         note = (f"desock forkserver crashed on calibration (preeny socket-thread startup "
-                f"race) — retried {attempt + 1}x")
+                f"race) — gave up after {attempt + 1} attempts")
     return proc, note
 
 
@@ -237,10 +238,15 @@ def main() -> int:
         p0, note = _launch_with_forkserver_retry([*common, "-M", "fuzzer00", *run_argv],
                                                  afl_env, outdir, work)
         procs = [p0]
-        for i in range(1, instances):
-            procs.append(subprocess.Popen([*common, "-S", f"fuzzer{i:02d}", *run_argv],
-                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                          env=afl_env, cwd=outdir))
+        # Only bring up the `-S` secondaries if the `-M` main actually came up. If the main
+        # exhausted its forkserver-startup retries and died, the secondaries (which sync off
+        # the main's queue dir) have nothing to attach to — launching them just spawns more
+        # racing instances; let the run finalize as degraded with the note instead.
+        if p0.poll() is None:
+            for i in range(1, instances):
+                procs.append(subprocess.Popen([*common, "-S", f"fuzzer{i:02d}", *run_argv],
+                                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                              env=afl_env, cwd=outdir))
 
     deadline = time.monotonic() + max_total_time + 5
     while time.monotonic() < deadline and any(p.poll() is None for p in procs):
