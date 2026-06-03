@@ -110,8 +110,10 @@ jobs:
           build-args: WITH_GHIDRA=0
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - name: Install (server + dev extras)
-        run: python -m pip install -e ".[server,dev]"
+      - name: Install into .venv
+        # `just test-ci` / `just demo` run `.venv/bin/python` (the justfile's `py` var),
+        # so install into a venv the way `just install` does — not the system interpreter.
+        run: just install
       - name: Run the CI gate (fails fast if the image is missing)
         run: just test-ci
       - name: Smoke-test the full offline loop
