@@ -72,26 +72,38 @@ function CrashGroup({ a, onChanged, onViewFinding, onOpenSource }: {
 }) {
   const [busy, setBusy] = useState<string>();
   const [msg, setMsg] = useState<string>();
+  const [msgKind, setMsgKind] = useState<"ok" | "verified" | "error">("ok");
   const sev = SEV_FOR_KIND[a.sanitizer || ""] || "medium";
   const expl = a.exploitability || {};
   const status = a.finding?.status;
+  const note = (text: string, kind: "ok" | "verified" | "error" = "ok") => { setMsg(text); setMsgKind(kind); };
 
   const verify = async () => {
     setBusy("verify"); setMsg(undefined);
-    try { const r = await api.verifyArtifact(a.id); setMsg(r.verified ? "✓ reproduced" : "✗ not reproduced"); onChanged(); }
-    catch (e: any) { setMsg(String(e.message || e)); }
+    try { const r = await api.verifyArtifact(a.id); note(r.verified ? "✓ reproduced" : "✗ not reproduced", r.verified ? "verified" : "ok"); onChanged(); }
+    catch (e: any) { note(String(e.message || e), "error"); }
     finally { setBusy(undefined); }
   };
   const minimize = async () => {
     setBusy("min"); setMsg(undefined);
-    try { const r = await api.minimizeArtifact(a.id); setMsg(r.verified ? "✓ minimized reproducer re-verified" : "✗ not reproduced"); onChanged(); }
-    catch (e: any) { setMsg(String(e.message || e)); }
+    try { const r = await api.minimizeArtifact(a.id); note(r.verified ? "✓ minimized reproducer re-verified" : "✗ not reproduced", r.verified ? "verified" : "ok"); onChanged(); }
+    catch (e: any) { note(String(e.message || e), "error"); }
     finally { setBusy(undefined); }
   };
   const promote = async (toPoc: boolean) => {
     setBusy(toPoc ? "poc" : "promote"); setMsg(undefined);
-    try { const r = await api.promoteArtifact(a.id, toPoc); setMsg(toPoc ? "promoted → PoC (confirmed)" : `promoted (${r.status})`); onChanged(); }
-    catch (e: any) { setMsg(String(e.message || e)); }
+    try {
+      const r = await api.promoteArtifact(a.id, toPoc);
+      if (!toPoc) { note(`promoted (${r.status})`, "ok"); }
+      else if (r.verified) {
+        const lvl = r.assurance ? ` — ${r.assurance.standard} / ${r.assurance.method}` : "";
+        note(`✓ Verified PoC: the reproducer re-crashed the harness${lvl}`, "verified");
+      } else {
+        note(`✗ Promoted, but could not re-confirm the crash — ${r.verify_detail || "the reproducer did not re-crash"}`, "ok");
+      }
+      onChanged();
+    }
+    catch (e: any) { note(String(e.message || e), "error"); }
     finally { setBusy(undefined); }
   };
 
@@ -152,14 +164,21 @@ function CrashGroup({ a, onChanged, onViewFinding, onOpenSource }: {
         <button className="btn sm ghost" onClick={() => promote(false)} disabled={!!busy || !a.finding_id} title="Confirm this crash as a tracked finding">
           <Icon name="check" size={11} /> Promote
         </button>
-        <button className="btn sm primary" onClick={() => promote(true)} disabled={!!busy || !a.finding_id} title="Promote to a reproducer-backed PoC (re-verifiable)">
+        <button className="btn sm primary" onClick={() => promote(true)} disabled={!!busy || !a.finding_id} title="Promote to a PoC and re-run the reproducer now to verify it (executes the target — requires PoC verification enabled)">
           <Icon name="target" size={11} /> Promote → PoC
         </button>
         {a.finding_id && onViewFinding && (
           <button className="btn sm ghost" onClick={() => onViewFinding(a.finding_id!)} title="Open the finding"><Icon name="bug" size={11} /> Finding</button>
         )}
       </div>
-      {msg && <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>{msg}</div>}
+      {msg && (
+        msgKind === "verified"
+          ? <div style={{ fontSize: 11.5, marginTop: 6, padding: "4px 8px", borderRadius: 4,
+                          fontWeight: 600, color: "#2ea043",
+                          border: "1px solid #2ea043", background: "rgba(46,160,67,0.10)" }}>{msg}</div>
+          : <div className={msgKind === "error" ? undefined : "muted"}
+                 style={{ fontSize: 11, marginTop: 4, color: msgKind === "error" ? "#f85149" : undefined }}>{msg}</div>
+      )}
     </div>
   );
 }

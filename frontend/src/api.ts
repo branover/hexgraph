@@ -235,7 +235,7 @@ export const api = {
   campaignCoverage: (cid: string) => getJSON<Coverage>(`/api/campaigns/${cid}/coverage`),
   verifyArtifact: (aid: string) => postJSON<{ artifact_id: string; verified: boolean; detail?: string; assurance?: Assurance; output?: string }>(`/api/artifacts/${aid}/verify`, {}),
   minimizeArtifact: (aid: string) => postJSON<{ artifact_id: string; verified: boolean; detail?: string; assurance?: Assurance }>(`/api/artifacts/${aid}/minimize`, {}),
-  promoteArtifact: (aid: string, toPoc: boolean) => postJSON<{ artifact_id: string; finding_id: string; status: string; to_poc: boolean }>(`/api/artifacts/${aid}/promote`, { to_poc: toPoc }),
+  promoteArtifact: (aid: string, toPoc: boolean) => postJSON<{ artifact_id: string; finding_id: string; status: string; to_poc: boolean; verified?: boolean; verify_detail?: string; assurance?: Assurance }>(`/api/artifacts/${aid}/promote`, { to_poc: toPoc }),
   fuzzEngines: (surface?: string, targetId?: string) => {
     const qs = new URLSearchParams();
     if (surface) qs.set("surface", surface);

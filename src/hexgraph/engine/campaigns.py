@@ -1208,40 +1208,83 @@ def _rel_candidates(path: str) -> list[str]:
 
 # ── Promote a crash artifact to a tracked finding / PoC (the triage payoff) ───────
 
-def promote_artifact(session: Session, artifact: FuzzArtifact, *, to_poc: bool = False) -> dict:
-    """Promote a crash artifact into a tracked finding (and optionally seed a PoC spec
-    from its reproducer). A fuzz_crash already persists a finding at ingest; promoting
-    CONFIRMS it (status `confirmed`) so it leaves the triage inbox, and — when
-    `to_poc` — stamps `evidence.extra.poc` with a reproducer-backed spec so the existing
-    one-click verify path (verify_artifact, LLM-free) can re-prove it. No new finding is
-    duplicated; this is the triage → tracked-work transition (design §6.3)."""
+def promote_artifact(session: Session, artifact: FuzzArtifact, *, to_poc: bool = False,
+                     executor=None) -> dict:
+    """Promote a crash artifact into a tracked finding (and optionally a VERIFIED PoC).
+    A fuzz_crash already persists a finding at ingest; promoting CONFIRMS it (status
+    `confirmed`) so it leaves the triage inbox.
+
+    With `to_poc`, this is the one-click "prove it" action: it stamps
+    `evidence.extra.poc` with a reproducer-backed spec AND immediately re-runs the
+    verification (the same LLM-free crash re-run `verify_artifact` performs — the stored
+    minimized reproducer against the instrumented harness via the unforgeable `crash`
+    oracle), so the finding ends with a real verification result + assurance in one
+    action. The verification EXECUTES the target, so `to_poc` is gated by the execution
+    policy seam (`assert_allows_execution`): under static-only (PoC/fuzzing disabled) it
+    refuses BEFORE seeding, with actionable guidance — we never seed a PoC spec that can
+    never verify (a silent dead end). No new finding is duplicated; this is the
+    triage → tracked-work transition (design §6.3).
+
+    Returns `{artifact_id, finding_id, status, to_poc}` and, when `to_poc`, the
+    verification outcome (`verified`, `verify_detail`, `assurance`)."""
     from hexgraph.db.models import Finding
+    from hexgraph.policy import assert_allows_execution
 
     if not artifact.finding_id:
         raise CampaignError("artifact has no linked finding to promote")
     f = session.get(Finding, artifact.finding_id)
     if f is None:
         raise CampaignError("linked finding not found")
-    f.status = "confirmed"
     if to_poc:
-        ev = dict(f.evidence_json or {})
-        extra = dict(ev.get("extra") or {})
-        # A reproducer-backed PoC spec: the verify path re-runs the stored reproducer
-        # against the instrumented harness binary via the unforgeable `crash` oracle.
-        extra["poc"] = {
-            "kind": "fuzz_reproducer",
-            "reproducer_ref": artifact.content_cas,
-            "campaign_id": artifact.campaign_id,
-            "artifact_id": artifact.id,
-            "oracle": {"type": "crash"},
-            "note": ("Re-runs the campaign's minimized reproducer against the instrumented "
-                     "harness binary; 'verified' = the process really crashed on this input."),
-        }
-        ev["extra"] = extra
-        f.evidence_json = ev
+        # Promote→PoC = "prove it", which executes the target. Gate at the policy seam
+        # BEFORE mutating anything: under static-only there is no point seeding a PoC
+        # spec the verify path will refuse to run — fail closed with guidance instead.
+        # (This is the ONLY gate; we never relax execution here.)
+        assert_allows_execution()
+    f.status = "confirmed"
+    if not to_poc:
+        session.flush()
+        return {"artifact_id": artifact.id, "finding_id": f.id, "status": f.status,
+                "to_poc": False}
+
+    ev = dict(f.evidence_json or {})
+    extra = dict(ev.get("extra") or {})
+    # A reproducer-backed PoC spec: the verify path re-runs the stored reproducer
+    # against the instrumented harness binary via the unforgeable `crash` oracle.
+    extra["poc"] = {
+        "kind": "fuzz_reproducer",
+        "reproducer_ref": artifact.content_cas,
+        "campaign_id": artifact.campaign_id,
+        "artifact_id": artifact.id,
+        "oracle": {"type": "crash"},
+        "note": ("Re-runs the campaign's minimized reproducer against the instrumented "
+                 "harness binary; 'verified' = the process really crashed on this input."),
+    }
+    ev["extra"] = extra
+    f.evidence_json = ev
+    session.flush()
+
+    # Actually prove it: re-run the reproducer now (LLM-free, in the sandbox). This is the
+    # SAME path the one-click Verify button uses; doing it inline makes Promote→PoC a real
+    # one-click "verified PoC" rather than a seed-only no-op.
+    result = verify_artifact(session, artifact, executor=executor)
+    # Persist the verification onto the finding so the triage view (artifact_to_dict reads
+    # extra.verification) shows the verified badge + assurance — the proof becomes durable
+    # knowledge, not a transient response.
+    ev = dict(f.evidence_json or {})
+    extra = dict(ev.get("extra") or {})
+    extra["verification"] = {
+        "verified": bool(result.get("verified")),
+        "detail": result.get("detail"),
+        "assurance": result.get("assurance"),
+        "via": "promote_to_poc",
+    }
+    ev["extra"] = extra
+    f.evidence_json = ev
     session.flush()
     return {"artifact_id": artifact.id, "finding_id": f.id, "status": f.status,
-            "to_poc": to_poc}
+            "to_poc": True, "verified": bool(result.get("verified")),
+            "verify_detail": result.get("detail"), "assurance": result.get("assurance")}
 
 
 # ── Coverage (line-level shading for the Source viewer) ──────────────────────────
