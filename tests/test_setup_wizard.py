@@ -348,3 +348,210 @@ def test_run_setup_falls_back_when_no_tty(hg_home, monkeypatch):
     rc = w.run_setup(non_interactive=False)
     assert rc == 0
     assert "TTY" in called["reason"] or "TUI" in called["reason"]
+
+
+# ---------------------------------------------------------------------------
+# Coding-agent integration: MCP-server registration + VR-skill install
+# (the wizard's new optional step). The registration helpers in agent_setup
+# PERFORM the install by editing the agent's own config file directly, so they
+# are exercised headlessly here — and the step itself is driven with fakes.
+# ---------------------------------------------------------------------------
+
+
+def test_register_claude_user_creates_and_is_idempotent(tmp_path, monkeypatch):
+    from hexgraph import agent_setup
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    res = agent_setup.register_agent("claude", scope="user")
+    assert res["changed"] is True
+    assert res["path"] == str(tmp_path / ".claude.json")
+    data = json.loads((tmp_path / ".claude.json").read_text())
+    assert data["mcpServers"]["hexgraph"] == agent_setup.mcp_server_entry()
+    # Re-running is a no-op (idempotent).
+    res2 = agent_setup.register_agent("claude", scope="user")
+    assert res2["changed"] is False
+    assert json.loads((tmp_path / ".claude.json").read_text()) == data
+
+
+def test_register_claude_project_writes_dot_mcp_json(tmp_path, monkeypatch):
+    from hexgraph import agent_setup
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    monkeypatch.chdir(proj)
+    res = agent_setup.register_agent("claude", scope="project")
+    assert res["path"] == str(proj / ".mcp.json")
+    data = json.loads((proj / ".mcp.json").read_text())
+    assert data["mcpServers"]["hexgraph"] == agent_setup.mcp_server_entry()
+
+
+def test_register_gemini_user(tmp_path, monkeypatch):
+    from hexgraph import agent_setup
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    res = agent_setup.register_agent("gemini", scope="user")
+    assert res["path"] == str(tmp_path / ".gemini" / "settings.json")
+    data = json.loads((tmp_path / ".gemini" / "settings.json").read_text())
+    assert data["mcpServers"]["hexgraph"] == agent_setup.mcp_server_entry()
+
+
+def test_register_preserves_existing_keys(tmp_path, monkeypatch):
+    from hexgraph import agent_setup
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cfg = tmp_path / ".claude.json"
+    cfg.write_text(json.dumps({"theme": "dark",
+                               "mcpServers": {"other": {"command": "x", "args": []}}}))
+    agent_setup.register_agent("claude", scope="user")
+    data = json.loads(cfg.read_text())
+    assert data["theme"] == "dark"
+    assert data["mcpServers"]["other"] == {"command": "x", "args": []}
+    assert data["mcpServers"]["hexgraph"] == agent_setup.mcp_server_entry()
+
+
+def test_register_refuses_unparseable_json(tmp_path, monkeypatch):
+    from hexgraph import agent_setup
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cfg = tmp_path / ".claude.json"
+    cfg.write_text("{ this is not json ")
+    with pytest.raises(RuntimeError):
+        agent_setup.register_agent("claude", scope="user")
+    assert cfg.read_text() == "{ this is not json "  # left untouched
+
+
+def test_register_codex_user_appends_table_and_is_idempotent(tmp_path, monkeypatch):
+    from hexgraph import agent_setup
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    res = agent_setup.register_agent("codex", scope="user")
+    assert res["changed"] is True
+    path = tmp_path / ".codex" / "config.toml"
+    text = path.read_text()
+    assert "[mcp_servers.hexgraph]" in text
+    res2 = agent_setup.register_agent("codex", scope="user")
+    assert res2["changed"] is False  # idempotent
+    assert path.read_text() == text
+
+
+def test_register_codex_preserves_existing_toml(tmp_path, monkeypatch):
+    from hexgraph import agent_setup
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    path = tmp_path / ".codex" / "config.toml"
+    path.parent.mkdir(parents=True)
+    path.write_text('model = "o3"\n')
+    agent_setup.register_agent("codex", scope="user")
+    text = path.read_text()
+    assert 'model = "o3"' in text and "[mcp_servers.hexgraph]" in text
+    tomllib = pytest.importorskip("tomllib")
+    parsed = tomllib.loads(text)
+    assert parsed["model"] == "o3" and "hexgraph" in parsed["mcp_servers"]
+
+
+def test_register_codex_project_scope_rejected(monkeypatch, tmp_path):
+    from hexgraph import agent_setup
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    with pytest.raises(ValueError):
+        agent_setup.register_agent("codex", scope="project")
+
+
+def test_register_unknown_agent_rejected():
+    from hexgraph import agent_setup
+
+    with pytest.raises(ValueError):
+        agent_setup.register_agent("nope", scope="user")
+
+
+def test_default_skill_dir_under_home(tmp_path, monkeypatch):
+    from hexgraph import agent_setup
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert agent_setup.default_skill_dir() == str(tmp_path / ".claude" / "skills")
+
+
+# --- The wizard step driven with fakes (no real TTY) -----------------------
+
+
+class _FakeAnswer:
+    def __init__(self, value):
+        self._value = value
+
+    def ask(self):
+        return self._value
+
+
+class _FakeQuestionary:
+    """Scripts answers in order; confirm/select/text each pop the next value."""
+
+    def __init__(self, answers):
+        self._answers = list(answers)
+
+    def _next(self):
+        return _FakeAnswer(self._answers.pop(0))
+
+    def confirm(self, *a, **k):
+        return self._next()
+
+    def select(self, *a, **k):
+        return self._next()
+
+    def text(self, *a, **k):
+        return self._next()
+
+    class Choice:
+        def __init__(self, title, value=None):
+            self.title = title
+            self.value = value
+
+
+class _FakeConsole:
+    def rule(self, *a, **k):
+        pass
+
+    def print(self, *a, **k):
+        pass
+
+
+def test_coding_agent_step_registers_and_installs(tmp_path, monkeypatch):
+    from hexgraph import agent_setup
+    from hexgraph.setup_wizard import _coding_agent_step
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    skill_dir = tmp_path / "skills"
+    q = _FakeQuestionary([
+        True, "claude", "user",                 # register MCP for claude, user scope
+        True, "__custom__", str(skill_dir),     # install skill to a custom dir
+    ])
+    _coding_agent_step(_FakeConsole(), q)
+    data = json.loads((tmp_path / ".claude.json").read_text())
+    assert data["mcpServers"]["hexgraph"] == agent_setup.mcp_server_entry()
+    assert (skill_dir / "hexgraph-vr" / "SKILL.md").is_file()
+
+
+def test_coding_agent_step_skip_both(tmp_path, monkeypatch):
+    from hexgraph.setup_wizard import _coding_agent_step
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    q = _FakeQuestionary([False, False])  # decline both prompts
+    _coding_agent_step(_FakeConsole(), q)
+    assert not (tmp_path / ".claude.json").exists()
+    assert not (tmp_path / ".claude" / "skills").exists()
+
+
+def test_non_interactive_setup_skips_agent_step(hg_home, tmp_path, monkeypatch):
+    # The whole agent step lives on the interactive path, so the CI-safe baseline
+    # must never reach it — guard that explicitly.
+    import hexgraph.setup_wizard as w
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(w, "run_build_step", lambda *a, **k: 0)
+    monkeypatch.setattr(w, "_docker_image_exists", lambda tag: True)
+    monkeypatch.setattr(w, "_coding_agent_step",
+                        lambda *a, **k: pytest.fail("agent step ran non-interactively"))
+    rc = w.run_setup(non_interactive=True)
+    assert rc == 0
+    assert not (tmp_path / ".claude.json").exists()
+    assert not (tmp_path / ".codex").exists()
+    assert not (tmp_path / ".gemini").exists()

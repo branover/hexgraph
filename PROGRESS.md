@@ -546,6 +546,25 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-03: **feat: setup wizard registers MCP + skill; fix: just --list truncation** (branch
+  `build/setup-mcp`). Two setup-experience improvements in one PR. **(1)** The interactive `hexgraph
+  setup` wizard now offers a final **coding-agent integration** step: register HexGraph's MCP server
+  with Claude Code / Codex / gemini-cli (pick agent + scope — project vs user) and install the VR
+  skill (pick destination: `~/.claude/skills`, a project `.claude/skills`, or a custom path). New
+  `agent_setup.register_agent()` PERFORMS the registration by editing the agent's own config file
+  directly — JSON merge into `mcpServers` (Claude `~/.claude.json` / project `.mcp.json`; gemini
+  `~/.gemini/settings.json`) or a `[mcp_servers.hexgraph]` TOML table for Codex — fully idempotent
+  (re-running is a no-op; refuses to clobber an unparseable/conflicting config). Both steps are
+  local-only filesystem edits, no network and no secret (the MCP command carries no key). The step
+  lives only on the interactive path, so the **non-interactive / CI baseline never prompts or installs
+  anything** (`hexgraph setup --non-interactive` proven: applies the static-only baseline, exit 0, no
+  agent configs touched). **(2)** Fixed `just --list` description truncation: `just` shows only the
+  single comment line directly above a recipe, so multi-line blocks were leaking a sentence fragment
+  into the menu (`setup`, `install`, `serve`, `up`, `app-build`, `demo`). Reordered each so the
+  complete one-liner sits closest to the recipe; every menu description now reads as a full phrase.
+  New `tests/test_setup_wizard.py` covers registration per agent/scope, idempotency, JSON/TOML
+  preservation, the skill install, the wizard step driven with fakes, and the non-interactive guard.
+  Docs updated (README setup, `docs/setup.md`, `docs/mcp.md`). `just test` green.
 - 2026-06-03: **fix: fuzz campaign live metrics — edges_covered + mid-run progress** (branch
   `fix/fuzz-live-metrics`). Two related fuzz-campaign bugs, fixed as one PR. **(A) Campaigns
   reported "0 edges" forever despite millions of execs.** ROOT CAUSE: the libFuzzer probe

@@ -35,11 +35,12 @@ default:
 # setup — the core path a brand-new user needs (run these first)
 # ===========================================================================
 
-# ★ One command to get running: install deps + build the web UI, then launch the
-# interactive setup WIZARD — choose which optional features to enable (each shown with
-# its SECURITY IMPLICATION) + non-secret config, then build the chosen images + init the
-# DB. CI-safe: with no TTY (or `just setup yes=1`) it applies the static-only baseline +
-# the sandbox image WITHOUT prompting, so an unattended `just setup` never hangs.
+# The wizard lets you choose which optional features to enable (each shown with its SECURITY
+# IMPLICATION) + non-secret config, optionally register HexGraph's MCP server with a coding agent
+# + install the VR skill, then builds the chosen images + inits the DB. CI-safe: with no TTY (or
+# `just setup yes=1`) it applies the static-only baseline + the sandbox image WITHOUT prompting
+# (and skips the MCP/skill install), so an unattended `just setup` never hangs.
+# ★ Bootstrap venv+deps+SPA, then run the interactive setup wizard (the one command to get running).
 [group('setup')]
 setup yes="0": install ui
     #!/usr/bin/env bash
@@ -60,8 +61,8 @@ setup yes="0": install ui
 venv:
     python3 -m venv .venv
 
-# Install the hexgraph package (server + dev extras) into the venv.
 # Rerun after changing dependencies in pyproject.toml.
+# Install the hexgraph package (server + dev extras) into the venv.
 [group('setup')]
 install: venv
     {{pip}} install -e ".[server,dev]"
@@ -70,10 +71,10 @@ install: venv
 # run — start the app
 # ===========================================================================
 
-# Start the loopback-only API/UI at http://127.0.0.1:8765 (mock backend by default).
 # Ensures the served SPA is CURRENT first (ui-check rebuilds it only if stale) — a plain
 # `just serve` used to silently ship an OLD bundle when frontend/ had changed since the
 # last build, hiding new UI (the Campaigns tab, assurance chips, …) until you ran `just ui`.
+# Start the loopback-only API/UI at http://127.0.0.1:8765 (mock backend by default).
 [group('run')]
 serve: ui-check
     HEXGRAPH_HOST={{host}} HEXGRAPH_PORT={{port}} {{py}} -m hexgraph.cli serve
@@ -146,18 +147,17 @@ build-image with_cross="0":
 fuzz-build:
     docker build -f docker/fuzz.Dockerfile -t {{fuzz_image}} .
 
-# Build the full HexGraph app image (frontend SPA + backend + docker CLI) for the
-# `docker compose up` path. The host pip install (`just setup`) remains the primary/dev
-# path; this is for running the whole thing in a container. Multi-stage: Node builds the
-# SPA, Python installs the package with the bundle. REBUILD WHEN you change app source,
-# frontend/, or docker/app.Dockerfile.
+# The host pip install (`just setup`) remains the primary/dev path; this is for running the
+# whole thing in a container. Multi-stage: Node builds the SPA, Python installs the package with
+# the bundle. REBUILD WHEN you change app source, frontend/, or docker/app.Dockerfile.
+# Build the full HexGraph app image (frontend SPA + backend + docker CLI) for `docker compose up`.
 [group('build')]
 app-build:
     docker build -f docker/app.Dockerfile -t {{app_image}} .
 
-# Start HexGraph via docker-compose at http://{{host}}:{{port}} (published on host
-# loopback only). Mounts the host Docker socket so the app spawns its sandbox/build/fuzz
-# sibling containers on the host daemon — see the security note in docker-compose.yml.
+# Mounts the host Docker socket so the app spawns its sandbox/build/fuzz sibling containers on
+# the host daemon — see the security note in docker-compose.yml.
+# Start HexGraph via docker-compose at http://{{host}}:{{port}} (published on host loopback only).
 [group('run')]
 up:
     docker compose up --build
@@ -220,9 +220,9 @@ fixtures:
 # demo — the full offline loop (doubles as a smoke test)
 # ===========================================================================
 
-# Narrated offline loop: ingest firmware → build-from-source INSTRUMENTED (MockBuilder) → fuzz
 # campaign (MockFuzzer) → verified PoC + assurance ladder → spawn follow-up → graph. Mock LLM,
-# no key/network, $0; needs only the base sandbox image (Docker) for recon/unpack. Smoke test.
+# no key/network, $0; needs only the base sandbox image (Docker) for recon/unpack.
+# Narrated offline loop (ingest → instrumented build → fuzz → verified PoC → graph); also a smoke test.
 [group('demo')]
 demo:
     {{py}} -m hexgraph.demo

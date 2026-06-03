@@ -16,6 +16,11 @@ hypotheses, and annotations, and run sandboxed tasks.
 .venv/bin/hexgraph mcp install  # prints the exact registration command for your agent
 ```
 
+The setup wizard can do this for you. When you run `hexgraph setup` interactively it offers to
+register the MCP server with the agent of your choice (for this project or globally) and to install
+the VR skill, so you usually do not need to wire it up by hand. The commands above are the manual path
+if you skipped that step or want to script it.
+
 The MCP server speaks JSON-RPC over stdio, and your agent spawns it on demand. Run it by hand and it
 prints a "ready" line to stderr and then blocks, which is correct; confirm it with `hexgraph mcp
 --check`. The web UI and the MCP server run at the same time, as separate processes sharing the
