@@ -467,18 +467,17 @@ export default function Workspace() {
             {fc && <span className={"tbadge" + (fc.hot ? " hot" : "")} style={{ marginLeft: "auto" }}>{fc.n}</span>}
           </div>
           <div className="mt">{t.kind}{t.arch ? " · " + t.arch : ""}</div>
-          <Launcher allowed={allowed} onChoose={(type) => setLaunchFor({ target: t, type })}
-                    onFuzz={caps.features?.fuzzing && t.kind !== "firmware_image" ? () => setFuzzFor(t) : undefined} />
-          {caps.features?.fuzzing && t.kind !== "firmware_image" && (
-            <button className="btn sm icon ghost" title="Start a fuzz campaign on this target (detached, reapable; live status in the Campaigns tab)"
-                    onClick={(e) => { e.stopPropagation(); setFuzzFor(t); }}>
-              <Icon name="bug" size={12} />
+          {/* Action cluster: Run (+ its in-menu Fuzz row) and Remove, in one aligned top-right
+              row. The standalone fuzz button was removed — it duplicated the Launcher menu's
+              "Fuzz campaign…" row and the two absolutely-positioned controls collided (issue 7). */}
+          <div className="row-actions" onClick={(e) => e.stopPropagation()}>
+            <Launcher allowed={allowed} onChoose={(type) => setLaunchFor({ target: t, type })}
+                      onFuzz={caps.features?.fuzzing && t.kind !== "firmware_image" ? () => setFuzzFor(t) : undefined} />
+            <button className="btn sm icon ghost trash" title="Remove target (hides its nodes/findings)"
+                    onClick={(e) => { e.stopPropagation(); removeTarget(t); }}>
+              <Icon name="x" size={12} />
             </button>
-          )}
-          <button className="btn sm icon ghost trash" title="Remove target (hides its nodes/findings)"
-                  onClick={(e) => { e.stopPropagation(); removeTarget(t); }}>
-            <Icon name="x" size={12} />
-          </button>
+          </div>
         </div>
         {childrenOf(t.id).map((c) => TreeRow(c, true))}
       </div>
@@ -766,6 +765,8 @@ export default function Workspace() {
                      isolateType={pinType || hoverType}
                      focus={focus} onFocus={(id, hop) => focusOn(id, hop)} onClearFocus={clearFocus}
                      groupBy={view === "map" ? "target" : groupBy} onGroupBy={onGroupBy}
+                     mapMode={view === "map"}
+                     onRoomDrill={(tid) => { switchView("graph"); scopeToTarget(tid); onGraphSelect(tid, "target"); }}
                      layers={layers} onLayers={onLayers}
                      filters={filters} onFilters={onFilters}
                      findings={findingsLayer} onFindings={onFindingsLayer}

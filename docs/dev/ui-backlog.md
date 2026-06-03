@@ -1,5 +1,76 @@
 # UI improvement backlog
 
+## Graph-canvas interaction/layout fixes (2026-06-02)
+
+**Shipped in `build/graph-canvas-fixes`.** A batch of hands-on graph-canvas bugs, fixed on top of
+the merged graph redesign (PR #88: compound rooms, skeleton-first loading, focus/hide, LOD,
+layers/filters). Each was re-verified LIVE first (Playwright, isolated home, mock, port 8771);
+two had already shifted under #88 / #86 and are noted as such. **Type color-coding untouched (D8).**
+
+- **#1 Room hover drew a filled blob over the group — FIXED.** The `.hl`/`.focus` classes put a
+  0.3-opacity `underlay` on the hovered element; on a huge compound *room* parent that rendered as
+  a big filled ellipse smothering its contents. Added room-specific guard rules (last in the
+  stylesheet, so they win for `node[gtype='room']`): a room emphasizes/recedes via its BORDER +
+  label only, never an underlay-fill or opacity-blob. `GraphView.tsx`.
+- **#2 Hover dimmed the hovered node + its surroundings (inverted) — FIXED.** Reworked the hover
+  handler to EMPHASIZE the hovered node + neighborhood (room hover → room + its whole subtree, since
+  a compound parent has no graph-edge neighbors) and gently recede the rest. Bumped the recede
+  opacity `0.12 → 0.28` so the backdrop stays present, not deleted.
+- **#3 Room placed far from a loose target dot — ALREADY FIXED by #88.** Verified: a target renders
+  ONLY as its `room:<id>` box, never also as a free-floating anchor dot. No residual disconnect.
+- **#4 + #11 Two duplicate +/- pairs & inconsistent rail sizing — FIXED.** The standalone
+  collapse/expand-all (−/+) buttons duplicated both the zoom (+/−) pair AND the filter-menu's
+  expand/collapse rows. Replaced them with ONE skeleton-toggle button (firmware/chip glyph, not
+  +/-), leaving the zoom +/− as the only pair, now a single segmented `+`/fit/`−` cluster. The
+  whole rail is a fixed-width aligned column (group-by pill, layer/filter/draw icons, zoom cluster
+  all 132px wide, 32px tall). `theme.css` + `GraphView.tsx`.
+- **#5 Scroll-to-zoom too slow — FIXED.** `wheelSensitivity` 0.25 → 0.6 (2.4× more responsive).
+- **#6 Labels missing where nodes are individuated — FIXED.** `LOD_NEAR` 1.35 → 0.85 (the whole
+  z≈0.5–1.35 MID band was a label dead-zone), MID no longer zeroes leaf labels (only the
+  `min-zoomed-font-size` floor hides a genuinely tiny one), and the resting leaf text-opacity floor
+  is 0.5 (was mapped to 0.0 for low-degree nodes — they were never labelled at any zoom).
+- **#7 Target-card Run dropdown overlapped the fuzz/gear button — FIXED (the inspector card was
+  already clean post-#86).** The left target-tree row had a standalone fuzz `bug` button colliding
+  with the absolutely-positioned Run pill + trash; removed it (it duplicated the Run menu's "Fuzz
+  campaign…" row) and put Run + Remove in one aligned `.row-actions` flex cluster. `Workspace.tsx`.
+- **#8 Map ≡ Graph (did nothing visible) — FIXED (my-call differentiation).** Map was the by-target
+  Graph in disguise. Map is now a distinct collapsed-skeleton TERRITORY overview: a `mapMode` prop
+  force-collapses every room to a finding-weighted card regardless of tier, never auto-expands
+  interiors, drops the purely-structural cross-target ribbons (semantic links + socket bus only),
+  and double-tapping a card DRILLS into the scoped Graph for that binary. At SMALL/MEDIUM the
+  difference is obvious (Map = cards, Graph = full detail); at LARGE/PATHOLOGICAL the two converge
+  because Graph already opens skeleton-first (per design D4: "Map = the skeleton given a name") — an
+  honest, intended overlap. `GraphView.tsx` + `Workspace.tsx`.
+- **#9 Right-click verb menu rendered full-pane-width — FIXED.** Gave the verb menu an explicit
+  compact width (200px) + a `max-width: 220px` CSS cap with `white-space: nowrap` rows.
+- **#10 Browser native context menu leaked over graph objects — FIXED.** Cytoscape's `cxttap` only
+  preventDefaults over NODES and fires after the native menu; added an unconditional `contextmenu`
+  preventDefault on the cy container (removed on teardown) so only the app verb menu ever shows
+  (verified `defaultPrevented` on empty canvas + edges).
+
+**Other quirks fixed in passing:** removed tracked build-cache artifact `frontend/tsconfig.tsbuildinfo`
+(gitignored + untracked).
+
+### Recurring graph-canvas assessment checks (add to every graph-UI review)
+
+Information completeness is NOT enough — these INTERACTION states must be exercised in Playwright
+(scripted `mouseover` / `mouse.wheel` / right-`click` / view-switch) and the PNGs viewed as a human:
+
+1. **Hover a leaf node** — the hovered node + neighbors POP; the rest recedes but stays present; the
+   parent room is a clean bounding box (never a filled blob).
+2. **Hover a room card** — the room + its contents light up cleanly; the room never becomes a filled
+   opaque ellipse and its own children are not dimmed into a smear.
+3. **Scroll-zoom** — a few wheel notches noticeably change scale (not glacial); zoom feels comfortable.
+4. **Zoom to where nodes are individuated** — leaf labels (function/endpoint/string), not just
+   findings, are visible; nothing overprints.
+5. **Right-click a node / a room / an edge / empty canvas** — only the COMPACT app verb menu appears;
+   the browser's native menu never shows; the verb menu is not full-pane-width.
+6. **Switch Map ⇆ Graph** — the views are visibly different (Map = collapsed cards / territory; Graph
+   = the detailed/skeleton node-link), and double-tapping a Map card drills into the scoped Graph.
+7. **Focus a node (double-click)** — focused neighborhood is the obvious subject; off-focus recedes;
+   the room box stays a clean outline; the breadcrumb shows the path and clears in one click.
+8. **Control rail** — one aligned column; a single +/- (zoom) pair; consistent button sizing.
+
 ## Run/fuzz UX on the target card (2026-06-02)
 
 **Shipped in `build/run-fuzz-ux`.** Made the right-panel target card's launch UX expressive
