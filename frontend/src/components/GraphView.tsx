@@ -384,13 +384,26 @@ export default function GraphView({
   // graph, tier); the user's later manual expand/collapse is preserved until that key changes.
   useEffect(() => {
     if (groupBy === "none") { setExpandedRooms(new Set()); return; }
-    // Map view (issue 8): force the pure collapsed skeleton — every room a card, a firmware
-    // grandparent expanded only enough to show its child-binary cards (when few), interiors
-    // never auto-shown. This is what makes Map distinct from the by-target Graph.
+    // Map view (issue 8): the pure collapsed skeleton — every room a finding-weighted card, a
+    // firmware grandparent expanded only enough to show its child-binary CARDS, interiors never
+    // auto-shown. This is what makes Map distinct from the by-target Graph.
+    //
+    // Expand only PURE CONTAINER rooms: a room with child ROOMS but NO interior content nodes of
+    // its own. A firmware grandparent qualifies (expanding it reveals its child-binary cards); a
+    // binary like httpd that ALSO carries a child variant room does NOT — the old child-count
+    // rule expanded httpd (it has an instrumented child room) and thereby dumped all 37 of its
+    // own functions into the territory map, which is exactly why Map looked identical to Graph
+    // (the issue-8 deviation). "Interior content" means type==='node' only — a finding that rolls
+    // up to a room is part of its card, not interior structure, so it must not disqualify a
+    // container. Capped by the ceiling so a real firmware with hundreds of children stays a
+    // single card rather than an illegible grid.
     if (mapMode) {
       const childCount = new Map<string, number>();
       for (const r of model.rooms) { const p = model.parentOf.get(r.id); if (p) childCount.set(p, (childCount.get(p) || 0) + 1); }
-      setExpandedRooms(new Set([...childCount.entries()].filter(([, c]) => c <= ROOM_AUTO_EXPAND_CEILING).map(([id]) => id)));
+      const ownsContent = new Set<string>();
+      for (const n of graph.nodes) { if (n.type !== "node") continue; const r = model.parentOf.get(n.id); if (r) ownsContent.add(r); }
+      setExpandedRooms(new Set([...childCount.entries()]
+        .filter(([id, c]) => c <= ROOM_AUTO_EXPAND_CEILING && !ownsContent.has(id)).map(([id]) => id)));
       autoKey.current = "map|" + graph.project_id;
       return;
     }
@@ -693,7 +706,8 @@ export default function GraphView({
             shape: "round-rectangle",
             width: "mapData(roomWeight, 8, 60, 78, 150)" as any, height: "mapData(roomWeight, 8, 60, 44, 82)" as any,
             "background-color": (n: any) => KIND[n.data("kind")] || NODE_T[n.data("kind")] || "#7d8799",
-            "background-opacity": 0.92,
+            // clean rooms (no findings) recede a touch so the finding-bearing rooms own the eye.
+            "background-opacity": (n: any) => (n.data("roomWorst") >= 0 ? 0.92 : 0.74),
             // Issue 5 (round 2): the title was BLACK (#0a0c12) centered on the card. On a
             // mid-brightness fill (the blue/teal kind tints) — and even more so over the dark
             // canvas behind a faint card — that read as black-on-black/unreadable. Make it LIGHT
@@ -705,12 +719,16 @@ export default function GraphView({
             "text-background-color": "#0a0c12", "text-background-opacity": 0.78, "text-background-padding": "3px",
             "text-background-shape": "roundrectangle",
             "text-max-width": "138px", "text-wrap": "ellipsis", "text-margin-y": 0,
-            // finding-severity rollup ring: the worst finding inside tints the border (red/orange).
-            "border-width": (n: any) => (n.data("roomWorst") >= 3 ? 4 : n.data("roomWorst") >= 0 ? 2.5 : 1.5),
-            "border-color": (n: any) => (n.data("roomSev") ? SEV[n.data("roomSev")] : "#0a0c12"),
+            // finding-severity rollup ring. The glow (underlay) is RESERVED for high/critical so
+            // a few hot rooms pop out of a large skeleton — previously EVERY finding-bearing room
+            // washed at ≥0.22, so 78/251 rooms merged into a uniform pink haze and no single hot
+            // room pulled the eye (GRAPH-01). Now only high/critical wash strongly, medium gets a
+            // faint tint, low/info carry just a severity-colored border, clean rooms none.
+            "border-width": (n: any) => { const w = n.data("roomWorst"); return w >= 3 ? 4 : w >= 1 ? 2.5 : w >= 0 ? 2 : 1.2; },
+            "border-color": (n: any) => (n.data("roomSev") ? SEV[n.data("roomSev")] : "#222a3a"),
             "underlay-color": (n: any) => (n.data("roomSev") ? SEV[n.data("roomSev")] : "#39c5cf"),
-            "underlay-opacity": (n: any) => (n.data("roomWorst") >= 3 ? 0.45 : n.data("roomWorst") >= 0 ? 0.22 : 0),
-            "underlay-padding": (n: any) => (n.data("roomWorst") >= 3 ? 9 : 6),
+            "underlay-opacity": (n: any) => { const w = n.data("roomWorst"); return w >= 3 ? 0.5 : w === 2 ? 0.16 : 0; },
+            "underlay-padding": (n: any) => (n.data("roomWorst") >= 3 ? 10 : 6),
             "transition-property": "opacity", "transition-duration": "160ms" as any,
         } },
         // Hubs (degree ≥ 8): a degree-driven 30→40px ramp + a slight glow.
@@ -799,6 +817,12 @@ export default function GraphView({
         // FAR: edge labels are the collision culprit — off (incl. the normally-persistent
         // semantic + meta labels); meta ribbons keep their width/color, just lose the text.
         { selector: "edge.lod-far", style: { label: "", "min-zoomed-font-size": 0 } },
+        // FAR: the cross-room meta ribbons recede so the room CARDS (and their severity glow) own
+        // the frame. At a zoom where an individual ribbon is unreadable anyway, a wall of
+        // 0.6-opacity semantic ribbons otherwise washes the whole skeleton one warm colour and
+        // drowns the hot-room heat (GRAPH-01) — dim them to context so the rooms speak.
+        { selector: "edge[eclass = 'meta'].lod-far", style: { opacity: 0.2 } },
+        { selector: "edge[eclass = 'meta-structural'].lod-far", style: { opacity: 0.07 } },
 
         // MID: structure — the skeleton's default frame often lands HERE (LARGE), so collapsed
         // room cards keep a readable below-card label (smaller than FAR since zoom is higher);
