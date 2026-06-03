@@ -55,30 +55,38 @@ def _ensure_outdir_writable(path: Path) -> None:
     """Make the host-side `/out` bind-mount writable by the sandbox container's uid.
 
     The container always runs as ``--user 1000:1000`` (non-root, UNCONDITIONAL). The host
-    process, though, creates the out-dir as ITS OWN uid — which equals 1000 only by luck.
-    On any host whose uid != 1000 (a fresh user account, a CI runner, a packaged service)
-    the container then can't create ``/out/<file>`` and every extract/exec path dies with
-    EACCES. Fix it by uid, WITHOUT weakening the container:
+    process, though, creates the out-dir as ITS OWN uid/gid — which equals 1000 only by
+    luck. On any host whose uid != 1000 (a fresh user account, a CI runner, a packaged
+    service) the container then can't create ``/out/<file>`` and every extract/exec path
+    dies with EACCES. Grant access by uid/gid, WITHOUT weakening the container and WITHOUT
+    opening the dir to other local users:
 
-      * host uid == 1000 → already owned by the container uid; nothing to do.
-      * host is root     → chown the dir to 1000 (we hold the privilege; tightest option).
-      * otherwise        → widen the dir's mode so uid 1000 (which the unmatched container
-                           maps to "other") can write. The dir is per-run and lives under
-                           the private ``HEXGRAPH_HOME``, whose parent mode gates access, so
-                           opening the leaf dir does not actually expose it.
+      * effective uid == 1000 → already owned by the container uid; nothing to do.
+      * effective uid is root → chown the dir to 1000 (we hold the privilege; tightest).
+      * otherwise             → make the dir group-writable at ``0o770`` (owner+group only,
+                                no "other"). The dir's group is the host's own gid, and
+                                ``_hardening_args`` adds that gid to the container with
+                                ``--group-add`` so the container writes via the group.
 
-    Only the host-side bind-mount dir changes — the container's ``--user``, dropped caps,
-    read-only rootfs, ``--network none`` and the rest of the hardening are untouched.
+    The ``0o770`` matters: a bare ``0o777`` would expose the per-run out-dir (extracted
+    firmware, PoC/fuzz output) to ANY local user, because the real out-dir roots are not
+    private — poc/fuzz/build use ``tempfile.mkdtemp()`` under ``/tmp`` (1777), and
+    ``HEXGRAPH_HOME``/``projects/`` are created at 0o755. Group-write keeps access to the
+    host user + the container's added gid only. Only the host-side bind-mount dir changes;
+    the container's ``--user``, dropped caps, read-only rootfs and ``--network none`` are
+    untouched.
     """
-    if not hasattr(os, "getuid"):  # non-POSIX host: bind-mount uid semantics don't apply
+    if not hasattr(os, "geteuid"):  # non-POSIX host: bind-mount uid semantics don't apply
         return
-    host_uid = os.getuid()
-    if host_uid == SANDBOX_UID:
+    euid = os.geteuid()
+    if euid == SANDBOX_UID:
         return
-    if host_uid == 0:
+    if euid == 0:
         os.chown(path, SANDBOX_UID, SANDBOX_GID)
     else:
-        os.chmod(path, 0o777)
+        # The dir's group is the host's egid (set at mkdir); the container joins that gid
+        # via --group-add (see _hardening_args). Group-write, NO "other" — so no exposure.
+        os.chmod(path, 0o770)
 
 
 class SandboxError(RuntimeError):
@@ -179,6 +187,13 @@ class SandboxRunner:
             # allow (see _seccomp_aslr_profile). The single, narrow, documented relaxation.
             *(["--security-opt", f"seccomp={_seccomp_aslr_profile()}"] if disable_aslr else []),
             "--user", f"{SANDBOX_UID}:{SANDBOX_GID}",
+            # When the host uid != 1000 (a fresh account / CI runner / packaged service) the
+            # container can't write the host-owned /out bind-mount as uid 1000. Add the host's
+            # OWN gid as a supplementary group so it writes a 0o770 group-writable out-dir
+            # (see _ensure_outdir_writable) without granting "other" access — and WITHOUT
+            # adding the root group (skipped when host is root; that path chowns /out instead).
+            *(["--group-add", str(os.getegid())]
+              if (hasattr(os, "geteuid") and os.geteuid() not in (0, SANDBOX_UID)) else []),
             # Resource ceilings — the ONLY flags a ResourceSpec governs (empty under
             # `unconstrained`, so the container can use the whole host).
             *resources.docker_resource_args(),
