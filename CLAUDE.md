@@ -25,7 +25,7 @@ Post-MVP, **every new feature or major atomic change happens on its own branch i
 
 **The merge gate — a PR-review subagent, every time.** Before a worktree branch merges:
 1. Run `just test` (and `just demo` if the loop is touched) green in the worktree.
-2. **A review subagent — a *different* agent than whoever wrote the code — must review the PR diff** (correctness, the security invariants [loopback / sandbox / secret-never-logged / the opt-in execution policy], test quality, and that docs/PROGRESS/migrations were updated). **Who launches it depends on who can:**
+2. **A review subagent — a *different* agent than whoever wrote the code — must review the PR diff** (correctness, the security invariants [loopback / sandbox / secret-never-logged / the opt-in execution policy], test quality, and that docs/migrations were updated). **Who launches it depends on who can:**
    - If you are doing the work yourself and the `Agent` tool is available to you, **dispatch the reviewer yourself**.
    - **If you were *delegated* this work by a parent/orchestrator agent (you are a work-subagent) and cannot spawn a nested subagent: do NOT treat reviewing your own diff as a substitute, and do NOT merge on your own review. Finish the implementation, push the branch, open the PR, and STOP — report the PR number back. The agent that initiated you then launches the PR-review subagent against your PR** (and addresses/merges per the steps below). Whoever spawns work-subagents **owns** launching the reviewer for every PR those subagents produce — this is a standing orchestrator responsibility, not optional.
    - Self-reviewing inline is only an acceptable *fallback* when no agent in the chain can spawn a separate reviewer at all, and the PR must say so explicitly.
