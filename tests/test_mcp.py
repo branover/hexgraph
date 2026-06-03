@@ -406,3 +406,87 @@ def test_graph_read_tools(hg_home):
     assert any(x["id"] == n["id"] for x in mcp_tools.list_nodes(pid, node_type="function"))
     mcp_tools.create_edge(pid, "node", n["id"], "target", tid, "contains")
     assert any(e["src_id"] == n["id"] for e in mcp_tools.list_edges(pid, node_id=n["id"]))
+
+
+# ── agent-surface audit: tools an agent needs but couldn't reach (build log, promote a
+#    firmware file to a target, resume a campaign) + their catalog membership / skill docs. ──
+
+def test_new_tools_in_catalog_groups():
+    """build_log is read-only; add_file_as_target + resume_fuzz_campaign execute in the
+    sandbox, so they live in `run`. A drop would otherwise go unnoticed."""
+    read_names = {t["name"] for t in mcp_tools.catalog({"read"})}
+    run_names = {t["name"] for t in mcp_tools.catalog({"run"})}
+    assert "build_log" in read_names
+    assert {"add_file_as_target", "resume_fuzz_campaign"} <= run_names
+    for name in ("build_log", "add_file_as_target", "resume_fuzz_campaign"):
+        t = next(x for x in mcp_tools.catalog() if x["name"] == name)
+        assert callable(t["fn"]) and t["schema"]["type"] == "object"
+
+
+def test_build_log_tool(hg_home):
+    """A failed build's compile log is the only iteration signal — the agent must be able
+    to read it. A build with no stored log returns "" (not an error); an unknown id errors."""
+    from hexgraph.db.models import Build
+    from hexgraph.engine import cas
+    with session_scope() as s:
+        p = create_project(s, name="bl")
+        sha = cas.put(p, "configure: error: missing zlib\nmake: *** [all] Error 1\n")
+        b = Build(project_id=p.id, build_spec_id="spec1", source_tree_id="tree1",
+                  status="failed", returncode=1, error="build failed", log_cas=sha)
+        s.add(b)
+        s.flush()
+        bid = b.id
+        empty = Build(project_id=p.id, build_spec_id="s2", source_tree_id="t2", status="queued")
+        s.add(empty)
+        s.flush()
+        empty_id = empty.id
+
+    out = mcp_tools.build_log(bid)
+    assert out["status"] == "failed" and out["returncode"] == 1 and out["error"] == "build failed"
+    assert "missing zlib" in out["log"]
+    assert mcp_tools.build_log(empty_id)["log"] == ""           # no log → "", not an error
+    assert mcp_tools.build_log("nope").get("error") == "build not found"
+
+
+def test_add_file_as_target_tool(hg_home, monkeypatch):
+    """Promote a binary from an unpacked firmware FS into its own analyzable target — the
+    bridge from browsing the rootfs to decompiling it. Idempotent; bad path/target → error."""
+    from test_filesystem import _firmware_with_fs
+    monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: False)  # skip recon
+    with session_scope() as s:
+        p, fw = _firmware_with_fs(s)
+        fwid = fw.id
+
+    out = mcp_tools.add_file_as_target(fwid, "usr/sbin/httpd")
+    assert out.get("id") and out["name"] == "usr/sbin/httpd" and out["parent_id"] == fwid
+    assert isinstance(out["kind"], str) and out["kind"]
+    again = mcp_tools.add_file_as_target(fwid, "usr/sbin/httpd")   # idempotent per path
+    assert again["id"] == out["id"]
+    assert mcp_tools.add_file_as_target(fwid, "no/such/file").get("error")
+    assert mcp_tools.add_file_as_target("nope", "x").get("error") == "target not found"
+
+
+def test_resume_fuzz_campaign_guards(hg_home):
+    """The wrapper must surface the engine's guards as `{"error": ...}` strings, never raise:
+    a still-running campaign can't resume, and an unknown id is reported plainly."""
+    from hexgraph.db.models import FuzzCampaign
+    with session_scope() as s:
+        p = create_project(s, name="rz")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="x")
+        c = FuzzCampaign(project_id=p.id, target_id=t.id, status="running")
+        s.add(c)
+        s.flush()
+        cid = c.id
+    out = mcp_tools.resume_fuzz_campaign(cid)
+    assert "error" in out and "resume" in out["error"].lower()
+    assert mcp_tools.resume_fuzz_campaign("nope").get("error") == "campaign not found"
+
+
+def test_skill_documents_fs_browsing_and_new_tools():
+    """The agent only knows what the SKILL tells it: the firmware-FS workflow, the new tools,
+    and the strict 'surface, don't prune' stance must all be present."""
+    from hexgraph.agent_setup import SKILL
+    for token in ("list_filesystem", "add_file_as_target", "build_log",
+                  "resume_fuzz_campaign", "list_projects",
+                  "You SURFACE for the analyst to TRIAGE"):
+        assert token in SKILL, token

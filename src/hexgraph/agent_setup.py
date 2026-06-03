@@ -49,6 +49,8 @@ not new top-level evidence keys.
 ## 1. Read what's already known FIRST
 Before analyzing anything, orient on prior work so you don't repeat it and you can
 see where to go next:
+- `list_projects()` if you weren't handed a project_id — it lists every project
+  (id/name/backend), the starting point the other tools need.
 - `list_targets(project_id)`, `target_facts` (note its `dangerous_imports` — start
   there), `read_imports` — scope + recon facts.
 - `list_findings(project_id)` — what's already found, **verified**, confirmed, or
@@ -87,6 +89,27 @@ that haven't been analyzed yet.
     and a `coverage_instrumented` flag. **Trust the flag:** when `coverage_instrumented=false`
     it was a black-box run — do NOT overstate coverage or completeness. `list_findings` shows
     a compact `fuzz` summary; `get_finding` returns the full `evidence.extra.fuzz`.
+
+## 2a. Browse the firmware filesystem (configs, scripts, keys — not just code)
+A firmware target unpacks into a filesystem, and a large share of real findings live in
+its FILES rather than its code: hardcoded credentials and API keys, private keys/certs,
+weak `/etc/passwd`+`/etc/shadow` hashes, init/boot scripts that launch services as root,
+nvram defaults, CGI scripts, and the web root. Skim the tree EARLY on any firmware — it
+shows you the attack surface (what runs, where the secrets are) before you decompile a thing.
+- **`list_filesystem(target_id)`** lists the unpacked tree (paths/sizes, which entries are
+  ELFs, which are already child targets). Start here.
+- **`read_file(target_id, path)`** reads ONE file (config/script/key/web template — bounded,
+  traversal-safe; binary shown as hex; `path` is relative to the extracted root). Pull the
+  configs/keys/scripts and turn what you find into findings + nodes: a startup script that
+  runs `/sbin/httpd` → record the service + a `socket` node; `/etc/shadow` with a weak hash →
+  a hardcoded-credential finding; a baked-in private key → record it. (This is the firmware's
+  OWN unpacked bytes — distinct from `read_source_file`, which reads trusted managed source.)
+- **`add_file_as_target(target_id, path)`** promotes an interesting file (a CGI, a service
+  daemon, a helper binary) that unpack didn't already register into its OWN child target —
+  then `decompile_function`/`list_functions`/`run_task`/fuzz it like any other target. This is
+  how you go from "I see an interesting binary in the rootfs" to actually analyzing it.
+(For a LIVE device rather than an extracted image, §2c's remote_list_files/remote_read_file
+are the same idea over SSH/telnet.)
 
 ## 2b. Live web / service surfaces (routers, admin consoles, APIs)
 Many firmware bugs live in a web app, not just the binary. If you're given a base
@@ -245,6 +268,11 @@ recorded recipe in the sandbox. This is the analogue of "you direct, HexGraph ru
   instrumentation, arch}`; same recipe_sha + source content_hash + toolchain_digest (+ lockfile) ⇒ the
   same build. **`list_builds(project_id)`** shows the ledger (status, the triple, lockfile/SBOM,
   reproducible/cache_hit, artifacts as CAS shas, the instrumented derived_target_id).
+- **When a build FAILS, read the log: `build_log(build_id)`** returns the full compile output
+  (every phase's stdout+stderr) — the iteration signal. Use it to see EXACTLY why it broke (a
+  missing header, a flag the sanitizer rejected, a cross-compile sysroot miss), then fix
+  `phases`/`env`/`arch` (or `save_source_revision` the harness) and rebuild. Don't guess at a
+  failed build — read its log.
 - **Rebuild-with-instrumentation is the headline move:** if the source tree is linked (`built_from`)
   to a target, the rebuild registers a DERIVED target wired `instrumented_build_of`→ the original —
   the fuzzable, coverage-instrumented twin of the shipped binary. That unlocks **coverage-guided
@@ -315,8 +343,11 @@ reaps a hardened sandbox container.
   Each unique crash becomes a **`fuzz_crash` finding** (one representative per normalized
   stack-hash bucket + a `dupe_count`) with a minimized reproducer, a deterministic exploitability
   rating, and the coverage flag — all on `evidence.extra.fuzz`.
-- **`stop_fuzz_campaign(campaign_id)`** preserves the corpus (resumable). Campaigns are
-  **crash-safe**: they survive a server restart (the reaper re-attaches).
+- **`stop_fuzz_campaign(campaign_id)`** preserves the corpus (resumable), and
+  **`resume_fuzz_campaign(campaign_id)`** picks a finished/stopped campaign back up from that
+  preserved corpus — continue a run that timed out, or resume after a restart, instead of
+  starting cold (AFL++ resumes natively). Campaigns are **crash-safe**: they survive a server
+  restart (the reaper re-attaches).
 - **A crash is a re-runnable PoC.** **`verify_fuzz_artifact(artifact_id)`** (the first-class verb;
   `minimize_artifact` is its back-compat alias) replays the crash reproducer BYTE-FAITHFULLY IN THE
   SANDBOX and reports `{verified, assurance, output}` — LLM-free, one click. The reproducer is run as
@@ -470,6 +501,31 @@ project sees the attack surface, the input→sink paths, what's suspected vs
 confirmed vs refuted, and the obvious next tasks, without re-reading the binary.
 Leave unfinished threads as hypotheses or unanalyzed nodes so the user (or the
 next agent) can launch follow-up tasks on them.
+
+**Confirm your writes + inspect the graph as you build it.** After writing, read it back so
+you catch a missed attribute or an edge you still owe: `get_node(node_id)` and
+`get_finding(finding_id)` return one entity in full (with the attrs/evidence you set);
+`list_nodes(project_id, target_id?, node_type?)` and `list_edges(project_id, node_id?)` show
+what's already there and where the gaps are. `set_hypothesis_status(hypothesis_id, status,
+rationale?)` pins a verdict (confirmed/rejected/open) directly when you're not driving it
+through `link_evidence`; `update_edge(edge_id, attrs, merge?)` edits an existing edge in
+place. After any live testing, `list_egress(project_id)` is the audit log of every outbound
+network action (allowed/denied) — review it to confirm you stayed in bounds.
+
+**You SURFACE for the analyst to TRIAGE — you do NOT prune the graph.** Your job is to add
+and expose, not to tidy up. Do NOT delete, archive, or dismiss findings/nodes/edges just
+because they look low-value, uncertain, redundant, or unproven — an unconfirmed lead is still
+worth surfacing, and `status`/`confidence` are how you flag that for the human (a low-
+confidence `new` finding, not a deletion). The graph is the human's to triage. The ONLY time
+you remove something is to correct YOUR OWN error: an entity you created from bad information,
+an obvious mistake, or a hallucinated finding with no tool output behind it. For that narrow
+case: `update_finding(finding_id, status="dismissed")` sets a finding aside reversibly (keeps
+the row, greyed and restorable — PREFER this); `delete_finding(finding_id)` / `delete_edge(
+edge_id)` hard-delete pure junk YOU created in error; `archive_node` / `archive_target` (with
+`restore_node` / `restore_target`) reversibly hide an entity you added wrongly. Never remove
+the user's or another agent's work, and never remove something merely to declutter. (Duplicate
+function/symbol nodes are folded automatically after tasks; `merge_duplicates(project_id)`
+re-runs that fold on demand — it preserves every edge/finding, it does not delete data.)
 
 A finding object looks like:
 {"title": "...", "severity": "critical|high|medium|low|info",

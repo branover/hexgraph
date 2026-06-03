@@ -83,6 +83,29 @@ def read_file(target_id: str, path: str) -> dict:
             return {"error": str(exc)}
 
 
+def add_file_as_target(target_id: str, path: str) -> dict:
+    """Promote ONE file from a firmware target's unpacked filesystem into its OWN child
+    target so you can analyze it directly (decompile/list_functions/run_task/fuzz) — the
+    bridge from browsing the rootfs to analyzing a binary in it. `path` is relative to the
+    extracted root (see list_filesystem; an entry's `is_elf` flags a binary worth promoting,
+    `added` means it's already a target). Real bytes → runs recon in the sandbox when Docker
+    is up. Idempotent per path (returns the existing child if already promoted). Use it when
+    list_filesystem surfaces an interesting binary (a CGI, a service daemon, a helper) that
+    unpack didn't already register. Returns {id, name, kind, parent_id, arch}."""
+    from hexgraph.engine.filesystem import FilesystemError, add_file_as_target as _add
+
+    with session_scope() as s:
+        t = s.get(Target, target_id)
+        if t is None:
+            return {"error": "target not found"}
+        try:
+            child = _add(s, s.get(Project, t.project_id), t, path)
+        except FilesystemError as exc:
+            return {"error": str(exc)}
+        return {"id": child.id, "name": child.name, "kind": child.kind.value,
+                "parent_id": target_id, "arch": (child.metadata_json or {}).get("arch")}
+
+
 def list_source_trees(project_id: str) -> dict:
     """List the project's managed SOURCE trees (trusted source we possess/build —
     NOT the hostile target; harnesses/PoCs/scripts live here as role-tagged
@@ -194,6 +217,24 @@ def list_builds(project_id: str, source_tree_id: str | None = None) -> dict:
             return {"error": "project not found"}
         return {"build_specs": B.list_build_specs(s, p, source_tree_id=source_tree_id),
                 "builds": B.list_builds(s, p, source_tree_id=source_tree_id)}
+
+
+def build_log(build_id: str) -> dict:
+    """The full build log (stdout+stderr of every phase, from CAS) for a build — the
+    recipe-iteration signal on a FAILED build: read it to see WHY a compile/instrumentation
+    step failed (a missing header, a flag the sanitizer rejected, a cross-compile sysroot
+    miss), then fix `phases`/`env`/`arch` and rebuild. `build_id` from list_builds. Returns
+    {build_id, status, returncode, error, log}."""
+    from hexgraph.db.models import Build
+    from hexgraph.engine import cas
+
+    with session_scope() as s:
+        b = s.get(Build, build_id)
+        if b is None:
+            return {"error": "build not found"}
+        text = cas.get_text(s.get(Project, b.project_id), b.log_cas) if b.log_cas else None
+        return {"build_id": build_id, "status": b.status, "returncode": b.returncode,
+                "error": b.error, "log": text or ""}
 
 
 def import_oss_fuzz(project_id: str, source_tree_id: str, build_sh: str,
@@ -493,6 +534,33 @@ def stop_fuzz_campaign(campaign_id: str) -> dict:
         if c is None:
             return {"error": "campaign not found"}
         return C.campaign_to_dict(C.stop_campaign(s, c))
+
+
+def resume_fuzz_campaign(campaign_id: str) -> dict:
+    """Resume a FINISHED fuzz campaign (stopped/completed/failed/degraded), re-seeded from
+    its preserved CAS corpus so it continues accumulating coverage + crashes instead of
+    starting cold — the other half of stop_fuzz_campaign's 'resumable'. AFL++ resumes
+    natively from the snapshot. The surface-correct policy gate is re-applied inside (exec
+    for a binary/source campaign, egress for a live-socket network campaign) — NO new gate.
+    Returns the campaign dict ({id, status:'running', …}); poll fuzz_status as before."""
+    from hexgraph.db.models import FuzzCampaign
+    from hexgraph.engine import campaigns as C
+    from hexgraph.policy import PolicyViolation
+
+    with session_scope() as s:
+        c = s.get(FuzzCampaign, campaign_id)
+        if c is None:
+            return {"error": "campaign not found"}
+        try:
+            return C.campaign_to_dict(C.resume_campaign(s, c))
+        except PolicyViolation as exc:
+            return {"error": f"not permitted — {exc}; enable the matching gate in Settings "
+                             "(features.fuzzing/poc to execute a binary/source campaign, "
+                             "features.network for a live-socket one)"}
+        except (C.CampaignError, ValueError) as exc:
+            # A network-tier egress denial arrives here wrapped as CampaignError (start_campaign
+            # re-applies the gate); its message already states the reason, so surface it as-is.
+            return {"error": str(exc)}
 
 
 def fuzz_status(campaign_id: str) -> dict:
