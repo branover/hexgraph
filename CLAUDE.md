@@ -20,7 +20,7 @@ Post-MVP, **every new feature or major atomic change happens on its own branch i
 - **Never commit or push to `main`.** `main` only changes by **merging a reviewed PR**. (There is no automated push guard or branch protection — this is a discipline you must keep, not something the repo enforces for you.)
 - Branch off `main` with a typed name: **`build/<topic>`** (code), **`fix/<topic>`** (bugfix), **`docs/<topic>`** (docs).
 - Commits: imperative, lowercase-prefixed subject (`feat:`/`fix:`/`docs:`/`db:`/…); end every commit with the trailer `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
-- **Ship the whole change together:** code + its tests + `PROGRESS.md` update + (for any model change) an `alembic revision --autogenerate` migration. A PR that changes a model without a migration is incomplete.
+- **Ship the whole change together:** code + its tests + `PROGRESS.md` update + (for any model change) an `alembic revision --autogenerate` migration. A PR that changes a model without a migration is incomplete. **Analogously, any PR that changes UI behavior MUST update `docs/dev/ux-contract.md` in the same PR** (add/edit/retire the affected interaction entries) — a UI-behavior change without a contract update is incomplete, and the review gate checks for it.
 - Open the PR with `gh pr create --base main`; write a real description (what/why, verification).
 
 **The merge gate — a PR-review subagent, every time.** Before a worktree branch merges:
@@ -175,6 +175,8 @@ User-facing docs (`README.md`, the feature docs in `docs/`, `DISCLAIMER.md`, `TH
 When a workflow becomes repetitive, capture it as a skill under `.claude/skills/` and note it in `PROGRESS.md`.
 
 ## Assessing the UI visually (Playwright)
+
+For the full, structured UX walkthrough, **`docs/dev/ux-contract.md` is the living behavior contract** (every UI interaction catalogued with its expected functional + backend effect + qualitative bar) and the **`ux-assessment` skill** runs it as a two-role, agent-driven assessment (a VR-analyst agent populates every surface; a separate researcher-agent walks the contract entry by entry and scores it). Re-run it on every major UI change / fix evaluation. The quick ad-hoc captures below are for spot checks.
 
 No browser MCP here and `WebFetch` can't reach `127.0.0.1`; the UI is JS-driven, so fetching HTML isn't enough. Drive headless Chromium via Playwright (dev-only, **not** in `pyproject`):
 

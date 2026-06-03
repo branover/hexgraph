@@ -28,3 +28,7 @@ frontend/dist/
 frontend/tsconfig.tsbuildinfo
 src/hexgraph/web/dist/
 .claude/
+# …but DO track committed project skills (CLAUDE.md: capture workflows as skills under .claude/skills/).
+!.claude/
+.claude/*
+!.claude/skills/
