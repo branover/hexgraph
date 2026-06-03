@@ -247,11 +247,11 @@ select.sel:focus, .settings select.sel:focus { outline: none; border-color: var(
   color: var(--fg-dim); padding-left: 3px; }
 .graph-controls .group-by-sel { height: 30px; min-width: 122px; padding: 0 26px 0 10px; font-size: 12px;
   background-color: rgba(22,26,38,.85); backdrop-filter: blur(6px); }
-/* action icons (layers / filter / skeleton / draw) in one compact row, like the zoom cluster —
-   each a 32px square, NOT stretched to the group-by width (issue 11 revisited). */
 /* one flat row along the bottom holding ALL the buttons — the action icons + the zoom cluster —
    with the group-by selector the only thing on the row above it. */
 .button-row { display: flex; align-items: center; gap: 6px; }
+/* the action icons (layers / filter / skeleton / draw), each a 32px square, NOT stretched to the
+   group-by width (issue 11 revisited). */
 .ctrl-cluster { display: flex; gap: 4px; }
 .ctrl-cluster > div { position: relative; }
 .graph-controls .btn.icon { width: 32px; height: 32px; padding: 0; }

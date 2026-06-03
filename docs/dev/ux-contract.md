@@ -356,20 +356,23 @@ loud only where you are looking; every node/edge/color kept, mute never deletes.
 - Prereq: a graph with direct edges.
 
 **GRAPH-13 — Zoom + / − / fit controls**
-- Steps: use the +/fit/− segmented cluster on the control rail.
+- Steps: use the +/fit/− segmented cluster in the flat control row along the bottom-right.
 - Functional: + zooms in, − zooms out (animated), fit frames all visible elements.
-- Qualitative: this is the ONLY +/− pair on the rail (the skeleton toggle uses a chip glyph, not +/−) —
-  Consistency (issue-4: two identical +/− pairs is the failure).
+- Qualitative: this is the ONLY +/− pair (the skeleton toggle uses a chip glyph, not +/−) —
+  Consistency (issue-4: two identical +/− pairs is the failure). ALL the buttons sit in ONE flat row
+  along the bottom — the action icons (layers / filter / skeleton / draw) then this zoom cluster — each
+  sized to itself, never stretched to a shared width.
 - Principle: one zoom cluster, no duplicate affordances.
 - Prereq: any graph.
 
 **GRAPH-14 — Group-by switch**
-- Steps: change the group-by select (by target / by type / by finding / flat none).
-- Functional: the canvas reorganizes into compound rooms by the chosen facet; "flat (none)" is today's
-  ungrouped graph.
-- Qualitative: switching is instant (client-side, no refetch) — Friction; each facet reads as a coherent
-  reorganization, not a reshuffle of dots (Aesthetics).
-- Principle: grouping is a first-class, switchable facet.
+- Steps: change the labelled **GROUP BY** select (target / type / finding / none (flat)).
+- Functional: the canvas reorganizes into compound rooms by the chosen facet; "none (flat)" is the
+  ungrouped graph. Expanding a node/room works in EVERY facet, by-type included, without error.
+- Qualitative: switching is instant (client-side, no refetch) — Friction; the selector carries a
+  "GROUP BY" label (so it reads as what it does), sits on its own row above the button row, and is sized
+  to its own content rather than dictating the rail width (Aesthetics).
+- Principle: grouping is a first-class, switchable, clearly-labelled facet.
 - Prereq: a graph with targets + findings.
 
 **GRAPH-15 — Layer panel: toggle node types**
