@@ -591,6 +591,34 @@ then run the resume verifier, then continue at the next unchecked task.
   review), the PyPI-vs-clone-only decision (Phase 6), and an optional self-hosted runner for the rehost/KVM
   lanes. Remaining pre-release phases: security-invariant audit, clean-machine install test, release
   packaging/tagging (`0.0.1`→`0.1.0`). (UX evaluation is being handled in a separate session.)
+- 2026-06-03: **feat: close agent-surface gaps from a VR-agent tool/skill audit** (branch
+  `build/agent-surface`). Audited every agent-facing surface — the 70 MCP tools
+  (`engine/mcp_catalog.py`), the generated `hexgraph-vr` SKILL (`agent_setup.SKILL`, also the
+  delegate prompt), and `docs/mcp.md` — against the full engine/REST capability set, asking the
+  two audit questions: what does a VR agent *want to do but can't reach*, and what *can it do but
+  isn't told about*. **Added 3 MCP tools** (now 73): **`build_log`** (read — the full CAS build
+  log, so a FAILED `build_target` is debuggable instead of a blind wall), **`add_file_as_target`**
+  (run — promote a file from an unpacked firmware FS into its own child target, the bridge from
+  browsing the rootfs to analyzing a binary in it), **`resume_fuzz_campaign`** (run — the missing
+  half of stop's "resumable"; pick a finished/stopped campaign back up from its preserved corpus).
+  **SKILL gaps closed:** a new **§2a firmware-filesystem-browsing** workflow (`list_filesystem` /
+  `read_file` / `add_file_as_target` — configs/keys/scripts/`/etc/shadow` are where many firmware
+  bugs live and the skill never mentioned them); the read-back/confirm tools woven into §3
+  (`get_node`/`list_nodes`/`list_edges`/`list_egress`/`set_hypothesis_status`/`update_edge`) and
+  `list_projects` into §1; `build_log`/`resume_fuzz_campaign` into §2g/§2h. **A deliberately strict
+  "you SURFACE, you don't PRUNE" stance** in §3 (per the product owner): the agent's job is to
+  surface for the human to triage — it removes things ONLY to correct its OWN error/hallucination/
+  bad-info (dismiss > delete), never to declutter. Did NOT add: promote-crash-to-PoC or
+  extra LLM-task types (the agent *is* the LLM task), and kept operator-only surfaces
+  (delete_project, settings, fuzz-env registration) out. **Bug fixed along the way:**
+  `filesystem.add_file_as_target` marked the manifest entry via a shallow-copy mutation that never
+  persisted (JSON column unchanged-by-identity), so add-from-fs was NOT idempotent across sessions
+  — an agent's repeat call (each its own session) made duplicate child targets. Now rebuilds the
+  manifest with fresh dicts + `flag_modified`. No schema change/migration (additive tools + a
+  persistence fix). Verified: 6 new tests in `tests/test_mcp.py` (catalog membership + groups,
+  build_log happy/empty/not-found, add_file_as_target promote/idempotent/error, resume guards,
+  skill-content) + full `just test` green (751 passed, 2 skipped). `docs/mcp.md` group bullets
+  updated to list the new tools.
 - 2026-06-03: **feat: hard-delete a finding (distinct from dismiss)** (branch `build/delete-findings`).
   Findings could only be *dismissed* (the row persists, reversibly greyed). Added a true, irreversible
   HARD delete alongside it. `engine/removal.delete_finding(session, finding_id)` removes the Finding row
