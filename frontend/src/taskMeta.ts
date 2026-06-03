@@ -59,6 +59,34 @@ export const TASK_META: Record<string, TaskMeta> = {
       "recorded as a harness finding. This is the PREREQUISITE for fuzzing — once a " +
       "harness exists, start a fuzz campaign with the Fuzz button to actually run it.",
   },
+  surface_recon: {
+    label: "Surface recon",
+    icon: "search",
+    summary: "Map a web surface's routes — offline, no egress",
+    detail:
+      "The surface analogue of byte recon for a web_app target (which has no bytes at " +
+      "rest). Deterministically materialises the surface's route spec into endpoint / " +
+      "param nodes and routes_to handler edges. Offline and deterministic — no network " +
+      "request is made.",
+  },
+  web_recon: {
+    label: "Web recon (live)",
+    icon: "search",
+    summary: "Probe the live web surface — bounded, audited egress",
+    detail:
+      "Sends bounded, audited requests from the sandbox to the live web surface to confirm " +
+      "endpoints and fingerprint the app. Requires the network feature (loopback/private " +
+      "hosts only); every outbound request is recorded as an egress event.",
+  },
+  web_discover: {
+    label: "Web discover (live)",
+    icon: "filter",
+    summary: "Crawl the live surface for routes — bounded egress",
+    detail:
+      "Crawls the live web surface (bounded, audited egress) to discover routes beyond a " +
+      "supplied spec, materialising new endpoint / param nodes. Requires the network " +
+      "feature; loopback/private hosts only.",
+  },
   pattern_sweep: {
     label: "Pattern sweep",
     icon: "filter",

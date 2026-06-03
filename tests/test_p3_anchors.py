@@ -5,7 +5,8 @@ from fastapi.testclient import TestClient
 from hexgraph.api.app import create_app
 from hexgraph.db.models import Finding, Task
 from hexgraph.db.session import session_scope
-from hexgraph.engine.capabilities import capabilities_for
+from hexgraph import settings as st
+from hexgraph.engine.capabilities import capabilities_for, capability_table
 from hexgraph.engine.ingest import create_project, ingest_file
 from hexgraph.engine.suggester import suggest_followups
 from hexgraph.engine.tasks import create_task
@@ -19,6 +20,42 @@ def test_capability_table():
     assert capabilities_for("node", "string") == ["pattern_sweep"]
     assert "static_analysis" in capabilities_for("edge", "calls")
     assert capabilities_for("target", "firmware_image") == ["recon", "unpack"]
+
+
+def test_surface_targets_do_not_offer_byte_recon(hg_home):
+    """A web_app (and service/remote) is a reachable SURFACE with no bytes at rest, so the
+    Run menu must NOT advertise byte 'recon' (the worker would route it to a confusing
+    'artifact not found' / a clear NotImplementedError). web_app offers surface_recon
+    instead; service/remote have no offline single-shot task wired."""
+    web = capabilities_for("target", "web_app")
+    assert "recon" not in web                 # byte recon is wrong for a surface
+    assert "surface_recon" in web             # the surface analogue IS offered
+    # No byte-file tasks leak onto a surface.
+    for byte_task in ("harness_generation", "static_analysis", "reverse_engineering", "unpack"):
+        assert byte_task not in web
+
+    # service / remote: honest minimal set — no offline single-shot task, and crucially no
+    # byte recon (they previously fell through to the ["recon"] default).
+    assert capabilities_for("target", "service") == []
+    assert capabilities_for("target", "remote") == []
+
+    # The full UI table carries the surface kinds explicitly (not the byte default).
+    table = capability_table()
+    assert "recon" not in table["target"]["web_app"]
+    assert "surface_recon" in table["target"]["web_app"]
+    assert table["target"]["service"] == []
+    assert table["target"]["remote"] == []
+
+
+def test_web_app_live_tasks_gated_on_network(hg_home):
+    """The live web tasks (web_recon/web_discover, bounded audited egress) appear only when
+    features.network is enabled — mirroring the worker's egress gating."""
+    assert capabilities_for("target", "web_app") == ["surface_recon"]
+    st.update_settings({"features.network.enabled": True})
+    web = capabilities_for("target", "web_app")
+    assert web == ["surface_recon", "web_recon", "web_discover"]
+    assert "recon" not in web  # still never byte recon
+    assert capability_table()["target"]["web_app"] == ["surface_recon", "web_recon", "web_discover"]
 
 
 def test_task_records_anchor(hg_home):

@@ -8,12 +8,39 @@ the canonical set; relational work is an anchor, not a new type (ruling #8).
 
 from __future__ import annotations
 
-# task types available per target kind
+# task types available per target kind.
+#
+# BYTE targets have an artifact at rest, so they offer the byte pipeline (recon over the
+# file, decompile, harness-gen, …). SURFACE targets (web_app/service/remote) have NO bytes
+# — they're a reachable surface reached via a Channel, with `path=""` — so byte 'recon'
+# (and harness-gen / static-analysis, which assume a byte file) must NOT be offered for
+# them; the worker would route byte recon to a confusing "artifact not found" / a clear
+# NotImplementedError. Surfaces get their own surface-appropriate task set below.
 _TARGET = {
     "firmware_image": ["recon", "unpack"],
     "executable": ["recon", "static_analysis", "reverse_engineering", "harness_generation"],
     "shared_library": ["recon", "static_analysis", "reverse_engineering", "harness_generation"],
     "unknown": ["recon"],
+}
+
+# SURFACE targets (no bytes at rest). These are kept SEPARATE from `_TARGET` so the byte
+# 'recon' default never leaks onto a surface. The base set is the surface-appropriate,
+# always-available (offline, no egress) task; live/dynamic tasks fold in only when the
+# relevant opt-in feature is enabled (see `_surface_caps`).
+#
+# - web_app  → `surface_recon` (deterministic, offline: materialise the route spec into
+#              endpoint/param nodes + routes_to handler edges — the surface analogue of
+#              byte recon). With features.network: the live `web_recon` / `web_discover`
+#              (bounded, audited egress) fold in.
+# - service  → a bare network listener: NO offline deterministic probe. Assessed by a
+#              network fuzz campaign (Fuzz button) / run_tcp_probe under features.network.
+#              No single-shot Run-menu task is wired, so the base set is honestly empty.
+# - remote   → a live device over SSH/telnet: assessed via the read-only remote MCP tools
+#              (features.remote), not a Run-menu task. Base set honestly empty.
+_SURFACE_BASE = {
+    "web_app": ["surface_recon"],
+    "service": [],
+    "remote": [],
 }
 
 # task types available per node type
@@ -57,6 +84,14 @@ def _agent_enabled() -> bool:
     return _flag("features.agent.enabled")
 
 
+def _network_enabled() -> bool:
+    return _flag("features.network.enabled")
+
+
+def _remote_enabled() -> bool:
+    return _flag("features.remote.enabled")
+
+
 def _poc_enabled() -> bool:
     return _flag("features.poc.enabled")
 
@@ -75,8 +110,24 @@ def _source_edit_enabled() -> bool:
     return _flag("features.source.edit")
 
 
+def _surface_caps(subtype: str) -> list[str]:
+    """Task set for a SURFACE target kind (web_app/service/remote).
+
+    Byte tasks (recon over a file, harness-gen, …) are deliberately absent — a surface has
+    no bytes. The offline base set folds in live/dynamic tasks only when the matching opt-in
+    feature is enabled, mirroring the worker's dispatch (`web_recon`/`web_discover` are
+    bounded-egress, audited; gated by features.network)."""
+    caps = list(_SURFACE_BASE.get(subtype, []))
+    if subtype == "web_app" and _network_enabled():
+        # Live, bounded-egress web assessment (features.network); audited.
+        caps += ["web_recon", "web_discover"]
+    return caps
+
+
 def capabilities_for(anchor_kind: str, subtype: str | None = None) -> list[str]:
     if anchor_kind == "target":
+        if subtype in _SURFACE_BASE:
+            return _surface_caps(subtype)
         caps = list(_TARGET.get(subtype or "unknown", ["recon"]))
         if _fuzzing_enabled() and subtype in _FUZZABLE_TARGETS:
             caps.append("fuzzing")
@@ -115,6 +166,8 @@ def capability_table() -> dict:
         return out
 
     targets = {k: extra(k, v) for k, v in _TARGET.items()}
+    # SURFACE kinds carry their own surface-appropriate sets (NOT the byte 'recon' default).
+    targets.update({k: _surface_caps(k) for k in _SURFACE_BASE})
     nodes = {k: extra(k, v) for k, v in _NODE.items()}
     # `features` carries non-anchor affordance flags the SPA reads to show/hide UI
     # that isn't keyed to a target/node/edge — e.g. the Source-tab Build button

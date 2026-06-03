@@ -195,6 +195,20 @@ export default function Workspace() {
     });
   }, [projectId]);
 
+  // SURFACE target kinds (web_app/service/remote) have NO byte artifact, so byte 'recon'
+  // is wrong for them — the server now advertises a surface-appropriate set (web_app →
+  // surface_recon, service/remote → only their network/remote tasks when enabled, else
+  // none). Trust the server set verbatim for any kind it knows (including an empty list);
+  // the byte 'recon' fallback applies ONLY to a kind the table has no entry for at all,
+  // and NEVER to a surface kind. Keeps the menu honest per kind.
+  const SURFACE_KINDS = ["web_app", "service", "remote"];
+  const targetCaps = (kind: string): string[] => {
+    const set = caps.target?.[kind];
+    if (set) return set;                       // server knows this kind — use it as-is
+    if (SURFACE_KINDS.includes(kind)) return [];  // a surface with no advertised tasks → none, never byte recon
+    return ["recon"];                          // genuine unknown byte kind → safe byte default
+  };
+
   useEffect(() => {
     load();
     api.capabilities().then(setCaps).catch(() => {});
@@ -456,7 +470,7 @@ export default function Workspace() {
   };
 
   const TreeRow = (t: TargetNode, child: boolean) => {
-    const allowed = caps.target?.[t.kind] ?? ["recon"];
+    const allowed = targetCaps(t.kind);
     const fc = findingCounts[t.id];
     return (
       <div key={t.id}>
@@ -563,7 +577,7 @@ export default function Workspace() {
       const tgt = selNode.type === "target" ? detail.targets.find((t) => t.id === selNode.id) : undefined;
       const owner = selNode.type === "node" ? detail.targets.find((t) => t.id === selNode.target_id) : undefined;
       const allowed = tgt
-        ? (caps.target?.[tgt.kind] ?? ["recon"])
+        ? targetCaps(tgt.kind)
         : (selNode.type === "node" ? (caps.node?.[selNode.node_type] ?? []) : []);
       const onLaunch = (type: string) => {
         if (tgt) setLaunchFor({ target: tgt, type });
