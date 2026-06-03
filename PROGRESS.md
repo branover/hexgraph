@@ -546,6 +546,28 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-03: **fix: graph-canvas UX round 2** (branch `build/graph-ux-round2`). Five hands-on
+  graph-canvas issues the maintainer found after PR #89 — some were RESIDUALS where #89's fix
+  didn't fully take, so each was re-verified LIVE (Playwright, isolated `HEXGRAPH_HOME`, mock,
+  offline; the `seed_graph_tiers.py` LARGE tier + the showcase). Frontend-only (`GraphView.tsx`,
+  `graphLayers.ts`). **(1) Scroll-zoom still sluggish** — `wheelSensitivity` 0.6→**1.4** (set at
+  `cytoscape()` construction, the only place cytoscape reads it; confirmed 1.4 on the live `__cy`).
+  **(2) Native context menu still leaked** — #89's preventDefault sat on the inner `#cy` div in the
+  bubble phase; moved it to the OUTER `.graph-wrap` in the **capture phase** so every right-click
+  (canvas layers, DOM overlays, node/edge, empty bg) is intercepted on the way down. Live: 4/4
+  right-clicks `defaultPrevented=true`, only the app verb menu shows. **(3) Expand/collapse teleport**
+  — the room toggle rebuilds the cy instance, which snapped the camera; now the camera GLIDES
+  (`cy.animate fit`, ease-in-out-cubic) and freshly-revealed interior nodes FADE in on a short
+  stagger; collapse symmetrically glides the re-fit. Live: 14 interior nodes animating mid-expand.
+  **(4) No way to hide source files** — added `source_file` (+ `harness`, also missing) to
+  `NODE_TYPE_LAYERS`; `source_file` is OFF by default (trusted high-volume scaffolding, like
+  symbol/string) with the layer panel wiring it live; gave both a distinct color/shape (D8). Live:
+  toggling reveals/hides the showcase's 3 source_file nodes. **(5) Room title black-on-black** — the
+  collapsed-room base label was `#0a0c12` (black) centered on a mid-brightness card → unreadable; now
+  light `#e8edf6` in a dark rounded text pill (the legible LOD-far/mid treatment), card keeps its
+  per-type color fill + severity ring. `just ui` clean; `just test` 718 passed / 2 skipped / 1 failed
+  (`test_desock_afl_fuzzes_local_server_no_network` — a Docker+AFL fuzzing e2e that degraded to
+  no-crash in this env; unrelated to the frontend diff). Left for the orchestrator's reviewer + merge.
 - 2026-06-02: **fix: Run menu advertises kind-valid tasks for SURFACE targets** (branch
   `fix/surface-run-menu`). Companion to PR #84's backend routing: the Run menu was server-driven via the
   capability table, but `web_app`/`service`/`remote` SURFACE kinds had **no entry in `_TARGET`**, so they

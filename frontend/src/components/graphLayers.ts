@@ -27,9 +27,14 @@ export const NODE_TYPE_LAYERS: { key: string; label: string }[] = [
   { key: "sink", label: "sink" },
   { key: "hypothesis", label: "hypothesis" },
   { key: "pattern", label: "pattern" },
+  { key: "source_file", label: "source file" },
+  { key: "harness", label: "harness" },
   { key: "finding", label: "finding" },
 ];
-export const NODE_LAYER_DEFAULT_OFF = new Set(["symbol", "string", "param"]);
+// source_file nodes are TRUSTED source we possess (often materialized in bulk when a tree is
+// imported) — like symbol/string they're high-volume scaffolding, so they're OFF by default and
+// the user opts them in via the layer panel (issue 4).
+export const NODE_LAYER_DEFAULT_OFF = new Set(["symbol", "string", "param", "source_file"]);
 
 // ── Edge-class layers (the single biggest density lever — edges are the dominant ink).
 // Each class groups the real EDGE_C vocab; toggling a class hides every edge in it.
