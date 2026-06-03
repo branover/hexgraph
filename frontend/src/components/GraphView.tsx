@@ -8,7 +8,7 @@ import { Icon } from "./Icon";
 import {
   LayerState, FilterState, defaultLayers, defaultFilters,
   nodeLayerOn, edgeClassOn, sevRank, anyFilterActive,
-  NODE_TYPE_LAYERS, EDGE_CLASSES,
+  NODE_TYPE_LAYERS, EDGE_CLASSES, NODE_LAYER_DEFAULT_OFF,
 } from "./graphLayers";
 
 cytoscape.use(dagre);
@@ -27,6 +27,7 @@ export const NODE_T: Record<string, string> = {
   function: "#7ee787", symbol: "#d2a8ff", string: "#79c0ff", struct: "#ffa657",
   hypothesis: "#e3b341", pattern: "#bc8cff",
   input: "#58a6ff", sink: "#db6d28", socket: "#f778ba", endpoint: "#2dd4bf", param: "#a5d6ff",
+  source_file: "#9ba3b4", harness: "#56d4dd",
 };
 // Per-node-type shape, so types are distinguishable independent of color (a redundant
 // channel: color + shape, so types stay tellable apart when nodes shrink below
@@ -36,6 +37,7 @@ export const NODE_SHAPE: Record<string, string> = {
   socket: "hexagon", endpoint: "tag", param: "ellipse", input: "triangle", sink: "vee",
   struct: "barrel", hypothesis: "pentagon", pattern: "diamond",
   string: "round-tag", symbol: "round-diamond",
+  source_file: "round-rectangle", harness: "rhomboid",
 };
 export const EDGE_C: Record<string, string> = {
   contains: "#46506a", calls: "#6aa3ff", about: "#3b4458", related_to: "#f0883e",
@@ -187,6 +189,9 @@ export default function GraphView({
   // the room most recently expanded by an explicit user act — the build's layoutstop scopes
   // an auto-frame to it (design §3.4: auto-zoom only on an explicit navigation act).
   const justExpanded = useRef<string | null>(null);
+  // set on an explicit COLLAPSE so the rebuild's layoutstop ANIMATES the re-fit (a glide back to
+  // the skeleton) instead of snapping — the symmetric counterpart to justExpanded (issue 3).
+  const justCollapsed = useRef<boolean>(false);
   // findings tri-state + layer/filter state are CONTROLLED when the host passes them
   // (Phase 5), else fall back to internal state so GraphView still works standalone.
   const [findingsLocal, setFindingsLocal] = useState<"all" | "unresolved" | "none">("all");
@@ -642,9 +647,13 @@ export default function GraphView({
     const elements = [...roomElements, ...contentElements, ...directEdgeElements, ...metaShown];
 
     const cy = cytoscape({
-      // wheelSensitivity 0.25 made scroll-to-zoom feel sluggish (issue 5) — a full wheel
-      // notch barely changed scale. 0.6 is a comfortable, responsive feel without overshooting.
-      container: ref.current, elements, wheelSensitivity: 0.6,
+      // Scroll-to-zoom sensitivity (issue 5, round 2). 0.25→0.6 (PR #89) was STILL sluggish —
+      // a wheel notch barely moved the scale. 1.4 makes a notch a clearly-felt zoom step while
+      // staying short of the jumpy/overshooting feel a value ≥2 gives. NOTE: cytoscape reads
+      // wheelSensitivity ONLY at construction (it's ignored if set on the live instance later),
+      // so this MUST live here in the cytoscape() options — it's the single source of truth and
+      // nothing reassigns cy.wheelSensitivity afterwards.
+      container: ref.current, elements, wheelSensitivity: 1.4,
       style: [
         {
           selector: "node",
@@ -685,8 +694,16 @@ export default function GraphView({
             width: "mapData(roomWeight, 8, 60, 78, 150)" as any, height: "mapData(roomWeight, 8, 60, 44, 82)" as any,
             "background-color": (n: any) => KIND[n.data("kind")] || NODE_T[n.data("kind")] || "#7d8799",
             "background-opacity": 0.92,
-            label: "data(label)", color: "#0a0c12", "font-size": "12px", "font-weight": 800,
+            // Issue 5 (round 2): the title was BLACK (#0a0c12) centered on the card. On a
+            // mid-brightness fill (the blue/teal kind tints) — and even more so over the dark
+            // canvas behind a faint card — that read as black-on-black/unreadable. Make it LIGHT
+            // text sitting in its own dark rounded pill (the same treatment the legible LOD-far/mid
+            // rules already use), so the title is crisp at every zoom. The card KEEPS its per-type
+            // color fill + the severity ring (D8 color-coding untouched) — only the label is fixed.
+            label: "data(label)", color: "#e8edf6", "font-size": "12px", "font-weight": 800,
             "text-valign": "center", "text-halign": "center", "text-opacity": 1, "min-zoomed-font-size": 5,
+            "text-background-color": "#0a0c12", "text-background-opacity": 0.78, "text-background-padding": "3px",
+            "text-background-shape": "roundrectangle",
             "text-max-width": "138px", "text-wrap": "ellipsis", "text-margin-y": 0,
             // finding-severity rollup ring: the worst finding inside tints the border (red/orange).
             "border-width": (n: any) => (n.data("roomWorst") >= 3 ? 4 : n.data("roomWorst") >= 0 ? 2.5 : 1.5),
@@ -917,13 +934,33 @@ export default function GraphView({
       const je = justExpanded.current; justExpanded.current = null;
       if (je && !focusValRef.current?.id) {
         const room = cy.getElementById(je);
-        if (room.nonempty()) { const inside = room.descendants().union(room); if (inside.length > 1) cy.animate({ fit: { eles: inside, padding: 60 } }, { duration: 340 }); }
+        if (room.nonempty()) {
+          const inside = room.descendants().union(room);
+          // Issue 3 (round 2): expanding a room used to TELEPORT — the whole instance rebuilds,
+          // then the camera snapped to the room. Now the camera GLIDES to the expanded room and
+          // its freshly-revealed interior nodes FADE+SCALE in (a brief staged reveal) so the user
+          // watches the room open instead of being yanked there. The interior starts transparent
+          // and slightly shrunk, then animates to full on a short stagger.
+          const interior = room.descendants().filter("[gtype = 'node'], [gtype = 'finding'], [gtype = 'room']");
+          if (interior.nonempty()) {
+            interior.style({ opacity: 0 });
+            interior.forEach((el: any, i: number) => {
+              el.delay(Math.min(i * 8, 120)).animate({ style: { opacity: 1 } }, { duration: 260, easing: "ease-out-cubic" });
+            });
+          }
+          if (inside.length > 1) cy.animate({ fit: { eles: inside, padding: 60 } }, { duration: 380, easing: "ease-in-out-cubic" });
+        }
       } else if (!focusValRef.current?.id && !je) {
         // First open / rebuild with no pending nav: frame ALL visible elements (rooms + the
         // network-bus sockets + any loose nodes) so nothing is cut off and the default
         // LARGE/PATHOLOGICAL frame is the full set of labelled cards filling the pane.
-        cy.fit(cy.elements(":visible"), 36);
+        // On an explicit COLLAPSE, GLIDE the re-fit (issue 3) so the view eases back to the
+        // skeleton instead of snapping; a true first-mount fits instantly (nothing to glide from).
+        const collapsing = justCollapsed.current; justCollapsed.current = false;
+        if (collapsing) cy.animate({ fit: { eles: cy.elements(":visible"), padding: 36 } }, { duration: 340, easing: "ease-in-out-cubic" });
+        else cy.fit(cy.elements(":visible"), 36);
       }
+      justCollapsed.current = false;
       applyLod();
       applyFocusRef.current?.();
     });
@@ -990,21 +1027,31 @@ export default function GraphView({
       cy.elements().removeClass("hl hl-dim");
     });
 
+    // Cytoscape's cxttap also fires the originalEvent's preventDefault for nodes — but the
+    // native menu suppression can't rely on cxttap alone (it fires after the browser menu, and
+    // only over hit elements). The DOM-level capture-phase listener below is the real guarantee;
+    // these handlers just drive the app verb menu.
     cy.on("cxttap", "node", (evt) => {
       evt.originalEvent?.preventDefault?.();
       const n = evt.target;
       const rp = n.renderedPosition();
       setMenu({ x: rp.x, y: rp.y, id: n.id(), type: n.data("gtype") });
     });
-    cy.on("cxttap", (evt) => { if (evt.target === cy) setMenu(null); });
+    cy.on("cxttap", "edge", (evt) => { evt.originalEvent?.preventDefault?.(); setMenu(null); });
+    cy.on("cxttap", (evt) => { if (evt.target === cy) { evt.originalEvent?.preventDefault?.(); setMenu(null); } });
     cy.on("pan zoom drag", () => setMenu(null));
-    // Cytoscape's cxttap fires AFTER the browser's native contextmenu and only over nodes —
-    // right-clicking an EDGE or empty canvas (and sometimes a node, depending on timing) still
-    // popped the native menu (issue 10). Suppress it unconditionally at the container so ONLY
-    // the app verb menu ever shows. Listener is on the canvas element, removed on teardown.
+    // Round 2 (issue 2): PR #89's container-level contextmenu preventDefault leaked the browser's
+    // native menu on some paths. The leaks: (a) it sat on the inner #cy div, but cytoscape stacks
+    // several <canvas> layers AND edgehandles injects its own canvas — a stray stopPropagation on
+    // any of them, or a right-click landing on a layer outside the listener's subtree, slips past;
+    // (b) bubble-phase can be pre-empted. Fix: register on the OUTER graph-wrap in the CAPTURE
+    // phase so EVERY right-click anywhere in the graph area (canvas layers, DOM overlays, node/edge
+    // HTML, empty background) is intercepted on the way DOWN, before anything can swallow it — the
+    // app verb menu is then the only menu that ever appears. Removed on teardown.
     const container = ref.current;
+    const wrap = (container.closest(".graph-wrap") as HTMLElement | null) ?? container;
     const suppressCtx = (e: Event) => e.preventDefault();
-    container.addEventListener("contextmenu", suppressCtx);
+    wrap.addEventListener("contextmenu", suppressCtx, { capture: true });
 
     cyRef.current = cy;
     (window as any).__cy = cy;
@@ -1026,7 +1073,7 @@ export default function GraphView({
       try { eh.destroy(); } catch { /* ignore */ }
       ehRef.current = null;
       savedPos.current.clear();
-      container.removeEventListener("contextmenu", suppressCtx);
+      wrap.removeEventListener("contextmenu", suppressCtx, { capture: true } as any);
       if ((window as any).__cy === cy) (window as any).__cy = undefined;
       cy.destroy();
     };
@@ -1042,11 +1089,11 @@ export default function GraphView({
   // expand/collapse one room (used by double-tap + the room verb menu).
   const toggleRoom = (rid: string) => setExpandedRooms((s) => {
     const x = new Set(s);
-    if (x.has(rid)) { x.delete(rid); justExpanded.current = null; }
-    else { x.add(rid); justExpanded.current = rid; requestRoomInterior(rid); }
+    if (x.has(rid)) { x.delete(rid); justExpanded.current = null; justCollapsed.current = true; }
+    else { x.add(rid); justExpanded.current = rid; justCollapsed.current = false; requestRoomInterior(rid); }
     return x;
   });
-  const collapseAll = () => setExpandedRooms(new Set());
+  const collapseAll = () => { justCollapsed.current = true; justExpanded.current = null; setExpandedRooms(new Set()); };
   // Expand-all at firmware scale would re-summon the whole graph — in skeleton mode the
   // host hasn't even loaded the interiors, so expand-all only expands CONTAINER rooms
   // (the firmware grandparent) to reveal the child-binary cards, never every leaf.
@@ -1216,7 +1263,7 @@ export default function GraphView({
     () => [...new Set(graph.nodes.filter((n) => n.type === "finding")
       .map((n) => (n.finding_type as string) || "other"))], [graph]);
   const filterActive = anyFilterActive(filters);
-  const layersDefault = NODE_TYPE_LAYERS.every((l) => nodeLayerOn(layers, l.key) === !["symbol", "string", "param"].includes(l.key))
+  const layersDefault = NODE_TYPE_LAYERS.every((l) => nodeLayerOn(layers, l.key) === !NODE_LAYER_DEFAULT_OFF.has(l.key))
     && EDGE_CLASSES.every((c) => layers.edges[c.key] !== false);
   const resetLayers = () => setLayers(defaultLayers());
   const clearFilters = () => setFilters(defaultFilters());
