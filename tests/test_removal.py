@@ -258,6 +258,31 @@ def test_delete_finding_detaches_followup_task(hg_home):
         assert again is not None and again.parent_finding_id is None
 
 
+def test_delete_finding_detaches_fuzz_artifact(hg_home):
+    """A fuzz_crash finding is OWNED by its crash artifact via a COLUMN ref
+    (FuzzArtifact.finding_id), not an edge. Deleting the finding must NULL that
+    pointer (symmetric with the task detach) so the artifact row + crash bytes
+    survive with no dangling reference (else triage serializes a stale id and
+    promote/verify wedge the inbox)."""
+    from hexgraph.db.models import FuzzArtifact
+    with session_scope() as s:
+        p, t, caller, callee, edge = _seed(s)
+        f = _persist_a_finding(s, p, t)
+        art = FuzzArtifact(project_id=p.id, campaign_id="camp-1", kind="crash",
+                           finding_id=f.id)
+        s.add(art)
+        s.flush()
+        aid = art.id
+
+        out = delete_finding(s, f.id)
+        assert out["artifacts_detached"] == 1
+
+        s.expire_all()  # bulk UPDATE used synchronize_session=False; refresh from DB
+        again = s.get(FuzzArtifact, aid)
+        assert again is not None and again.finding_id is None  # row + bytes survive, no dangling ref
+        assert s.get(Finding, f.id) is None  # the finding itself is gone
+
+
 def test_delete_nonexistent_finding_is_safe_noop(hg_home):
     with session_scope() as s:
         out = delete_finding(s, "does-not-exist")

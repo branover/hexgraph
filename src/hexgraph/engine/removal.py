@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from hexgraph.db.models import (
     AnalysisRun, Annotation, ContextBundle, ContextItem, Edge, EgressEvent,
-    Finding, Node, Project, Target, Task,
+    Finding, FuzzArtifact, Node, Project, Target, Task,
 )
 
 
@@ -65,14 +65,18 @@ def delete_finding(session: Session, finding_id: str) -> dict:
       - annotations keyed to it (`node_kind="finding"`);
       - any task spawned from it (`parent_finding_id`) is detached, not deleted —
         the task ran and its log/result stand on their own (mirrors how we never
-        orphan-cascade a run).
+        orphan-cascade a run);
+      - any fuzz artifact that produced it (`FuzzArtifact.finding_id`, a column ref,
+        not an edge) is detached the same way — the artifact row and its crash bytes
+        in CAS stand on their own; we just NULL the dangling finding pointer so the
+        triage UI doesn't surface a stale id (and promote/verify don't wedge).
 
     Idempotent: deleting an already-gone finding is a safe no-op. Returns a small
     summary of what was removed, like the other removal fns."""
     f = session.get(Finding, finding_id)
     if f is None:
         return {"deleted_finding": finding_id, "found": False, "edges": 0,
-                "annotations": 0, "tasks_detached": 0}
+                "annotations": 0, "tasks_detached": 0, "artifacts_detached": 0}
 
     edges = (
         session.query(Edge)
@@ -94,10 +98,20 @@ def delete_finding(session: Session, finding_id: str) -> dict:
         .filter(Task.parent_finding_id == finding_id)
         .update({Task.parent_finding_id: None}, synchronize_session=False)
     )
+    # A fuzz_crash finding is OWNED by its crash artifact, which stores the finding id
+    # in a plain COLUMN (FuzzArtifact.finding_id) — invisible to the edge/annotation
+    # cleanup above. Detach it symmetrically with the task pointer: keep the artifact
+    # row + its crash bytes, just NULL the dangling reference.
+    artifacts_detached = (
+        session.query(FuzzArtifact)
+        .filter(FuzzArtifact.finding_id == finding_id)
+        .update({FuzzArtifact.finding_id: None}, synchronize_session=False)
+    )
     session.delete(f)
     session.flush()
     return {"deleted_finding": finding_id, "found": True, "edges": edges,
-            "annotations": annotations, "tasks_detached": tasks_detached}
+            "annotations": annotations, "tasks_detached": tasks_detached,
+            "artifacts_detached": artifacts_detached}
 
 
 def delete_project(session: Session, project_id: str) -> dict:

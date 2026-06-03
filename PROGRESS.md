@@ -562,6 +562,15 @@ then run the resume verifier, then continue at the next unchecked task.
   annotation with NO dangling refs; follow-up task detached not deleted; nonexistent is a no-op; dismiss
   still works unchanged; API delete → 404 + idempotent) plus full `just test`; Playwright screenshots
   confirmed the Delete/confirm UX and an end-to-end UI delete dropped the graph finding count 10→9.
+  **Review fix (PR #99):** `delete_finding` also missed `FuzzArtifact.finding_id` (a COLUMN ref, not an
+  edge, so invisible to the edge/annotation cleanup) — a `fuzz_crash` finding is owned by its crash
+  artifact, so after delete the artifact kept a dangling `finding_id` and wedged the triage inbox
+  (`promote_artifact`/`verify_artifact` raised "linked finding not found"). Now NULLs `FuzzArtifact.finding_id`
+  symmetric with the `Task.parent_finding_id` detach (artifact row + crash bytes survive), reports it as
+  `artifacts_detached`, with a new test in `test_removal.py`. Confirmed Task + FuzzArtifact are the ONLY
+  two column refs to a finding id (no other dangling type). Also fixed a `docs/mcp.md` nit: the
+  removal tools (`delete_edge`/`archive_target`/`restore_target`/`archive_node`/`restore_node`) are
+  **write** tools, were wrongly listed under read.
 - 2026-06-03: **feat: setup wizard registers MCP + skill; fix: just --list truncation** (branch
   `build/setup-mcp`). Two setup-experience improvements in one PR. **(1)** The interactive `hexgraph
   setup` wizard now offers a final **coding-agent integration** step: register HexGraph's MCP server
