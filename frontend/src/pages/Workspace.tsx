@@ -24,6 +24,7 @@ import ArtifactsView from "../components/ArtifactsView";
 import FuzzModal from "../components/FuzzModal";
 import EgressPanel from "../components/EgressPanel";
 import { Icon, NODE_ICON } from "../components/Icon";
+import { useWorkspaceLayout, useDrag } from "../hooks/useWorkspaceLayout";
 
 // A reversible focus frame (design §4.2): the anchor node, the hop radius of its focused
 // neighborhood, and a human label for the breadcrumb crumb.
@@ -107,6 +108,38 @@ export default function Workspace() {
   // defined below, so route through a ref the settings-load effect can call).
   const lensApplied = useRef(false);
   const applyLensRef = useRef<((l: SavedLens) => void) | null>(null);
+
+  // ── Resizable / collapsible workspace layout (persisted to localStorage). The grid
+  // columns are driven by the persisted widths; collapsing a side pane hands its space
+  // to the center graph. Each drag captures the size at grab time so the delta resolves
+  // cleanly even if React re-renders mid-drag.
+  const { layout, update: setLayout, toggleLeft, toggleRight } = useWorkspaceLayout();
+  const dragStart = useRef(0);
+  const rightPaneRef = useRef<HTMLElement>(null);
+  const [dragging, setDragging] = useState<"left" | "right" | "detail" | null>(null);
+  const onDragLeft = useDrag({
+    axis: "x",
+    onStart: () => { dragStart.current = layout.leftW; setDragging("left"); },
+    onDelta: (d) => setLayout({ leftW: dragStart.current + d }),
+    onEnd: () => setDragging(null),
+  });
+  const onDragRight = useDrag({
+    axis: "x",
+    // The right divider sits to the LEFT of the right pane, so dragging right SHRINKS it.
+    onStart: () => { dragStart.current = layout.rightW; setDragging("right"); },
+    onDelta: (d) => setLayout({ rightW: dragStart.current - d }),
+    onEnd: () => setDragging(null),
+  });
+  const onDragDetail = useDrag({
+    axis: "y",
+    onStart: () => { dragStart.current = layout.detailFrac; setDragging("detail"); },
+    onDelta: (d) => {
+      const h = rightPaneRef.current?.clientHeight || 1;
+      // Dragging the DETAIL divider DOWN shrinks the detail section (it's the bottom region).
+      setLayout({ detailFrac: dragStart.current - d / h });
+    },
+    onEnd: () => setDragging(null),
+  });
 
   const load = useCallback(async () => {
     if (!projectId) return;
@@ -403,7 +436,7 @@ export default function Workspace() {
   };
 
   if (!detail || !graph) {
-    return <><Header /><div className="workspace">{[0, 1, 2].map((i) => <div key={i} className="pane skel" />)}</div></>;
+    return <><Header /><div className="workspace skel-grid">{[0, 1, 2].map((i) => <div key={i} className="pane skel" />)}</div></>;
   }
 
   const isMock = detail.project.backend === "mock";
@@ -452,7 +485,7 @@ export default function Workspace() {
   };
 
   const fuzzingFeature = !!caps.features?.fuzzing;
-  const renderTabs = () => (
+  const renderTabs = (collapsible = false) => (
     <div className="pane-h">
       <button className={"btn sm" + (tab === "findings" ? " primary" : " ghost")} onClick={() => { setTab("findings"); setUrl({ tab: undefined }); }}>
         <Icon name="bug" size={12} /> Findings · {detail.findings.length}
@@ -469,6 +502,11 @@ export default function Workspace() {
       <button className="btn sm icon" title={maxed ? "Restore" : "Expand to full screen"} onClick={() => setMaxed((m) => !m)}>
         <Icon name={maxed ? "minus" : "fit"} size={13} />
       </button>
+      {collapsible && (
+        <button className="btn sm icon ghost pane-collapse" title="Collapse panel" onClick={toggleRight}>
+          <span style={{ transform: "rotate(-90deg)", display: "inline-flex" }}><Icon name="chevron" size={13} /></span>
+        </button>
+      )}
     </div>
   );
   const renderList = () => tab === "findings" ? (
@@ -547,7 +585,14 @@ export default function Workspace() {
     <>
       <Header project={detail.project} cost={detail.cost} />
       <div className="workspace">
-        <aside className="pane">
+        {layout.leftCollapsed ? (
+          <div className="pane-edge" title="Show Targets panel" onClick={toggleLeft}>
+            <span className="arrow" style={{ transform: "rotate(-90deg)", display: "inline-flex" }}><Icon name="chevron" size={13} /></span>
+            <span className="lbl">Targets</span>
+            <span className="arrow" style={{ display: "inline-flex" }}><Icon name="chip" size={13} /></span>
+          </div>
+        ) : (
+        <aside className="pane side" style={{ width: layout.leftW }}>
           <div className="pane-h">
             <Icon name="chip" size={14} /><span className="ttl">Targets</span>
             <span className="grow" />
@@ -557,6 +602,9 @@ export default function Workspace() {
                 <Icon name="bulb" size={12} /> Ghidra
               </button>
             )}
+            <button className="btn sm icon ghost pane-collapse" title="Collapse Targets panel" onClick={toggleLeft}>
+              <span style={{ transform: "rotate(90deg)", display: "inline-flex" }}><Icon name="chevron" size={13} /></span>
+            </button>
             <input ref={fileRef} type="file" style={{ display: "none" }} onChange={onUpload} />
           </div>
           <div className="scroll">
@@ -564,8 +612,17 @@ export default function Workspace() {
             {roots.map((t) => TreeRow(t, false))}
           </div>
         </aside>
+        )}
 
-        <section className="pane">
+        {!layout.leftCollapsed && (
+          <div className={"wsplit" + (dragging === "left" ? " dragging" : "")} onPointerDown={onDragLeft}
+               role="separator" aria-orientation="vertical"
+               title="Drag to resize · double-click to collapse" onDoubleClick={toggleLeft}>
+            <span className="grip"><i /><i /><i /></span>
+          </div>
+        )}
+
+        <section className="pane center">
           <div className="toolbar">
             {/* ── Phase 5: center-pane view switcher (§6.1) — Map / Graph / Table / Matrix /
                 Source. Graph stays the obvious DEFAULT; Map = the §1 skeleton given a name;
@@ -762,14 +819,33 @@ export default function Workspace() {
           )}
         </section>
 
-        {!maxed && (
-          <aside className="pane">
-            {!detailBig && renderTabs()}
+        {!maxed && !layout.rightCollapsed && (
+          <div className={"wsplit" + (dragging === "right" ? " dragging" : "")} onPointerDown={onDragRight}
+               role="separator" aria-orientation="vertical"
+               title="Drag to resize · double-click to collapse" onDoubleClick={toggleRight}>
+            <span className="grip"><i /><i /><i /></span>
+          </div>
+        )}
+
+        {!maxed && (layout.rightCollapsed ? (
+          <div className="pane-edge" title="Show Findings & Detail panel" onClick={toggleRight}>
+            <span className="arrow" style={{ transform: "rotate(90deg)", display: "inline-flex" }}><Icon name="chevron" size={13} /></span>
+            <span className="lbl">Findings</span>
+            <span className="arrow" style={{ display: "inline-flex" }}><Icon name="bug" size={13} /></span>
+          </div>
+        ) : (
+          <aside className="pane side" ref={rightPaneRef} style={{ width: layout.rightW }}>
+            {!detailBig && renderTabs(true)}
             {!detailBig && renderList()}
+            {!detailBig && (
+              <div className={"dsplit" + (dragging === "detail" ? " dragging" : "")} onPointerDown={onDragDetail}
+                   role="separator" aria-orientation="horizontal" title="Drag to resize the Detail section">
+                <span className="grip"><i /><i /><i /></span>
+              </div>
+            )}
             <div className="detailbox" style={{
-              borderTop: "1px solid var(--border)",
               flex: detailBig ? 1 : "none",
-              maxHeight: detailBig ? "none" : "46%",
+              height: detailBig ? "auto" : `${Math.round(layout.detailFrac * 100)}%`,
               display: "flex", flexDirection: "column", overflow: "hidden",
             }}>
               <div className="pane-h sub">
@@ -785,7 +861,7 @@ export default function Workspace() {
               </div>
             </div>
           </aside>
-        )}
+        ))}
       </div>
 
       {maxed && (

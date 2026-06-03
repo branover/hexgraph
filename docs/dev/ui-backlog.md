@@ -1,5 +1,25 @@
 # UI improvement backlog
 
+## Resizable + collapsible workspace panels (2026-06-02)
+
+**Shipped in `build/resizable-panels`.** The three-pane workspace (`frontend/src/pages/Workspace.tsx`)
+is now user-adjustable so the center graph can claim the room it needs:
+
+- **Drag-to-resize** the two vertical dividers (left↔center, center↔right). A hand-rolled
+  pointer-drag splitter (`frontend/src/hooks/useWorkspaceLayout.ts` — no new deps) with sensible
+  min/max widths (left 180–480px, right 280–680px). Double-click a divider to collapse that side.
+- **Collapse/restore** each side pane to a thin clickable edge (header chevron collapses; the edge
+  restores), letting the graph go near full-width.
+- **Detail-section drag**: a row-resize handle on the right pane's `DETAIL` divider trades space
+  between the findings/tasks/campaigns list and the detail pane (clamped 18–85%).
+- **Persistence**: widths + collapsed flags + detail fraction persist to `localStorage`
+  (`hexgraph.ws.layout.v1`) — survives reload, no DB/settings migration. Corrupt/missing storage
+  falls back to the prior defaults (268 / 392 / 0.46).
+- Playwright-verified end-to-end (`scripts/ws_layout_shot.py`): drag widens left 268→388, right
+  drag grows center, detail drag works, collapsing both grows the graph, and sizes +
+  collapsed state survive a reload. The skeleton loader keeps its even 3-column look (`.skel-grid`).
+  Rebased onto the skeleton-first graph (#88) — the resizable center pane hosts the skeleton view.
+
 ## Graph at REAL firmware scale — skeleton-first loading (2026-06-02)
 
 **Shipped in `build/graph-scale`.** The Phase 1–5 graph redesign was validated against a synthetic
