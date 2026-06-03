@@ -546,6 +546,31 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-03: **feat: curatable targets — Phase 1 (FS-hierarchical targets pane)** (branch
+  `build/curatable-targets`). Two deliverables in one PR. **(A)** New design doc
+  [`docs/design/design-curatable-targets.md`](docs/design/design-curatable-targets.md) — the
+  4-phase plan for "curatable, filesystem-hierarchical targets & active-set graph visibility":
+  Phase 1 the pane (this PR), Phase 2 cheap-vs-deep recon split + lazy materialization
+  (deferred ONLY for auto-extracted firmware children; a durable migrated `target`
+  materialization column; idempotent activate API/MCP/pane action + analyze-directory), Phase 3
+  the unifying active-set visibility model (owned-by-active ∪ one-hop edge inheritance for
+  shared nodes ∪ stubs-with-counts for cross-edges into inactive targets; consolidates
+  archive/scope/layers/active-set into ONE documented model; drops reachability-BFS-as-hiding),
+  Phase 4 activate-from-graph/-directory/-search polish. **(B)** Phase 1 itself, **frontend-only**:
+  the firmware TARGETS pane now groups path-named children (`usr/sbin/telnetd`) into collapsible
+  directory FOLDERS derived client-side by splitting names on "/" — pure UI grouping, no target
+  rows, no backend/schema change. Folders show child counts + a rolled-up worst-severity finding
+  badge; sort dirs-first-then-files alpha; small firmware (≤12 binaries) opens top-level folders,
+  large opens collapsed (heuristic in an effect, idempotent via a ref). Leaf rows preserve ALL
+  per-target behavior (select/scope/Run/Fuzz/Remove/badge); leaf shown by FS name, full path on
+  hover. SURFACE children (web_app/service/remote) are excluded from folding so a coincidental
+  slash like `upnpd control (tcp/5000)` stays a flat leaf. Non-firmware projects render exactly as
+  before; #85 (resizable panels) and #88 (skeleton load) untouched. `Workspace.tsx` +
+  `theme.css` (`.tree-row.dir`/chevron/count) + a `folder` icon. **Verified** (Playwright, mock,
+  isolated `HEXGRAPH_HOME`, port 8772): the `seed_graph_tiers.py` REAL tier (251 targets / ~11.6k
+  nodes) collapses from a 250-row scroll to 5 calm folder rows (`bin` 36 · `lib` 36 · `sbin` 36 ·
+  `usr` 107 · `www` 35), `usr/` nests `usr/bin`/`usr/lib`/`usr/sbin`; showcase groups
+  `sbin/httpd` + `lib/libupnp.so`. `just test` 719 passed / 2 skipped.
 - 2026-06-03: **fix: graph-canvas UX round 2** (branch `build/graph-ux-round2`). Five hands-on
   graph-canvas issues the maintainer found after PR #89 — some were RESIDUALS where #89's fix
   didn't fully take, so each was re-verified LIVE (Playwright, isolated `HEXGRAPH_HOME`, mock,
