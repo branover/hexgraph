@@ -183,8 +183,14 @@ class SandboxRunner:
         secret: dict | None = None,
         resources: ResourceSpec | None = None,
         network_gate: str = "network",
+        image: str | None = None,
     ) -> RunResult:
         """Run a probe script over `artifact` inside the sandbox.
+
+        `image` overrides the runner's default sandbox image for THIS probe run (the
+        same per-run override `start_detached` accepts) — e.g. the build probe runs in
+        the dedicated `hexgraph-build` image (clang + AFL++ toolchain), not the shared
+        analysis sandbox. Defaults to `self.image`.
 
         `outdir` (host dir) is bind-mounted read-write at /out when a probe needs
         to write extracted files; otherwise only stdout is captured.
@@ -263,7 +269,7 @@ class SandboxRunner:
         if PROBES_DIR.is_dir() and os.environ.get("HEXGRAPH_SANDBOX_NO_MOUNT") != "1":
             cmd += ["-v", f"{PROBES_DIR}:{CONTAINER_PROBES}:ro"]
 
-        cmd += [self.image, "python3", f"{CONTAINER_PROBES}/{probe}", *probe_args]
+        cmd += [image or self.image, "python3", f"{CONTAINER_PROBES}/{probe}", *probe_args]
 
         run_env = None
         if secret:

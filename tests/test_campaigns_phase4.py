@@ -6,6 +6,7 @@ All offline ($0) via the MockFuzzer + a fake executor.
 
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 from hexgraph.api.app import create_app
@@ -74,27 +75,87 @@ def _started(s, monkeypatch):
     return p, t, s.query(FuzzArtifact).filter(FuzzArtifact.campaign_id == row.id).first()
 
 
+def _disable_fuzzing():
+    from hexgraph import settings as _st
+    _st.update_settings({"features.fuzzing.enabled": False, "features.poc.enabled": False})
+
+
 def test_promote_artifact_confirms_finding(hg_home, monkeypatch):
+    # Plain Promote (to_poc=False) just CONFIRMS the finding — it executes nothing, so it
+    # works even after dropping back to static-only (no policy gate on plain promote).
     _mock_env(monkeypatch)
     _enable_fuzzing()
     with session_scope() as s:
         p, t, art = _started(s, monkeypatch)
+        _disable_fuzzing()  # now static-only — plain promote must STILL work
         res = C.promote_artifact(s, art, to_poc=False)
-        assert res["status"] == "confirmed"
+        assert res["status"] == "confirmed" and res["to_poc"] is False
         f = s.get(Finding, art.finding_id)
         assert f.status == "confirmed"
         assert not ((f.evidence_json.get("extra") or {}).get("poc"))
+        # No verification was run (plain promote never executes the target).
+        assert not ((f.evidence_json.get("extra") or {}).get("verification"))
 
 
-def test_promote_to_poc_seeds_reproducer_spec(hg_home, monkeypatch):
+def test_promote_to_poc_seeds_and_verifies_when_enabled(hg_home, monkeypatch):
+    # With execution enabled (fuzzing), Promote→PoC seeds the reproducer-backed PoC spec
+    # AND immediately re-runs the LLM-free crash verification — one click → a verified PoC.
     _mock_env(monkeypatch)
     _enable_fuzzing()
     with session_scope() as s:
         p, t, art = _started(s, monkeypatch)
-        C.promote_artifact(s, art, to_poc=True)
+        res = C.promote_artifact(s, art, to_poc=True)
         f = s.get(Finding, art.finding_id)
-        poc = (f.evidence_json.get("extra") or {}).get("poc")
+        extra = f.evidence_json.get("extra") or {}
+        poc = extra.get("poc")
         assert poc and poc["kind"] == "fuzz_reproducer" and poc["reproducer_ref"] == art.content_cas
+        # The verification actually RAN and was recorded onto the finding (durable proof),
+        # carrying an assurance triple — not a seed-only no-op. (verified True/False depends
+        # on whether the reproducer re-crashes; the mock harness exits cleanly, so the point
+        # asserted here is that verification executed + persisted, with assurance.)
+        assert res["to_poc"] is True and "verified" in res and res.get("assurance")
+        verif = extra.get("verification")
+        assert verif is not None and verif["via"] == "promote_to_poc"
+        assert verif["assurance"] and verif["verified"] == res["verified"]
+
+
+def test_promote_to_poc_refuses_under_static_only(hg_home, monkeypatch):
+    # The whole point of the gate: with PoC/fuzzing DISABLED (static-only default),
+    # Promote→PoC must NOT seed an unverifiable PoC and must NOT execute the target —
+    # it raises a PolicyViolation with actionable guidance, before any mutation.
+    from hexgraph.policy import PolicyViolation
+
+    _mock_env(monkeypatch)
+    _enable_fuzzing()  # enable to PRODUCE the crash artifact...
+    with session_scope() as s:
+        p, t, art = _started(s, monkeypatch)
+        _disable_fuzzing()  # ...then drop back to static-only before promoting
+        before_status = s.get(Finding, art.finding_id).status
+        with pytest.raises(PolicyViolation):
+            C.promote_artifact(s, art, to_poc=True)
+        f = s.get(Finding, art.finding_id)
+        # Fail-closed: nothing seeded, nothing verified, status untouched.
+        assert f.status == before_status
+        extra = f.evidence_json.get("extra") or {}
+        assert not extra.get("poc") and not extra.get("verification")
+
+
+def test_api_promote_to_poc_blocked_returns_guidance(hg_home, monkeypatch):
+    # The API maps the policy refusal to a clean 403 with guidance (no stack trace).
+    _mock_env(monkeypatch)
+    _enable_fuzzing()
+    app = create_app()
+    with session_scope() as s:
+        p, t, art = _started(s, monkeypatch)
+        aid = art.id
+    _disable_fuzzing()  # static-only at promote time
+    with TestClient(app) as c:
+        r = c.post(f"/api/artifacts/{aid}/promote", json={"to_poc": True})
+        assert r.status_code == 403
+        assert "PoC verification" in r.json()["detail"] and "Settings" in r.json()["detail"]
+        # Plain promote still works under static-only.
+        r2 = c.post(f"/api/artifacts/{aid}/promote", json={"to_poc": False})
+        assert r2.status_code == 200 and r2.json()["status"] == "confirmed"
 
 
 # ── Coverage serialization ─────────────────────────────────────────────────────────
