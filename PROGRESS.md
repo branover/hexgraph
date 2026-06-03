@@ -546,6 +546,23 @@ then run the resume verifier, then continue at the next unchecked task.
 - _(none yet — candidates: `regen-fixtures`, `run-task`, `add-mock-scenario`)_
 
 ## Session log (newest first)
+- 2026-06-02: **fix: Run menu advertises kind-valid tasks for SURFACE targets** (branch
+  `fix/surface-run-menu`). Companion to PR #84's backend routing: the Run menu was server-driven via the
+  capability table, but `web_app`/`service`/`remote` SURFACE kinds had **no entry in `_TARGET`**, so they
+  fell through the frontend `caps.target?.[kind] ?? ["recon"]` fallback and offered **byte 'recon'** —
+  wrong for a surface with no bytes (the worker then routed it to `surface_recon` for `web_app` or a clear
+  `NotImplementedError` for `service`/`remote`). Fix, two layers: (1) `engine/capabilities.py` gains a
+  SEPARATE `_SURFACE_BASE` map (web_app→`surface_recon`; service/remote→`[]` — no offline single-shot task
+  is wired, the honest minimal set, never byte recon) + `_surface_caps()` which folds in the live
+  `web_recon`/`web_discover` only when `features.network` is on (mirrors the worker's egress gating);
+  `capabilities_for("target", …)` and `capability_table()` route surface kinds through it. Byte targets
+  unchanged. (2) Frontend: `Workspace.tsx` replaces the two `?? ["recon"]` fallbacks with a `targetCaps()`
+  helper that trusts the server set verbatim (incl. an empty list) and falls back to byte `recon` ONLY for
+  a kind the table doesn't know AND that isn't a surface; `taskMeta.ts` adds copy for
+  `surface_recon`/`web_recon`/`web_discover`. Tests: `tests/test_p3_anchors.py` +2 (a web_app advertises
+  `surface_recon` and NOT byte recon / harness-gen / static-analysis; service & remote are empty;
+  `web_recon`/`web_discover` appear only under `features.network`). `just test` green (719 passed / 2
+  Docker-gated skips); SPA rebuilt clean (`just ui`). Left to the orchestrator's reviewer + merge.
 - 2026-06-02: **build: Run/fuzz UX on the target card** (branch `build/run-fuzz-ux`). Three changes,
   frontend + a small backend tweak. (1) **Expressive Run menu** — `frontend/src/taskMeta.ts` (new) gives
   every task type a label + one-line summary + a richer hover explanation; `Launcher.tsx` rewritten to
