@@ -72,7 +72,10 @@ def _ensure_outdir_writable(path: Path) -> None:
     firmware, PoC/fuzz output) to ANY local user, because the real out-dir roots are not
     private — poc/fuzz/build use ``tempfile.mkdtemp()`` under ``/tmp`` (1777), and
     ``HEXGRAPH_HOME``/``projects/`` are created at 0o755. Group-write keeps access to the
-    host user + the container's added gid only. Only the host-side bind-mount dir changes;
+    host user + the container's added gid only. (Caveat: on a host whose effective gid is a
+    BROAD shared primary group — uncommon under modern per-user-group defaults — that
+    group's members could also reach the per-run dir; a packaged/multi-user deployment
+    should run HexGraph under a private group.) Only the host-side bind-mount dir changes;
     the container's ``--user``, dropped caps, read-only rootfs and ``--network none`` are
     untouched.
     """
