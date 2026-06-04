@@ -790,6 +790,51 @@ def test_service_launch_probe_falls_back_when_setarch_epermed(monkeypatch, tmp_p
     assert "could not disable ASLR" in (out / "service.log").read_text()
 
 
+def test_service_launch_probe_does_not_relaunch_on_bare_eperm(monkeypatch, tmp_path):
+    """Regression: a SERVICE that legitimately fails (non-zero) and emits the bare errno
+    "Operation not permitted" — e.g. `bind: Operation not permitted` on a privileged port
+    under --cap-drop ALL — must NOT be misread as a setarch personality failure. setarch ran
+    fine (it exec'd the target), so the probe must record the real exit code and NOT relaunch
+    the service a second time. Detection keys on setarch's OWN "failed to set personality"
+    signature, which is absent here."""
+    from hexgraph.sandbox.probes import service_launch_probe as P
+
+    calls = []
+
+    class _FakeProc:
+        def __init__(self, pid, rc):
+            self.pid = pid
+            self._rc = rc
+
+        def wait(self):
+            return self._rc
+
+    def _fake_popen(cmd, **kw):
+        calls.append({"cmd": cmd, "env": kw.get("env")})
+        out = tmp_path / "out"
+        # setarch exec'd the target fine; the SERVICE ITSELF then failed with the generic errno.
+        with open(out / "service.log", "ab") as fh:
+            fh.write(b"server: bind(0.0.0.0:80): Operation not permitted\n")
+        return _FakeProc(100, 1)
+
+    monkeypatch.setattr(P.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(P.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setenv("HEXGRAPH_SVC_ASLR_RELAXED", "1")  # engine DID grant the cap
+    art = _elf(tmp_path)
+    out = tmp_path / "out"
+    monkeypatch.setattr(__import__("sys"), "argv",
+                        ["service_launch_probe.py", str(art), str(out), "--port=9135"])
+    assert P.main() == 0
+
+    # Exactly ONE spawn (with setarch) — no spurious relaunch.
+    assert len(calls) == 1
+    assert calls[0]["cmd"][0].endswith("setarch")
+    status = json.loads((out / "status.json").read_text())
+    # setarch did run, so the relaxation took effect; the honest exit code is recorded.
+    assert status["aslr_relaxed"] is True
+    assert status["exit_code"] == 1
+
+
 def test_service_launch_probe_skips_setarch_when_marker_absent(monkeypatch, tmp_path):
     """N1 (compat): setarch is PRESENT but the engine did NOT set the handshake marker — the
     server is running stale code that never granted the personality cap (or a host that forbids

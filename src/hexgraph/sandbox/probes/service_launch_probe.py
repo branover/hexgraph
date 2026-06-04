@@ -172,8 +172,13 @@ def main() -> int:
 
     def _setarch_personality_failed(rc):
         # setarch fails to set the personality BEFORE exec'ing the target: it exits non-zero
-        # and writes "setarch: failed to set personality ... Operation not permitted" to the
-        # log. Recognize either signal so a denied personality() triggers the no-setarch retry.
+        # and writes "setarch: failed to set personality to <name>: Operation not permitted" to
+        # the log. Key on setarch's OWN, specific signature ("failed to set personality") — NOT
+        # the bare errno "operation not permitted", which a legitimately-failing SERVICE can emit
+        # itself (e.g. `bind: Operation not permitted` on a privileged port under --cap-drop ALL);
+        # keying on the generic string would misclassify that as a setarch failure and needlessly
+        # relaunch the service without setarch. setarch's message always contains the specific
+        # phrase, so this stays a reliable trigger for the genuine personality()-denied case.
         if rc == 0:
             return False
         try:
@@ -181,7 +186,7 @@ def main() -> int:
                 tail = fh.read()[-4096:].decode("utf-8", "replace").lower()
         except OSError:
             tail = ""
-        return ("failed to set personality" in tail) or ("operation not permitted" in tail)
+        return "failed to set personality" in tail
 
     try:
         proc, log, cmd = _spawn(use_setarch)
