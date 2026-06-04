@@ -137,7 +137,10 @@ def reap_campaigns_sync() -> int:
     from hexgraph.engine import campaigns
 
     with session_scope() as session:
-        return campaigns.reap_all(session)
+        # The worker reaper runs in a background thread, so it may take the symbolization
+        # backfill path (which EXECUTES the target via the verify replay); the on-read HTTP
+        # reaps leave allow_replay_backfill False so they never run the target in a request.
+        return campaigns.reap_all(session, allow_replay_backfill=True)
 
 
 class TaskWorker:

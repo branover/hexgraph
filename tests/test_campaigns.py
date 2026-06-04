@@ -373,7 +373,10 @@ def test_representative_is_symbolized_via_verify_when_report_lacks_frames(hg_hom
              "coverage_instrumented": True, "crashes": [crash]}))
         (outdir / "DONE").write_text("libfuzzer")
 
-        created = C.reap_campaign(s, s.get(FuzzCampaign, cid), executor=ex)
+        # allow_replay_backfill=True simulates the background worker reaper (the only context
+        # permitted to run the target-executing replay); the on-read HTTP reaps leave it False.
+        created = C.reap_campaign(s, s.get(FuzzCampaign, cid), executor=ex,
+                                  allow_replay_backfill=True)
         assert created == 1
         assert ex.verify_calls == 1, "the symbolizing replay must run when frames are missing"
 
@@ -420,12 +423,60 @@ def test_representative_with_frames_skips_verify_backfill(hg_home, monkeypatch):
              "executions": 1000, "crash_count": 1, "coverage_instrumented": True,
              "crashes": [crash]}))
         (outdir / "DONE").write_text("libfuzzer")
-        C.reap_campaign(s, s.get(FuzzCampaign, cid), executor=ex)
+        # allow_replay_backfill=True so the ONLY reason the replay is skipped is the
+        # already-present frames, not the worker gate.
+        C.reap_campaign(s, s.get(FuzzCampaign, cid), executor=ex, allow_replay_backfill=True)
         assert ex.verify_calls == 0, "no verify replay when the report already symbolizes"
         art = s.query(FuzzArtifact).filter(FuzzArtifact.campaign_id == cid).one()
         f = s.get(Finding, art.finding_id)
         frames = (((f.evidence_json or {}).get("extra") or {}).get("fuzz") or {}).get("frames")
         assert frames and frames[0]["func"] == "cgi_handler"
+
+
+def test_on_read_reap_does_not_execute_target_for_backfill(hg_home, monkeypatch):
+    """Safety gate: the on-read reap paths (SPA list-poll / GET / SSE, MCP, stop) reap with
+    allow_replay_backfill=False, so an unsymbolized crash must NOT trigger the target-executing
+    verify replay in a request thread. The crash is still ingested; symbolization is deferred
+    to the background worker reaper."""
+    import json as _json
+    from pathlib import Path
+    from hexgraph.engine import cas
+
+    _enable_fuzzing()
+    ex = _SymbolizingExecutor()
+    with session_scope() as s:
+        p, t = _project_with_target(s)
+        spec = FuzzCampaignSpec(target_id=t.id, surface="source_lib", harness_source=HARNESS,
+                                function="cgi_handler", target_sources=["/x.c"])
+        monkeypatch.setenv("HEXGRAPH_FUZZER", "")
+        row = C.start_campaign(s, p, t, spec=spec, executor=ex)
+        cid = row.id
+        fuzzer_cas = cas.put(p, b"\x7fELF-fake-fuzzer-binary")
+        row.config_json = {**(row.config_json or {}), "fuzzer_cas": fuzzer_cas}
+        s.flush()
+        outdir = Path(row.outdir)
+        outdir.mkdir(parents=True, exist_ok=True)
+        crash = {
+            "kind": "heap-use-after-free", "function": None,
+            "summary": "SUMMARY: AddressSanitizer: heap-use-after-free",
+            "reproducer_sha256": "b" * 64, "reproducer_size": 8,
+            "reproducer_b64": "QUFBQUFBQUE=",
+            "dedup_key": "cafebabe" * 8, "dupe_count": 0,
+            "exploitability": {"rating": "likely_exploitable", "access": "READ", "signals": []},
+            "minimized_reproducer_sha256": "b" * 64, "minimized_reproducer_size": 8,
+            "_report": ("==9==ERROR: AddressSanitizer: heap-use-after-free\n"
+                        "    #0 0x4f (/out/fuzzer+0x4f)\n"),  # module+offset only — NO frames
+        }
+        (outdir / "status.json").write_text(_json.dumps(
+            {"compiled": True, "ran": True, "engine": "libfuzzer", "done": True,
+             "executions": 1000, "crash_count": 1, "coverage_instrumented": True,
+             "crashes": [crash]}))
+        (outdir / "DONE").write_text("libfuzzer")
+
+        # Default flag (on-read context): the crash is still recorded, but no replay runs.
+        created = C.reap_campaign(s, s.get(FuzzCampaign, cid), executor=ex)
+        assert created == 1
+        assert ex.verify_calls == 0, "the on-read reap must not execute the target to backfill"
 
 
 # ── Degraded / zero-work campaigns surface a WARNING, not a silent "completed" ────

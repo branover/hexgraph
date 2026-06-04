@@ -578,27 +578,34 @@ def _launch_mock(row: FuzzCampaign, prepared, spec: FuzzCampaignSpec) -> None:
 
 # ── Reaping (the periodic worker job) ───────────────────────────────────────────
 
-def reap_all(session: Session, *, executor=None) -> int:
+def reap_all(session: Session, *, executor=None, allow_replay_backfill: bool = False) -> int:
     """Reap every live campaign once. Returns the number of crash findings created.
     Called periodically by the worker AND on a serve restart (crash-safe re-attach:
-    we re-bind to running containers by `container_name` from the durable row)."""
+    we re-bind to running containers by `container_name` from the durable row).
+    `allow_replay_backfill` is set ONLY by the background worker reaper — see
+    `_backfill_symbolized_frames`; it gates the (target-executing) symbolization replay
+    so it never runs in an HTTP request thread (the on-read reaps leave it False)."""
     rows = (session.query(FuzzCampaign)
             .filter(FuzzCampaign.status.in_(["running", "building"]))
             .all())
     total = 0
     for row in rows:
         try:
-            total += reap_campaign(session, row, executor=executor)
+            total += reap_campaign(session, row, executor=executor,
+                                   allow_replay_backfill=allow_replay_backfill)
         except Exception:  # noqa: BLE001 — one bad campaign must not kill the reaper
             session.rollback()
     return total
 
 
-def reap_campaign(session: Session, row: FuzzCampaign, *, executor=None) -> int:
+def reap_campaign(session: Session, row: FuzzCampaign, *, executor=None,
+                  allow_replay_backfill: bool = False) -> int:
     """Poll a campaign's container, ingest NEW artifacts (dedup'd) into fuzz_artifact +
     fuzz_crash findings, update stats, and finalize when the container exits. Idempotent
     — already-ingested dedup buckets are skipped, so polling repeatedly is safe and
-    crashes stream as they appear."""
+    crashes stream as they appear. `allow_replay_backfill` (worker-only) gates the
+    symbolization replay; the on-read reaps keep it False so the target is never executed
+    in a request thread."""
     executor = _executor_for(session, row, executor)
     project = session.get(Project, row.project_id)
     target = session.get(Target, row.target_id)
@@ -626,7 +633,8 @@ def reap_campaign(session: Session, row: FuzzCampaign, *, executor=None) -> int:
     status = _read_status(outdir)
     created = 0
     if status:
-        created = _ingest_artifacts(session, project, target, row, status, executor=executor)
+        created = _ingest_artifacts(session, project, target, row, status, executor=executor,
+                                    allow_replay_backfill=allow_replay_backfill)
         _update_stats(row, status)
 
     if done:
@@ -659,7 +667,8 @@ def reap_campaign(session: Session, row: FuzzCampaign, *, executor=None) -> int:
     return created
 
 
-def _ingest_artifacts(session, project, target, row, status: dict, *, executor=None) -> int:
+def _ingest_artifacts(session, project, target, row, status: dict, *, executor=None,
+                      allow_replay_backfill: bool = False) -> int:
     """Persist each NEW unique crash as a fuzz_artifact + a fuzz_crash finding, wiring
     the campaign `produced_artifact`→ the finding. Dedup is by `dedup_key`
     (UNIQUE(campaign_id,dedup_key)); a re-seen bucket only bumps dupe_count. Streams —
@@ -737,8 +746,10 @@ def _ingest_artifacts(session, project, target, row, status: dict, *, executor=N
             # If the streamed report yielded no symbolized stack, backfill it by re-running
             # the symbolizing replay (the verify path) against the stored reproducer. This
             # makes the headline representative consistently symbolized instead of leaving it
-            # with null frames while a sibling crash happens to carry a full backtrace.
-            if not frames:
+            # with null frames while a sibling crash happens to carry a full backtrace. The
+            # replay EXECUTES the target, so it is gated to the background worker reaper
+            # (allow_replay_backfill) and never runs on the on-read HTTP/MCP reap paths.
+            if not frames and allow_replay_backfill:
                 _backfill_symbolized_frames(session, project, row, art, frow,
                                             executor=executor)
         created += 1
