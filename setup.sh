@@ -45,5 +45,5 @@ say "Building the web UI (npm install && npm run build)"
 say "Launching the HexGraph setup wizard"
 .venv/bin/python -m hexgraph.cli setup "$@"
 
-printf '\n\033[1m✓ Start HexGraph with:\033[0m  .venv/bin/python -m hexgraph.cli serve   →  http://127.0.0.1:8765\n'
+printf '\n\033[1m✓ Start HexGraph with:\033[0m  .venv/bin/hexgraph serve   →  http://127.0.0.1:8765\n'
 printf '  (or, with just installed:  just serve)\n'
