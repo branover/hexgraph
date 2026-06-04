@@ -156,6 +156,17 @@ def test_read_imports_tool_offline(hg_home):
         assert "token=" not in run_tool(ctx, "list_strings", {"pattern": "cgi"})
 
 
+def test_check_decompiler_tool_offline(hg_home, monkeypatch):
+    monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
+    with session_scope() as s:
+        p = create_project(s, name="t")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        ctx = ToolContext(session=s, project=p, target=t)
+        assert "check_decompiler" in {sp.name for sp in available_tools(ctx)}
+        out = run_tool(ctx, "check_decompiler", {})
+        assert "radare2" in out and "WORKING" in out
+
+
 def test_fuzz_tool_only_when_enabled(hg_home):
     with session_scope() as s:
         p = create_project(s, name="t2")

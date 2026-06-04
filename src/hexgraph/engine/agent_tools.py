@@ -47,6 +47,11 @@ _STATIC_SPECS = [
              {"type": "object", "properties": {}}),
     ToolSpec("list_strings", "List notable strings in the target, optionally filtered by a substring.",
              {"type": "object", "properties": {"pattern": {"type": "string"}}}),
+    ToolSpec("check_decompiler", "Verify the decompiler decompile_function/disassemble use ACTUALLY "
+             "works (not just the configured name): radare2 needs the sandbox image up; Ghidra needs "
+             "WITH_GHIDRA=1 (headless) or a reachable bridge. Run it if a decompile fails so you don't "
+             "keep retrying a broken backend — the result's detail says what to fix.",
+             {"type": "object", "properties": {}}),
 ]
 
 _FUZZ_SPEC = ToolSpec(
@@ -171,6 +176,13 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
             addr = f" @ {focus['address']}" if focus.get("address") else ""
             return _clip(f"// {fn}{addr} (callees: {', '.join(focus.get('callees', []) or [])})\n"
                          f"{focus.get('pseudocode', '')}")
+        if name == "check_decompiler":
+            from hexgraph.engine.mcp_tools import check_decompiler
+            d = check_decompiler()
+            ver = f" {d['version']}" if d.get("version") else ""
+            mode = f" ({d['mode']})" if d.get("mode") else ""
+            status = "WORKING" if d["working"] else "NOT WORKING"
+            return _clip(f"decompiler: {d['active']}{ver}{mode} — {status}\n{d['detail']}")
         if name == "xrefs":
             return _xrefs(ctx, args.get("symbol"))
         if name == "fuzz_function":
