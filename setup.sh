@@ -22,7 +22,7 @@ say() { printf '\n\033[1m>> %s\033[0m\n' "$*"; }
 die() { printf '\n\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # --- prerequisites ---------------------------------------------------------
-command -v python3 >/dev/null 2>&1 || die "python3 not found. Install Python 3.10+ and re-run."
+command -v python3 >/dev/null 2>&1 || die "python3 not found. Install Python 3.11+ and re-run."
 command -v npm     >/dev/null 2>&1 || die "npm not found. The web UI build needs Node.js + npm (https://nodejs.org). Install them and re-run."
 
 # --- 1/3  virtualenv + package --------------------------------------------
