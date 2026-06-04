@@ -149,14 +149,22 @@ def create_project(name: str, backend: str | None = None) -> dict:
     the source-first entry point. `ingest` only makes a project alongside a binary/firmware
     path, so a pure source/fuzzing workflow (import_source_tree → build_target → fuzz) starts
     here, then feeds the returned id to those tools. `backend` is the LLM backend
-    (mock|anthropic_api|claude_code; defaults to mock). Returns {error} on a blank name."""
+    (mock|anthropic|claude_code; defaults to mock). Returns {error} on a blank name or an
+    unknown backend."""
+    from hexgraph.db.models import LLMBackendName
     from hexgraph.engine.ingest import create_project as _create
 
     name = (name or "").strip()
     if not name:
         return {"error": "project name is required"}
+    backend = backend or "mock"
+    try:
+        LLMBackendName(backend)
+    except ValueError:
+        choices = "|".join(b.value for b in LLMBackendName)
+        return {"error": f"unknown backend {backend!r}; choose one of {choices}"}
     with session_scope() as s:
-        p = _create(s, name=name, llm_backend=backend or "mock")
+        p = _create(s, name=name, llm_backend=backend)
         return {"id": p.id, "name": p.name, "backend": p.llm_backend.value}
 
 

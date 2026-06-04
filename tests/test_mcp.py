@@ -70,6 +70,11 @@ def test_create_project_tool_makes_empty_project(hg_home):
     # backend defaults to mock; a blank name is rejected
     assert mcp_tools.create_project("dflt")["backend"] == "mock"
     assert "error" in mcp_tools.create_project("  ")
+    # a real (non-mock) enum backend is accepted, an unknown one is a clean {error}
+    # (not an uncaught ValueError — the MCP server doesn't wrap tool exceptions)
+    assert mcp_tools.create_project("anth", backend="anthropic")["backend"] == "anthropic"
+    assert "error" in mcp_tools.create_project("bad", backend="anthropic_api")
+    assert "error" in mcp_tools.create_project("bad2", backend="garbage")
 
 
 def test_record_finding_validates_and_persists(hg_home):
