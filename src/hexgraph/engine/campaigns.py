@@ -595,6 +595,16 @@ def reap_all(session: Session, *, executor=None, allow_replay_backfill: bool = F
                                    allow_replay_backfill=allow_replay_backfill)
         except Exception:  # noqa: BLE001 — one bad campaign must not kill the reaper
             session.rollback()
+    # WORKER-ONLY: re-symbolize already-ingested representatives an on-read reap left with
+    # empty frames (round-3 finding N5). This must run AFTER the per-campaign loop and over
+    # ALL campaigns (incl. finalized ones the status filter above no longer revisits), and
+    # only when the worker permits the target-executing replay. Each rep is attempted at most
+    # once, so a stuck crash never re-replays the target every tick.
+    if allow_replay_backfill:
+        try:
+            backfill_pending_representatives(session, executor=executor)
+        except Exception:  # noqa: BLE001 — the sweep must never kill the reaper
+            session.rollback()
     return total
 
 
@@ -756,13 +766,42 @@ def _ingest_artifacts(session, project, target, row, status: dict, *, executor=N
     return created
 
 
+def _mark_symbolize_attempted(session, finding_id: str) -> None:
+    """Stamp a durable `symbolize_attempted` marker on the finding's
+    `evidence_json.extra.fuzz` so a representative that genuinely can't be symbolized isn't
+    re-replayed (executing the target) on every 15s worker tick forever — each rep is
+    attempted AT MOST ONCE. Kept in the existing evidence JSON (alongside `frames`), so no
+    new column / migration. Idempotent."""
+    from hexgraph.db.models import Finding
+
+    f = session.get(Finding, finding_id)
+    if f is None:
+        return
+    evidence = dict(f.evidence_json or {})
+    extra = dict(evidence.get("extra") or {})
+    fz = dict(extra.get("fuzz") or {})
+    if fz.get("symbolize_attempted"):
+        return
+    fz["symbolize_attempted"] = True
+    extra["fuzz"] = fz
+    evidence["extra"] = extra
+    f.evidence_json = evidence
+    session.flush()
+
+
 def _backfill_symbolized_frames(session, project, row, art, frow, *, executor=None) -> None:
     """Re-run the symbolizing replay (`verify_artifact`) for one crash artifact and, if it
     yields source-mapped frames, attach them to the finding (evidence.extra.fuzz.frames),
     set the finding's faulting function, update the artifact's faulting_function, and
     auto-link the top in-project frame to source. Best-effort: any failure (no reproducer,
     no symbolizer, replay error) leaves the under-symbolized representative untouched — it
-    must never break ingest."""
+    must never break ingest.
+
+    EVERY non-skipped attempt stamps a durable `symbolize_attempted` marker on the finding
+    (whether it yielded frames or not), so a rep that genuinely can't be symbolized is NOT
+    re-replayed (and re-executes the target) on every subsequent worker tick — the sweep
+    below skips already-attempted reps. A skip on engine/surface/missing-reproducer grounds
+    leaves NO marker (there's nothing to attempt and nothing to retry)."""
     if not art.content_cas:
         return
     # A mock campaign carries canned reports; there is nothing to symbolize by replay, and a
@@ -770,6 +809,9 @@ def _backfill_symbolized_frames(session, project, row, art, frow, *, executor=No
     # local/remote harness crash.
     if row.engine == "mock" or row.surface == "network":
         return
+    # From here on a replay WILL be attempted — mark it so it is tried at most once, even if
+    # the replay errors or yields no frames.
+    _mark_symbolize_attempted(session, frow.id)
     try:
         result = verify_artifact(session, art, executor=executor)
     except Exception:  # noqa: BLE001 — symbolization backfill is best-effort, never fatal
@@ -802,6 +844,57 @@ def _backfill_symbolized_frames(session, project, row, art, frow, *, executor=No
     f.evidence_json = evidence
     session.flush()
     _autolink_top_frame(session, project, frow.id, frames)
+
+
+def _finding_has_frames(f) -> bool:
+    """True when the finding already carries symbolized stack frames."""
+    return bool((((f.evidence_json or {}).get("extra") or {}).get("fuzz") or {}).get("frames"))
+
+
+def _finding_symbolize_attempted(f) -> bool:
+    """True when a symbolization backfill was already attempted for this finding's rep."""
+    return bool((((f.evidence_json or {}).get("extra") or {})
+                 .get("fuzz") or {}).get("symbolize_attempted"))
+
+
+def backfill_pending_representatives(session: Session, *, executor=None) -> int:
+    """WORKER-ONLY sweep: re-symbolize ALREADY-INGESTED crash representatives that still
+    lack source-mapped frames (round-3 finding N5). The inline backfill in `_ingest_artifacts`
+    only fires on a crash's FIRST ingest; but an on-read HTTP/MCP reap (which passes
+    `allow_replay_backfill=False`, so it never executes the target in a request thread) can
+    ingest a crash with EMPTY frames BEFORE the ~15s worker tick — and the worker would then
+    skip that bucket forever, leaving the headline crash with `faulting_function: null`.
+
+    This sweep closes the race: on each worker pass we re-symbolize every crash artifact whose
+    finding has no frames AND no prior `symbolize_attempted` marker, INCLUDING reps on already-
+    FINALIZED campaigns (which `reap_all` no longer revisits). Each rep is attempted AT MOST
+    ONCE (the marker), so a crash that genuinely can't be symbolized never triggers a
+    target-executing replay on every subsequent tick. The replay EXECUTES the target, so this
+    is called ONLY from the background worker reaper (`reap_campaigns_sync`, allow_replay_backfill
+    =True) — NEVER from an on-read reap path. Returns the number of reps successfully filled."""
+    from hexgraph.db.models import Finding
+
+    arts = (session.query(FuzzArtifact)
+            .filter(FuzzArtifact.kind == "crash",
+                    FuzzArtifact.finding_id.isnot(None))
+            .all())
+    filled = 0
+    for art in arts:
+        f = session.get(Finding, art.finding_id)
+        if f is None or _finding_has_frames(f) or _finding_symbolize_attempted(f):
+            continue
+        row = session.get(FuzzCampaign, art.campaign_id)
+        if row is None or row.engine == "mock" or row.surface == "network":
+            continue
+        project = session.get(Project, art.project_id)
+        try:
+            _backfill_symbolized_frames(session, project, row, art, f, executor=executor)
+        except Exception:  # noqa: BLE001 — one bad rep must not abort the whole sweep
+            session.rollback()
+            continue
+        if _finding_has_frames(session.get(Finding, art.finding_id)):
+            filled += 1
+    return filled
 
 
 def _update_stats(row: FuzzCampaign, status: dict) -> None:

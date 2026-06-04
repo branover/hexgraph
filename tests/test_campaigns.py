@@ -479,6 +479,168 @@ def test_on_read_reap_does_not_execute_target_for_backfill(hg_home, monkeypatch)
         assert ex.verify_calls == 0, "the on-read reap must not execute the target to backfill"
 
 
+# ── N5: a later WORKER tick re-symbolizes a rep the on-read reap left with empty frames ──
+
+class _NeverSymbolizingExecutor(_RunningExecutor):
+    """A fake executor whose verify replay returns an UNSYMBOLIZED report (module+offset
+    only). Stands in for a crash that genuinely can't be symbolized — used to prove the
+    worker doesn't re-execute the target on every tick for a hopeless rep."""
+
+    def __init__(self):
+        super().__init__()
+        self.verify_calls = 0
+
+    def run_json_probe(self, probe, artifact, *, outdir=None, extra_args=None,
+                       requires_execution=False, extra_ro_mounts=None):
+        self.verify_calls += 1
+        return {"tool": "poc_probe", "ran": True, "verified": True, "exit_code": 1,
+                "output": "==9==ERROR: AddressSanitizer: heap-use-after-free\n"
+                          "    #0 0x4f (/out/fuzzer+0x4f)\n",  # module+offset only — NO frames
+                "detail": "re-crashed"}
+
+
+def _running_campaign_with_unsymbolized_crash(s, ex, monkeypatch):
+    """Start a still-running source_lib campaign, preserve a fuzzer binary so verify takes
+    the symbolizing replay path, and stream ONE crash whose `_report` has no frames (no DONE
+    marker → the campaign stays `running`, so reap_all revisits it). Returns the campaign id."""
+    import json as _json
+    from pathlib import Path
+    from hexgraph.engine import cas
+
+    p, t = _project_with_target(s)
+    spec = FuzzCampaignSpec(target_id=t.id, surface="source_lib", harness_source=HARNESS,
+                            function="cgi_handler", target_sources=["/x.c"])
+    monkeypatch.setenv("HEXGRAPH_FUZZER", "")
+    row = C.start_campaign(s, p, t, spec=spec, executor=ex)
+    cid = row.id
+    fuzzer_cas = cas.put(p, b"\x7fELF-fake-fuzzer-binary")
+    row.config_json = {**(row.config_json or {}), "fuzzer_cas": fuzzer_cas}
+    s.flush()
+    outdir = Path(row.outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    crash = {
+        "kind": "heap-use-after-free", "function": None,
+        "summary": "SUMMARY: AddressSanitizer: heap-use-after-free",
+        "reproducer_sha256": "b" * 64, "reproducer_size": 8,
+        "reproducer_b64": "QUFBQUFBQUE=",
+        "dedup_key": "cafebabe" * 8, "dupe_count": 0,
+        "exploitability": {"rating": "likely_exploitable", "access": "READ", "signals": []},
+        "minimized_reproducer_sha256": "b" * 64, "minimized_reproducer_size": 8,
+        "_report": ("==9==ERROR: AddressSanitizer: heap-use-after-free\n"
+                    "    #0 0x4f (/out/fuzzer+0x4f)\n"),  # module+offset only — NO frames
+    }
+    (outdir / "status.json").write_text(_json.dumps(
+        {"compiled": True, "ran": True, "engine": "libfuzzer", "done": False,
+         "executions": 1000, "edges_covered": 5, "crash_count": 1,
+         "coverage_instrumented": True, "crashes": [crash]}))
+    # NO DONE marker → the (running) executor keeps the campaign `running`, so reap_all revisits.
+    return cid
+
+
+def _frames_of(s, cid):
+    art = s.query(FuzzArtifact).filter(FuzzArtifact.campaign_id == cid).one()
+    f = s.get(Finding, art.finding_id)
+    return (((f.evidence_json or {}).get("extra") or {}).get("fuzz") or {}).get("frames"), art
+
+
+def test_worker_backfills_rep_an_onread_reap_left_unsymbolized(hg_home, monkeypatch):
+    """N5: THE RACE. An on-read reap (allow_replay_backfill=False) ingests an unsymbolized
+    crash with EMPTY frames and does NOT execute the target. A LATER WORKER reap
+    (allow_replay_backfill=True) on the SAME already-ingested bucket runs the backfill and
+    fills the frames — closing the race where the worker used to skip the bucket forever."""
+    _enable_fuzzing()
+    ex = _SymbolizingExecutor()
+    with session_scope() as s:
+        cid = _running_campaign_with_unsymbolized_crash(s, ex, monkeypatch)
+
+        # 1) On-read reap: ingests the crash, frames stay empty, target NOT executed.
+        created = C.reap_campaign(s, s.get(FuzzCampaign, cid), executor=ex,
+                                  allow_replay_backfill=False)
+        assert created == 1
+        assert ex.verify_calls == 0, "on-read reap must not execute the target"
+        frames, art = _frames_of(s, cid)
+        assert not frames, "frames are empty after the on-read reap (the race window)"
+        assert art.faulting_function is None
+
+        # 2) A later WORKER reap on the SAME already-ingested bucket backfills the stack.
+        C.reap_all(s, executor=ex, allow_replay_backfill=True)
+        assert ex.verify_calls == 1, "the worker must re-symbolize the already-ingested rep"
+        frames, art = _frames_of(s, cid)
+        assert frames and frames[0]["func"] == "real_handler" and frames[0]["line"] == 128
+        assert art.faulting_function == "real_handler"
+
+
+def test_worker_backfill_attempted_at_most_once_for_unsymbolizable_rep(hg_home, monkeypatch):
+    """N5 idempotency: a rep that genuinely can't be symbolized (the replay yields no frames)
+    is attempted AT MOST ONCE — the durable `symbolize_attempted` marker stops the worker
+    from re-executing the target on every 15s tick forever."""
+    _enable_fuzzing()
+    ex = _NeverSymbolizingExecutor()
+    with session_scope() as s:
+        cid = _running_campaign_with_unsymbolized_crash(s, ex, monkeypatch)
+        # On-read reap ingests the crash (no replay).
+        C.reap_campaign(s, s.get(FuzzCampaign, cid), executor=ex, allow_replay_backfill=False)
+        assert ex.verify_calls == 0
+
+        # First worker tick: ATTEMPTS the replay (executes once) but gets no frames.
+        C.reap_all(s, executor=ex, allow_replay_backfill=True)
+        assert ex.verify_calls == 1
+        frames, _ = _frames_of(s, cid)
+        assert not frames, "the unsymbolizable rep still has no frames"
+
+        # Second + third worker ticks: the marker prevents any further target-executing replay.
+        C.reap_all(s, executor=ex, allow_replay_backfill=True)
+        C.reap_all(s, executor=ex, allow_replay_backfill=True)
+        assert ex.verify_calls == 1, "an unsymbolizable rep must be attempted at most once"
+
+
+def test_worker_backfill_skips_reps_that_already_have_frames(hg_home, monkeypatch):
+    """The sweep must not re-do work: a rep already carrying frames (filled on its first
+    worker tick) is never re-replayed on a subsequent tick."""
+    _enable_fuzzing()
+    ex = _SymbolizingExecutor()
+    with session_scope() as s:
+        cid = _running_campaign_with_unsymbolized_crash(s, ex, monkeypatch)
+        C.reap_campaign(s, s.get(FuzzCampaign, cid), executor=ex, allow_replay_backfill=False)
+        # First worker tick fills the frames (one replay).
+        C.reap_all(s, executor=ex, allow_replay_backfill=True)
+        assert ex.verify_calls == 1
+        frames, _ = _frames_of(s, cid)
+        assert frames
+        # Subsequent ticks see frames present → no further replay.
+        C.reap_all(s, executor=ex, allow_replay_backfill=True)
+        assert ex.verify_calls == 1, "a rep that already has frames must not be re-symbolized"
+
+
+def test_worker_backfills_finalized_campaign_rep(hg_home, monkeypatch):
+    """The headline-live case: the campaign FINALIZED (DONE) on the on-read reap, so reap_all's
+    status filter (running/building) no longer revisits it — yet the sweep, which scans ALL
+    crash artifacts, still backfills its under-symbolized rep on a later worker tick."""
+    import json as _json
+    from pathlib import Path
+    from hexgraph.engine import cas
+
+    _enable_fuzzing()
+    ex = _SymbolizingExecutor()
+    with session_scope() as s:
+        cid = _running_campaign_with_unsymbolized_crash(s, ex, monkeypatch)
+        # Finalize the campaign on the on-read reap by dropping a DONE marker.
+        (Path(s.get(FuzzCampaign, cid).outdir) / "DONE").write_text("libfuzzer")
+        C.reap_campaign(s, s.get(FuzzCampaign, cid), executor=ex, allow_replay_backfill=False)
+        assert s.get(FuzzCampaign, cid).status in ("completed", "degraded")
+        assert ex.verify_calls == 0
+        frames, _ = _frames_of(s, cid)
+        assert not frames
+
+        # A later worker tick: reap_all skips the finalized campaign in its loop, but the
+        # sweep over ALL artifacts still backfills it.
+        C.reap_all(s, executor=ex, allow_replay_backfill=True)
+        assert ex.verify_calls == 1
+        frames, art = _frames_of(s, cid)
+        assert frames and frames[0]["func"] == "real_handler"
+        assert art.faulting_function == "real_handler"
+
+
 # ── Degraded / zero-work campaigns surface a WARNING, not a silent "completed" ────
 
 @pytest.mark.parametrize("scenario,expect_note", [
