@@ -23,6 +23,15 @@ got:
   with `--network none`, using an `LD_PRELOAD` shim that turns its socket into stdin.
 - A **`file_format`** target goes to AFL++ or libFuzzer with an auto-derived dictionary.
 
+One honest caveat about the network engine: the one shipped in the image today is a built-in
+generational, text-oriented mutator driven by your proto-spec, not the full upstream boofuzz. It works
+well, but it's weaker than real boofuzz on binary protocols, because it doesn't yet keep binary length
+fields or checksum blocks consistent as it mutates a message. In practice that means you shouldn't
+expect it to discover a length/body mismatch on its own. If you're fuzzing a binary, length-prefixed
+protocol, pin the framing fields (the lengths and any checksums) in the proto-spec defaults and let
+the engine vary the payload around them. (A separate change is bringing the engine closer to upstream
+boofuzz.)
+
 The UI never hardcodes the engine list. The Fuzz modal shows whatever engines the server advertises
 for the target's surface, fetched from `GET /api/fuzz/engines`.
 
@@ -73,6 +82,29 @@ network service-death reaches `input_reachable/dynamic`, meaning it was reached 
 end through the live input boundary, with its crashing message replaying over the socket. Every entity
 is deep-linkable by URL (`?tab=campaigns&campaign=…`), so a triage view is shareable and is restored on
 reload.
+
+## A footgun when you author your own harness or target
+
+If you're writing a deliberately-vulnerable target or a custom harness, the compiler can quietly
+delete the very bug you meant to plant. HexGraph builds harnesses and instrumented targets with
+optimization on, and at those levels clang's dead-store and allocation elimination will throw away a
+buffer or an allocation whose result is never observed. A classic example is a `malloc`, a `memcpy`
+into it, and a `free`, with nothing in between that ever reads the data: the whole sequence is dead
+code to the optimizer, so it vanishes and the fuzzer can run forever without ever hitting the
+overflow.
+
+The fix is to make the sink observable. Return the result, print it, or do a `volatile` read of a
+byte you wrote, so the write genuinely has to happen and can't be optimized away. One important
+gotcha: `-fsanitize=address` does not save you here. ASan instruments the code that survives
+optimization; it doesn't force dead code to be kept, so an elided buffer is elided before ASan ever
+sees it. When a harness you expect to crash stays stubbornly clean, suspect elision first and add an
+observable use of the vulnerable result.
+
+When you're iterating like this on a harness HexGraph authored, note that editing it in place and
+rebuilding from the new revision (`save_source_revision`) is gated behind `features.source.edit`,
+which is off by default. With it off, the way to iterate is to re-import a fresh source tree each
+round rather than editing the managed one. See [build-from-source.md](build-from-source.md) for the
+editable-IDE workflow.
 
 ## Fuzzing a local network service with launch-and-join
 
