@@ -54,6 +54,29 @@ def test_list_and_facts(hg_home):
     assert facts["imports"] == ["strcpy"] and facts["exports"] == ["ssdp_recv"]
 
 
+def test_create_project_tool_makes_empty_project(hg_home):
+    """Eval finding F1: a source-first workflow couldn't start from MCP (ingest needs a
+    binary path, import_source_tree errors without a project). create_project makes an
+    EMPTY project that then accepts import_source_tree and shows up via list_projects."""
+    res = mcp_tools.create_project("src-first", backend="mock")
+    pid = res["id"]
+    assert res["name"] == "src-first" and res["backend"] == "mock"
+    # it's a real, empty project: visible in the listing, no targets yet
+    assert any(pr["id"] == pid for pr in mcp_tools.list_projects())
+    assert mcp_tools.list_targets(pid) == []
+    # and it now accepts a source tree (the workaround the evaluator needed HTTP for)
+    tree = mcp_tools.import_source_tree(pid, "h", files=[{"rel": "h.c", "content": "int main(){}"}])
+    assert tree.get("id") and tree["written"] == 1
+    # backend defaults to mock; a blank name is rejected
+    assert mcp_tools.create_project("dflt")["backend"] == "mock"
+    assert "error" in mcp_tools.create_project("  ")
+    # a real (non-mock) enum backend is accepted, an unknown one is a clean {error}
+    # (not an uncaught ValueError — the MCP server doesn't wrap tool exceptions)
+    assert mcp_tools.create_project("anth", backend="anthropic")["backend"] == "anthropic"
+    assert "error" in mcp_tools.create_project("bad", backend="anthropic_api")
+    assert "error" in mcp_tools.create_project("bad2", backend="garbage")
+
+
 def test_record_finding_validates_and_persists(hg_home):
     with session_scope() as s:
         p = create_project(s, name="m2")
