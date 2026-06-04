@@ -118,3 +118,31 @@ jobs:
         run: just test-ci
       - name: Smoke-test the full offline loop
         run: just demo
+
+  ghidra:
+    name: ghidra decompile gate (WITH_GHIDRA=1)
+    runs-on: ubuntu-latest
+    # Separate lane so the heavy Ghidra build (JDK 21 + ~400 MB Ghidra) doesn't block
+    # the offline matrix. This is the durable fix for the bug that shipped TWICE: nothing
+    # exercised a WITH_GHIDRA build end to end, so a JDK/version mismatch went unnoticed.
+    # The build itself asserts JDK ↔ Ghidra alignment; this job then decompiles a fixture
+    # and asserts the output is real C, so Ghidra cannot regress to broken silently.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the sandbox image WITH_GHIDRA=1 (layer-cached)
+        # A failed build-time JDK assertion fails this step outright. Cache is keyed
+        # separately from the WITH_GHIDRA=0 docker lane (different build-args).
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/sandbox.Dockerfile
+          tags: hexgraph-sandbox:ci-ghidra
+          load: true
+          build-args: WITH_GHIDRA=1
+          cache-from: type=gha,scope=ghidra
+          cache-to: type=gha,mode=max,scope=ghidra
+      - name: Decompile a fixture and assert real C
+        # Fails the job if Ghidra returns an error, pseudo-asm, or nothing.
+        run: python3 scripts/ci_ghidra_decompile_check.py hexgraph-sandbox:ci-ghidra
