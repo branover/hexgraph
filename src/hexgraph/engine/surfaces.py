@@ -335,7 +335,8 @@ def _device_host(target: Target) -> str | None:
 def run_tcp_probe(session: Session, project: Project, target: Target, *, port: int,
                   payload: str | None = None, payload_hex: str | None = None,
                   oracle: dict | None = None,
-                  read_bytes: int | None = None, runner=None, task_id=None) -> dict:
+                  read_bytes: int | None = None, runner=None, task_id=None,
+                  host: str | None = None, net_container: str | None = None) -> dict:
     """Talk to a raw TCP service on a live device (the non-HTTP analogue of run_http_request /
     run_web_poc). Reaches `<device_host>:<port>` — the device IP of a rehosted surface or a
     `remote` target — through the emulator netns when applicable. Same bounded-egress contract
@@ -345,16 +346,24 @@ def run_tcp_probe(session: Session, project: Project, target: Target, *, port: i
 
     `payload_hex` sends BYTE-EXACT arbitrary bytes (the probe `bytes.fromhex`es it) — use this
     for a binary protocol / a replayed fuzz reproducer, since the `payload` str field is
-    re-encoded as utf-8 and is NOT a byte round-trip for non-ASCII bytes."""
+    re-encoded as utf-8 and is NOT a byte round-trip for non-ASCII bytes.
+
+    `host`/`net_container` override the target-derived device host / emulator netns. The
+    launch-and-join verify path (campaigns._verify_network_artifact) uses this to point the
+    probe at `127.0.0.1` inside a freshly-relaunched SERVICE container's netns — the service
+    container is gone by verify time, so there is no live host on the target to resolve. The
+    SAME local_tcp_scope egress gate + audit still applies (the override only changes WHERE,
+    not WHETHER, egress is permitted)."""
     from hexgraph import settings
     from hexgraph.engine.audit import record_egress
     from hexgraph.policy import (PolicyViolation, assert_allows_egress, current_policy,
                                  local_tcp_scope)
     from hexgraph.sandbox.executor import get_executor
 
-    host = _device_host(target)
+    host = host or _device_host(target)
     if not host:
         raise ValueError("target has no live device host (rehost ip / remote host / base_url)")
+    net_container = net_container or _rehost_container(target)
     scope = local_tcp_scope(host, int(port))  # raises if the host isn't loopback/private
     dest = next(iter(scope.allow))
     try:
@@ -379,7 +388,7 @@ def run_tcp_probe(session: Session, project: Project, target: Target, *, port: i
     if read_bytes is not None:
         channel["read_bytes"] = int(read_bytes)
     return runner.run_channel_probe("tcp_probe.py", channel=channel,
-                                    net_container=_rehost_container(target))
+                                    net_container=net_container)
 
 
 def run_web_recon(session: Session, project: Project, target: Target, task=None, runner=None) -> dict:
