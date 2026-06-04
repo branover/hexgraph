@@ -158,6 +158,7 @@ def test_read_imports_tool_offline(hg_home):
 
 def test_check_decompiler_tool_offline(hg_home, monkeypatch):
     monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
+    monkeypatch.setattr("hexgraph.engine.mcp_tools._sandbox_image_built", lambda tag: True)
     with session_scope() as s:
         p = create_project(s, name="t")
         t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
