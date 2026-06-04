@@ -275,8 +275,10 @@ FEATURES: tuple[Feature, ...] = (
     Feature(
         key="features.source.edit",
         label="Editable source IDE",
-        unlocks="Make the Source tab editable for HexGraph-authored files (harness/PoC/"
-                "script + scratch); a save creates a new revision (never in-place).",
+        unlocks="Scratch trees (your promoted harnesses/PoCs) are already editable by "
+                "default — this additionally makes OTHER authored files editable (harness/"
+                "PoC/script in an imported-but-editable tree); a save creates a new "
+                "revision (never in-place).",
         security="",  # a UI/capability flag — never touches policy.py.
         policy_changing=False,
         tier=None,

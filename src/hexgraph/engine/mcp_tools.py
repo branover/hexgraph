@@ -294,7 +294,8 @@ def save_source_revision(tree_id: str, rel: str, content: str, role: str | None 
     """Edit a HexGraph-AUTHORED source file (a harness/PoC/script you wrote) and save it as
     a NEW REVISION — never an in-place mutation, so the edit is durable + reversible and a
     build can be launched rebuild-from-revision (pass the returned revision id as the
-    recipe's source_revision_id). Gated by features.source.edit; REFUSES an imported/
+    recipe's source_revision_id). SCRATCH/HexGraph-authored trees are editable by default;
+    editing OTHER authored trees needs features.source.edit. ALWAYS REFUSES an imported/
     extracted/vendor (read-only) tree — editing those would break the build content_hash.
     Returns the revision {id, seq, rel, role, ...}. Use to iterate on a harness/PoC in-place."""
     from hexgraph.db.models import SourceTree

@@ -271,10 +271,12 @@ export default function Settings() {
                     <span>Editable IDE {(v.settings.features as any).source?.edit ? "enabled" : "disabled"}</span>
                   </label>
                   <p className="hint" style={{ marginTop: 4 }}>
-                    Makes the Source tab <b>editable</b> for HexGraph-authored files (harness/PoC/script + scratch).
-                    A save creates a <b>new revision</b> (never an in-place mutation); a build can be launched
-                    <b> rebuild-from-revision</b>. Imported / extracted / vendor source stays <b>read-only</b>
-                    (editing it would break the build content-hash contract).
+                    <b>Scratch</b> trees (your promoted harnesses/PoCs) are <b>already editable by default</b> —
+                    no flag needed. This flag additionally makes <b>other</b> authored files editable
+                    (harness/PoC/script in an imported-but-editable tree). A save creates a <b>new revision</b>
+                    (never an in-place mutation); a build can be launched <b>rebuild-from-revision</b>.
+                    Imported / extracted / vendor source stays <b>read-only</b> (editing it would break the
+                    build content-hash contract).
                   </p>
                 </div>
               </>

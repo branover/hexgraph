@@ -514,8 +514,9 @@ def rebuild_from_revision(session: Session, project: Project, spec_row: BuildSpe
     """Build a recorded recipe from a SPECIFIC editable-IDE revision. Reverts the file to
     that revision's content (append-only — the revert is itself a new revision, so nothing
     is lost), refreshes the tree content_hash, then runs the build recording
-    `source_revision_id`. Gated by features.source.edit (the revert) + features.build (the
-    build). The build is reproducible from {recipe_sha + the reverted source content_hash}."""
+    `source_revision_id`. The revert uses the scoped source-edit gate (scratch trees always
+    editable; other authored trees need features.source.edit) + features.build (the build).
+    The build is reproducible from {recipe_sha + the reverted source content_hash}."""
     from hexgraph.db.models import SourceRevision
     from hexgraph.engine import revisions as R
 

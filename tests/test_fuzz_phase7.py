@@ -299,14 +299,39 @@ def _enable_edit():
     settings.update_settings({"features.source.edit": True})
 
 
-def test_save_revision_gated(hg_home):
+def test_scratch_tree_editable_without_flag(hg_home):
+    """SCOPED source-edit: a SCRATCH (HexGraph-authored, ephemeral) tree is editable
+    UNCONDITIONALLY — no features.source.edit needed. The friction-killing default."""
     from hexgraph.engine import revisions as R
     with session_scope() as s:
-        p = create_project(s, name="editgate")
-        tree, _ = _src_tree(s, p)
-        # gate OFF ⇒ refused
+        p = create_project(s, name="scratchedit")
+        tree, _ = _src_tree(s, p)  # origin="scratch", editable=True
+        assert R.is_scratch_tree(tree) is True
+        assert R.can_edit_tree(tree) is True   # flag OFF, still editable
+        # flag OFF ⇒ a scratch save SUCCEEDS (new behavior)
+        rev = R.save_revision(s, p, tree, "h.c", "int main(){}", role="harness")
+        assert rev["seq"] == 1
+        assert src.read_source_file(p, tree, "h.c")["content"] == "int main(){}"
+
+
+def test_nonscratch_authored_tree_gated_by_flag(hg_home):
+    """An editable-but-NOT-scratch authored tree (e.g. imported source an importer marked
+    editable) still requires features.source.edit: refused with the flag off, allowed on."""
+    from hexgraph.engine import revisions as R
+    with session_scope() as s:
+        p = create_project(s, name="authoredgate")
+        # editable=True but origin != scratch — NOT a scratch tree.
+        tree = src.create_source_tree(s, p, name="imported", origin="git", editable=True)
+        assert R.is_scratch_tree(tree) is False
+        # flag OFF ⇒ refused (still gated)
+        assert R.can_edit_tree(tree) is False
         with pytest.raises(PolicyViolation):
             R.save_revision(s, p, tree, "h.c", "int main(){}", role="harness")
+        # flag ON ⇒ allowed
+        _enable_edit()
+        assert R.can_edit_tree(tree) is True
+        rev = R.save_revision(s, p, tree, "h.c", "int main(){}", role="harness")
+        assert rev["seq"] == 1
 
 
 def test_save_revision_creates_history(hg_home):
@@ -327,8 +352,9 @@ def test_save_revision_creates_history(hg_home):
 
 
 def test_edit_refused_on_extracted_or_vendor_tree(hg_home):
-    """The riskiest confinement: editing extracted/vendor/imported source is REFUSED — it
-    would break the content_hash build contract. tree.editable is the hard gate."""
+    """The riskiest confinement: editing extracted/vendor/imported source is ALWAYS REFUSED
+    (with the flag on OR off) — it would break the content_hash build contract. tree.editable
+    is the hard structural gate, unchanged by the scoped scratch-tree allowance."""
     from hexgraph.engine import revisions as R
     _enable_edit()
     with session_scope() as s:
@@ -336,6 +362,8 @@ def test_edit_refused_on_extracted_or_vendor_tree(hg_home):
         for origin in ("extracted", "git", "archive", "upload"):
             ro = src.create_source_tree(s, p, name=f"t-{origin}", origin=origin)
             assert ro.editable is False
+            assert R.is_scratch_tree(ro) is False  # read-only ⇒ never scratch
+            assert R.can_edit_tree(ro) is False     # never editable even with the flag on
             with pytest.raises(src.SourceError):
                 R.save_revision(s, p, ro, "x.c", "tampered", role="code")
 

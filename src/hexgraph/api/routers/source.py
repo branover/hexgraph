@@ -152,8 +152,9 @@ def api_backfill_harnesses(project_id: str):
 @router.post("/api/source-trees/{tree_id}/revisions")
 def api_save_source_revision(tree_id: str, body: SourceRevisionSave):
     """Save an EDIT to a HexGraph-authored source file as a NEW REVISION (never an
-    in-place mutation) — the editable-IDE save. Gated by features.source.edit; the
-    per-tree editability check refuses an extracted/vendor/imported (read-only) tree.
+    in-place mutation) — the editable-IDE save. Scratch/HexGraph-authored trees are
+    editable by default; other authored trees need features.source.edit. The per-tree
+    editability check still refuses an extracted/vendor/imported (read-only) tree.
     Returns the revision dict."""
     from hexgraph.engine import revisions as R
     from hexgraph.policy import PolicyViolation

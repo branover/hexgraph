@@ -62,7 +62,7 @@ export interface SettingsView {
 }
 export interface GhidraStatus { enabled: boolean; ok: boolean; detail: string; mode?: string; [k: string]: any; }
 export interface FsEntry { rel: string; size?: number; is_elf?: boolean; child_target_id?: string | null; added?: boolean; }
-export interface SourceTreeRow { id: string; name: string; origin: string; editable: boolean; vcs_rev?: string | null; content_hash?: string | null; file_count: number; archived: boolean; target_ids: string[]; }
+export interface SourceTreeRow { id: string; name: string; origin: string; editable: boolean; can_edit?: boolean; vcs_rev?: string | null; content_hash?: string | null; file_count: number; archived: boolean; target_ids: string[]; }
 export interface SourceFileEntry { rel: string; size?: number; role: string; node_id?: string | null; is_harness?: boolean; }
 export interface BuildSpecBody { source_tree_id: string; system?: string; phases?: any[]; instrumentation?: { sanitizers?: string[]; coverage?: string[]; engine?: string }; artifacts?: string[]; env?: Record<string, string>; arch?: string; name?: string; network?: string; fetch_phases?: any[]; }
 export interface BuildPreview { system: string; phases: { argv: string[]; shell?: boolean }[]; fetch_phases?: { argv: string[] }[]; instrumentation: any; artifacts: string[]; recipe_sha: string; injected_env: Record<string, string>; base_image: string; arch: string; network: string; cross?: boolean; }
