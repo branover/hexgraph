@@ -43,25 +43,18 @@ default:
 # setup — the core path a brand-new user needs (run these first)
 # ===========================================================================
 
+# Thin wrapper around ./setup.sh so the bootstrap sequence (venv + deps + SPA, then the
+# interactive setup wizard) lives in exactly ONE place and the no-`just` path can't drift.
+# Any flags pass straight through to the wizard, so `just setup --yes` (or --non-interactive
+# / --defaults / --rebuild) applies the static-only baseline WITHOUT prompting. The wizard
+# also auto-detects a missing TTY, so an unattended `just setup` in CI never hangs anyway.
 # The wizard lets you choose which optional features to enable (each shown with its SECURITY
-# IMPLICATION) + non-secret config, optionally register HexGraph's MCP server with a coding agent
-# + install the VR skill, then builds the chosen images + inits the DB. CI-safe: with no TTY (or
-# `just setup yes=1`) it applies the static-only baseline + the sandbox image WITHOUT prompting
-# (and skips the MCP/skill install), so an unattended `just setup` never hangs.
+# IMPLICATION) + non-secret config, optionally registers the MCP server + VR skill, then builds
+# the chosen images + inits the DB.
 # ★ Bootstrap venv+deps+SPA, then run the interactive setup wizard (the one command to get running).
 [group('setup')]
-setup yes="0": install ui
-    #!/usr/bin/env bash
-    set -euo pipefail
-    echo ""
-    if [ "{{yes}}" = "1" ] || [ ! -t 0 ]; then
-        # No interactive terminal (CI) or explicit yes=1 → non-interactive baseline.
-        {{py}} -m hexgraph.cli setup --non-interactive
-    else
-        {{py}} -m hexgraph.cli setup
-    fi
-    echo ""
-    echo "✓ Start HexGraph with:  just serve   →  http://{{host}}:{{port}}"
+setup *args:
+    @./setup.sh {{args}}
 
 # Create the virtualenv (.venv). Rerun only if you delete .venv.
 [group('setup')]
