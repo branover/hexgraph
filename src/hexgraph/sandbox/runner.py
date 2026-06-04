@@ -220,6 +220,14 @@ class SandboxRunner:
             "-e", "TMPDIR=/scratch",
             "-e", "XDG_CACHE_HOME=/scratch",
             "-e", "XDG_CONFIG_HOME=/scratch",
+            # Capability handshake (NOT a security flag): when this container gets the
+            # personality-allowing seccomp profile (disable_aslr), tell the probe so it KNOWS
+            # the relaxation was actually granted. A probe that intends `setarch -R` but does
+            # NOT see this marker is running against a STALE engine (probes hot-load from disk;
+            # engine code is process-cached) that didn't grant the cap — it can then log a clear
+            # diagnostic and skip setarch instead of hitting a cryptic EPERM. See
+            # service_launch_probe.py / afl_probe.py.
+            *(["-e", "HEXGRAPH_SVC_ASLR_RELAXED=1"] if disable_aslr else []),
             *(["-e", "HG_CHANNEL_SECRET"] if secret else []),
         ]
 

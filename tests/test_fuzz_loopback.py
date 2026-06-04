@@ -646,6 +646,8 @@ def test_service_launch_probe_sets_asan_options_and_setarch(monkeypatch, tmp_pat
 
     monkeypatch.setattr(P.subprocess, "Popen", _fake_popen)
     monkeypatch.setattr(P.shutil, "which", lambda name: f"/usr/bin/{name}")
+    # The engine granted the personality cap → it set the handshake marker on the container.
+    monkeypatch.setenv("HEXGRAPH_SVC_ASLR_RELAXED", "1")
     # a real ELF-shaped artifact path; _qemu_prefix reads its header (host arch → no qemu).
     art = tmp_path / "server"
     art.write_bytes(b"\x7fELF" + b"\x01" * 14 + bytes([62, 0]) + b"\x00" * 20)
@@ -669,6 +671,10 @@ def test_service_launch_probe_sets_asan_options_and_setarch(monkeypatch, tmp_pat
     assert env is not None
     assert "abort_on_error=1" in env["ASAN_OPTIONS"]
     assert "detect_leaks=0" in env["ASAN_OPTIONS"]
+    # Happy path: setarch ran → the status reports the relaxation took effect.
+    status = json.loads((out / "status.json").read_text())
+    assert status["aslr_relaxed"] is True
+    assert status.get("note") in (None, "")
 
 
 def test_service_launch_probe_falls_back_without_setarch(monkeypatch, tmp_path):
@@ -697,3 +703,169 @@ def test_service_launch_probe_falls_back_without_setarch(monkeypatch, tmp_path):
     assert "setarch" not in cmd[0]
     # ASAN_OPTIONS is still set even without setarch.
     assert "abort_on_error=1" in captured["env"]["ASAN_OPTIONS"]
+    status = json.loads((out / "status.json").read_text())
+    assert status["aslr_relaxed"] is False
+
+
+# ── N1: the engine sets the ASLR-relaxed handshake marker ONLY when it grants the cap ──
+
+def test_runner_sets_aslr_marker_only_when_relaxation_granted():
+    """The capability handshake: _hardening_args emits HEXGRAPH_SVC_ASLR_RELAXED=1 EXACTLY
+    when it also swaps in the personality-allowing seccomp profile (disable_aslr=True), and
+    NOT otherwise. That's how the probe knows the engine actually granted the relaxation."""
+    from hexgraph.sandbox.runner import SandboxRunner
+
+    r = SandboxRunner(image="x")
+    kw = dict(allow_network=False, net_container=None, resources=None, secret=False)
+    from hexgraph.sandbox.runner import ResourceSpec
+    kw["resources"] = ResourceSpec()
+
+    granted = r._hardening_args(disable_aslr=True, **kw)
+    not_granted = r._hardening_args(disable_aslr=False, **kw)
+    assert "HEXGRAPH_SVC_ASLR_RELAXED=1" in granted
+    # The marker rides alongside the relaxed seccomp profile — same gate, same flag.
+    assert any("seccomp=" in a for a in granted)
+    assert "HEXGRAPH_SVC_ASLR_RELAXED=1" not in not_granted
+    assert not any("seccomp=" in a for a in not_granted)
+
+
+# ── N3 / N1: setarch EPERM fallback + the stale-engine handshake diagnostic ───────────
+
+def _elf(tmp_path, name="server"):
+    art = tmp_path / name
+    art.write_bytes(b"\x7fELF" + b"\x01" * 14 + bytes([62, 0]) + b"\x00" * 20)
+    return art
+
+
+def test_service_launch_probe_falls_back_when_setarch_epermed(monkeypatch, tmp_path):
+    """N3: setarch is PRESENT and the engine granted the cap (marker set), but personality()
+    is still denied at runtime (hardened host / older Docker) — setarch exits non-zero before
+    exec'ing the target. The probe RETRIES the launch WITHOUT setarch so the service comes up,
+    and the status reflects aslr_relaxed=False with a clear host-forbids note."""
+    from hexgraph.sandbox.probes import service_launch_probe as P
+
+    calls = []
+
+    class _FakeProc:
+        def __init__(self, pid, rc):
+            self.pid = pid
+            self._rc = rc
+
+        def wait(self):
+            return self._rc
+
+    def _fake_popen(cmd, **kw):
+        calls.append({"cmd": cmd, "env": kw.get("env")})
+        out = tmp_path / "out"
+        if cmd and cmd[0].endswith("setarch"):
+            # Emulate setarch failing to set the personality BEFORE exec (EPERM): write the
+            # tell-tale line to the service log and exit non-zero.
+            with open(out / "service.log", "ab") as fh:
+                fh.write(b"setarch: failed to set personality to x86_64: Operation not permitted\n")
+            return _FakeProc(100, 1)
+        return _FakeProc(200, 0)  # the no-setarch retry runs clean
+
+    monkeypatch.setattr(P.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(P.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setenv("HEXGRAPH_SVC_ASLR_RELAXED", "1")  # engine DID grant the cap
+    art = _elf(tmp_path)
+    out = tmp_path / "out"
+    monkeypatch.setattr(__import__("sys"), "argv",
+                        ["service_launch_probe.py", str(art), str(out), "--port=9133"])
+    assert P.main() == 0
+
+    # Two spawns: the setarch attempt (EPERM) then the no-setarch retry.
+    assert len(calls) == 2
+    assert calls[0]["cmd"][0].endswith("setarch")
+    assert "setarch" not in calls[1]["cmd"][0]
+    # The retry keeps the SAME ASAN_OPTIONS.
+    assert "abort_on_error=1" in calls[1]["env"]["ASAN_OPTIONS"]
+    # The service still came up (final pid = the retry's), and the status is honest.
+    status = json.loads((out / "status.json").read_text())
+    assert status["launched"] is True
+    assert status["pid"] == 200
+    assert status["aslr_relaxed"] is False
+    assert "personality() denied" in status["note"]
+    # The clear note is also in the service log for an operator.
+    assert "could not disable ASLR" in (out / "service.log").read_text()
+
+
+def test_service_launch_probe_does_not_relaunch_on_bare_eperm(monkeypatch, tmp_path):
+    """Regression: a SERVICE that legitimately fails (non-zero) and emits the bare errno
+    "Operation not permitted" — e.g. `bind: Operation not permitted` on a privileged port
+    under --cap-drop ALL — must NOT be misread as a setarch personality failure. setarch ran
+    fine (it exec'd the target), so the probe must record the real exit code and NOT relaunch
+    the service a second time. Detection keys on setarch's OWN "failed to set personality"
+    signature, which is absent here."""
+    from hexgraph.sandbox.probes import service_launch_probe as P
+
+    calls = []
+
+    class _FakeProc:
+        def __init__(self, pid, rc):
+            self.pid = pid
+            self._rc = rc
+
+        def wait(self):
+            return self._rc
+
+    def _fake_popen(cmd, **kw):
+        calls.append({"cmd": cmd, "env": kw.get("env")})
+        out = tmp_path / "out"
+        # setarch exec'd the target fine; the SERVICE ITSELF then failed with the generic errno.
+        with open(out / "service.log", "ab") as fh:
+            fh.write(b"server: bind(0.0.0.0:80): Operation not permitted\n")
+        return _FakeProc(100, 1)
+
+    monkeypatch.setattr(P.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(P.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setenv("HEXGRAPH_SVC_ASLR_RELAXED", "1")  # engine DID grant the cap
+    art = _elf(tmp_path)
+    out = tmp_path / "out"
+    monkeypatch.setattr(__import__("sys"), "argv",
+                        ["service_launch_probe.py", str(art), str(out), "--port=9135"])
+    assert P.main() == 0
+
+    # Exactly ONE spawn (with setarch) — no spurious relaunch.
+    assert len(calls) == 1
+    assert calls[0]["cmd"][0].endswith("setarch")
+    status = json.loads((out / "status.json").read_text())
+    # setarch did run, so the relaxation took effect; the honest exit code is recorded.
+    assert status["aslr_relaxed"] is True
+    assert status["exit_code"] == 1
+
+
+def test_service_launch_probe_skips_setarch_when_marker_absent(monkeypatch, tmp_path):
+    """N1 (compat): setarch is PRESENT but the engine did NOT set the handshake marker — the
+    server is running stale code that never granted the personality cap (or a host that forbids
+    it). The probe skips setarch UP FRONT (no cryptic EPERM), logs the stale-engine diagnostic,
+    and launches the service; status reports aslr_relaxed=False."""
+    from hexgraph.sandbox.probes import service_launch_probe as P
+
+    calls = []
+
+    class _FakeProc:
+        pid = 55
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(P.subprocess, "Popen",
+                        lambda cmd, **kw: (calls.append({"cmd": cmd, "env": kw.get("env")}) or _FakeProc()))
+    monkeypatch.setattr(P.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.delenv("HEXGRAPH_SVC_ASLR_RELAXED", raising=False)  # engine did NOT grant
+    art = _elf(tmp_path)
+    out = tmp_path / "out"
+    monkeypatch.setattr(__import__("sys"), "argv",
+                        ["service_launch_probe.py", str(art), str(out), "--port=9134"])
+    assert P.main() == 0
+
+    # Only ONE spawn, and it never used setarch (skipped up front, not attempted-and-failed).
+    assert len(calls) == 1
+    assert "setarch" not in calls[0]["cmd"][0]
+    assert "abort_on_error=1" in calls[0]["env"]["ASAN_OPTIONS"]
+    status = json.loads((out / "status.json").read_text())
+    assert status["launched"] is True
+    assert status["aslr_relaxed"] is False
+    assert "stale code" in status["note"]
+    assert "running stale code" in (out / "service.log").read_text()

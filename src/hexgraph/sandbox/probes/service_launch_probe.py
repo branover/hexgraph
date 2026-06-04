@@ -110,14 +110,21 @@ def main() -> int:
     # intermittently collides with a randomized mapping and the process SIGSEGVs during ASan
     # init, BEFORE main (exit_code -11, ~nondeterministic). ASLR-off makes the address space
     # deterministic so the shadow always fits — identical to the AFL/desock probes. The
-    # container is launched with the minimal default+personality seccomp profile
-    # (start_detached(disable_aslr=True) → runner) so this is permitted under
-    # --no-new-privileges. If setarch isn't present we fall through to a bare invocation
-    # (the bug is then latent but the launch still attempts to run). NOT a security flag:
-    # it does not touch --network/caps/read-only/--user.
+    # container must be launched with the minimal default+personality seccomp profile
+    # (start_detached(disable_aslr=True) → runner) so personality() is permitted under
+    # --no-new-privileges. NOT a security flag: it does not touch --network/caps/read-only/
+    # --user — and below we always FALL BACK to a bare invocation when setarch can't run,
+    # which only makes the latent SIGSEGV bug possible again (strictly better than a hard
+    # campaign failure).
     setarch = shutil.which("setarch")
-    aslr_off = [setarch, os.uname().machine, "-R"] if setarch else []
-    cmd = [*aslr_off, *prefix, target, *extra_argv]
+    # Capability handshake: the engine sets HEXGRAPH_SVC_ASLR_RELAXED=1 on the container ONLY
+    # when it actually granted the personality-allowing seccomp profile (disable_aslr=True).
+    # Probes hot-load from disk but the engine is process-cached, so a NEW probe can run
+    # against a STALE engine that never granted the cap — then setarch -R would EPERM with a
+    # cryptic "failed to set personality". If we INTEND setarch but the marker is absent, we
+    # know the cap wasn't granted (stale engine, or a host that forbids personality()) and
+    # skip setarch up front with a clear diagnostic rather than failing the launch.
+    relaxation_granted = os.environ.get("HEXGRAPH_SVC_ASLR_RELAXED") == "1"
 
     # ASan defaults: abort (so a real crash is a clean SIGABRT, not a confusing later state),
     # symbolize the report (we read the launched-service log directly, no AFL parser to satisfy
@@ -129,26 +136,109 @@ def main() -> int:
 
     # The hostile target writes nothing we trust; capture its output to a log on /out so a
     # failed launch is diagnosable, but keep stdin closed (a daemon does not read our stdin).
-    log = open(os.path.join(outdir, "service.log"), "wb")
+    log_path = os.path.join(outdir, "service.log")
+    base_cmd = [*prefix, target, *extra_argv]
+
+    def _log_note(msg):
+        with open(log_path, "ab") as fh:
+            fh.write(("[service_launch_probe] " + msg + "\n").encode())
+
+    use_setarch = bool(setarch)
+    note = None
+    aslr_relaxed = False
+    if use_setarch and not relaxation_granted:
+        # Stale-engine deploy skew (or a host that never grants the cap): the marker the
+        # engine sets when it relaxes seccomp is absent, so personality() is almost certainly
+        # forbidden. Skip setarch up front — don't even attempt the EPERM.
+        use_setarch = False
+        note = ("ASLR relaxation not granted by the running engine — the server may be "
+                "running stale code (probe newer than engine), or this host forbids "
+                "personality(); launched without setarch -R, crashes may be less deterministic")
+        _log_note(note)
+
+    def _spawn(with_setarch):
+        if with_setarch:
+            cmd = [setarch, os.uname().machine, "-R", *base_cmd]
+        else:
+            cmd = list(base_cmd)
+        log = open(log_path, "ab")
+        try:
+            proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                                    cwd=outdir, env=env)
+        except OSError:
+            log.close()
+            raise
+        return proc, log, cmd
+
+    def _setarch_personality_failed(rc):
+        # setarch fails to set the personality BEFORE exec'ing the target: it exits non-zero
+        # and writes "setarch: failed to set personality to <name>: Operation not permitted" to
+        # the log. Key on setarch's OWN, specific signature ("failed to set personality") — NOT
+        # the bare errno "operation not permitted", which a legitimately-failing SERVICE can emit
+        # itself (e.g. `bind: Operation not permitted` on a privileged port under --cap-drop ALL);
+        # keying on the generic string would misclassify that as a setarch failure and needlessly
+        # relaunch the service without setarch. setarch's message always contains the specific
+        # phrase, so this stays a reliable trigger for the genuine personality()-denied case.
+        if rc == 0:
+            return False
+        try:
+            with open(log_path, "rb") as fh:
+                tail = fh.read()[-4096:].decode("utf-8", "replace").lower()
+        except OSError:
+            tail = ""
+        return "failed to set personality" in tail
+
     try:
-        proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                                cwd=outdir, env=env)
+        proc, log, cmd = _spawn(use_setarch)
     except OSError as exc:
-        _write_status(outdir, {"launched": False, "port": port,
+        _write_status(outdir, {"launched": False, "port": port, "aslr_relaxed": False,
                                "error": f"could not launch service: {exc}"})
         open(os.path.join(outdir, "EXITED"), "w").write("launch-failed")
         return 1
 
+    aslr_relaxed = use_setarch
+
     _write_status(outdir, {"launched": True, "pid": proc.pid, "port": port,
-                           "foreign_arch": bool(prefix), "started_at": time.time()})
+                           "foreign_arch": bool(prefix), "aslr_relaxed": aslr_relaxed,
+                           "note": note, "started_at": time.time()})
     # Signal readiness (best-effort: the service is up; the campaign engine + boofuzz's own
     # connect-with-retry confirm the port is actually accepting). The container stays alive
     # as long as the service does — its teardown is the reaper's/stop's job.
     open(os.path.join(outdir, "READY"), "w").write(str(proc.pid))
     rc = proc.wait()
     log.close()
+
+    # N3: setarch was PRESENT and we expected the cap (marker present), but personality() was
+    # still denied (a hardened host / older Docker overriding the profile) — setarch exits
+    # before exec'ing the target. Retry the launch WITHOUT setarch so the service actually
+    # comes up (ASLR-shadow bug becomes latent again — strictly better than a dead campaign).
+    if use_setarch and _setarch_personality_failed(rc):
+        note = ("setarch -R could not disable ASLR (personality() denied by the host's "
+                "seccomp/permissions despite the engine granting the relaxation); retried "
+                "without setarch -R — crashes may be less deterministic")
+        _log_note(note)
+        aslr_relaxed = False
+        try:
+            os.remove(os.path.join(outdir, "READY"))
+        except OSError:
+            pass
+        try:
+            proc, log, cmd = _spawn(False)
+        except OSError as exc:
+            _write_status(outdir, {"launched": False, "port": port, "aslr_relaxed": False,
+                                   "note": note, "error": f"could not launch service: {exc}"})
+            open(os.path.join(outdir, "EXITED"), "w").write("launch-failed")
+            return 1
+        _write_status(outdir, {"launched": True, "pid": proc.pid, "port": port,
+                               "foreign_arch": bool(prefix), "aslr_relaxed": False,
+                               "note": note, "started_at": time.time()})
+        open(os.path.join(outdir, "READY"), "w").write(str(proc.pid))
+        rc = proc.wait()
+        log.close()
+
     _write_status(outdir, {"launched": True, "pid": proc.pid, "port": port,
-                           "foreign_arch": bool(prefix), "exit_code": rc})
+                           "foreign_arch": bool(prefix), "aslr_relaxed": aslr_relaxed,
+                           "note": note, "exit_code": rc})
     open(os.path.join(outdir, "EXITED"), "w").write(str(rc))
     return 0
 
