@@ -53,9 +53,17 @@ def main() -> int:
     path = sys.argv[1]
     focus_name = sys.argv[2] if len(sys.argv) > 2 else None
 
-    import r2pipe
+    try:
+        import r2pipe
+    except ImportError as exc:
+        print(json.dumps({"error": f"radare2/r2pipe not available in the sandbox image: {exc}"}))
+        return 3
 
-    r2 = r2pipe.open(path, flags=["-2"])  # -2 silences stderr
+    try:
+        r2 = r2pipe.open(path, flags=["-2"])  # -2 silences stderr
+    except Exception as exc:  # noqa: BLE001 — surface a structured reason, not a bare traceback
+        print(json.dumps({"error": f"radare2 failed to open the target: {exc}"}))
+        return 4
     try:
         r2.cmd("aaa")  # analyze all
         offsets = {}

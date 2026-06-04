@@ -137,7 +137,9 @@ def main() -> int:
 
     hl = _find_headless()
     if not hl:
-        print(json.dumps({"error": "Ghidra not installed in sandbox image (WITH_GHIDRA=1)"}))
+        print(json.dumps({"error": "Ghidra not installed in this sandbox image — rebuild it "
+                                   "with WITH_GHIDRA=1 (just sandbox-build with_ghidra=1), or "
+                                   "switch the decompiler back to radare2"}))
         return 3
 
     proj_dir = os.path.join(SCRATCH, "ghidra_proj")
@@ -156,8 +158,13 @@ def main() -> int:
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if not os.path.isfile(out_path):
-        print(json.dumps({"error": f"analyzeHeadless produced no output (exit {proc.returncode}): "
-                                   f"{proc.stderr.strip()[:400]}"}))
+        # analyzeHeadless logs to STDOUT, not stderr — read stdout for the real reason
+        # (the old code read the empty stderr, so the surfaced detail was blank). Prefer
+        # the tail of stdout (the failing analysis log lines); fall back to stderr.
+        log = (proc.stdout or "").strip() or (proc.stderr or "").strip()
+        tail = "\n".join(log.splitlines()[-12:])[-1500:] if log else "(no analyzeHeadless output)"
+        print(json.dumps({"error": f"analyzeHeadless produced no output (exit {proc.returncode}); "
+                                   f"analysis log tail:\n{tail}"}))
         return 4
     with open(out_path) as fh:
         result = json.load(fh)
