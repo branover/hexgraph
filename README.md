@@ -36,8 +36,9 @@ Three principles are non-negotiable, and they shape everything else:
 ## Install
 
 You will need Python 3.11 or newer, a Docker daemon your user can talk to (check with `docker run
---rm hello-world`), [`just`](https://just.systems), Node.js 18+ with npm (the default `just setup`
-builds the web UI), and Linux or macOS. No API key is required, since the default mock backend runs
+--rm hello-world`), Node.js 18+ with npm (the setup builds the web UI), and Linux or macOS. The task
+runner [`just`](https://just.systems) is recommended but optional — if you'd rather not install it,
+use the `./setup.sh` script shown below. No API key is required, since the default mock backend runs
 fully offline.
 
 ```bash
@@ -55,6 +56,10 @@ static-only posture; everything beyond that is something you turn on yourself, w
 wizard, the manual step-by-step, the non-interactive CI mode, and Ghidra, see
 **[docs/setup.md](docs/setup.md)**.
 
+> Prefer not to install `just`? Run `./setup.sh` instead — it does the same venv + deps + web-UI
+> bootstrap and then launches the identical interactive wizard, after which `.venv/bin/hexgraph serve`
+> starts the app. (`./setup.sh --yes` takes the static-only defaults without prompting.)
+>
 > To install `just` without sudo:
 > `curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to ~/.local/bin`
 > (make sure `~/.local/bin` is on your `PATH`), or `snap install just`. Run `just` on its own for the

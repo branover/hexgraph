@@ -7,6 +7,17 @@ just setup          # venv + deps + web UI, then the interactive setup wizard
 just serve          # → http://127.0.0.1:8765
 ```
 
+Don't want to install [`just`](https://just.systems)? There's a plain shell script that does the
+same bootstrap and then drops you into the very same interactive wizard:
+
+```bash
+./setup.sh          # venv + deps + web UI, then the interactive setup wizard
+.venv/bin/hexgraph serve
+```
+
+`setup.sh` passes any arguments straight through to the wizard, so `./setup.sh --yes` takes the
+static-only defaults without prompting (handy for CI or a scripted install).
+
 ## The setup wizard
 
 `just setup` runs the bootstrap and then launches an interactive setup wizard (`hexgraph setup`). The
@@ -41,11 +52,14 @@ install` prints the exact steps for each agent.
 > without prompting, and skips the coding-agent and skill install entirely, so an unattended `just
 > setup` never hangs.
 >
-> One gotcha in stripped-down environments (minimal containers, `cron`, `su` without a login session):
-> `just` needs a writable `XDG_RUNTIME_DIR` for recipes that invoke `just` again, which `setup` does. A
-> normal interactive Linux login has `/run/user/$UID` created for it, but those bare contexts may not,
-> and you'll see `error: I/O error in runtime dir`. If that happens, point it somewhere writable first,
-> e.g. `export XDG_RUNTIME_DIR=$(mktemp -d)`, then re-run `just setup`.
+> **A note on `XDG_RUNTIME_DIR`.** `just` writes a small temp script to run any shebang recipe (like
+> `setup`), normally under `$XDG_RUNTIME_DIR` (e.g. `/run/user/$UID`). In stripped-down environments —
+> minimal containers, `cron`, `su` without a login session — that variable can point at a directory
+> that doesn't exist and can't be created, which historically surfaced as `error: I/O error in runtime
+> dir`. The justfile now pins `just`'s temp dir to a writable location (`set tempdir := "/tmp"`), so
+> this no longer bites you. If you ever hit a similar runtime-dir error from another tool, the root
+> cause is the same broken `XDG_RUNTIME_DIR`; `export XDG_RUNTIME_DIR=$(mktemp -d)` is a quick
+> per-shell workaround, and `./setup.sh` sidesteps `just` entirely.
 
 ## Manual install (or adding Ghidra)
 
