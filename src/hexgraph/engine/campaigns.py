@@ -626,7 +626,7 @@ def reap_campaign(session: Session, row: FuzzCampaign, *, executor=None) -> int:
     status = _read_status(outdir)
     created = 0
     if status:
-        created = _ingest_artifacts(session, project, target, row, status)
+        created = _ingest_artifacts(session, project, target, row, status, executor=executor)
         _update_stats(row, status)
 
     if done:
@@ -659,11 +659,17 @@ def reap_campaign(session: Session, row: FuzzCampaign, *, executor=None) -> int:
     return created
 
 
-def _ingest_artifacts(session, project, target, row, status: dict) -> int:
+def _ingest_artifacts(session, project, target, row, status: dict, *, executor=None) -> int:
     """Persist each NEW unique crash as a fuzz_artifact + a fuzz_crash finding, wiring
     the campaign `produced_artifact`→ the finding. Dedup is by `dedup_key`
     (UNIQUE(campaign_id,dedup_key)); a re-seen bucket only bumps dupe_count. Streams —
-    so an early crash in a long campaign surfaces immediately."""
+    so an early crash in a long campaign surfaces immediately.
+
+    When the captured crash report carries no symbolized source frames (e.g. the streamed
+    `_report` was truncated, or that replay missed the symbolizer), we re-run the SAME
+    symbolizing replay `verify_artifact` uses to backfill the representative's stack — so
+    the headline crash gets a clickable backtrace + a real faulting function rather than a
+    null one. `executor` threads the campaign's executor through so that replay reuses it."""
     from hexgraph.engine.fuzzing import crash_finding
 
     created = 0
@@ -728,8 +734,63 @@ def _ingest_artifacts(session, project, target, row, status: dict) -> int:
                      dst=("finding", frow.id), type=EdgeType.produced_artifact,
                      origin="tool", confidence=1.0, created_by_tool="fuzz",
                      attrs={"kind": "crash", "dedup_key": key})
+            # If the streamed report yielded no symbolized stack, backfill it by re-running
+            # the symbolizing replay (the verify path) against the stored reproducer. This
+            # makes the headline representative consistently symbolized instead of leaving it
+            # with null frames while a sibling crash happens to carry a full backtrace.
+            if not frames:
+                _backfill_symbolized_frames(session, project, row, art, frow,
+                                            executor=executor)
         created += 1
     return created
+
+
+def _backfill_symbolized_frames(session, project, row, art, frow, *, executor=None) -> None:
+    """Re-run the symbolizing replay (`verify_artifact`) for one crash artifact and, if it
+    yields source-mapped frames, attach them to the finding (evidence.extra.fuzz.frames),
+    set the finding's faulting function, update the artifact's faulting_function, and
+    auto-link the top in-project frame to source. Best-effort: any failure (no reproducer,
+    no symbolizer, replay error) leaves the under-symbolized representative untouched — it
+    must never break ingest."""
+    if not art.content_cas:
+        return
+    # A mock campaign carries canned reports; there is nothing to symbolize by replay, and a
+    # network campaign re-verifies over a socket (no ASan stack). Only re-symbolize a real
+    # local/remote harness crash.
+    if row.engine == "mock" or row.surface == "network":
+        return
+    try:
+        result = verify_artifact(session, art, executor=executor)
+    except Exception:  # noqa: BLE001 — symbolization backfill is best-effort, never fatal
+        return
+    report = result.get("output") or ""
+    frames = parse_source_frames(report)
+    if not frames:
+        return
+    from hexgraph.db.models import Finding
+
+    f = session.get(Finding, frow.id)
+    if f is None:
+        return
+    # evidence_json is the serialized Evidence: frames ride evidence.extra.fuzz.frames and
+    # the faulting symbol is evidence.function (NOT a top-level key).
+    evidence = dict(f.evidence_json or {})
+    extra = dict(evidence.get("extra") or {})
+    fz = dict(extra.get("fuzz") or {})
+    fz["frames"] = frames
+    extra["fuzz"] = fz
+    evidence["extra"] = extra
+    # The top frame's function is the faulting function — backfill it on both the finding's
+    # evidence and the artifact so the representative no longer reports a null function.
+    top_func = frames[0].get("func")
+    if top_func:
+        if not evidence.get("function"):
+            evidence["function"] = top_func
+        if not art.faulting_function:
+            art.faulting_function = top_func
+    f.evidence_json = evidence
+    session.flush()
+    _autolink_top_frame(session, project, frow.id, frames)
 
 
 def _update_stats(row: FuzzCampaign, status: dict) -> None:
@@ -819,7 +880,7 @@ def stop_campaign(session: Session, row: FuzzCampaign, *, executor=None) -> Fuzz
     if status:
         project = session.get(Project, row.project_id)
         target = session.get(Target, row.target_id)
-        _ingest_artifacts(session, project, target, row, status)
+        _ingest_artifacts(session, project, target, row, status, executor=executor)
         _update_stats(row, status)
     _snapshot_corpus(session, session.get(Project, row.project_id), row)
     if row.container_name:
@@ -1107,8 +1168,13 @@ def verify_artifact(session: Session, artifact: FuzzArtifact, *, executor=None) 
     # Run the fuzzer harness with the reproducer as its single input file (libFuzzer/AFL
     # persistent binaries replay a crashing file passed as argv[1]). The `crash` oracle
     # is unforgeable — the process really aborted on this input.
+    # Force ASan to SYMBOLIZE its backtrace (`func file:line:col`) on this replay — the fuzz
+    # image ships llvm-symbolizer, so the re-crash report carries source-mapped frames the
+    # ingest path can parse into a clickable stack (the same symbolizing replay used to
+    # backfill an under-symbolized representative). symbolize=1 is harmless when no
+    # symbolizer is present (ASan falls back to module+offset).
     spec = {"argv": ["/repro/reproducer"], "oracle": {"type": "crash"},
-            "env": {"ASAN_OPTIONS": "abort_on_error=1:detect_leaks=0"}}
+            "env": {"ASAN_OPTIONS": "abort_on_error=1:detect_leaks=0:symbolize=1"}}
     result = executor.run_json_probe(
         "poc_probe.py", fuzzer_path, outdir=out,
         extra_args=["--spec", json.dumps(spec)], requires_execution=True,

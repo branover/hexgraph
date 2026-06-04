@@ -304,6 +304,130 @@ def test_reap_streaming_partial_status_is_live_then_final(hg_home, monkeypatch):
         assert s.query(FuzzArtifact).filter(FuzzArtifact.campaign_id == cid).count() == 1
 
 
+# ── F5: the representative is symbolized consistently (re-run verify when frames missing) ─
+
+class _SymbolizingExecutor(_RunningExecutor):
+    """A fake executor whose verify replay (poc_probe) returns a SYMBOLIZED ASan report —
+    standing in for the fuzz image's llvm-symbolizer. Used to prove the ingest path backfills
+    a representative's stack from the verify replay when the streamed `_report` had none."""
+
+    SYMBOLIZED = (
+        "==9==ERROR: AddressSanitizer: heap-use-after-free on address 0x602000000010\n"
+        "READ of size 4 at 0x602000000010 thread T0\n"
+        "    #0 0x4f in real_handler /src/httpd.c:128:9\n"
+        "    #1 0x6a in dispatch /src/httpd.c:80:3\n"
+        "SUMMARY: AddressSanitizer: heap-use-after-free /src/httpd.c:128:9 in real_handler\n")
+
+    def __init__(self):
+        super().__init__()
+        self.verify_calls = 0
+
+    def run_json_probe(self, probe, artifact, *, outdir=None, extra_args=None,
+                       requires_execution=False, extra_ro_mounts=None):
+        self.verify_calls += 1
+        return {"tool": "poc_probe", "ran": True, "verified": True, "exit_code": 1,
+                "output": self.SYMBOLIZED, "detail": "re-crashed"}
+
+
+def test_representative_is_symbolized_via_verify_when_report_lacks_frames(hg_home, monkeypatch):
+    """F5 / defect 2: a crash whose streamed `_report` carries NO symbolized frames (only
+    module+offset, e.g. the campaign replay missed the symbolizer) gets its backtrace
+    BACKFILLED by re-running the SAME symbolizing replay verify uses — so the headline
+    representative ends up with frames + a real faulting function instead of null."""
+    import json as _json
+    from pathlib import Path
+    from hexgraph.engine import cas
+
+    _enable_fuzzing()
+    ex = _SymbolizingExecutor()
+    with session_scope() as s:
+        p, t = _project_with_target(s)
+        spec = FuzzCampaignSpec(target_id=t.id, surface="source_lib", harness_source=HARNESS,
+                                function="cgi_handler", target_sources=["/x.c"])
+        monkeypatch.setenv("HEXGRAPH_FUZZER", "")
+        row = C.start_campaign(s, p, t, spec=spec, executor=ex)
+        cid = row.id
+        # verify_artifact takes the poc_probe path only when a fuzzer binary was preserved.
+        fuzzer_cas = cas.put(p, b"\x7fELF-fake-fuzzer-binary")
+        row.config_json = {**(row.config_json or {}), "fuzzer_cas": fuzzer_cas}
+        s.flush()
+        outdir = Path(row.outdir)
+        outdir.mkdir(parents=True, exist_ok=True)
+
+        # An UNSYMBOLIZED report: frames are only module+offset, so parse_source_frames → [].
+        crash = {
+            "kind": "heap-use-after-free", "function": None,
+            "summary": "SUMMARY: AddressSanitizer: heap-use-after-free",
+            "reproducer_sha256": "b" * 64, "reproducer_size": 8,
+            "reproducer_b64": "QUFBQUFBQUE=",
+            "dedup_key": "cafebabe" * 8, "dupe_count": 0,
+            "exploitability": {"rating": "likely_exploitable", "access": "READ", "signals": []},
+            "minimized_reproducer_sha256": "b" * 64, "minimized_reproducer_size": 8,
+            "_report": ("==9==ERROR: AddressSanitizer: heap-use-after-free\n"
+                        "READ of size 4 at 0x602000000010\n"
+                        "    #0 0x4f (/out/fuzzer+0x4f)\n"),  # module+offset only — NO frames
+        }
+        (outdir / "status.json").write_text(_json.dumps(
+            {"compiled": True, "ran": True, "engine": "libfuzzer", "done": True,
+             "executions": 1000, "edges_covered": 5, "crash_count": 1,
+             "coverage_instrumented": True, "crashes": [crash]}))
+        (outdir / "DONE").write_text("libfuzzer")
+
+        created = C.reap_campaign(s, s.get(FuzzCampaign, cid), executor=ex)
+        assert created == 1
+        assert ex.verify_calls == 1, "the symbolizing replay must run when frames are missing"
+
+        art = s.query(FuzzArtifact).filter(FuzzArtifact.campaign_id == cid).one()
+        f = s.get(Finding, art.finding_id)
+        frames = (((f.evidence_json or {}).get("extra") or {}).get("fuzz") or {}).get("frames")
+        assert frames, "frames must be backfilled from the verify replay"
+        assert frames[0]["func"] == "real_handler" and frames[0]["line"] == 128
+        # The artifact's faulting_function (which was null from the probe) is recovered from
+        # the symbolized top frame — the central F5 fix (the headline crash had a null one).
+        assert art.faulting_function == "real_handler"
+
+
+def test_representative_with_frames_skips_verify_backfill(hg_home, monkeypatch):
+    """The backfill is a fallback only: a crash whose streamed `_report` is already
+    symbolized must NOT trigger a (costly) verify replay."""
+    import json as _json
+    from pathlib import Path
+
+    _enable_fuzzing()
+    ex = _SymbolizingExecutor()
+    with session_scope() as s:
+        p, t = _project_with_target(s)
+        spec = FuzzCampaignSpec(target_id=t.id, surface="source_lib", harness_source=HARNESS,
+                                function="cgi_handler", target_sources=["/x.c"])
+        monkeypatch.setenv("HEXGRAPH_FUZZER", "")
+        row = C.start_campaign(s, p, t, spec=spec, executor=ex)
+        cid = row.id
+        outdir = Path(row.outdir)
+        outdir.mkdir(parents=True, exist_ok=True)
+        crash = {
+            "kind": "heap-buffer-overflow", "function": "cgi_handler",
+            "summary": "SUMMARY: AddressSanitizer: heap-buffer-overflow",
+            "reproducer_sha256": "c" * 64, "reproducer_size": 8,
+            "reproducer_b64": "QUFBQUFBQUE=",
+            "dedup_key": "feedface" * 8, "dupe_count": 0,
+            "exploitability": {"rating": "likely_exploitable", "access": "WRITE", "signals": []},
+            "minimized_reproducer_sha256": "c" * 64, "minimized_reproducer_size": 8,
+            "_report": ("==1==ERROR: AddressSanitizer: heap-buffer-overflow\n"
+                        "    #0 0x49 in cgi_handler /src/httpd.c:42:7\n"),  # already symbolized
+        }
+        (outdir / "status.json").write_text(_json.dumps(
+            {"compiled": True, "ran": True, "engine": "libfuzzer", "done": True,
+             "executions": 1000, "crash_count": 1, "coverage_instrumented": True,
+             "crashes": [crash]}))
+        (outdir / "DONE").write_text("libfuzzer")
+        C.reap_campaign(s, s.get(FuzzCampaign, cid), executor=ex)
+        assert ex.verify_calls == 0, "no verify replay when the report already symbolizes"
+        art = s.query(FuzzArtifact).filter(FuzzArtifact.campaign_id == cid).one()
+        f = s.get(Finding, art.finding_id)
+        frames = (((f.evidence_json or {}).get("extra") or {}).get("fuzz") or {}).get("frames")
+        assert frames and frames[0]["func"] == "cgi_handler"
+
+
 # ── Degraded / zero-work campaigns surface a WARNING, not a silent "completed" ────
 
 @pytest.mark.parametrize("scenario,expect_note", [
