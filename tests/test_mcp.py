@@ -318,6 +318,54 @@ def test_get_schemas_contract():
     assert "input" in sch["node_types"] and "sink" in sch["node_types"]
     assert "taints" in sch["edge_types"]
     assert "extra" in sch["finding"]["evidence_fields"]
+    # the decompiler block now carries a health verdict, not just a configured name
+    dec = sch["decompiler"]
+    assert "working" in dec and isinstance(dec["working"], bool)
+    assert isinstance(dec["health"], dict) and dec["health"]["detail"]
+
+
+def test_check_decompiler_in_catalog():
+    names = {t["name"] for t in mcp_tools.catalog()}
+    assert "check_decompiler" in names
+
+
+def test_check_decompiler_radare2_working(hg_home, monkeypatch):
+    """Default config: radare2 reports working when the sandbox image is up."""
+    monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
+    d = mcp_tools.check_decompiler()
+    assert d["active"] == "radare2"
+    assert d["working"] is True
+    assert "radare2" in d["detail"]
+    assert d["mode"] is None
+
+
+def test_check_decompiler_radare2_docker_down(hg_home, monkeypatch):
+    monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: False)
+    d = mcp_tools.check_decompiler()
+    assert d["active"] == "radare2"
+    assert d["working"] is False
+    assert "Docker" in d["detail"]
+
+
+def test_check_decompiler_ghidra_broken(hg_home, monkeypatch):
+    """Ghidra configured but unavailable: a clear, actionable broken-detail."""
+    from hexgraph import settings as st
+
+    st.update_settings({"features.ghidra.enabled": True, "features.ghidra.mode": "headless"})
+    monkeypatch.setattr(
+        "hexgraph.engine.ghidra.check_ghidra",
+        lambda: {"enabled": True, "mode": "headless", "ok": False,
+                 "detail": "Ghidra not found in sandbox image (build with WITH_GHIDRA=1)."},
+    )
+    d = mcp_tools.check_decompiler()
+    assert d["active"] == "ghidra"
+    assert d["working"] is False
+    assert d["mode"] == "headless"
+    assert "WITH_GHIDRA" in d["detail"]
+    # and the schema block reflects the same broken verdict
+    sch = mcp_tools.get_schemas()
+    assert sch["decompiler"]["active"] == "ghidra"
+    assert sch["decompiler"]["working"] is False
 
 
 def test_create_node_address_and_input_sink(hg_home):

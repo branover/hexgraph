@@ -1165,21 +1165,88 @@ def set_hypothesis_status(hypothesis_id: str, status: str, rationale: str | None
             return {"error": str(exc)}
 
 
+def _decompiler_health(active: str) -> dict:
+    """Does the ACTIVE decompiler actually work right now (not merely configured)?
+    Returns {working: bool, detail: str, mode?, version?}. Never raises — a broken
+    decompiler is a reportable fact, not an exception."""
+    try:
+        from hexgraph.sandbox.runner import docker_available
+
+        if active in ("ghidra", "ghidra_bridge", "bridge"):
+            # Ghidra (headless or bridge) — defer to the real status probe.
+            from hexgraph.engine.ghidra import check_ghidra
+
+            g = check_ghidra()
+            return {
+                "working": bool(g.get("ok")),
+                "mode": g.get("mode"),
+                "version": g.get("ghidra_version"),
+                "detail": g.get("detail")
+                or ("Ghidra is configured but its status could not be confirmed."),
+            }
+
+        # radare2 — the always-available default, shipped in the sandbox image.
+        if not docker_available():
+            return {
+                "working": False,
+                "detail": "Docker is not running; radare2 decompilation runs inside the "
+                          "sandbox image. Start Docker (and `just sandbox-build` if the image "
+                          "is missing).",
+            }
+        return {
+            "working": True,
+            "detail": "radare2 is available in the sandbox image.",
+        }
+    except Exception as exc:  # noqa: BLE001 — health probing must never crash a read call
+        return {"working": False, "detail": f"could not determine decompiler health: {exc}"}
+
+
 def _decompiler_info() -> dict:
-    """Which decompiler decompile_function/disassemble use right now, and how to change
-    it — so an agent knows it can't flip it itself (the operator does, in Settings)."""
+    """Which decompiler decompile_function/disassemble use right now, whether it
+    actually WORKS, and how to change it — so an agent knows it can't flip it itself
+    (the operator does, in Settings) and isn't misled by a configured-but-broken tool."""
     from hexgraph.sandbox.decompiler import _resolve_name
 
     active = _resolve_name(None)
+    health = _decompiler_health(active)
     return {
         "active": active,
         "available_default": "radare2",
+        "working": health["working"],
+        "health": health,
         "note": "decompile_function / disassemble use the OPERATOR-configured decompiler "
                 "automatically — you don't select it. radare2 is the always-available default; "
                 "Ghidra is used when the operator enables features.ghidra in Settings AND the "
                 "sandbox image was built with Ghidra (`just sandbox-build with_ghidra=1`). There "
                 "is intentionally no MCP tool to toggle this (it's an operator setting). If you "
-                "want Ghidra and `active` here is 'radare2', ask the operator to enable it.",
+                "want Ghidra and `active` here is 'radare2', ask the operator to enable it. "
+                "`working` reports whether `active` ACTUALLY functions right now — if it's false, "
+                "see health.detail (run check_decompiler for the full diagnostic).",
+    }
+
+
+def check_decompiler() -> dict:
+    """Diagnose the decompiler decompile_function / disassemble use — does the active
+    one ACTUALLY work, or is it merely configured? get_schemas reports the configured
+    `active` name; this VERIFIES it, so you don't waste turns decompiling against a
+    broken backend (e.g. Ghidra named active while every call fails because the sandbox
+    image was built without it). Returns {active, working, mode, version, detail}:
+    `active` is radare2|ghidra|ghidra_bridge; `working` is the real verdict (radare2 ⇒
+    the sandbox image is up; Ghidra ⇒ the headless binary is present / the bridge is
+    reachable); `mode` is headless|bridge for Ghidra; `detail` is an ACTIONABLE string
+    when broken (rebuild the sandbox with WITH_GHIDRA=1, start the Ghidra bridge server,
+    start Docker, …). Read-only — no target is touched. If working is False, fall back to
+    radare2-level reading or tell the operator what to fix; don't keep retrying."""
+    from hexgraph.sandbox.decompiler import _resolve_name
+
+    active = _resolve_name(None)
+    health = _decompiler_health(active)
+    return {
+        "active": active,
+        "working": health["working"],
+        "mode": health.get("mode"),
+        "version": health.get("version"),
+        "detail": health["detail"],
     }
 
 
