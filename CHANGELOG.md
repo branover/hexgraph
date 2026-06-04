@@ -5,6 +5,27 @@ All notable changes to HexGraph are recorded here. The format loosely follows
 [semantic versioning](https://semver.org/) properly once it reaches 1.0. Until then,
 expect breaking changes between minor versions.
 
+## [0.3.0](https://github.com/branover/hexgraph/compare/hexgraph-v0.2.0...hexgraph-v0.3.0) (2026-06-04)
+
+
+### Features
+
+* add check_decompiler health verb and surface decompiler health in get_schemas ([2ab6d85](https://github.com/branover/hexgraph/commit/2ab6d856f7a249311543ed272cf6a2756be50689))
+
+
+### Bug Fixes
+
+* build Ghidra against JDK 21 and add a CI gate that decompiles a fixture ([e4fa3fa](https://github.com/branover/hexgraph/commit/e4fa3fa4d43122096d76c93b5e3175411ed9d139))
+* **ci:** drop unreachable stdout re-capture in the ghidra gate ([aaabeb3](https://github.com/branover/hexgraph/commit/aaabeb3d3fed3ecb66bdd07ec89cbb530c233767))
+* make Ghidra 12 decompile under full sandbox hardening ([532694d](https://github.com/branover/hexgraph/commit/532694dce90f47c3bc03f39090d28fc7203233c0))
+* radare2 health also confirms the sandbox image is built ([60bf5ad](https://github.com/branover/hexgraph/commit/60bf5adbca08b61a7dffd951c39080418f00fd04))
+* surface decompiler probe errors instead of a bare exit code ([e860f0a](https://github.com/branover/hexgraph/commit/e860f0afe1c4e4edc83602c5d9656fd350d3c2a1))
+
+
+### Documentation
+
+* reverse-engineering tooling design ([#126](https://github.com/branover/hexgraph/issues/126)) ([eee464e](https://github.com/branover/hexgraph/commit/eee464e6843b183415578de0f2ea63a4c1b546eb))
+
 ## [0.2.0](https://github.com/branover/hexgraph/compare/hexgraph-v0.1.0...hexgraph-v0.2.0) (2026-06-04)
 
 
