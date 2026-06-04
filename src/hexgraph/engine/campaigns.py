@@ -27,6 +27,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import shlex
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -445,6 +446,32 @@ def _launch_network(session, project, target, row, prepared, spec, *, executor, 
     )
 
 
+def _coerce_launch_argv(launch_command) -> list[str]:
+    """Normalize a launch_command into a clean argv list WITHOUT ever char-splitting a str.
+
+    `launch_command` can arrive as a list/tuple of tokens (the intended shape) or — via a
+    JSON-schema'd MCP arg, a config value, or a hand-typed flag — as a single string. A bare
+    `list("netd 9999")` char-splits into ['n','e','t',...] (bug F2), and `list('["9999"]')`
+    splits the JSON text into ['[','"','9',...]. So: a str is shlex.split (a JSON-array string
+    is detected and json.loads'd first, so '["9999"]' → ['9999']); a list/tuple is taken
+    verbatim (stringifying each token); anything else → empty."""
+    if launch_command is None:
+        return []
+    if isinstance(launch_command, str):
+        s = launch_command.strip()
+        if s.startswith("[") and s.endswith("]"):
+            try:
+                parsed = json.loads(s)
+                if isinstance(parsed, list):
+                    return [str(a) for a in parsed]
+            except (ValueError, TypeError):
+                pass
+        return shlex.split(s)
+    if isinstance(launch_command, (list, tuple)):
+        return [str(a) for a in launch_command]
+    return []
+
+
 def _launch_service(session, project, target, row, prepared, port, *, executor, resources) -> str:
     """Launch the server ELF in its OWN detached, hardened container (launch-and-join,
     §5.8b) and return the container name. The service EXECUTES the (hostile) target binary,
@@ -463,8 +490,9 @@ def _launch_service(session, project, target, row, prepared, port, *, executor, 
     svc_args = [f"--port={int(port)}"]
     if prepared.launch_sysroot:
         svc_args.append("--sysroot=/sysroot")
-    if prepared.launch_command:
-        svc_args.append("--cmd=" + json.dumps(list(prepared.launch_command)))
+    launch_argv = _coerce_launch_argv(prepared.launch_command)
+    if launch_argv:
+        svc_args.append("--cmd=" + json.dumps(launch_argv))
     mounts: list[tuple[str, str]] = []
     if prepared.launch_sysroot and Path(prepared.launch_sysroot).is_dir():
         mounts.append((prepared.launch_sysroot, "/sysroot"))
@@ -472,6 +500,10 @@ def _launch_service(session, project, target, row, prepared, port, *, executor, 
         "service_launch_probe.py", prepared.launch_binary, name=svc_name, outdir=svc_outdir,
         image=prepared.image, extra_args=svc_args, requires_execution=True,
         extra_ro_mounts=mounts, resources=resources,
+        # The launched service EXECUTES an ASan-instrumented target; turn ASLR off in its
+        # container (setarch -R in the probe) so ASan's shadow reservation can't collide with
+        # a randomized mapping and SIGSEGV at init (bug F3) — same relaxation the AFL path uses.
+        disable_aslr=True,
     )
     return handle.name
 
