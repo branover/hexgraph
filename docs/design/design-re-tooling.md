@@ -2,7 +2,7 @@
 
 **Status:** proposed (design)
 **Scope:** the static-analysis / reverse-engineering surface — decompilation, the deterministic analysis tools, how their results are stored and become graph truth, and the external RE tools we want to add.
-**Companion evaluations:** `hexgraph-static-analysis-evaluation.md` (radare2 + Ghidra eval) and the fuzzing eval rounds that surfaced the `static_analysis` hallucination.
+**Driven by:** an out-of-tree radare2 + Ghidra static-analysis evaluation and the fuzzing-eval rounds that surfaced the `static_analysis` hallucination (the eval reports live in the operator's working tree, not the repo).
 
 ---
 
@@ -136,6 +136,8 @@ Indexed on `(target_id, node_type, subject_kind, subject_key)`.
 - **Observation write** → a per-`result_kind` **extractor** (a registry seam) distills only whitelisted facts into `enrichment_fact` rows, keyed by canonical identity. If a matching node/edge already exists, enrich it now (the forward, node-before-observation direction).
 - **Node create / promote** (`get_or_create_node`) → a single **indexed lookup** by the node's `(name, address)` keys merges any waiting attribute facts into `attrs` (idempotent union); **relationship facts** where this node is an endpoint materialize their edge *iff the other endpoint now exists* (respecting the both-endpoints-exist rule). On a later **address-fill**, re-lookup by the address key.
 
+A node can match facts under both a name key and an address key (a decompilation observation knows both); because the merge is an idempotent union into the same node's `attrs`, applying both is safe — a fact seen twice is a no-op, not a double-write. **Cache invalidation is passive:** facts are scoped by `content_hash`, so re-ingesting changed bytes yields a new `content_hash` and the stale facts simply never match the new node — there is no active eviction step.
+
 **Why this shape:** parse-once (extraction at write, never at create); `O(facts-about-this-object)`, not `O(observations)`; idempotent (re-applying merges to a no-op); bounded and always-welcome-only (the extractor's whitelist); temporally symmetric (push at write, pull at create). **Bonus:** as functions are promoted, the call edges *among promoted functions* self-wire from prior observations — the curated graph's connectivity fills in for free, never exceeding the curated node set.
 
 **Extractor registry** keeps it a clean seam: adding a tool means optionally adding an extractor for its always-welcome facts; conflicts (two decompilations disagree) resolve most-recent / highest-confidence with provenance retained.
@@ -182,7 +184,7 @@ Multi-PR per phase; a good fit for the integration-branch batch flow.
 ### Phase 0 — Make the shipped decompiler work, observable, and tested *(S–M; do first)*
 - Fix `docker/sandbox.Dockerfile`: align JDK ↔ Ghidra (recommend **JDK 21 + Ghidra 12.x** for longevity) and add a **build-time assertion** that the JDK major matches Ghidra's requirement.
 - Stop swallowing errors (`ghidra_probe.py`, `decompiler.py`): surface the probe's JSON `{error}`; capture **stdout**.
-- Expose health: a **`check_decompiler`** read verb (wraps `check_ghidra()` + radare2 availability + a round-trip probe) and a `health`/`working` field on `get_schemas.decompiler`; optional **`set_decompiler`** per-session override.
+- Expose health: a **`check_decompiler`** read verb (wraps `check_ghidra()` + radare2 availability + a round-trip probe) and add a `health`/`working` **field** to the existing `get_schemas.decompiler` block (`_decompiler_info()` reports `active` today but never verifies it works). A **`set_decompiler`** override, if added, is a *per-session/per-call* selection and does **not** contradict the existing "operator sets this in Settings; no MCP tool to toggle it" note — that note guards the **persistent** project default; an ephemeral override for one analysis is a different lever. Decide whether the per-session override is worth it or whether health-visibility alone suffices.
 - **CI gate:** build the sandbox `WITH_GHIDRA=1` and decompile a fixture, asserting real C. The single most important durable fix.
 
 ### Phase 1 — Persistent Ghidra project cache *(M–L; the perf unblocker)*
