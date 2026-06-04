@@ -59,6 +59,65 @@ def test_parse_asan_classifies():
     assert "SUMMARY" in info["summary"]
 
 
+# Canned ASan reports (trimmed to the salient lines) for the normalized-kind check. The
+# `sanitizer` label on a fuzz_crash finding is exactly parse_asan(...)["kind"], so these
+# pin that the captured type is correct — especially the double-free case whose ERROR line
+# reads "attempting double-free …" (where a naive first-token capture yields "attempting").
+_HEAP_UAF = (
+    "==1==ERROR: AddressSanitizer: heap-use-after-free on address 0x602000000010\n"
+    "READ of size 4 at 0x602000000010 thread T0\n"
+    "    #0 0x4f in use_it /src/uaf.c:12:5\n"
+    "SUMMARY: AddressSanitizer: heap-use-after-free /src/uaf.c:12:5 in use_it")
+_HEAP_BOF = (
+    "==2==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x602000000020\n"
+    "WRITE of size 8 at 0x602000000020 thread T0\n"
+    "    #0 0x5a in copy /src/bof.c:20:3\n"
+    "SUMMARY: AddressSanitizer: heap-buffer-overflow /src/bof.c:20:3 in copy")
+_STACK_BOF = (
+    "==3==ERROR: AddressSanitizer: stack-buffer-overflow on address 0x7ffd...\n"
+    "WRITE of size 16 at 0x7ffd... thread T0\n"
+    "    #0 0x6b in parse /src/stack.c:8:1\n"
+    "SUMMARY: AddressSanitizer: stack-buffer-overflow /src/stack.c:8:1 in parse")
+# A double-free's ERROR line uses the verb "attempting" before the type.
+_DOUBLE_FREE = (
+    "==4==ERROR: AddressSanitizer: attempting double-free on address 0x602000000030\n"
+    "    #0 0x7c in free_twice /src/df.c:30:5\n"
+    "SUMMARY: AddressSanitizer: double-free /src/df.c:30:5 in free_twice")
+# Same double-free, but with NO SUMMARY line — must still normalize via the ERROR phrasing.
+_DOUBLE_FREE_NO_SUMMARY = (
+    "==5==ERROR: AddressSanitizer: attempting double-free on address 0x602000000040\n"
+    "    #0 0x8d in df2 /src/df2.c:7:3")
+# A bare SEGV with no SUMMARY type at all.
+_BARE_SEGV = (
+    "==6==ERROR: AddressSanitizer: SEGV on unknown address 0x000000000000 (pc 0x4ee...)\n"
+    "    #0 0x9e in deref /src/segv.c:5:9")
+
+
+@pytest.mark.parametrize("report,expected_kind", [
+    (_HEAP_UAF, "heap-use-after-free"),
+    (_HEAP_BOF, "heap-buffer-overflow"),
+    (_STACK_BOF, "stack-buffer-overflow"),
+    (_DOUBLE_FREE, "double-free"),
+    (_DOUBLE_FREE_NO_SUMMARY, "double-free"),
+])
+def test_parse_asan_normalizes_kind(report, expected_kind):
+    assert parse_asan(report)["kind"] == expected_kind
+
+
+def test_parse_asan_double_free_not_attempting():
+    """Regression: the 'attempting double-free' ERROR phrasing must NOT label the kind
+    'attempting' (the old first-token capture bug → wrong `sanitizer` field)."""
+    assert parse_asan(_DOUBLE_FREE)["kind"] != "attempting"
+    assert parse_asan(_DOUBLE_FREE_NO_SUMMARY)["kind"] != "attempting"
+
+
+def test_parse_asan_bare_segv():
+    """A SEGV with no SUMMARY type still classifies as an ASan SEGV (not the literal
+    'crash' fallback), so the exploitability classifier and label are meaningful."""
+    info = parse_asan(_BARE_SEGV)
+    assert info["kind"].lower() == "segv"
+
+
 def test_policy_blocks_when_disabled(hg_home):
     with session_scope() as s:
         p = create_project(s, name="f")

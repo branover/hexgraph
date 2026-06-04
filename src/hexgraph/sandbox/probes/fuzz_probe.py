@@ -44,7 +44,17 @@ import time
 
 SCRATCH = os.environ.get("TMPDIR", "/scratch")
 
-_ASAN_TYPE = re.compile(r"(?:ERROR|SUMMARY): AddressSanitizer: ([a-zA-Z0-9_\-]+)")
+# The SUMMARY line is the AUTHORITATIVE normalized type ("heap-use-after-free",
+# "double-free", …); prefer it. The ERROR line's first token after "AddressSanitizer:"
+# is unreliable — for a double-free it reads "attempting double-free on address …", so a
+# naive first-word capture yields "attempting". Match each separately.
+_ASAN_SUMMARY_TYPE = re.compile(r"SUMMARY: AddressSanitizer: ([a-zA-Z0-9_\-]+)")
+_ASAN_ERROR_TYPE = re.compile(r"ERROR: AddressSanitizer: ([a-zA-Z0-9_\-]+)")
+# ASan phrases (double-)free differently on the ERROR line: "attempting double-free on
+# address …" / "attempting free on address which was not malloc()-ed". Normalize these
+# to the canonical SUMMARY-style type so the finding's `sanitizer` label is correct even
+# when no SUMMARY line is present.
+_ASAN_ATTEMPTING = re.compile(r"attempting (double-free|free)\b")
 _LIBFUZZER_DEADLY = re.compile(r"==\d+== ERROR|libFuzzer: (deadly signal|timeout|out-of-memory)")
 _FRAME0 = re.compile(r"#0 0x[0-9a-f]+ in (\S+)")
 _SUMMARY = re.compile(r"SUMMARY: AddressSanitizer: .*")
@@ -62,15 +72,25 @@ _SEGV_UNKNOWN = re.compile(r"unknown address.*\bpc\s+0x[0-9a-f]+", re.IGNORECASE
 
 def parse_asan(stderr: str) -> dict:
     """Pull a crash classification out of an ASan/libFuzzer report (pure; testable)."""
+    text = stderr or ""
     kind = "crash"
-    m = _ASAN_TYPE.search(stderr or "")
-    if m:
-        kind = m.group(1)
-    elif "libFuzzer: timeout" in (stderr or ""):
+    # Prefer the SUMMARY line — it carries the canonical normalized type. Fall back to the
+    # ERROR line, but special-case its "attempting (double-)free" phrasing (where the first
+    # token is the verb "attempting", not the bug type) so a double-free isn't mislabeled.
+    sm = _ASAN_SUMMARY_TYPE.search(text)
+    em = _ASAN_ERROR_TYPE.search(text)
+    am = _ASAN_ATTEMPTING.search(text)
+    if sm:
+        kind = sm.group(1)
+    elif am:
+        kind = am.group(1)
+    elif em:
+        kind = em.group(1)
+    elif "libFuzzer: timeout" in text:
         kind = "timeout"
-    elif "out-of-memory" in (stderr or ""):
+    elif "out-of-memory" in text:
         kind = "out-of-memory"
-    elif "deadly signal" in (stderr or ""):
+    elif "deadly signal" in text:
         kind = "deadly-signal"
     summary = _SUMMARY.search(stderr or "")
     # The faulting function is the first MEANINGFUL frame — skipping sanitizer
