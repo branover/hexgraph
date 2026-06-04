@@ -202,9 +202,14 @@ def list_source_trees(session: Session, project: Project, *, include_archived: b
               .filter(Edge.project_id == project.id, Edge.type == EdgeType.built_from.value,
                       Edge.dst_kind == "source_tree").all()):
         links.setdefault(e.dst_id, []).append(e.src_id)
+    from hexgraph.engine.revisions import can_edit_tree
+
     return [
         {"id": t.id, "name": t.name, "origin": t.origin, "editable": t.editable,
-         "vcs_rev": t.vcs_rev, "content_hash": t.content_hash,
+         # `can_edit` folds the SCOPED source-edit gate (scratch trees editable
+         # unconditionally; other authored trees need features.source.edit) so the SPA
+         # keys its edit affordances off ONE per-tree flag instead of re-deriving it.
+         "can_edit": can_edit_tree(t), "vcs_rev": t.vcs_rev, "content_hash": t.content_hash,
          "file_count": len(_manifest_files(t)), "archived": t.archived,
          "target_ids": links.get(t.id, [])}
         for t in trees
@@ -232,8 +237,10 @@ def list_source_files(session: Session, project: Project, tree: SourceTree) -> d
             "node_id": node.id if node else None,
             "is_harness": bool(node and (node.attrs_json or {}).get("role") == "harness"),
         })
+    from hexgraph.engine.revisions import can_edit_tree
+
     return {"id": tree.id, "name": tree.name, "origin": tree.origin, "editable": tree.editable,
-            "content_hash": tree.content_hash, "files": files}
+            "can_edit": can_edit_tree(tree), "content_hash": tree.content_hash, "files": files}
 
 
 def read_source_file(project: Project, tree: SourceTree, rel: str, *, max_bytes: int = MAX_VIEW_BYTES) -> dict:

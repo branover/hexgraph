@@ -920,16 +920,23 @@ loud only where you are looking; every node/edge/color kept, mute never deletes.
 - Qualitative: reads like an IDE pane (Aesthetics); read-only is clearly labeled (Consistency).
 - Prereq: a managed source tree.
 
-**SRC-02 — Edit a source file (when enabled)**
-- Steps: with `features.source.edit` on, open an editable HexGraph-authored file → **Edit** → change → **Save
-  revision**.
-- Functional: a textarea editor; Save creates a NEW revision (never in-place); the revisions list grows;
-  imported/extracted/vendor source stays read-only.
-- 🔌 Backend: `POST` save-source-revision; verify a new revision row.
-- Qualitative: "Save revision" wording makes the append-only model clear (Forgiveness); read-only files have
-  no Edit button (Consistency).
-- Principle: edits are append-only revisions; only authored files are editable.
-- Prereq: `features.source.edit` on; an editable authored file.
+**SRC-02 — Edit a source file (scratch trees by default; other authored trees gated)**
+- Steps: open a HexGraph-authored file in a **scratch** tree (your promoted harnesses/PoCs, origin=scratch) →
+  **Edit** → change → **Save revision**. No feature flag needed. For an **other** authored tree (e.g. imported
+  source marked editable), the Edit affordance only appears with `features.source.edit` on.
+- Functional: a textarea editor; Save creates a NEW revision (never in-place); the revisions list grows.
+  Scratch trees show Edit by default (the scoped source-edit design — they're ephemeral, authored, and exist to
+  be iterated on); imported/extracted/vendor source stays read-only ALWAYS; other editable-but-not-scratch
+  authored trees show Edit only with the flag. The Edit button is driven by the per-tree `can_edit` flag the
+  API reports (which folds the scoped gate), not the global feature flag alone.
+- 🔌 Backend: `GET` source trees returns `can_edit` per tree; `POST` save-source-revision; verify a new
+  revision row. A scratch save succeeds with `features.source.edit` OFF; a non-scratch authored save is
+  refused (403) with it off and succeeds with it on; a read-only tree is refused either way.
+- Qualitative: "Save revision" wording makes the append-only model clear (Forgiveness); read-only and
+  flag-gated files have no Edit button (Consistency); iterating on a harness in place is friction-free.
+- Principle: edits are append-only revisions; scratch (authored, ephemeral) trees are editable by default,
+  other authored trees stay opt-in, read-only trees are never editable.
+- Prereq: a scratch authored file (no flag), OR `features.source.edit` on for another editable authored tree.
 
 **SRC-03 — Revert to a revision**
 - Steps: in the revisions list, click **revert** on an older revision.

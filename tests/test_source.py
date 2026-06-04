@@ -51,6 +51,30 @@ def test_create_source_tree_persists_and_lists(hg_home):
         assert len(listed) == 1 and listed[0]["id"] == tree.id and listed[0]["file_count"] == 0
 
 
+def test_can_edit_surfaced_per_tree(hg_home):
+    """list_source_trees / list_source_files report a per-tree `can_edit` folding the
+    SCOPED source-edit gate: scratch trees editable by default, read-only trees never,
+    other authored trees only with features.source.edit. The SPA keys edit UI off this."""
+    from hexgraph import settings as _settings
+    with session_scope() as s:
+        p = create_project(s, name="canedit")
+        scratch = src.create_source_tree(s, p, name="scratch", origin="scratch")  # editable=True
+        ro = src.create_source_tree(s, p, name="vendor", origin="git", editable=False)
+        authored = src.create_source_tree(s, p, name="imported", origin="git", editable=True)
+        by_id = {t["id"]: t for t in src.list_source_trees(s, p)}
+        # flag OFF: scratch yes, read-only no, other-authored no
+        assert by_id[scratch.id]["can_edit"] is True
+        assert by_id[ro.id]["can_edit"] is False
+        assert by_id[authored.id]["can_edit"] is False
+        assert src.list_source_files(s, p, scratch)["can_edit"] is True
+        assert src.list_source_files(s, p, authored)["can_edit"] is False
+        # flag ON: other-authored flips to editable; read-only still no
+        _settings.update_settings({"features.source.edit": True})
+        by_id = {t["id"]: t for t in src.list_source_trees(s, p)}
+        assert by_id[authored.id]["can_edit"] is True
+        assert by_id[ro.id]["can_edit"] is False
+
+
 def test_bad_origin_rejected(hg_home):
     with session_scope() as s:
         p = create_project(s, name="src")

@@ -290,8 +290,10 @@ recorded recipe in the sandbox. This is the analogue of "you direct, HexGraph ru
   OSS-Fuzz project's build.sh onto our env contract and records a build_spec — so an existing OSS-Fuzz
   target builds with minimal hand-authoring. Then `build_target` (or POST builds with the spec id).
 - **Edit a harness/PoC + rebuild from a revision (the editable IDE):** **`save_source_revision(tree_id,
-  rel, content, role?)`** (needs **`features.source.edit`**) saves an edit to a HexGraph-authored file
-  as a NEW REVISION (never an in-place mutation; refuses an imported/extracted/vendor tree) — iterate
+  rel, content, role?)`** saves an edit to a HexGraph-authored file as a NEW REVISION (never an
+  in-place mutation; refuses an imported/extracted/vendor tree). **Scratch trees** (your authored
+  harnesses/PoCs) are editable by default — no flag needed; editing OTHER authored trees needs
+  **`features.source.edit`**. Iterate
   on a harness in place, then `build_target(..., source_revision_id=<rev id>)` to **rebuild from that
   revision**.
 - Building needs **`features.build`** enabled in Settings (its own gate, separate from executing the

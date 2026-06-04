@@ -10,8 +10,12 @@ build can be launched **rebuild-from-a-revision**. Confinement is the safety pro
     read-only tree (origin=git|archive|extracted|upload). Editing imported/vendor/extracted
     source is forbidden — it would break the content_hash reproducibility contract — so
     the editable surface is confined to scratch + HexGraph's own roles.
-  - Gated by `features.source.edit` (a UI/capability flag; the per-tree editability check
-    is the structural enforcement, so this is enforced even if the flag is bypassed).
+  - SCOPED gate (a UI/capability flag, never policy): a SCRATCH tree (HexGraph-authored,
+    ephemeral, origin="scratch" + editable) is editable UNCONDITIONALLY — it exists to be
+    iterated on and saves are append-only — so no `features.source.edit` is required. Any
+    OTHER authored tree still needs the opt-in `features.source.edit` flag. The per-tree
+    structural editability check (`write_source_file` refuses a non-editable tree) is the
+    hard enforcement either way, so this is safe even if the flag is bypassed.
 
 Revisions are content-addressed in CAS (free dedup; reverting to a past revision is just
 re-pointing the working file at that content). The frozen Finding schema is untouched.
@@ -39,16 +43,46 @@ class RevisionError(SourceError):
     """A revision request violated an invariant (read-only tree, missing revision)."""
 
 
-def _gate_edit() -> None:
-    """Fail-closed on features.source.edit. The per-tree editability check (in
-    write_source_file) is the structural enforcement; this is the feature toggle."""
+def is_scratch_tree(tree: SourceTree) -> bool:
+    """A SCRATCH tree is HexGraph-authored, ephemeral, and exists precisely to be
+    iterated on (the harness-promote tree, an MCP `import_source_tree` scratch tree).
+    Saves to it are append-only revisions that never touch target bytes, so editing it
+    is unconditionally allowed (no `features.source.edit` needed) — the scoped
+    source-edit design. Imported/extracted/vendor trees are NOT scratch even when an
+    importer marked them editable, so they still require the opt-in flag below.
+    Identity is structural: `origin == "scratch"` AND the tree is editable."""
+    return tree.origin == "scratch" and bool(tree.editable)
+
+
+def can_edit_tree(tree: SourceTree) -> bool:
+    """Read-side mirror of `_gate_edit`: would a save to this tree be allowed right now?
+    A read-only tree (not editable) is never editable; a scratch tree always is; any other
+    editable tree depends on `features.source.edit`. The SPA reads this per-tree so scratch
+    trees show edit affordances by default while other authored trees stay gated."""
+    if not bool(tree.editable):
+        return False
+    if is_scratch_tree(tree):
+        return True
+    from hexgraph import settings
+
+    return bool(settings.get("features.source.edit"))
+
+
+def _gate_edit(tree: SourceTree) -> None:
+    """Per-tree edit gate (NOT policy — a UI/capability flag). A SCRATCH tree is editable
+    unconditionally; any OTHER tree requires `features.source.edit`. Either way the
+    structural read-only check in `write_source_file` still refuses an imported/extracted/
+    vendor tree, so the reproducible-build content_hash contract stays safe."""
     from hexgraph import settings
     from hexgraph.policy import PolicyViolation
 
+    if is_scratch_tree(tree):
+        return
     if not bool(settings.get("features.source.edit")):
         raise PolicyViolation(
-            "editing source is not permitted (enable features.source.edit to edit "
-            "HexGraph-authored harness/poc/script files in the IDE)")
+            "editing this source tree is not permitted (scratch/HexGraph-authored trees "
+            "are editable by default; enable features.source.edit to edit other authored "
+            "harness/poc/script files in the IDE)")
 
 
 def _next_seq(session: Session, tree: SourceTree, rel: str) -> int:
@@ -86,7 +120,7 @@ def save_revision(session: Session, project: Project, tree: SourceTree, rel: str
     from hexgraph.engine.source import write_source_file
 
     if gate:
-        _gate_edit()
+        _gate_edit(tree)
     eff_role = role or _role_of(tree, rel) or "code"
     if eff_role not in SOURCE_ROLES:
         raise RevisionError(f"role must be one of {SOURCE_ROLES}")

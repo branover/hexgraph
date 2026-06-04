@@ -107,9 +107,13 @@ export default function SourceBrowser({ projectId, open, onPickedTarget, buildEn
   };
 
   const tree0 = treeId ? trees?.find((t) => t.id === treeId) : undefined;
-  // An editable file: features.source.edit on + an editable tree + a HexGraph-authored
-  // role (extracted/vendor/imported trees stay read-only — the backend enforces this).
-  const canEdit = !!(sourceEditEnabled && tree0?.editable && view?.encoding === "text"
+  // An editable file: the tree's per-tree `can_edit` flag (the backend folds the SCOPED
+  // source-edit gate — scratch trees are editable unconditionally; other authored trees
+  // need features.source.edit) + a text file + a HexGraph-authored role. Falls back to
+  // the global flag for an older backend that doesn't yet send `can_edit`. Extracted/
+  // vendor/imported (read-only) trees stay read-only — the backend enforces this.
+  const treeEditable = tree0?.can_edit ?? (sourceEditEnabled && tree0?.editable);
+  const canEdit = !!(treeEditable && view?.encoding === "text"
                      && view.role && ["harness", "poc", "script", "build_recipe", "code"].includes(view.role));
 
   const loadRevs = () => {
