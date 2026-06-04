@@ -47,10 +47,10 @@ You can re-run `hexgraph setup` any time you want to change which features are o
 list` shows the current settings. If you would rather register the MCP server by hand, `hexgraph mcp
 install` prints the exact steps for each agent.
 
-> **Non-interactive and CI.** When there is no TTY, or when you pass `just setup yes=1` (or `hexgraph
-> setup --non-interactive`), the wizard applies the static-only baseline plus the sandbox image
-> without prompting, and skips the coding-agent and skill install entirely, so an unattended `just
-> setup` never hangs.
+> **Non-interactive and CI.** When there is no TTY, or when you pass `--yes` (`just setup --yes`,
+> `./setup.sh --yes`, or `hexgraph setup --non-interactive`), the wizard applies the static-only
+> baseline plus the sandbox image without prompting, and skips the coding-agent and skill install
+> entirely, so an unattended `just setup` never hangs.
 >
 > **A note on `XDG_RUNTIME_DIR`.** `just` writes a small temp script to run any shebang recipe (like
 > `setup`), normally under `$XDG_RUNTIME_DIR` (e.g. `/run/user/$UID`). In stripped-down environments —

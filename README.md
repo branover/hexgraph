@@ -36,30 +36,36 @@ Three principles are non-negotiable, and they shape everything else:
 ## Install
 
 You will need Python 3.11 or newer, a Docker daemon your user can talk to (check with `docker run
---rm hello-world`), Node.js 18+ with npm (the setup builds the web UI), and Linux or macOS. The task
-runner [`just`](https://just.systems) is recommended but optional — if you'd rather not install it,
-use the `./setup.sh` script shown below. No API key is required, since the default mock backend runs
-fully offline.
+--rm hello-world`), Node.js 18+ with npm (the setup builds the web UI), and Linux or macOS. No API key
+is required, since the default mock backend runs fully offline.
+
+There are two equivalent ways to bootstrap, so you are **not** required to install the
+[`just`](https://just.systems) task runner if you'd rather not. Both build the virtualenv, install the
+dependencies and the web UI, and then drop you into the very same interactive setup wizard — pick
+whichever you prefer:
 
 ```bash
 git clone https://github.com/branover/hexgraph.git hexgraph && cd hexgraph
-just setup          # venv + deps + web UI, then the interactive setup wizard
-just serve          # → http://127.0.0.1:8765
+
+# Option A — with the `just` task runner (recommended):
+just setup                 # venv + deps + web UI, then the interactive setup wizard
+just serve                 # → http://127.0.0.1:8765
+
+# Option B — without `just`, a plain shell script:
+./setup.sh                 # the same venv + deps + web UI, then the same wizard
+.venv/bin/hexgraph serve   # → http://127.0.0.1:8765
 ```
 
-`just setup` does the bootstrap and then hands off to an interactive setup wizard. The wizard walks
-you through the optional features, and for each one that relaxes the security posture it shows you the
-implication and asks you to confirm before turning it on. It then writes your settings and builds the
-images you picked, and it can optionally register HexGraph's MCP server with a coding agent and install
-the VR skill for you (both local-only, no secret). If you accept the defaults you stay in the
-static-only posture; everything beyond that is something you turn on yourself, with eyes open. For the
-wizard, the manual step-by-step, the non-interactive CI mode, and Ghidra, see
-**[docs/setup.md](docs/setup.md)**.
+(`just setup` is in fact a thin wrapper that just calls `./setup.sh`, so the two paths can't drift.)
+Either one hands off to an interactive setup wizard. The wizard walks you through the optional
+features, and for each one that relaxes the security posture it shows you the implication and asks you
+to confirm before turning it on. It then writes your settings and builds the images you picked, and it
+can optionally register HexGraph's MCP server with a coding agent and install the VR skill for you
+(both local-only, no secret). If you accept the defaults you stay in the static-only posture;
+everything beyond that is something you turn on yourself, with eyes open. To skip the prompts and take
+the static-only defaults, pass `--yes` (`just setup --yes` or `./setup.sh --yes`). For the wizard, the
+manual step-by-step, the non-interactive CI mode, and Ghidra, see **[docs/setup.md](docs/setup.md)**.
 
-> Prefer not to install `just`? Run `./setup.sh` instead — it does the same venv + deps + web-UI
-> bootstrap and then launches the identical interactive wizard, after which `.venv/bin/hexgraph serve`
-> starts the app. (`./setup.sh --yes` takes the static-only defaults without prompting.)
->
 > To install `just` without sudo:
 > `curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to ~/.local/bin`
 > (make sure `~/.local/bin` is on your `PATH`), or `snap install just`. Run `just` on its own for the

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# setup.sh — bootstrap HexGraph without the `just` task runner.
+# setup.sh — bootstrap HexGraph (with or without the `just` task runner).
 #
-# This is the no-`just` path: it does exactly what `just setup` does — create the
-# virtualenv, install the package, build the web UI — and then hands off to the SAME
-# interactive setup wizard (`hexgraph setup`) that walks you through the optional
-# features and their security implications. If you already have `just`, prefer
-# `just setup`; this script is here for people who'd rather not install it.
+# This is the single source of truth for the bootstrap sequence: create the virtualenv,
+# install the package, build the web UI, then hand off to the interactive setup wizard
+# (`hexgraph setup`) that walks you through the optional features and their security
+# implications. `just setup` is a thin wrapper that just calls this script, so the two
+# paths can never drift. Run it directly if you'd rather not install `just`.
 #
 # Usage:
 #   ./setup.sh            # build everything, then run the interactive wizard
@@ -45,5 +45,5 @@ say "Building the web UI (npm install && npm run build)"
 say "Launching the HexGraph setup wizard"
 .venv/bin/python -m hexgraph.cli setup "$@"
 
-printf '\n\033[1m✓ Start HexGraph with:\033[0m  .venv/bin/python -m hexgraph.cli serve   →  http://127.0.0.1:8765\n'
+printf '\n\033[1m✓ Start HexGraph with:\033[0m  .venv/bin/hexgraph serve   →  http://127.0.0.1:8765\n'
 printf '  (or, with just installed:  just serve)\n'

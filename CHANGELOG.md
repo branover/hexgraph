@@ -8,10 +8,18 @@ expect breaking changes between minor versions.
 ## [Unreleased]
 
 ### Added
-- **`setup.sh`** — a no-`just` bootstrap. It does the same venv + deps + web-UI build as
-  `just setup` and then hands off to the identical interactive setup wizard, for people who
-  would rather not install the `just` task runner. Arguments pass through to the wizard, so
-  `./setup.sh --yes` takes the static-only defaults without prompting.
+- **`setup.sh`** — a no-`just` bootstrap, now the single source of truth for the setup
+  sequence (venv + deps + web-UI build, then the interactive setup wizard). `just setup` is a
+  thin wrapper that calls it, so the two paths can't drift. For people who would rather not
+  install the `just` task runner. Arguments pass through to the wizard, so `./setup.sh --yes`
+  takes the static-only defaults without prompting.
+
+### Changed
+- `just setup` now forwards flags straight through to the wizard, so the non-interactive
+  invocation is **`just setup --yes`** (or `--non-interactive` / `--defaults` / `--rebuild`).
+  The old `just setup yes=1` form never actually bound the parameter — `just` parsed `yes=1`
+  as a positional value, so it only reached the baseline via the no-TTY fallback; use `--yes`
+  instead.
 
 ### Fixed
 - `just setup` (and any other shebang recipe) no longer fails with `error: I/O error in
