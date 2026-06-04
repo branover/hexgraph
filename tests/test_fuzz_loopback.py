@@ -378,6 +378,152 @@ def test_verify_non_launch_network_crash_does_not_relaunch(hg_home):
         assert replay and all(c["channel"]["host"] == "192.168.5.5" for c in replay)
 
 
+# ── Verify: the launch-and-join DOWN oracle is the SERVICE CONTAINER's exit (round-3 N6) ─
+
+def test_verify_launch_and_join_container_exit_is_verified_down(hg_home):
+    """N6: for a launch-and-join service, "down" means the relaunched service CONTAINER
+    exited. A TCP re-probe can't attach to a dead container's netns (docker `exit 125:
+    cannot join network namespace … is exited`) — so the unforgeable DOWN oracle is the
+    container EXIT CODE read directly via poll_detached. An ASan crash signal (SIGABRT 134
+    / SIGSEGV 139) ⇒ verified:true, WITHOUT the third (impossible) TCP re-probe."""
+    _enable("features.network.enabled")
+    _enable("features.poc.enabled")
+
+    class _CrashExitExecutor(_RecordingExecutor):
+        """The relaunched service container ABORTS on the crashing message: poll_detached
+        reports it exited with SIGABRT (134). The post-send liveness TCP re-probe must NOT
+        even be attempted — the container-exit oracle decides the verdict."""
+
+        def __init__(self, exit_code=134):
+            # liveness=[True] → the banner grab confirms the service is UP before the replay.
+            super().__init__(liveness=[True])
+            self._exit_code = exit_code
+            self.polled = []
+
+        def poll_detached(self, name):
+            self.polled.append(name)
+            return {"exists": True, "running": False, "exit_code": self._exit_code}
+
+    ex = _CrashExitExecutor(exit_code=134)  # 128 + SIGABRT(6) — the ASan abort
+    with session_scope() as s:
+        p, t = _launchable_net_target(s, port=9210)
+        camp, art, payload = _net_crash_artifact(s, p, t, port=9210)
+
+        res = C.verify_artifact(s, art, executor=ex)
+
+        # The service was relaunched AND its exit code consulted as the oracle.
+        svc = ex._service_call()
+        assert svc is not None and svc["name"] in ex.polled, \
+            "verify must read the relaunched service container's exit code as the DOWN oracle"
+        assert res["verified"] is True
+        assert "SIGABRT" in res["detail"]
+        assert res["assurance"]["standard"] == "input_reachable"
+        # Only TWO TCP probes happened (banner grab + the crashing-message send) — the third
+        # "is it down now?" re-probe is replaced by the container-exit oracle.
+        tcp = [c for c in ex.channel_probes if c["probe"] == "tcp_probe.py"]
+        assert len(tcp) == 2, "the post-send liveness re-probe must be skipped for a dead container"
+        # …and the container is still torn down (the finally), never leaked.
+        assert svc["name"] in ex.stops
+
+
+def test_verify_launch_and_join_clean_exit_zero_is_not_verified(hg_home):
+    """Defensive: if the relaunched container exited with status 0 (a graceful shutdown, not
+    a crash) the replay did NOT reproduce a crash — verified must be False."""
+    _enable("features.network.enabled")
+    _enable("features.poc.enabled")
+
+    class _CleanExitExecutor(_RecordingExecutor):
+        def __init__(self):
+            super().__init__(liveness=[True])  # banner grab UP, then the container exits 0
+        def poll_detached(self, name):
+            return {"exists": True, "running": False, "exit_code": 0}
+
+    ex = _CleanExitExecutor()
+    with session_scope() as s:
+        p, t = _launchable_net_target(s, port=9211)
+        camp, art, _ = _net_crash_artifact(s, p, t, port=9211)
+        res = C.verify_artifact(s, art, executor=ex)
+        assert res["verified"] is False
+        assert ex._service_call()["name"] in ex.stops
+
+
+def test_verify_launch_and_join_netns_join_failure_maps_to_down(hg_home):
+    """N6 (fallback): when poll_detached can't confirm the exit (the executor still reports
+    the container as running), the post-send TCP re-probe attaches the dead container's netns
+    and docker fails `exit 125: cannot join network namespace … is exited`. That SandboxError
+    must be MAPPED to DOWN (verified) rather than propagating as a hard verify error."""
+    from hexgraph.sandbox.runner import SandboxError
+    _enable("features.network.enabled")
+    _enable("features.poc.enabled")
+
+    class _NetnsFailExecutor(_RecordingExecutor):
+        """poll_detached is inconclusive (reports running) so the code falls back to the TCP
+        re-probe; the post-send re-probe then hits the dead-container netns-join 125 error."""
+
+        def __init__(self):
+            super().__init__()
+            self._sent = False
+
+        def poll_detached(self, name):
+            return {"exists": True, "running": True, "exit_code": None}
+
+        def run_channel_probe(self, probe, *, channel, net_container=None, secret=None):
+            self.channel_probes.append({"probe": probe, "channel": dict(channel),
+                                        "net_container": net_container})
+            if channel.get("payload_hex") is not None:  # the crashing message send
+                self._sent = True
+                return {"ok": True, "response": "(payload sent)"}
+            if not self._sent:  # banner grab — service is UP
+                return {"ok": True, "response": ""}
+            # post-send liveness re-probe: the container died, docker can't join its netns.
+            raise SandboxError(
+                "probe tcp_probe.py failed (exit 125): Error response from daemon: cannot "
+                "join network namespace of a non running container: container ... is exited")
+
+    ex = _NetnsFailExecutor()
+    with session_scope() as s:
+        p, t = _launchable_net_target(s, port=9212)
+        camp, art, _ = _net_crash_artifact(s, p, t, port=9212)
+        res = C.verify_artifact(s, art, executor=ex)  # must NOT raise
+        assert res["verified"] is True, "a dead-container netns-join (125) must be DOWN, not an error"
+        assert ex._service_call()["name"] in ex.stops
+
+
+def test_verify_launch_and_join_unrelated_probe_error_still_propagates(hg_home):
+    """A non-netns-join probe error (e.g. an unrelated docker failure) on the post-send
+    re-probe must STILL propagate — only the dead-container 125 is special-cased to DOWN."""
+    from hexgraph.sandbox.runner import SandboxError
+    _enable("features.network.enabled")
+    _enable("features.poc.enabled")
+
+    class _OtherErrExecutor(_RecordingExecutor):
+        def __init__(self):
+            super().__init__()
+            self._sent = False
+
+        def poll_detached(self, name):
+            return {"exists": True, "running": True, "exit_code": None}
+
+        def run_channel_probe(self, probe, *, channel, net_container=None, secret=None):
+            self.channel_probes.append({"probe": probe, "channel": dict(channel),
+                                        "net_container": net_container})
+            if channel.get("payload_hex") is not None:
+                self._sent = True
+                return {"ok": True, "response": "(payload sent)"}
+            if not self._sent:
+                return {"ok": True, "response": ""}
+            raise SandboxError("probe tcp_probe.py did not emit valid JSON: boom")
+
+    ex = _OtherErrExecutor()
+    with session_scope() as s:
+        p, t = _launchable_net_target(s, port=9213)
+        camp, art, _ = _net_crash_artifact(s, p, t, port=9213)
+        with pytest.raises(SandboxError):
+            C.verify_artifact(s, art, executor=ex)
+        # teardown still happened despite the propagating error.
+        assert ex._service_call()["name"] in ex.stops
+
+
 # ── boofuzz startup-grace (the launch-and-join readiness race, review finding #1) ──
 
 def test_boofuzz_wait_alive_tolerates_slow_bind():

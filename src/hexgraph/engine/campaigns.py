@@ -1344,7 +1344,8 @@ def _verify_network_artifact(session, project, target, campaign, artifact, *, ex
             # daemon. Using the raw (possibly None→local) executor here would join a netns
             # that lives on a remote fuzz env's daemon and silently fail the verify.
             return _network_replay(session, project, target, port, payload, executor=svc_executor,
-                                   host="127.0.0.1", net_container=svc_name)
+                                   host="127.0.0.1", net_container=svc_name,
+                                   launched_container=svc_name)
         finally:
             if svc_name is not None:
                 try:
@@ -1357,7 +1358,8 @@ def _verify_network_artifact(session, project, target, campaign, artifact, *, ex
 
 
 def _network_replay(session, project, target, port, payload, *, executor=None,
-                    host: str | None = None, net_container: str | None = None) -> dict:
+                    host: str | None = None, net_container: str | None = None,
+                    launched_container: str | None = None) -> dict:
     """Replay a recorded crashing message over the live socket + a liveness oracle, and
     return the verify result. Confirm the service is UP first, send the crashing message,
     then re-probe that it is DOWN (a fresh connect fails). Each run_tcp_probe handles the
@@ -1366,10 +1368,22 @@ def _network_replay(session, project, target, port, payload, *, executor=None,
     fresh connection is the unforgeable liveness transition.
 
     `host`/`net_container` override the target-derived live host (launch-and-join points
-    them at 127.0.0.1 inside the freshly-relaunched service container's netns)."""
+    them at 127.0.0.1 inside the freshly-relaunched service container's netns).
+
+    `launched_container` (launch-and-join only) names the SERVICE container HexGraph itself
+    relaunched for this verify. For such a service "down" means the service CONTAINER exited
+    — so the liveness re-probe's docker run (`--network container:<svc>`) cannot attach to a
+    dead container (it fails `exit 125: cannot join network namespace … is exited`). The
+    unforgeable DOWN oracle here is therefore the container's EXIT itself, read directly via
+    `poll_detached`: an exited container — especially with a crash signal (SIGABRT 134 /
+    SIGSEGV 139 under ASan) — IS the verified re-kill. We consult that exit code first and
+    only fall back to the TCP re-probe (mapping the netns-join exit-125 failure to DOWN) when
+    the executor can't report the exit. The already-live path (`launched_container=None`)
+    keeps the pure TCP re-probe as its oracle (the service keeps running)."""
     from hexgraph.engine.assurance import (assurance, DYNAMIC, INPUT_REACHABLE, UNCONFIRMED,
                                            UNSPECIFIED)
     from hexgraph.engine.surfaces import run_tcp_probe
+    from hexgraph.sandbox.runner import SandboxError
 
     pre = run_tcp_probe(session, project, target, port=port, runner=executor,
                         host=host, net_container=net_container)  # banner grab
@@ -1379,8 +1393,43 @@ def _network_replay(session, project, target, port, payload, *, executor=None,
     run_tcp_probe(session, project, target, port=port, payload_hex=payload.hex(),
                   runner=executor, host=host,
                   net_container=net_container)  # the crashing message, byte-exact (audited)
-    post = run_tcp_probe(session, project, target, port=port, runner=executor,
-                         host=host, net_container=net_container)  # re-probe liveness
+
+    detail = ""
+    if launched_container is not None:
+        # Launch-and-join: the unforgeable DOWN signal is the SERVICE CONTAINER exiting (the
+        # relaunched ASan daemon aborts/segfaults and the container exits). A TCP re-probe
+        # cannot even attach to a dead container's netns, so read the exit code directly.
+        state = {}
+        if executor is not None:
+            try:
+                state = executor.poll_detached(launched_container) or {}
+            except Exception:  # noqa: BLE001 — fall through to the TCP-reprobe oracle below
+                state = {}
+        if state.get("exists") and state.get("running") is False:
+            code = state.get("exit_code")
+            # docker maps a fatal signal to 128+signum (134=SIGABRT, 139=SIGSEGV — the ASan
+            # crash signals); any non-zero exit means the service died on the crashing message.
+            crashed = bool(code) and code != 0
+            sig = {134: "SIGABRT", 139: "SIGSEGV"}.get(code)
+            detail = ("re-sent the crashing message; the relaunched service container exited"
+                      + (f" on {sig}" if sig else (f" (exit {code})" if code is not None else ""))
+                      + " — the crash reproduced")
+            return {"verified": crashed, "detail": detail, "output": f"exit_code={code}",
+                    "assurance": (assurance(INPUT_REACHABLE, DYNAMIC, UNSPECIFIED, detail=detail)
+                                  if crashed else assurance(UNCONFIRMED, DYNAMIC, UNSPECIFIED))}
+        # Executor couldn't confirm the exit (poll inconclusive / still reported running):
+        # fall back to the TCP re-probe, but a dead-container netns-join (exit 125) IS DOWN.
+        try:
+            post = run_tcp_probe(session, project, target, port=port, runner=executor,
+                                 host=host, net_container=net_container)
+        except SandboxError as exc:
+            if _is_dead_netns_join(exc):
+                post = {"ok": False, "error": str(exc)}
+            else:
+                raise
+    else:
+        post = run_tcp_probe(session, project, target, port=port, runner=executor,
+                             host=host, net_container=net_container)  # re-probe liveness
     verified = post.get("ok") is False
     return {"verified": verified,
             "detail": ("re-sent the crashing message over the live socket; the service went DOWN"
@@ -1390,6 +1439,15 @@ def _network_replay(session, project, target, port, payload, *, executor=None,
                                     detail="re-sent the crashing message over the live socket; "
                                            "the service went down again")
                           if verified else assurance(UNCONFIRMED, DYNAMIC, UNSPECIFIED))}
+
+
+def _is_dead_netns_join(exc: Exception) -> bool:
+    """A `--network container:<svc>` docker run fails `exit 125: cannot join network
+    namespace … is exited` once the launched service container has died. For a launch-and-join
+    verify, that failure IS the liveness-DOWN signal (the service we relaunched crashed), so
+    we map it to DOWN rather than letting it propagate as a hard verify error (round-3 N6)."""
+    msg = str(exc).lower()
+    return "cannot join network namespace" in msg or ("125" in msg and "is exited" in msg)
 
 
 # ── Source-mapped stack frames (the Artifacts triage stack → IDE jump) ───────────
