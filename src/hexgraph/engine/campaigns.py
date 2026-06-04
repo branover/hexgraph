@@ -1206,11 +1206,13 @@ def _verify_network_artifact(session, project, target, campaign, artifact, *, ex
     (bounded egress, audited via run_tcp_probe), then re-probes that the service went DOWN.
     A confirmed re-kill is `input_reachable/dynamic` (reached + triggered end-to-end). The
     SAME bounded-egress gate as the campaign launch — features.network + local_tcp_scope —
-    no new gate, no exec gate (no bytes are executed locally)."""
+    no new gate, no exec gate locally for the replay itself.
+
+    For a LAUNCH-AND-JOIN campaign (HexGraph started the service in its own hardened
+    container and tore it down at finish, §5.8b) there is no live host left to reach, so we
+    RELAUNCH the service first (reusing _launch_service — the same exec gate + hardening +
+    egress audit the campaign applied) and always tear it back down afterward."""
     from hexgraph.db.models import Finding
-    from hexgraph.engine.assurance import (assurance, DYNAMIC, INPUT_REACHABLE, UNCONFIRMED,
-                                           UNSPECIFIED)
-    from hexgraph.engine.surfaces import run_tcp_probe
 
     if not artifact.finding_id:
         raise CampaignError("network artifact has no linked finding to re-verify")
@@ -1220,21 +1222,72 @@ def _verify_network_artifact(session, project, target, campaign, artifact, *, ex
         raise CampaignError("network artifact carries no re-runnable crashing message")
     import base64
     payload = base64.b64decode(nr["payload_b64"])
-    port = int(nr.get("port") or campaign.config_json.get("port") or 0)
+    cfg = campaign.config_json or {}
+    port = int(nr.get("port") or cfg.get("port") or 0)
     if not port:
         raise CampaignError("network artifact has no service port to replay against")
-    # Confirm the service is UP first, send the crashing message, then re-probe that it is
-    # DOWN (a fresh connect fails). Each run_tcp_probe handles the egress assert + audit.
-    # Replay the reproducer BYTE-EXACT via payload_hex (the str payload field is utf-8
-    # re-encoded and would corrupt any non-ASCII byte). The death across a fresh connection
-    # is the unforgeable liveness transition.
-    pre = run_tcp_probe(session, project, target, port=port, runner=executor)  # banner grab
+
+    # Launch-and-join (§5.8b): HexGraph itself started the service in its OWN hardened
+    # container at campaign start and tore it down at finish — so by verify time there is NO
+    # live host on the target to resolve (the F6 failure). Such a campaign needs the service
+    # relaunched before the replay; an already-live host (rehost/remote/base_url) does not.
+    launch_on = bool(cfg.get("launch")) and bool(cfg.get("launch_binary"))
+
+    if launch_on:
+        # Launch-and-join: RELAUNCH the service into a FRESH netns (reusing the SAME
+        # _launch_service exec-gate + hardening + audit machinery), replay against it on
+        # 127.0.0.1 inside that container's netns, then ALWAYS tear it down (finally) so a
+        # verify can never leak a container.
+        svc_executor = _executor_for(session, campaign, executor)
+        spec = _spec_from_config(session, project, target, campaign, dict(cfg))
+        prepared = get_fuzzer(spec.surface, spec.engine).prepare(spec, project, target)
+        resources = resolve_resources(campaign.resources_json)
+        svc_name = None
+        try:
+            svc_name = _launch_service(session, project, target, campaign, prepared, port,
+                                       executor=svc_executor, resources=resources)
+            # Replay on the SAME executor the service launched on — the tcp_probe joins the
+            # service container's netns (net_container=svc_name), which only exists on that
+            # daemon. Using the raw (possibly None→local) executor here would join a netns
+            # that lives on a remote fuzz env's daemon and silently fail the verify.
+            return _network_replay(session, project, target, port, payload, executor=svc_executor,
+                                   host="127.0.0.1", net_container=svc_name)
+        finally:
+            if svc_name is not None:
+                try:
+                    svc_executor.stop_detached(svc_name, remove=True)
+                except Exception:  # noqa: BLE001 — best-effort teardown, never leak a container
+                    pass
+
+    # Already-live host (rehost / remote / base_url) — host + netns come from the target.
+    return _network_replay(session, project, target, port, payload, executor=executor)
+
+
+def _network_replay(session, project, target, port, payload, *, executor=None,
+                    host: str | None = None, net_container: str | None = None) -> dict:
+    """Replay a recorded crashing message over the live socket + a liveness oracle, and
+    return the verify result. Confirm the service is UP first, send the crashing message,
+    then re-probe that it is DOWN (a fresh connect fails). Each run_tcp_probe handles the
+    SAME bounded-egress assert + audit. Replay BYTE-EXACT via payload_hex (the `payload` str
+    field is utf-8 re-encoded and would corrupt any non-ASCII byte). The death across a
+    fresh connection is the unforgeable liveness transition.
+
+    `host`/`net_container` override the target-derived live host (launch-and-join points
+    them at 127.0.0.1 inside the freshly-relaunched service container's netns)."""
+    from hexgraph.engine.assurance import (assurance, DYNAMIC, INPUT_REACHABLE, UNCONFIRMED,
+                                           UNSPECIFIED)
+    from hexgraph.engine.surfaces import run_tcp_probe
+
+    pre = run_tcp_probe(session, project, target, port=port, runner=executor,
+                        host=host, net_container=net_container)  # banner grab
     if pre.get("ok") is False:
         return {"verified": False, "detail": "service was already down before replay",
                 "assurance": assurance(UNCONFIRMED, DYNAMIC, UNSPECIFIED)}
     run_tcp_probe(session, project, target, port=port, payload_hex=payload.hex(),
-                  runner=executor)  # the crashing message, byte-exact (audited)
-    post = run_tcp_probe(session, project, target, port=port, runner=executor)  # re-probe liveness
+                  runner=executor, host=host,
+                  net_container=net_container)  # the crashing message, byte-exact (audited)
+    post = run_tcp_probe(session, project, target, port=port, runner=executor,
+                         host=host, net_container=net_container)  # re-probe liveness
     verified = post.get("ok") is False
     return {"verified": verified,
             "detail": ("re-sent the crashing message over the live socket; the service went DOWN"

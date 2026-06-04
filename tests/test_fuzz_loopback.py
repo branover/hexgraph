@@ -38,10 +38,16 @@ class _RecordingExecutor:
     wiring and the teardown. Mirrors the real Executor signature (incl. requires_execution +
     disable_aslr added by PR #66)."""
 
-    def __init__(self, *, service_exits=False):
+    def __init__(self, *, service_exits=False, liveness=None):
         self.starts = []
         self.stops = []
         self._exits = service_exits
+        # The successive run_tcp_probe liveness verdicts (UP/DOWN) for the verify path:
+        # [baseline-UP, post-replay-DOWN] confirms a re-kill. The crashing-message send
+        # itself (payload_hex present) is a no-op DoS request.
+        self._liveness = list(liveness or [])
+        self._probe_i = 0
+        self.channel_probes = []
 
     def start_detached(self, probe, artifact, *, name, outdir, image=None, extra_args=None,
                        requires_execution=False, extra_ro_mounts=None, resources=None,
@@ -60,6 +66,15 @@ class _RecordingExecutor:
 
     def stop_detached(self, name, *, remove=True, timeout=10):
         self.stops.append(name)
+
+    def run_channel_probe(self, probe, *, channel, net_container=None, secret=None):
+        self.channel_probes.append({"probe": probe, "channel": dict(channel),
+                                    "net_container": net_container})
+        if channel.get("payload_hex") is not None:  # the crashing message (DoS send) — no-op
+            return {"ok": True, "response": "(payload sent)"}
+        up = self._liveness[self._probe_i] if self._probe_i < len(self._liveness) else False
+        self._probe_i += 1
+        return {"ok": True, "response": ""} if up else {"ok": False, "error": "ConnectionRefusedError"}
 
     # the service-launch probe call (a `service` start) — same start_detached path
 
@@ -247,6 +262,120 @@ def test_spec_roundtrips_launch_fields():
     d = spec.to_dict()
     assert d["launch"] is True and d["launch_binary"] == "/x/srv"
     assert d["launch_command"] == ["/x/srv", "-p", "80"]
+
+
+# ── Verify: re-confirming a launch-and-join NETWORK crash relaunches the service (F6) ─
+
+def _net_crash_artifact(s, p, t, *, port, launch=True, launch_binary=None):
+    """A finished network campaign + a fuzz_crash finding carrying a re-runnable crashing
+    MESSAGE + the linked FuzzArtifact — the inputs verify_artifact replays. `launch` records
+    that the campaign used launch-and-join (so verify must relaunch the service)."""
+    import base64
+
+    from hexgraph.db.models import Finding, FuzzArtifact, FuzzCampaign
+    from hexgraph.engine.tasks import create_task
+
+    task = create_task(s, project=p, target_id=t.id, type="fuzzing", params={"campaign": True})
+    cfg = {"surface": "network", "engine": "boofuzz", "port": port,
+           "launch": launch, "launch_binary": launch_binary or t.path,
+           "launch_command": None, "sysroot": None, "host": None}
+    from pathlib import Path
+    outdir = str(Path(p.data_dir) / "campaigns" / f"net-{port}")
+    camp = FuzzCampaign(project_id=p.id, target_id=t.id, name="net fuzz", surface="network",
+                        engine="boofuzz", task_id=task.id, status="completed",
+                        outdir=outdir, config_json=cfg, resources_json={})
+    s.add(camp)
+    s.flush()
+    payload = b"CRASH\x00\xff\r\n"  # non-ASCII bytes → must round-trip via payload_hex
+    f = Finding(project_id=p.id, target_id=t.id, task_id=task.id, title="svc crash",
+                severity="high", confidence="high", category="dos", summary="boofuzz crash",
+                reasoning="service died", finding_type="fuzz_crash",
+                evidence_json={"extra": {"fuzz": {"net_reproducer": {
+                    "payload_b64": base64.b64encode(payload).decode(), "port": port}}}})
+    s.add(f)
+    s.flush()
+    art = FuzzArtifact(project_id=p.id, campaign_id=camp.id, kind="crash",
+                       content_cas="deadbeef", size=len(payload), finding_id=f.id)
+    s.add(art)
+    s.flush()
+    return camp, art, payload
+
+
+def test_verify_relaunches_launch_and_join_service(hg_home):
+    """F6: re-verifying a launch-and-join network crash RELAUNCHES the service (the service
+    container is gone by verify time) into a fresh netns, replays the crashing message on
+    127.0.0.1 inside it, then tears it down — instead of failing with 'no live device host'."""
+    _enable("features.network.enabled")
+    _enable("features.poc.enabled")  # the exec tier (relaunching the service executes the target)
+    # baseline UP, then DOWN after the replay ⇒ the re-kill is confirmed.
+    ex = _RecordingExecutor(liveness=[True, False])
+    with session_scope() as s:
+        p, t = _launchable_net_target(s, port=9200)
+        camp, art, payload = _net_crash_artifact(s, p, t, port=9200)
+
+        res = C.verify_artifact(s, art, executor=ex)
+
+        # The service was RELAUNCHED (the §5.8b service-launch probe ran, executing the target).
+        svc = ex._service_call()
+        assert svc is not None, "verify must relaunch the launch-and-join service"
+        assert svc["requires_execution"] is True and svc["allow_network"] is False
+        assert svc["artifact"] == t.path
+        # …and TORN DOWN afterward — a verify must never leak the relaunched container.
+        assert svc["name"] in ex.stops, "the relaunched service must be torn down after verify"
+        # The replay targeted 127.0.0.1 INSIDE the relaunched service's netns (not the target,
+        # which has no live host) — banner grab, the crashing message, and the liveness re-probe.
+        replay = [c for c in ex.channel_probes if c["probe"] == "tcp_probe.py"]
+        assert replay and all(c["net_container"] == svc["name"] for c in replay)
+        assert all(c["channel"]["host"] == "127.0.0.1" for c in replay)
+        assert any(c["channel"].get("payload_hex") == payload.hex() for c in replay), \
+            "the crashing message must replay BYTE-EXACT via payload_hex"
+        # The liveness transition (UP→DOWN) is the unforgeable verdict.
+        assert res["verified"] is True
+        assert res["assurance"]["standard"] == "input_reachable"
+        # Every replay connection is audited egress to the loopback service (the SAME gate).
+        ev = s.query(EgressEvent).filter(EgressEvent.project_id == p.id,
+                                         EgressEvent.tool == "tcp_probe").all()
+        assert ev and all(e.dest == "127.0.0.1:9200" for e in ev)
+
+
+def test_verify_relaunch_always_tears_down_on_replay_error(hg_home):
+    """Even if the replay blows up mid-verify, the relaunched service container is still torn
+    down (the finally) — a verify can never strand a launched container."""
+    _enable("features.network.enabled")
+    _enable("features.poc.enabled")
+
+    class _BoomRunner(_RecordingExecutor):
+        def run_channel_probe(self, probe, *, channel, net_container=None, secret=None):
+            raise RuntimeError("probe exploded")
+
+    ex = _BoomRunner()
+    with session_scope() as s:
+        p, t = _launchable_net_target(s, port=9201)
+        camp, art, _ = _net_crash_artifact(s, p, t, port=9201)
+        with pytest.raises(RuntimeError):
+            C.verify_artifact(s, art, executor=ex)
+        svc = ex._service_call()
+        assert svc is not None and svc["name"] in ex.stops, \
+            "the relaunched service must be torn down even when the replay errors"
+
+
+def test_verify_non_launch_network_crash_does_not_relaunch(hg_home):
+    """A network crash on an ALREADY-LIVE host (rehost/remote/base_url — config.launch off)
+    must NOT relaunch a service: the existing already-live replay path is unchanged."""
+    _enable("features.network.enabled")
+    ex = _RecordingExecutor(liveness=[True, False])
+    with session_scope() as s:
+        # A target with a live device host recorded on its channel (no launch-and-join).
+        p, t = _launchable_net_target(s, host="192.168.5.5", port=9202)
+        camp, art, _ = _net_crash_artifact(s, p, t, port=9202, launch=False)
+
+        res = C.verify_artifact(s, art, executor=ex)
+
+        assert ex._service_call() is None, "an already-live host must not relaunch a service"
+        assert res["verified"] is True
+        replay = [c for c in ex.channel_probes if c["probe"] == "tcp_probe.py"]
+        # host/netns came from the TARGET (the live device IP), not a 127.0.0.1 override.
+        assert replay and all(c["channel"]["host"] == "192.168.5.5" for c in replay)
 
 
 # ── boofuzz startup-grace (the launch-and-join readiness race, review finding #1) ──
