@@ -1,31 +1,38 @@
 #!/usr/bin/env python3
-"""CI gate: prove the WITH_GHIDRA sandbox image really decompiles.
+"""CI gate: prove the WITH_GHIDRA sandbox image really decompiles UNDER PRODUCTION HARDENING.
 
-Ghidra shipped broken twice (absent, then a JDK/version mismatch) because nothing
-exercised a `WITH_GHIDRA=1` build end to end. This script is that exercise: it runs
-the unmodified `ghidra_probe.py` over a tiny fixture ELF inside the sandbox image —
-exactly the way `SandboxRunner.run_probe` does (plain `--network none`, read-only
-artifact, probes mounted, scratch tmpfs) — and asserts the result is REAL Ghidra C
-decompilation, not radare2 pseudo-asm and not an error.
+Ghidra shipped broken three times: absent, then a JDK/version mismatch, then it built
+fine but DIED INSTANTLY under the real sandbox hardening (`--read-only --user 1000:1000`)
+because its launcher couldn't write its user-settings / temp dirs anywhere but the
+read-only image home. Each slip happened because nothing exercised a `WITH_GHIDRA=1` build
+through the genuine production path. This script is that exercise.
+
+The gate drives the EXACT production code path: `SandboxRunner.run_probe("ghidra_probe.py",
+...)`, the same call `GhidraDecompiler` makes. That is deliberate — it can never again
+diverge from production hardening, because it IS production hardening (`--network none`,
+`--read-only`, `--cap-drop ALL`, `--no-new-privileges`, `--user 1000:1000`, scratch tmpfs,
+HOME/TMPDIR/XDG_* pinned at scratch). A decompile that fails here is a real, shipping
+breakage of `hexgraph` decompilation — which is the whole point of the gate.
+
+It then asserts the result is REAL Ghidra C decompilation (a recovered C function with the
+`strcpy` call from the fixture), not radare2 pseudo-asm and not an error.
 
 Usage:
     ci_ghidra_decompile_check.py [IMAGE] [FIXTURE]
 
-Defaults: IMAGE=hexgraph-sandbox:latest, FIXTURE=tests/fixtures/vuln_httpd.
-Exits non-zero (failing the CI job) if Ghidra decompilation is broken.
+Defaults: IMAGE=hexgraph-sandbox:latest (override with the WITH_GHIDRA image tag),
+FIXTURE=tests/fixtures/vuln_httpd. Exits non-zero (failing the CI job) if Ghidra
+decompilation is broken.
 """
 
 from __future__ import annotations
 
-import json
-import subprocess
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_IMAGE = "hexgraph-sandbox:latest"
 DEFAULT_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "vuln_httpd"
-PROBES_DIR = REPO_ROOT / "src" / "hexgraph" / "sandbox" / "probes"
 # The fixture (vuln_httpd.c) has cgi_handler() do `strcpy(buf, token)`. Real Ghidra C
 # recovers exactly this; radare2 `pdc` pseudo-asm would not. We assert on the function
 # signature shape and the strcpy call, which only a true decompile produces.
@@ -43,41 +50,37 @@ def main() -> int:
 
     if not fixture.is_file():
         _fail(f"fixture not found: {fixture}")
-    if not PROBES_DIR.is_dir():
-        _fail(f"probes dir not found: {PROBES_DIR}")
 
-    # Mirror SandboxRunner.run_probe's FULL production hardening so the gate proves the
-    # REAL config works, not a looser one: --network none, read-only rootfs + artifact,
-    # all caps dropped, no-new-privileges, unprivileged uid 1000, a writable scratch tmpfs
-    # (mode 1777 so uid 1000 can write) + /dev/shm, with HOME/TMPDIR pointed at scratch.
-    # Production runs Ghidra under exactly these flags, so a decompile that fails here is a
-    # real breakage — which is the point of the gate.
-    cmd = [
-        "docker", "run", "--rm",
-        "--network", "none",
-        "--read-only",
-        "--cap-drop", "ALL",
-        "--security-opt", "no-new-privileges",
-        "--user", "1000:1000",
-        "-v", f"{fixture}:/artifact:ro",
-        "-v", f"{PROBES_DIR}:/opt/hexgraph:ro",
-        "--tmpfs", "/scratch:rw,exec,mode=1777",
-        "--tmpfs", "/dev/shm:rw,mode=1777",
-        "--workdir", "/scratch",
-        "-e", "HOME=/scratch",
-        "-e", "TMPDIR=/scratch",
-        image,
-        "python3", "/opt/hexgraph/ghidra_probe.py", "/artifact", FOCUS,
-    ]
-    print("Running:", " ".join(cmd), flush=True)
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-    if proc.returncode != 0:
-        _fail(f"ghidra probe exited {proc.returncode}\nstderr:\n{proc.stderr[:2000]}")
-
+    # Drive the REAL production path so the gate can never diverge from how `hexgraph`
+    # actually runs Ghidra: GhidraDecompiler → SandboxRunner.run_probe. run_probe applies
+    # the full, UNCONDITIONAL hardening (--network none, --read-only, --cap-drop ALL,
+    # --no-new-privileges, --user 1000:1000, scratch tmpfs, HOME/TMPDIR/XDG_* at scratch)
+    # and mounts the on-disk probe over the baked copy, exactly as in production.
     try:
-        result = json.loads(proc.stdout)
-    except json.JSONDecodeError as exc:
-        _fail(f"probe did not emit JSON ({exc})\nstdout:\n{proc.stdout[:2000]}")
+        from hexgraph.sandbox.runner import SandboxError, SandboxRunner
+    except ImportError as exc:  # pragma: no cover - the CI job installs the package
+        _fail(f"could not import hexgraph (install the package in this job): {exc}")
+
+    runner = SandboxRunner(image=image)
+    try:
+        # run_json_probe == run_probe + json.loads of stdout, the same call GhidraDecompiler
+        # makes. On a non-zero probe exit it raises SandboxError; ghidra_probe.py emits its
+        # diagnostic (the analyzeHeadless log tail) on STDOUT as {"error": ...}, so surface
+        # that too — the previous standalone gate printed only the empty stderr, hiding the
+        # cause (the launcher's "Failed to create directory" under --read-only).
+        result = runner.run_json_probe("ghidra_probe.py", str(fixture), extra_args=[FOCUS])
+    except SandboxError as exc:
+        # The probe's JSON error blob (with the analyzeHeadless tail) rides along on the
+        # SandboxRunner result; re-run capturing raw stdout so the failure log shows the
+        # actual Ghidra error instead of an opaque exit code.
+        try:
+            raw = runner.run_probe("ghidra_probe.py", str(fixture), extra_args=[FOCUS])
+            print("--- probe stdout ---\n" + (raw.stdout or "")[:4000], file=sys.stderr)
+            print("--- probe stderr ---\n" + (raw.stderr or "")[:2000], file=sys.stderr)
+        except SandboxError as inner:
+            # run_probe itself raises on non-zero exit; its message carries the stderr tail.
+            print(f"--- run_probe error ---\n{inner}", file=sys.stderr)
+        _fail(f"ghidra probe failed under production hardening: {exc}")
 
     if "error" in result:
         _fail(f"probe reported an error: {result['error']}")
@@ -104,10 +107,10 @@ def main() -> int:
         print("--- pseudocode ---\n" + pseudo[:2000], file=sys.stderr)
         _fail("decompiled output failed C checks: " + "; ".join(failed))
 
-    print("--- decompiled C (Ghidra) ---")
+    print("--- decompiled C (Ghidra, under full production hardening) ---")
     print(pseudo)
     print(f"\nPASS: Ghidra decompiled {FOCUS} to real C "
-          f"({len(funcs)} functions recovered).")
+          f"({len(funcs)} functions recovered) via SandboxRunner.run_probe.")
     return 0
 
 

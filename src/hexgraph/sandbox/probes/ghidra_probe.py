@@ -24,6 +24,30 @@ import sys
 GHIDRA_DIR = os.environ.get("GHIDRA_INSTALL_DIR", "/opt/ghidra")
 SCRATCH = os.environ.get("TMPDIR", "/scratch")
 
+# Under the production sandbox hardening (`--read-only --user 1000:1000`) the ONLY
+# writable area is the /scratch tmpfs. Ghidra's launcher writes outside the project
+# dir before any analysis runs: `analyzeHeadless` → LaunchSupport saves the resolved
+# Java home into the user-settings dir, which it derives from XDG_CONFIG_HOME (NOT
+# $HOME), and Java's own caches/tmp come from XDG_CACHE_HOME / TMPDIR. If any of those
+# still point at the read-only image home (`/home/analyst/.config/ghidra/...`) the
+# launch dies instantly with "Failed to create directory" (exit 1) — long before our
+# postScript runs, so the gate just saw "no output". `SandboxRunner.run_probe` already
+# exports HOME/TMPDIR/XDG_* at /scratch; we re-assert them HERE so the probe works under
+# full hardening regardless of which caller invokes it (the gate, a future executor),
+# pinning every writable Ghidra/Java path at the one tmpfs. This adds NO privilege — it
+# only redirects writes to the already-writable scratch tmpfs.
+for _var in ("HOME", "TMPDIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
+             "XDG_STATE_HOME"):
+    os.environ.setdefault(_var, SCRATCH)
+# Ghidra's launcher (ApplicationUtilities) creates its per-run temp dir under the JVM's
+# `java.io.tmpdir`, which defaults to /tmp regardless of $TMPDIR — and under --read-only
+# /tmp is NOT writable unless a caller happens to mount a /tmp tmpfs. Pin the JVM temp at
+# /scratch via _JAVA_OPTIONS so EVERY writable Ghidra/Java path lands on the one tmpfs the
+# hardened sandbox guarantees, making the probe self-sufficient under bare --read-only +
+# --user 1000 with only /scratch writable. Prepend so a caller-supplied _JAVA_OPTIONS wins.
+_existing_jopts = os.environ.get("_JAVA_OPTIONS", "")
+os.environ["_JAVA_OPTIONS"] = (f"-Djava.io.tmpdir={SCRATCH} {_existing_jopts}").strip()
+
 # Jython postScript Ghidra runs after auto-analysis. It writes JSON to args[0];
 # args[1] (optional) is the focus function to decompile.
 POST_SCRIPT = r'''
