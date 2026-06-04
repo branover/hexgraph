@@ -130,6 +130,11 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
       - uses: docker/setup-buildx-action@v3
       - name: Build the sandbox image WITH_GHIDRA=1 (layer-cached)
         # A failed build-time JDK assertion fails this step outright. Cache is keyed
@@ -143,6 +148,11 @@ jobs:
           build-args: WITH_GHIDRA=1
           cache-from: type=gha,scope=ghidra
           cache-to: type=gha,mode=max,scope=ghidra
-      - name: Decompile a fixture and assert real C
-        # Fails the job if Ghidra returns an error, pseudo-asm, or nothing.
+      - name: Install hexgraph
+        # The gate now drives the REAL production path (SandboxRunner.run_probe) so it can
+        # never diverge from production hardening; that needs the package importable.
+        run: python -m pip install -e .
+      - name: Decompile a fixture and assert real C (under production hardening)
+        # Fails the job if Ghidra returns an error, pseudo-asm, or nothing. Runs the probe
+        # through SandboxRunner.run_probe — the exact call GhidraDecompiler makes.
         run: python3 scripts/ci_ghidra_decompile_check.py hexgraph-sandbox:ci-ghidra
