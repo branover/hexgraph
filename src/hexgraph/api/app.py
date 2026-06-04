@@ -93,8 +93,13 @@ def create_app() -> FastAPI:
         return await call_next(request)
 
     @app.get("/health")
-    def health() -> dict[str, str]:
-        return {"status": "ok", "version": __version__}
+    def health() -> dict[str, str | None]:
+        # `version` stays for backward-compat (was static "0.1.0") but is now the
+        # auto-derived build version; `git_sha` + `built_at` answer "is this current?".
+        from hexgraph.version import resolve_build_identity
+
+        bi = resolve_build_identity()
+        return {"status": "ok", **bi.as_dict()}
 
     # --- JSON API (one router per resource; see api/routers/) ---
     app.include_router(projects.router)

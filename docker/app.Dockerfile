@@ -37,7 +37,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /opt/hexgraph
 
 # Copy the project source, including the SPA bundle built in stage 1 (so the editable/
-# regular install packages the dist into the wheel and FastAPI serves it).
+# regular install packages the dist into the wheel and FastAPI serves it). The build
+# context excludes .git (see .dockerignore), so the image can't derive the build version
+# from git at runtime; `just app-build` runs scripts/bake_build_info.py on the HOST first,
+# writing src/hexgraph/_build_info.py — copied in here and read as the version fallback.
 COPY pyproject.toml README.md ./
 COPY src/ ./src/
 COPY migrations/ ./migrations/

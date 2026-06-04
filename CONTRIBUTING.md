@@ -62,8 +62,26 @@ collide — see `CLAUDE.md` for the full setup). Trivial touch-ups can use a pla
 
 ## Commit messages
 
-Imperative mood, lowercase type prefix: `feat:`, `fix:`, `docs:`, `db:`, `test:`, and so on. Keep the
-subject tight and let the body explain the why when it isn't obvious.
+We follow [Conventional Commits](https://www.conventionalcommits.org): imperative mood, lowercase type
+prefix (`feat:`, `fix:`, `docs:`, `db:`, `test:`, and so on). Keep the subject tight and let the body
+explain the why when it isn't obvious. The prefix isn't just style — it drives the version bump (below),
+so reach for `feat:` and `fix:` deliberately.
+
+## Versioning and releases
+
+The version is plain SemVer and lives in one place, `[project] version` in `pyproject.toml`. You never
+edit it by hand. Instead, [release-please](https://github.com/googleapis/release-please) reads the
+Conventional-Commit history on `main` and works out the next version for you: a `fix:` bumps the patch,
+a `feat:` bumps the minor, and a breaking change (`feat!:`, or a `BREAKING CHANGE:` footer) bumps the
+major. While we're still pre-1.0 a breaking change bumps the minor rather than jumping to 1.0, so the
+0.x line stays sane.
+
+It works through a pull request. As commits land on `main`, release-please keeps a standing "release PR"
+open that rolls up the pending version bump and the generated `CHANGELOG.md` entries. When you're ready
+to ship, you merge that PR; that's the moment release-please writes the new version into `pyproject.toml`,
+tags the commit, and publishes the GitHub release. So cutting a release is just reviewing and merging one
+PR, and the running server's reported version (`hexgraph --version`, `GET /health`, the MCP banner)
+follows along automatically.
 
 ## Reporting bugs and security issues
 
