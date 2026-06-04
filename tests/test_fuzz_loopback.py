@@ -51,7 +51,7 @@ class _RecordingExecutor:
             "probe": probe, "artifact": artifact, "name": name, "outdir": str(outdir),
             "requires_execution": requires_execution, "allow_network": allow_network,
             "net_container": net_container, "extra_args": extra_args,
-            "extra_ro_mounts": extra_ro_mounts,
+            "extra_ro_mounts": extra_ro_mounts, "disable_aslr": disable_aslr,
         })
         return DetachedHandle(name=name, outdir=str(outdir))
 
@@ -289,3 +289,136 @@ def test_boofuzz_wait_alive_tolerates_slow_bind():
     dead_port = dead.getsockname()[1]
     dead.close()  # closed → nothing is listening on dead_port
     assert B._wait_alive("127.0.0.1", dead_port, "tcp", grace=0.5, interval=0.2) is False
+
+
+# ── F2: launch_command must NEVER be char-split into single characters ─────────────
+
+def test_coerce_launch_argv_does_not_char_split_a_string():
+    """A bare str launch_command must be shlex.split into argv TOKENS, never list()'d into
+    single characters (bug F2 — `['9','9','9','9']` reaching the service)."""
+    f = C._coerce_launch_argv
+    assert f("netd 9999") == ["netd", "9999"]
+    assert f("9999") == ["9999"]
+    # a JSON-array STRING (the exact F2 repro: launch_command='["9999"]') → ['9999'],
+    # NOT ['[','"','9','9','9','9','"',']'].
+    assert f('["9999"]') == ["9999"]
+    assert f('["netd", "9999"]') == ["netd", "9999"]
+    # an already-correct list/tuple passes through verbatim (stringified), never re-split.
+    assert f(["9999"]) == ["9999"]
+    assert f(["netd", "9999"]) == ["netd", "9999"]
+    assert f(("-f", "-p", "9999")) == ["-f", "-p", "9999"]
+    assert f(None) == [] and f("") == []
+    # shell-quoted tokens survive as ONE token (no naive .split(" ")).
+    assert f("daemon '--name=my svc'") == ["daemon", "--name=my svc"]
+
+
+def test_launch_service_passes_intact_argv_not_chars(hg_home):
+    """End-to-end through _launch_service: a string launch_command reaches the service probe
+    as `--cmd=["9999"]` (the intended argv), NOT a per-character JSON array (bug F2). The
+    launched service container also gets disable_aslr=True (bug F3 plumbing)."""
+    _enable("features.network.enabled")
+    _enable("features.poc.enabled")
+    ex = _RecordingExecutor()
+    with session_scope() as s:
+        p, t = _launchable_net_target(s, port=9120)
+        spec = FuzzCampaignSpec(target_id=t.id, surface="network", engine="boofuzz",
+                                launch=True, launch_binary=t.path, launch_command="9999")
+        C.start_campaign(s, p, t, spec=spec, executor=ex)
+        svc = ex._service_call()
+        assert svc is not None
+        cmd_arg = next(a for a in svc["extra_args"] if a.startswith("--cmd="))
+        argv = json.loads(cmd_arg[len("--cmd="):])
+        assert argv == ["9999"], f"launch_command was corrupted: {argv!r}"
+        # F3: the launched ASan service container disables ASLR (setarch -R in the probe).
+        assert svc["disable_aslr"] is True
+
+
+def test_launch_service_disables_aslr_for_asan_service(hg_home):
+    """The launched-service container always opts into disable_aslr=True so the probe's
+    setarch -R can keep an ASan-instrumented daemon from SIGSEGV-ing at init (bug F3)."""
+    _enable("features.network.enabled")
+    _enable("features.poc.enabled")
+    ex = _RecordingExecutor()
+    with session_scope() as s:
+        p, t = _launchable_net_target(s, port=9121)
+        spec = FuzzCampaignSpec(target_id=t.id, surface="network", engine="boofuzz")
+        C.start_campaign(s, p, t, spec=spec, executor=ex)
+        svc = ex._service_call()
+        assert svc is not None and svc["disable_aslr"] is True
+
+
+# ── F3: the service-launch PROBE sets ASAN_OPTIONS + the setarch -R wrapper ────────
+
+def test_service_launch_probe_sets_asan_options_and_setarch(monkeypatch, tmp_path):
+    """The probe launches the service under `setarch <machine> -R` with ASAN_OPTIONS merged
+    into the child env — mirroring afl_probe — so an ASan daemon doesn't die at init (F3)."""
+    import os as _os
+    from hexgraph.sandbox.probes import service_launch_probe as P
+
+    captured = {}
+
+    class _FakeProc:
+        pid = 4321
+
+        def wait(self):
+            return 0
+
+    def _fake_popen(cmd, **kw):
+        captured["cmd"] = cmd
+        captured["env"] = kw.get("env")
+        # drop the READY/status markers the caller writes after — emulate a clean exit.
+        return _FakeProc()
+
+    monkeypatch.setattr(P.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(P.shutil, "which", lambda name: f"/usr/bin/{name}")
+    # a real ELF-shaped artifact path; _qemu_prefix reads its header (host arch → no qemu).
+    art = tmp_path / "server"
+    art.write_bytes(b"\x7fELF" + b"\x01" * 14 + bytes([62, 0]) + b"\x00" * 20)
+    out = tmp_path / "out"
+
+    monkeypatch.setattr(sys := __import__("sys"), "argv",
+                        ["service_launch_probe.py", str(art), str(out), "--port=9131",
+                         '--cmd=["9999"]'])
+    rc = P.main()
+    assert rc == 0
+
+    cmd = captured["cmd"]
+    env = captured["env"]
+    # setarch -R wrapper leads the argv (ASLR off), with the intact extra argv at the tail.
+    assert cmd[0] == "/usr/bin/setarch"
+    assert cmd[1] == _os.uname().machine
+    assert cmd[2] == "-R"
+    assert "9999" in cmd, f"the launch argv token was lost: {cmd!r}"
+    # ASAN_OPTIONS merged into the child env (not symbolize=0 — the launched service log is
+    # read directly, unlike the AFL fuzz child).
+    assert env is not None
+    assert "abort_on_error=1" in env["ASAN_OPTIONS"]
+    assert "detect_leaks=0" in env["ASAN_OPTIONS"]
+
+
+def test_service_launch_probe_falls_back_without_setarch(monkeypatch, tmp_path):
+    """If setarch isn't present the probe still launches (bare invocation, no wrapper) —
+    ASLR-off is best-effort, mirroring afl_probe."""
+    from hexgraph.sandbox.probes import service_launch_probe as P
+
+    captured = {}
+
+    class _FakeProc:
+        pid = 7
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(P.subprocess, "Popen",
+                        lambda cmd, **kw: (captured.update(cmd=cmd, env=kw.get("env")) or _FakeProc()))
+    monkeypatch.setattr(P.shutil, "which", lambda name: None)  # no setarch, no qemu
+    art = tmp_path / "server"
+    art.write_bytes(b"\x7fELF" + b"\x01" * 14 + bytes([62, 0]) + b"\x00" * 20)
+    out = tmp_path / "out"
+    monkeypatch.setattr(__import__("sys"), "argv",
+                        ["service_launch_probe.py", str(art), str(out), "--port=9132"])
+    assert P.main() == 0
+    cmd = captured["cmd"]
+    assert "setarch" not in cmd[0]
+    # ASAN_OPTIONS is still set even without setarch.
+    assert "abort_on_error=1" in captured["env"]["ASAN_OPTIONS"]

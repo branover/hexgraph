@@ -103,14 +103,36 @@ def main() -> int:
     os.chmod(target, 0o755)
 
     prefix = _qemu_prefix(target, sysroot)
-    cmd = [*prefix, target, *extra_argv]
+
+    # setarch -R = personality(ADDR_NO_RANDOMIZE): run the launched service with ASLR OFF.
+    # On high-ASLR-entropy kernels (vm.mmap_rnd_bits=32 — WSL2 6.6.x / Ubuntu 23.10+ / CI
+    # runners) an ASan-instrumented daemon's MAP_FIXED shadow reservation otherwise
+    # intermittently collides with a randomized mapping and the process SIGSEGVs during ASan
+    # init, BEFORE main (exit_code -11, ~nondeterministic). ASLR-off makes the address space
+    # deterministic so the shadow always fits — identical to the AFL/desock probes. The
+    # container is launched with the minimal default+personality seccomp profile
+    # (start_detached(disable_aslr=True) → runner) so this is permitted under
+    # --no-new-privileges. If setarch isn't present we fall through to a bare invocation
+    # (the bug is then latent but the launch still attempts to run). NOT a security flag:
+    # it does not touch --network/caps/read-only/--user.
+    setarch = shutil.which("setarch")
+    aslr_off = [setarch, os.uname().machine, "-R"] if setarch else []
+    cmd = [*aslr_off, *prefix, target, *extra_argv]
+
+    # ASan defaults: abort (so a real crash is a clean SIGABRT, not a confusing later state),
+    # symbolize the report (we read the launched-service log directly, no AFL parser to satisfy
+    # — unlike the fuzz child which needs symbolize=0), no leak detection at exit (a long-lived
+    # daemon torn down by the container would otherwise spew bogus leak reports). Merge over
+    # any inherited env so a target that needs its own vars keeps them.
+    env = dict(os.environ)
+    env["ASAN_OPTIONS"] = "abort_on_error=1:detect_leaks=0:symbolize=1"
 
     # The hostile target writes nothing we trust; capture its output to a log on /out so a
     # failed launch is diagnosable, but keep stdin closed (a daemon does not read our stdin).
     log = open(os.path.join(outdir, "service.log"), "wb")
     try:
         proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                                cwd=outdir)
+                                cwd=outdir, env=env)
     except OSError as exc:
         _write_status(outdir, {"launched": False, "port": port,
                                "error": f"could not launch service: {exc}"})
