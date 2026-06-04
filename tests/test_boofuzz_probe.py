@@ -38,6 +38,22 @@ def test_utf8_is_the_default_for_text():
     assert bp._encode_default({"type": "string", "default": "È"}) == "È".encode("utf-8")
 
 
+def test_malformed_hex_default_falls_back_not_raises():
+    # An odd-length / non-hex `hex` default must not abort the campaign; it falls back to
+    # a UTF-8 view of the literal instead of raising binascii.Error.
+    f = {"type": "hex", "name": "m", "default": "abc", "encoding": "hex"}
+    assert bp._encode_default(f) == b"abc"
+    f2 = {"type": "hex", "name": "m", "default": "zz", "encoding": "hex"}
+    assert bp._encode_default(f2) == b"zz"
+
+
+def test_bytes_default_above_latin1_falls_back_not_raises():
+    # A char > 0xFF in a `bytes` field can't be latin-1 encoded; fall back to UTF-8
+    # rather than raising UnicodeEncodeError mid-campaign.
+    f = {"type": "bytes", "name": "b", "default": "€", "encoding": "bytes"}
+    assert bp._encode_default(f) == "€".encode("utf-8")
+
+
 def test_list_default_is_taken_verbatim():
     f = {"type": "bytes", "name": "b", "default": [0xc8, 0xff, 0x00]}
     assert bp._encode_default(f) == b"\xc8\xff\x00"

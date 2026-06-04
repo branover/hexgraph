@@ -182,11 +182,22 @@ def _encode_default(field):
         return bytes(default)
     enc = (field.get("encoding") or field.get("format") or "utf8").lower()
     s = str(default)
+    # A malformed operator spec (odd-length/non-hex `hex`, a >255 char in a `bytes`
+    # field) must NOT abort the whole campaign with an uncaught exception — fall back to
+    # a UTF-8 byte view of the literal so rendering always yields bytes.
     if enc == "hex":
         cleaned = "".join(s.split()).replace("0x", "")
-        return binascii.unhexlify(cleaned) if cleaned else b""
+        if not cleaned:
+            return b""
+        try:
+            return binascii.unhexlify(cleaned)
+        except (binascii.Error, ValueError):
+            return s.encode("utf-8")
     if enc in ("bytes", "raw", "latin1", "latin-1"):
-        return s.encode("latin-1")
+        try:
+            return s.encode("latin-1")
+        except UnicodeEncodeError:
+            return s.encode("utf-8")
     return s.encode("utf-8")
 
 
@@ -252,25 +263,18 @@ def _render(fields, mutate_idx=None, mutation=None):
     `mutate_idx`, its raw `mutation` bytes win — producing a length/body mismatch or a
     bad checksum on purpose.
     """
-    # First pass: render every simple field; remember each field's byte span + name so a
-    # computed field can measure a named block. None marks a computed slot to fill later.
+    # First pass: render every simple field. None marks a computed slot (resolved in
+    # pass 2, once the blocks it measures have been rendered).
     parts = []
-    spans = {}  # field name -> (start, end) in the concatenated simple layout
-    cursor = 0
     for i, f in enumerate(fields):
-        name = f.get("name", str(i))
         typ = f.get("type", "string")
         if typ in _COMPUTED_TYPES and i != mutate_idx:
             parts.append(None)  # placeholder; resolved in pass 2
-            spans[name] = (cursor, cursor)  # zero-width until filled
             continue
         if i == mutate_idx:
-            chunk = mutation if mutation is not None else _encode_default(f)
+            parts.append(mutation if mutation is not None else _encode_default(f))
         else:
-            chunk = _encode_default(f)
-        parts.append(chunk)
-        spans[name] = (cursor, cursor + len(chunk))
-        cursor += len(chunk)
+            parts.append(_encode_default(f))
 
     # Helper: bytes of a named block from the parts rendered so far (computed slots = b"").
     def block_bytes(block_name):
