@@ -92,6 +92,37 @@ def _ensure_outdir_writable(path: Path) -> None:
         os.chmod(path, 0o770)
 
 
+def _probe_failure_message(probe: str, returncode: int, stdout: str, stderr: str) -> str:
+    """Build a legible failure message for a non-zero probe exit.
+
+    Probes emit a JSON `{"error": "<real reason>"}` on their failure paths (e.g.
+    ghidra_probe's "Ghidra not installed … rebuild with WITH_GHIDRA=1" or the
+    analyzeHeadless log tail). The old swallow point dropped that and surfaced only
+    `stderr` — which for analyzeHeadless is EMPTY (it logs to stdout), so the operator
+    got a bare `exit N`. Lead with the probe's own actionable reason when present,
+    falling back to a captured-output tail, and always keep the exit code visible.
+    """
+    reason = ""
+    out = (stdout or "").strip()
+    if out:
+        # The error JSON is usually the whole/last line of stdout; try the last
+        # non-empty line first, then the whole buffer.
+        for candidate in (out.splitlines()[-1], out):
+            try:
+                obj = json.loads(candidate)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if isinstance(obj, dict) and obj.get("error"):
+                reason = str(obj["error"]).strip()
+                break
+    if not reason:
+        # No structured reason — fall back to a tail of whatever the probe printed
+        # (stderr first, then stdout) so the caller still sees the real cause.
+        reason = (stderr or "").strip()[:500] or out[:500]
+    base = f"probe {probe} failed (exit {returncode})"
+    return f"{base}: {reason}" if reason else base
+
+
 class SandboxError(RuntimeError):
     """The sandbox run failed (non-zero exit, docker error, bad output)."""
 
@@ -352,7 +383,7 @@ class SandboxRunner:
 
         if proc.returncode != 0:
             raise SandboxError(
-                f"probe {probe} failed (exit {proc.returncode}): {proc.stderr.strip()[:500]}"
+                _probe_failure_message(probe, proc.returncode, proc.stdout, proc.stderr)
             )
         return RunResult(proc.returncode, proc.stdout, proc.stderr, str(outdir) if outdir else None)
 
