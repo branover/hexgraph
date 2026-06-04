@@ -1165,6 +1165,23 @@ def set_hypothesis_status(hypothesis_id: str, status: str, rationale: str | None
             return {"error": str(exc)}
 
 
+def _sandbox_image_built(tag: str) -> bool:
+    """Is the sandbox image actually built locally? Cheap `docker image inspect` (no run);
+    used so the radare2 health verdict isn't a false-positive when Docker is up but the
+    image was never built. Returns False on any error."""
+    import shutil
+    import subprocess
+
+    if not shutil.which("docker"):
+        return False
+    try:
+        return subprocess.run(["docker", "image", "inspect", tag],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              timeout=30).returncode == 0
+    except Exception:  # noqa: BLE001 — treat an inspect failure as "can't confirm built"
+        return False
+
+
 def _decompiler_health(active: str) -> dict:
     """Does the ACTIVE decompiler actually work right now (not merely configured)?
     Returns {working: bool, detail: str, mode?, version?}. Never raises — a broken
@@ -1193,9 +1210,20 @@ def _decompiler_health(active: str) -> dict:
                           "sandbox image. Start Docker (and `just sandbox-build` if the image "
                           "is missing).",
             }
+        # Docker being up isn't enough — the sandbox image must actually be built, or a
+        # decompile would still fail. Confirm it exists (cheap `image inspect`, no run).
+        from hexgraph.sandbox.runner import sandbox_image
+
+        image = sandbox_image()
+        if not _sandbox_image_built(image):
+            return {
+                "working": False,
+                "detail": f"the sandbox image '{image}' is not built — run `just sandbox-build` "
+                          "(radare2 decompilation runs inside it).",
+            }
         return {
             "working": True,
-            "detail": "radare2 is available in the sandbox image.",
+            "detail": f"radare2 is available in the sandbox image '{image}'.",
         }
     except Exception as exc:  # noqa: BLE001 — health probing must never crash a read call
         return {"working": False, "detail": f"could not determine decompiler health: {exc}"}
