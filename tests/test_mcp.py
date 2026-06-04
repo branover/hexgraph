@@ -330,8 +330,9 @@ def test_check_decompiler_in_catalog():
 
 
 def test_check_decompiler_radare2_working(hg_home, monkeypatch):
-    """Default config: radare2 reports working when the sandbox image is up."""
+    """Default config: radare2 reports working when Docker is up AND the image is built."""
     monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
+    monkeypatch.setattr("hexgraph.engine.mcp_tools._sandbox_image_built", lambda tag: True)
     d = mcp_tools.check_decompiler()
     assert d["active"] == "radare2"
     assert d["working"] is True
@@ -345,6 +346,16 @@ def test_check_decompiler_radare2_docker_down(hg_home, monkeypatch):
     assert d["active"] == "radare2"
     assert d["working"] is False
     assert "Docker" in d["detail"]
+
+
+def test_check_decompiler_radare2_image_not_built(hg_home, monkeypatch):
+    """Docker up but the sandbox image was never built → not working, with a build hint."""
+    monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
+    monkeypatch.setattr("hexgraph.engine.mcp_tools._sandbox_image_built", lambda tag: False)
+    d = mcp_tools.check_decompiler()
+    assert d["active"] == "radare2"
+    assert d["working"] is False
+    assert "not built" in d["detail"]
 
 
 def test_check_decompiler_ghidra_broken(hg_home, monkeypatch):
