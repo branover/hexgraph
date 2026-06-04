@@ -124,6 +124,48 @@ def test_eviction_never_drops_kept_slot(tmp_path):
     assert (root / "old__v").exists()
 
 
+def test_eviction_skips_in_use_locked_slot(tmp_path):
+    """A slot another process holds the lock on (mid-analysis) must NOT be evicted, even when it
+    is the over-cap LRU victim — rmtree'ing it would corrupt the in-flight Ghidra project and
+    unlink the lock file out from under the holder (the cross-process corruption the lock prevents).
+    Held cross-PROCESS so it's a genuine flock contention, not just a same-process advisory lock."""
+    import subprocess
+    import sys
+    import textwrap
+
+    data_dir = tmp_path / "proj"
+    root = gp.cache_root(data_dir)
+    root.mkdir(parents=True)
+    mb = 1024 * 1024
+    victim = gp.resolve(data_dir, "aaaa", "v"); victim.prepare()
+    (victim.project_dir / "blob").write_bytes(b"\0" * mb)
+    os.utime(victim.root, (1000, 1000))  # oldest ⇒ would be the LRU victim
+    keeper = gp.resolve(data_dir, "bbbb", "v"); keeper.prepare()
+    (keeper.project_dir / "blob").write_bytes(b"\0" * mb)
+    os.utime(keeper.root, (3000, 3000))
+
+    # Hold the victim's lock in a separate PROCESS while we evict.
+    holder_src = textwrap.dedent(f"""
+        import fcntl, os, time
+        fd = os.open({str(victim.lock_path)!r}, os.O_CREAT | os.O_RDWR, 0o666)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        print("locked", flush=True)
+        time.sleep(5)
+    """)
+    holder = subprocess.Popen([sys.executable, "-c", holder_src],
+                              stdout=subprocess.PIPE, text=True)
+    try:
+        assert holder.stdout.readline().strip() == "locked"
+        # Cap at 1 MiB, keep the keeper: the only evictable-by-LRU slot is the locked victim.
+        evicted = gp.evict_to_cap(data_dir, cap_mb=1, keep=keeper.root.name)
+        assert evicted == []                       # the in-use slot was spared
+        assert victim.root.exists()                # NOT wiped
+        assert victim.lock_path.exists()           # lock file intact for the holder
+    finally:
+        holder.terminate()
+        holder.wait(timeout=10)
+
+
 def test_eviction_disabled_when_cap_nonpositive(tmp_path):
     data_dir = tmp_path / "proj"
     root = gp.cache_root(data_dir)
