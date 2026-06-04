@@ -154,6 +154,10 @@ fuzz-build:
 # Build the full HexGraph app image (frontend SPA + backend + docker CLI) for `docker compose up`.
 [group('build')]
 app-build:
+    # Stamp the build identity from the host git checkout first (.git is excluded from the
+    # Docker context, so the in-image install can't derive it). The baked _build_info.py is
+    # copied in with src/ and read as the fallback when the running container has no .git.
+    {{py}} scripts/bake_build_info.py
     docker build -f docker/app.Dockerfile -t {{app_image}} .
 
 # Mounts the host Docker socket so the app spawns its sandbox/build/fuzz sibling containers on

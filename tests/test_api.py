@@ -12,6 +12,13 @@ def test_health(hg_home):
     body = resp.json()
     assert body["status"] == "ok"
     assert "version" in body
+    # Build-identity fields are additive (N8): keep `version` for back-compat, add SHA + time.
+    assert "git_sha" in body
+    assert "built_at" in body
+    # Running the test suite from the source checkout, version must be derived (not the
+    # static "0.1.0") and the short SHA present.
+    assert body["version"]
+    assert body["git_sha"]
 
 
 def test_project_payload_includes_cost(hg_home):

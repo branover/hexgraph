@@ -17,7 +17,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from hexgraph import __version__
+from hexgraph.version import resolve_build_identity
 from hexgraph.api.loopback import assert_loopback, host_allowed
 from hexgraph.api.routers import (
     annotations,
@@ -55,7 +55,9 @@ async def _lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="HexGraph", version=__version__, lifespan=_lifespan)
+    # Use the resolved build version (same source as /health) so /openapi.json never lags
+    # behind after a release-please bump in an editable install.
+    app = FastAPI(title="HexGraph", version=resolve_build_identity().version, lifespan=_lifespan)
 
     # --- Operator-machine trust boundary (loopback API has no auth by design) ---
     # 1) Host-header guard: the PRIMARY anti-DNS-rebinding defense. A malicious page that
@@ -93,8 +95,11 @@ def create_app() -> FastAPI:
         return await call_next(request)
 
     @app.get("/health")
-    def health() -> dict[str, str]:
-        return {"status": "ok", "version": __version__}
+    def health() -> dict[str, str | None]:
+        # `version` stays for backward-compat (was static "0.1.0") but is now the
+        # auto-derived build version; `git_sha` + `built_at` answer "is this current?".
+        bi = resolve_build_identity()
+        return {"status": "ok", **bi.as_dict()}
 
     # --- JSON API (one router per resource; see api/routers/) ---
     app.include_router(projects.router)

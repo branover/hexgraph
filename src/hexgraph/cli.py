@@ -321,6 +321,9 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="hexgraph", description="Local-only vuln-research workbench")
+    from hexgraph.version import version_string
+
+    p.add_argument("--version", "-V", action="version", version=f"hexgraph {version_string()}")
     sub = p.add_subparsers(dest="_cmd", required=True)
 
     sub.add_parser("init", help="initialize HexGraph (DB + dirs, via migrations)").set_defaults(func=_cmd_init)
