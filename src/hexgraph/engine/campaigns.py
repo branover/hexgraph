@@ -1246,7 +1246,11 @@ def _verify_network_artifact(session, project, target, campaign, artifact, *, ex
         try:
             svc_name = _launch_service(session, project, target, campaign, prepared, port,
                                        executor=svc_executor, resources=resources)
-            return _network_replay(session, project, target, port, payload, executor=executor,
+            # Replay on the SAME executor the service launched on — the tcp_probe joins the
+            # service container's netns (net_container=svc_name), which only exists on that
+            # daemon. Using the raw (possibly None→local) executor here would join a netns
+            # that lives on a remote fuzz env's daemon and silently fail the verify.
+            return _network_replay(session, project, target, port, payload, executor=svc_executor,
                                    host="127.0.0.1", net_container=svc_name)
         finally:
             if svc_name is not None:
