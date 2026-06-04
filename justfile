@@ -9,6 +9,14 @@
 #     curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to ~/.local/bin
 # (or `snap install just`), and ensure ~/.local/bin is on PATH.
 
+# Where `just` writes the temp script for shebang recipes (`setup`, `demo`, …). It
+# normally uses $XDG_RUNTIME_DIR (e.g. /run/user/$UID), but a minimal / `su` / cron /
+# container / sessionless context can leave that pointing at a dir that doesn't exist
+# and can't be created — then any shebang recipe dies with "I/O error in runtime dir".
+# Pinning a universally-writable base (just makes a unique subdir under it per run)
+# makes every recipe work regardless of the ambient runtime dir. See docs/setup.md.
+set tempdir := "/tmp"
+
 # ---------------------------------------------------------------------------
 # Configurable variables (override on the command line, e.g. `just port=8766 serve`)
 # ---------------------------------------------------------------------------

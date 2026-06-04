@@ -5,6 +5,21 @@ All notable changes to HexGraph are recorded here. The format loosely follows
 [semantic versioning](https://semver.org/) properly once it reaches 1.0. Until then,
 expect breaking changes between minor versions.
 
+## [Unreleased]
+
+### Added
+- **`setup.sh`** — a no-`just` bootstrap. It does the same venv + deps + web-UI build as
+  `just setup` and then hands off to the identical interactive setup wizard, for people who
+  would rather not install the `just` task runner. Arguments pass through to the wizard, so
+  `./setup.sh --yes` takes the static-only defaults without prompting.
+
+### Fixed
+- `just setup` (and any other shebang recipe) no longer fails with `error: I/O error in
+  runtime dir` in environments where `$XDG_RUNTIME_DIR` points at a directory that doesn't
+  exist and can't be created — minimal containers, `cron`, `su` without a login session, or
+  a WSL shell with no systemd user session. The justfile now pins `just`'s temp dir to a
+  writable location (`set tempdir := "/tmp"`).
+
 ## [0.1.0] — 2026-06-03
 
 The first tagged, public pre-release. HexGraph is a self-hosted, local-only workbench for
