@@ -8,10 +8,13 @@ asks for `get_decompiler()` and never names a tool, so swapping is transparent.
 
 from __future__ import annotations
 
+import logging
 import os
 from abc import ABC, abstractmethod
 
 from hexgraph.sandbox.executor import Executor, get_executor
+
+log = logging.getLogger(__name__)
 
 
 class Decompiler(ABC):
@@ -56,17 +59,46 @@ class GhidraDecompiler(Decompiler):
     def decompile(self, artifact: str, function: str | None = None, *, project=None) -> dict:
         args = [function] if function else None
         slot = self._resolve_slot(artifact, project)
+        if slot is None:
+            # No cache (no project / radare path / resolve failure) → throwaway /scratch project.
+            return self.runner.run_json_probe("ghidra_probe.py", artifact, extra_args=args)
+
+        # CROSS-PROCESS lock for the WHOLE use of the slot: the web app and an agent's MCP server
+        # are separate OS processes sharing this data dir, and a Ghidra project is NOT
+        # concurrency-safe — two analyzeHeadless opening one project corrupts it permanently. The
+        # lock is lock-and-wait with a timeout; a concurrent same-target decompile blocks until
+        # the in-flight one finishes (then proceeds warm). On timeout we DON'T touch the cached
+        # slot at all — fall back to a throwaway ephemeral project (correct, just uncached) rather
+        # than block forever or risk corruption. DIFFERENT targets → different slots → still
+        # concurrent. The lock is host-side; no container flag changes.
+        with slot.lock() as locked:
+            if not locked:
+                return self.runner.run_json_probe("ghidra_probe.py", artifact, extra_args=args)
+            return self._run_locked(slot, artifact, args)
+
+    def _run_locked(self, slot, artifact: str, args):
+        """Run the probe with the slot held exclusively. Decides cold vs warm on the AUTHORITATIVE
+        committed marker (`slot.exists()`); cleans a partially-written slot before a cold run; and
+        passes the warm/cold verdict to the probe explicitly (the probe re-affirms via the same
+        marker). The probe COMMITS the marker as the last step of a successful cold import, so the
+        host no longer races a separate write_meta."""
+        warm = slot.exists()
+        if not warm and slot.project_dir.is_dir() and any(slot.project_dir.iterdir()):
+            # Non-empty project dir with NO committed marker ⇒ a prior cold run died mid-import.
+            # Don't open it warm (a never-fully-imported program → permanent -process failure);
+            # wipe it and re-import cold.
+            log.info(
+                "ghidra project cache: clearing a half-written slot %s and re-importing cold",
+                slot.root.name)
+            slot.clear_project()
         out = self.runner.run_json_probe(
-            "ghidra_probe.py", artifact, extra_args=args,
-            project_mount=(str(slot.root) if slot is not None else None))
-        if slot is not None:
-            # The cold run just persisted the project; record the marker (what exists() keys
-            # on) and touch the slot so LRU eviction spares the most-recently-used project.
-            try:
-                slot.write_meta()
-                slot.touch()
-            except Exception:  # noqa: BLE001 — bookkeeping must not fail a good decompile
-                pass
+            "ghidra_probe.py", artifact, extra_args=args, project_mount=str(slot.root))
+        # The probe committed meta.json on a successful cold import; on the warm path it's already
+        # there. Either way, mark the slot most-recently-used so LRU eviction spares it.
+        try:
+            slot.touch()
+        except Exception:  # noqa: BLE001 — bookkeeping must not fail a good decompile
+            pass
         return out
 
     def _resolve_slot(self, artifact: str, project):

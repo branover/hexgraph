@@ -26,8 +26,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
+import time
 
 GHIDRA_DIR = os.environ.get("GHIDRA_INSTALL_DIR", "/opt/ghidra")
 SCRATCH = os.environ.get("TMPDIR", "/scratch")
@@ -35,6 +37,12 @@ SCRATCH = os.environ.get("TMPDIR", "/scratch")
 # runner.CONTAINER_PROJECT_DIR). Present only when the caller threads a project_mount; absent
 # for --check, for radare2 callers, or when the cache is disabled.
 PROJECT_MOUNT = "/ghidra-project"
+# The COMMITTED warm marker (engine.ghidra_project.META_NAME), written under PROJECT_MOUNT as the
+# LAST step of a successful cold import. Its presence — NOT the raw non-emptiness of the project
+# dir — is the authoritative "this slot is a valid warm project" signal: a crashed/timed-out cold
+# import leaves a non-empty project dir but NO marker, so the next run re-imports cold instead of
+# opening a never-fully-imported program with -process (which would fail forever).
+META_NAME = "meta.json"
 # analyzeHeadless names the GHIDRA PROJECT by the positional arg we pass ("hexgraph", the .gpr),
 # but names the imported PROGRAM after the imported file's basename. The artifact is always
 # mounted at a fixed path, so the program name inside the project is deterministic — `-process`
@@ -45,6 +53,51 @@ PROJECT_NAME = "hexgraph"
 def _program_name(artifact: str) -> str:
     """The name analyzeHeadless stores the imported program under (the artifact's basename)."""
     return os.path.basename(artifact) or "artifact"
+
+
+def _valid_marker(path: str) -> bool:
+    """True iff `path` is a committed, parseable warm marker. Anything else (absent, empty,
+    truncated/corrupt JSON from a crash) ⇒ treat the slot as cold."""
+    try:
+        with open(path) as fh:
+            json.load(fh)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _clear_partial(proj_dir: str, marker: str | None) -> None:
+    """Wipe a partially-written persistent slot before a cold re-import: drop the stale marker
+    and the incomplete project dir, then recreate an empty project dir. Best-effort."""
+    if marker:
+        try:
+            os.remove(marker)
+        except OSError:
+            pass
+    try:
+        if os.path.isdir(proj_dir):
+            shutil.rmtree(proj_dir)
+    except OSError:
+        pass
+    os.makedirs(proj_dir, exist_ok=True)
+
+
+def _commit_marker(marker: str, prog: str) -> None:
+    """COMMIT the warm marker — the LAST step of a successful cold import, written atomically
+    (tmp + os.replace) so a crash never leaves a half-written marker that reads as warm. Mirrors
+    engine.ghidra_project.GhidraProject.write_meta; its presence makes the slot warm next call."""
+    payload = json.dumps({
+        "program_name": prog,
+        "version": _version(),
+        "created_at": time.time(),
+    })
+    tmp = marker + ".tmp"
+    try:
+        with open(tmp, "w") as fh:
+            fh.write(payload)
+        os.replace(tmp, marker)
+    except OSError:
+        pass  # best-effort; without a marker the next call simply re-imports cold (correct)
 
 # Under the production sandbox hardening (`--read-only --user 1000:1000`) the ONLY
 # writable area is the /scratch tmpfs. Ghidra's launcher writes outside the project
@@ -205,10 +258,19 @@ def main() -> int:
     persistent = os.path.isdir(PROJECT_MOUNT)
     if persistent:
         proj_dir = os.path.join(PROJECT_MOUNT, "project")
-        os.makedirs(proj_dir, exist_ok=True)
-        warm = bool(os.path.isdir(proj_dir) and os.listdir(proj_dir))
+        marker = os.path.join(PROJECT_MOUNT, META_NAME)
+        # WARM only on the COMMITTED marker (written as the last step of a prior successful cold
+        # import) AND a non-empty project dir — never on raw dir non-emptiness, so a half-written
+        # cold run reads as cold.
+        warm = bool(_valid_marker(marker)
+                    and os.path.isdir(proj_dir) and os.listdir(proj_dir))
+        if not warm:
+            # Cold (fresh OR half-written): wipe any partial project + stale marker so the import
+            # starts clean, then re-import.
+            _clear_partial(proj_dir, marker)
     else:
         proj_dir = os.path.join(SCRATCH, "ghidra_proj")
+        marker = None
         os.makedirs(proj_dir, exist_ok=True)
         warm = False
 
@@ -247,6 +309,12 @@ def main() -> int:
         return 4
     with open(out_path) as fh:
         result = json.load(fh)
+    # COMMIT the warm marker as the LAST step of a successful COLD persistent import — the
+    # postScript only wrote out_path after a complete import+analyze, so reaching here means the
+    # project is fully imported. This atomic commit is the cold→warm transition: only now does the
+    # slot read as warm next call. (Warm runs already have it; throwaway runs have no mount.)
+    if persistent and not warm and marker:
+        _commit_marker(marker, prog)
     result["tool"] = "ghidra_probe"
     result["cached"] = warm  # True ⇒ reused the persistent project (-process, no re-analysis)
     print(json.dumps(result))

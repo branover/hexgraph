@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -144,14 +145,29 @@ def test_no_eviction_when_under_cap(tmp_path):
 # --- the decompiler's cold-vs-warm decision (probe argv) ----------------------------------
 
 class _RecordingExecutor:
-    """Records project_mount per call and returns a canned payload (no Docker)."""
+    """Records project_mount per call and returns a canned payload (no Docker). When a mount is
+    threaded it SIMULATES THE PROBE committing the warm marker on the cold run (the probe owns the
+    marker now, not the host) so a subsequent call resolves as warm."""
     def __init__(self):
         self.calls = []
 
     def run_json_probe(self, probe, artifact, *, outdir=None, extra_args=None,
                        requires_execution=False, project_mount=None):
-        self.calls.append({"probe": probe, "extra_args": extra_args, "project_mount": project_mount})
-        return {"tool": "ghidra_probe", "functions": ["main", "other"], "focus": None}
+        warm = False
+        if project_mount is not None:
+            proj_dir = Path(project_mount) / "project"
+            marker = Path(project_mount) / "meta.json"
+            warm = marker.is_file() and proj_dir.is_dir() and any(proj_dir.iterdir())
+            if not warm:
+                # Simulate a successful COLD import: a non-empty project + the committed marker
+                # written as the last step (mirrors ghidra_probe._commit_marker).
+                proj_dir.mkdir(parents=True, exist_ok=True)
+                (proj_dir / "hexgraph.gpr").write_text("project")
+                marker.write_text(json.dumps({"program_name": "hexgraph"}))
+        self.calls.append({"probe": probe, "extra_args": extra_args,
+                           "project_mount": project_mount, "cached": warm})
+        return {"tool": "ghidra_probe", "functions": ["main", "other"], "focus": None,
+                "cached": warm}
 
 
 class _Project:
@@ -170,22 +186,25 @@ def test_decompiler_threads_project_mount_and_persists_marker(tmp_path, monkeypa
     fake = _RecordingExecutor()
     dec = GhidraDecompiler(runner=fake)
 
-    # COLD call (function A): the mount is threaded to the probe, and afterward the slot's
-    # marker exists so the NEXT call is recognized as warm.
-    dec.decompile(str(artifact), "funcA", project=project)
+    # COLD call (function A): the mount is threaded to the probe, the probe commits the marker,
+    # and afterward the slot's marker exists so the NEXT call is recognized as warm.
+    out_cold = dec.decompile(str(artifact), "funcA", project=project)
     assert len(fake.calls) == 1
     mount = fake.calls[0]["project_mount"]
     assert mount is not None and Path(mount).is_dir()
     assert fake.calls[0]["extra_args"] == ["funcA"]
+    assert out_cold["cached"] is False  # cold run, freshly imported
     sha = gp.content_hash(artifact)
     slot = gp.resolve(project.data_dir, sha, "12.1")
-    assert slot.meta_path.is_file()  # marker recorded → reuse on the next call
+    assert slot.meta_path.is_file()  # marker committed by the probe → reuse on the next call
+    assert slot.exists()             # the authoritative warm signal is now true
 
     # WARM call (DIFFERENT function B): same artifact ⇒ SAME mount reused (analyze once).
-    dec.decompile(str(artifact), "funcB", project=project)
+    out_warm = dec.decompile(str(artifact), "funcB", project=project)
     assert len(fake.calls) == 2
     assert fake.calls[1]["project_mount"] == mount
     assert fake.calls[1]["extra_args"] == ["funcB"]
+    assert out_warm["cached"] is True  # reused the persistent project (-process, no re-analysis)
 
 
 def test_decompiler_no_project_no_mount(tmp_path):
@@ -207,3 +226,191 @@ def test_decompiler_version_partitions_cache(tmp_path, monkeypatch, version):
     fake = _RecordingExecutor()
     GhidraDecompiler(runner=fake).decompile(str(artifact), "f", project=project)
     assert version.replace(".", ".") in fake.calls[0]["project_mount"]
+
+
+# --- the atomic warm/cold marker (BLOCKING #2 / SHOULD-FIX #3) -----------------------------
+
+def test_exists_requires_committed_marker(tmp_path):
+    """exists() is the single authoritative warm signal: a non-empty project dir WITHOUT a
+    committed meta.json reads as a MISS (half-written cold run), with it reads as a HIT."""
+    slot = gp.resolve(tmp_path / "data", "deadbeef", "12.1")
+    slot.prepare()
+    # A non-empty project dir but no marker = a crashed cold import → still cold.
+    (slot.project_dir / "hexgraph.gpr").write_text("partial")
+    assert not slot.exists()
+    # Commit the marker → now warm.
+    slot.write_meta()
+    assert slot.exists()
+
+
+def test_exists_rejects_corrupt_marker(tmp_path):
+    """A truncated/corrupt marker (a crash mid-write, were it not atomic) ⇒ cold."""
+    slot = gp.resolve(tmp_path / "data", "deadbeef", "12.1")
+    slot.prepare()
+    (slot.project_dir / "hexgraph.gpr").write_text("x")
+    slot.meta_path.write_text("{ not valid json")
+    assert not slot.exists()
+
+
+def test_write_meta_is_atomic_no_tmp_left(tmp_path):
+    slot = gp.resolve(tmp_path / "data", "deadbeef", "12.1")
+    slot.prepare()
+    slot.write_meta()
+    assert slot.meta_path.is_file()
+    assert not slot.meta_path.with_suffix(".json.tmp").exists()  # tmp renamed away
+
+
+def test_clear_project_wipes_partial_slot(tmp_path):
+    slot = gp.resolve(tmp_path / "data", "deadbeef", "12.1")
+    slot.prepare()
+    (slot.project_dir / "hexgraph.gpr").write_text("partial")
+    slot.meta_path.write_text("stale")
+    slot.clear_project()
+    assert slot.project_dir.is_dir()
+    assert not any(slot.project_dir.iterdir())  # emptied
+    assert not slot.meta_path.exists()           # stale marker dropped
+
+
+def test_decompiler_redoes_cold_on_partial_slot(tmp_path, monkeypatch):
+    """A non-empty slot with NO committed marker must NOT be opened warm — the decompiler clears
+    it and the (faked) probe re-imports cold, then commits the marker so the next call is warm."""
+    from hexgraph.sandbox.decompiler import GhidraDecompiler
+
+    monkeypatch.setattr(gp, "ghidra_version_for_image", lambda *a, **k: "12.1")
+    artifact = _write(tmp_path / "bin", b"a binary")
+    project = _Project(tmp_path / "data")
+    sha = gp.content_hash(artifact)
+    slot = gp.resolve(project.data_dir, sha, "12.1")
+    slot.prepare()
+    # Pre-seed a HALF-WRITTEN slot: non-empty project, no marker.
+    (slot.project_dir / "leftover").write_text("from a crashed import")
+    assert not slot.exists()
+
+    fake = _RecordingExecutor()
+    out = GhidraDecompiler(runner=fake).decompile(str(artifact), "f", project=project)
+    assert out["cached"] is False               # treated as COLD, not warm
+    assert slot.exists()                         # now committed → warm next time
+    assert not (slot.project_dir / "leftover").exists()  # the partial was wiped
+
+
+# --- the cross-process slot lock (BLOCKING #1) --------------------------------------------
+
+def test_lock_serializes_concurrent_holders(tmp_path):
+    """Two threads contending on one slot's lock never overlap inside the critical section."""
+    import threading
+
+    slot = gp.resolve(tmp_path / "data", "deadbeef", "12.1")
+    slot.prepare()
+    inside = 0
+    max_concurrent = 0
+    overlaps = 0
+    lk = threading.Lock()
+    barrier = threading.Barrier(2)
+
+    def worker():
+        nonlocal inside, max_concurrent, overlaps
+        barrier.wait()
+        with slot.lock(timeout=10) as ok:
+            assert ok
+            with lk:
+                inside += 1
+                max_concurrent = max(max_concurrent, inside)
+                if inside > 1:
+                    overlaps += 1
+            time.sleep(0.2)
+            with lk:
+                inside -= 1
+
+    ts = [threading.Thread(target=worker) for _ in range(2)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert overlaps == 0
+    assert max_concurrent == 1
+
+
+def test_lock_different_slots_run_concurrently(tmp_path):
+    """Two DIFFERENT slots have different lock files → no serialization (they overlap)."""
+    import threading
+
+    a = gp.resolve(tmp_path / "data", "aaaa", "12.1"); a.prepare()
+    b = gp.resolve(tmp_path / "data", "bbbb", "12.1"); b.prepare()
+    inside = 0
+    max_concurrent = 0
+    lk = threading.Lock()
+    barrier = threading.Barrier(2)
+
+    def worker(slot):
+        nonlocal inside, max_concurrent
+        barrier.wait()
+        with slot.lock(timeout=10) as ok:
+            assert ok
+            with lk:
+                inside += 1
+                max_concurrent = max(max_concurrent, inside)
+            time.sleep(0.3)
+            with lk:
+                inside -= 1
+
+    ta = threading.Thread(target=worker, args=(a,))
+    tb = threading.Thread(target=worker, args=(b,))
+    ta.start(); tb.start(); ta.join(); tb.join()
+    assert max_concurrent == 2  # different locks → ran at the same time
+
+
+def test_lock_timeout_yields_false(tmp_path):
+    """When the slot is already locked by ANOTHER PROCESS, a contender times out and yields
+    False (the caller then falls back to a throwaway project)."""
+    import subprocess
+    import sys
+    import textwrap
+
+    slot = gp.resolve(tmp_path / "data", "deadbeef", "12.1")
+    slot.prepare()
+    # Hold the lock in a separate PROCESS (cross-process, not just cross-thread) for 5s.
+    holder_src = textwrap.dedent(f"""
+        import fcntl, os, sys, time
+        fd = os.open({str(slot.lock_path)!r}, os.O_CREAT | os.O_RDWR, 0o666)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        print("locked", flush=True)
+        time.sleep(5)
+    """)
+    holder = subprocess.Popen([sys.executable, "-c", holder_src],
+                              stdout=subprocess.PIPE, text=True)
+    try:
+        assert holder.stdout.readline().strip() == "locked"  # wait until it holds the lock
+        t0 = time.monotonic()
+        with slot.lock(timeout=0.5, poll=0.05) as ok:
+            assert ok is False  # timed out — fall back to throwaway
+        assert time.monotonic() - t0 >= 0.5  # actually waited the timeout
+    finally:
+        holder.terminate()
+        holder.wait(timeout=10)
+
+
+def test_decompiler_falls_back_to_throwaway_on_lock_timeout(tmp_path, monkeypatch):
+    """On a lock-acquire timeout the decompiler runs an UNCACHED throwaway probe (no mount) and
+    does NOT touch the cached slot."""
+    from hexgraph.sandbox.decompiler import GhidraDecompiler
+
+    monkeypatch.setattr(gp, "ghidra_version_for_image", lambda *a, **k: "12.1")
+    artifact = _write(tmp_path / "bin", b"a binary")
+    project = _Project(tmp_path / "data")
+
+    # Force the lock to "time out" by patching the slot's lock() to yield False.
+    import contextlib
+
+    @contextlib.contextmanager
+    def _never_acquire(*a, **k):
+        yield False
+
+    monkeypatch.setattr(gp.GhidraProject, "lock", _never_acquire)
+    fake = _RecordingExecutor()
+    out = GhidraDecompiler(runner=fake).decompile(str(artifact), "f", project=project)
+    # Ran the throwaway path: NO project_mount threaded.
+    assert fake.calls[0]["project_mount"] is None
+    assert out["cached"] is False
+    # The cached slot was left untouched (no marker committed).
+    sha = gp.content_hash(artifact)
+    assert not gp.resolve(project.data_dir, sha, "12.1").exists()
