@@ -230,7 +230,14 @@ class RemoteDockerExecutor(SandboxRunner):
     def run_probe(self, probe, artifact, *, outdir=None, extra_args=None,
                   requires_execution=False, extra_ro_mounts=None, allow_network=False,
                   net_container=None, secret=None, resources=None, network_gate="network",
-                  image=None) -> RunResult:
+                  image=None, project_mount=None) -> RunResult:
+        if project_mount is not None:
+            # The persistent Ghidra project cache (engine.ghidra_project) lives on the LOCAL
+            # data dir; a writable cross-host project mount is not wired for the staged-volume
+            # remote path. Fail loud rather than silently re-analyzing every call on the remote.
+            raise SandboxError(
+                "the persistent Ghidra project cache (project_mount) is only supported on the "
+                "local docker executor; run Ghidra decompilation locally or disable the cache")
         if requires_execution:
             from hexgraph.policy import assert_allows_execution
             assert_allows_execution()
@@ -287,11 +294,11 @@ class RemoteDockerExecutor(SandboxRunner):
 
     def run_json_probe(self, probe, artifact, *, outdir=None, extra_args=None,
                        requires_execution=False, extra_ro_mounts=None, allow_network=False,
-                       resources=None) -> dict:
+                       resources=None, project_mount=None) -> dict:
         result = self.run_probe(probe, artifact, outdir=outdir, extra_args=extra_args,
                                 requires_execution=requires_execution,
                                 extra_ro_mounts=extra_ro_mounts, allow_network=allow_network,
-                                resources=resources)
+                                resources=resources, project_mount=project_mount)
         try:
             return json.loads(result.stdout)
         except json.JSONDecodeError as exc:

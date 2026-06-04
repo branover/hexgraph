@@ -106,7 +106,9 @@ class GhidraBridgeDecompiler(Decompiler):
     def _resolve(self) -> BridgeOps:
         return self._ops if self._ops is not None else connect_ops()
 
-    def decompile(self, artifact: str, function: str | None = None) -> dict:
+    def decompile(self, artifact: str, function: str | None = None, *, project=None) -> dict:
+        # The bridge talks to a Ghidra you already have open (your project IS the cache);
+        # `project` is accepted for seam parity and ignored.
         return self._resolve().decompile(program=None, function=function)
 
 

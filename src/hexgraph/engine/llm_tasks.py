@@ -34,7 +34,7 @@ _DECOMPILE_TYPES = {"static_analysis", "reverse_engineering"}
 _DECOMPILABLE_KINDS = {TargetKind.executable, TargetKind.shared_library}
 
 
-def _gather_decompilation(target: Target, ctx: TaskContext) -> dict | None:
+def _gather_decompilation(target: Target, ctx: TaskContext, project: Project | None = None) -> dict | None:
     """Best-effort decompilation to enrich the prompt (real backends use it; the
     mock ignores it). Gated on the environment — never on the backend identity —
     so the backend seam stays clean. Silently skipped if the sandbox is absent."""
@@ -49,7 +49,7 @@ def _gather_decompilation(target: Target, ctx: TaskContext) -> dict | None:
     try:
         from hexgraph.sandbox.decompiler import get_decompiler
 
-        return get_decompiler().decompile(target.path, ctx.function)
+        return get_decompiler().decompile(target.path, ctx.function, project=project)
     except Exception:  # noqa: BLE001 — decompilation is best-effort enrichment
         return None
 
@@ -192,7 +192,7 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
     Sets the task status to needs_triage if any finding has low confidence.
     """
     ctx = _build_context(session, project, target, task)
-    decomp = _gather_decompilation(target, ctx)
+    decomp = _gather_decompilation(target, ctx, project)
     if decomp:
         ctx.tool_outputs["decompilation"] = decomp
         _materialize_decomp_graph(session, project.id, target.id, decomp)

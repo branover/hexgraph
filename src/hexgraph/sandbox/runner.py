@@ -28,6 +28,10 @@ DEFAULT_IMAGE = "hexgraph-sandbox:latest"
 DEFAULT_TIMEOUT = 300  # seconds
 PROBES_DIR = Path(__file__).resolve().parent / "probes"
 CONTAINER_PROBES = "/opt/hexgraph"
+# The persistent Ghidra-project bind-mount point inside the container (analyze-once / reuse,
+# engine.ghidra_project). A single bounded WRITABLE volume of HexGraph's own data — must match
+# engine.ghidra_project.CONTAINER_PROJECT_DIR.
+CONTAINER_PROJECT_DIR = "/ghidra-project"
 # The unprivileged uid:gid every sandbox container runs as — UNCONDITIONAL hardening,
 # never root. Kept as a constant (not a bare literal) so the host-side `/out` bind-mount
 # can be made writable by exactly this uid no matter what the host process's own uid is
@@ -277,6 +281,7 @@ class SandboxRunner:
         resources: ResourceSpec | None = None,
         network_gate: str = "network",
         image: str | None = None,
+        project_mount: str | Path | None = None,
     ) -> RunResult:
         """Run a probe script over `artifact` inside the sandbox.
 
@@ -310,6 +315,14 @@ class SandboxRunner:
 
         `resources` (a ResourceSpec) overrides the per-container ceilings (mem/cpu/pids/
         tmpfs/timeout); `unconstrained` lifts mem/cpu/pids ONLY (never a security flag).
+
+        `project_mount` (host dir) is bind-mounted READ-WRITE at /ghidra-project so the
+        persistent Ghidra project (analyze-once / reuse, engine.ghidra_project) survives
+        across container runs. This is HexGraph's OWN data dir, NOT target bytes — the target
+        artifact stays read-only at /artifact. It is the single bounded writable volume the
+        ghidra path adds; EVERY other hardening flag (`--read-only` rootfs, `--network none`,
+        `--cap-drop ALL`, `--no-new-privileges`, `--user 1000:1000`) is unchanged. The dir is
+        made writable for the container uid exactly like /out (`_ensure_outdir_writable`).
         """
         if requires_execution:
             from hexgraph.policy import assert_allows_execution
@@ -349,6 +362,15 @@ class SandboxRunner:
             _ensure_outdir_writable(outdir)  # so the --user 1000 container can write /out
             cmd += ["-v", f"{outdir}:/out:rw"]
             probe_args.append("/out")
+        if project_mount is not None:
+            # The persistent Ghidra project: a single bounded writable bind-mount of HexGraph's
+            # OWN data (not target bytes). Made writable for the --user 1000 container exactly
+            # like /out; the target artifact stays read-only at /artifact and every other
+            # hardening flag is untouched (see the docstring + _ensure_outdir_writable).
+            project_mount = Path(project_mount).resolve()
+            project_mount.mkdir(parents=True, exist_ok=True)
+            _ensure_outdir_writable(project_mount)
+            cmd += ["-v", f"{project_mount}:{CONTAINER_PROJECT_DIR}:rw"]
         # Extra read-only inputs (e.g. the target library a fuzz harness links against).
         for host, cont in (extra_ro_mounts or []):
             cmd += ["-v", f"{Path(host).resolve()}:{cont}:ro"]
@@ -398,12 +420,13 @@ class SandboxRunner:
         extra_ro_mounts: list[tuple[str, str]] | None = None,
         allow_network: bool = False,
         resources: ResourceSpec | None = None,
+        project_mount: str | Path | None = None,
     ) -> dict:
         """Run a probe whose stdout is a single JSON object, and parse it."""
         result = self.run_probe(
             probe, artifact, outdir=outdir, extra_args=extra_args,
             requires_execution=requires_execution, extra_ro_mounts=extra_ro_mounts,
-            allow_network=allow_network, resources=resources,
+            allow_network=allow_network, resources=resources, project_mount=project_mount,
         )
         try:
             return json.loads(result.stdout)
