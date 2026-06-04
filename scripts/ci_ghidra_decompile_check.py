@@ -70,16 +70,12 @@ def main() -> int:
         # cause (the launcher's "Failed to create directory" under --read-only).
         result = runner.run_json_probe("ghidra_probe.py", str(fixture), extra_args=[FOCUS])
     except SandboxError as exc:
-        # The probe's JSON error blob (with the analyzeHeadless tail) rides along on the
-        # SandboxRunner result; re-run capturing raw stdout so the failure log shows the
-        # actual Ghidra error instead of an opaque exit code.
-        try:
-            raw = runner.run_probe("ghidra_probe.py", str(fixture), extra_args=[FOCUS])
-            print("--- probe stdout ---\n" + (raw.stdout or "")[:4000], file=sys.stderr)
-            print("--- probe stderr ---\n" + (raw.stderr or "")[:2000], file=sys.stderr)
-        except SandboxError as inner:
-            # run_probe itself raises on non-zero exit; its message carries the stderr tail.
-            print(f"--- run_probe error ---\n{inner}", file=sys.stderr)
+        # SandboxRunner raises on a non-zero probe exit and the SandboxError message carries
+        # the probe's STDERR tail (runner._run: proc.stderr.strip()[:500]); it does NOT carry
+        # stdout, so re-running here cannot recover the {"error": ...} blob the probe writes to
+        # stdout (run_probe would just raise again). Surface the SandboxError message, which is
+        # the diagnostic available through this seam; the probe's own analyzeHeadless tail must
+        # reach stderr (see ghidra_probe) for the root cause to show up here.
         _fail(f"ghidra probe failed under production hardening: {exc}")
 
     if "error" in result:
