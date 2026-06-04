@@ -253,37 +253,37 @@ def resolve(data_dir: str | Path, content_sha: str, ghidra_version: str | None) 
     )
 
 
-def _slot_is_in_use(slot_root: Path) -> bool:
-    """True iff another holder currently owns this slot's `.hglock` (a running cold/warm
-    analysis). We probe with a NON-BLOCKING exclusive flock on the slot's lock file: if we get
-    it, nobody holds the slot (safe to evict) and we immediately release; if we can't, an
-    analysis is in flight and the slot must NOT be evicted (rmtree'ing it would corrupt the
-    in-flight Ghidra project and unlink the lock file out from under the holder — the very
-    cross-process corruption the per-slot lock exists to prevent). On a non-POSIX host (no
-    `fcntl`) there is no cross-process holder to race, so report not-in-use."""
+def _evict_slot_locked(slot_root: Path) -> bool:
+    """Evict a cache slot ONLY while holding its `.hglock`, returning True if evicted and
+    False if another holder has it (skip). Holding the lock ACROSS the rmtree is what makes
+    this safe: probing the lock and then releasing it before deleting would leave a TOCTOU
+    window in which a holder could acquire the slot and start an analysis we then rmtree out
+    from under them — the very cross-process corruption the per-slot lock exists to prevent.
+    Deleting the locked `.hglock` is safe on POSIX: our fd stays valid (unlinked-but-open),
+    and a later opener re-creates a fresh slot + new lock inode — a cache miss, never a
+    shared-project race. On a non-POSIX host (no `fcntl`) there is no cross-process holder to
+    race, so just delete. rmtree failures propagate to the caller."""
     if fcntl is None:  # pragma: no cover — non-POSIX host
-        return False
+        shutil.rmtree(slot_root)
+        return True
     lock_path = slot_root / LOCK_NAME
-    if not lock_path.exists():
-        return False  # no lock file ⇒ never locked by anyone
+    fd = None
     try:
-        fd = os.open(lock_path, os.O_RDWR)
-    except OSError:
-        return False  # vanished/unreadable ⇒ treat as free; rmtree handles the rest
-    try:
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o666)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
             if exc.errno in (errno.EACCES, errno.EAGAIN):
-                return True  # someone holds it → in use
+                return False  # a holder is mid-analysis → do NOT evict
             raise
-        # We grabbed it ⇒ free. Release immediately (we only probed).
-        with contextlib.suppress(OSError):
-            fcntl.flock(fd, fcntl.LOCK_UN)
-        return False
+        shutil.rmtree(slot_root)  # deletes the now-unlinked .hglock too; our fd stays valid
+        return True
     finally:
-        with contextlib.suppress(OSError):
-            os.close(fd)
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            with contextlib.suppress(OSError):
+                os.close(fd)
 
 
 def _dir_size(path: Path) -> int:
@@ -331,17 +331,15 @@ def evict_to_cap(data_dir: str | Path, cap_mb: int, *, keep: str | None = None) 
     for _mtime, child, size in slots:
         if total <= cap_bytes:
             break
-        if _slot_is_in_use(child):
-            # Another process is mid-analysis on this slot (holds its `.hglock`). Evicting it
-            # would rmtree the live Ghidra project and unlink the lock file out from under the
-            # holder — recreating exactly the cross-process corruption the slot lock prevents.
-            # Skip it; a later eviction (or the holder finishing) reclaims the space.
-            log.info("ghidra project cache: skipping eviction of in-use slot %s", child.name)
-            continue
         try:
-            shutil.rmtree(child)
+            evicted_ok = _evict_slot_locked(child)
         except OSError as exc:
             log.warning("ghidra project cache: failed to evict %s: %s", child.name, exc)
+            continue
+        if not evicted_ok:
+            # Another process holds this slot's `.hglock` (mid-analysis). Skip it; a later
+            # eviction (or the holder finishing) reclaims the space.
+            log.info("ghidra project cache: skipping eviction of in-use slot %s", child.name)
             continue
         total -= size
         evicted.append(child.name)
