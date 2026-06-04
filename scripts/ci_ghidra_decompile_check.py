@@ -46,17 +46,23 @@ def main() -> int:
     if not PROBES_DIR.is_dir():
         _fail(f"probes dir not found: {PROBES_DIR}")
 
-    # Mirror SandboxRunner.run_probe's hardening for the analysis path: no network,
-    # read-only artifact, the installed probes mounted over the baked copy, a writable
-    # scratch tmpfs, and HOME/TMPDIR pointed at it. (No --user here so we don't have to
-    # juggle the host uid for the throwaway scratch; the security flags that matter for a
-    # decompile — --network none, --read-only artifact — are all present.)
+    # Mirror SandboxRunner.run_probe's FULL production hardening so the gate proves the
+    # REAL config works, not a looser one: --network none, read-only rootfs + artifact,
+    # all caps dropped, no-new-privileges, unprivileged uid 1000, a writable scratch tmpfs
+    # (mode 1777 so uid 1000 can write) + /dev/shm, with HOME/TMPDIR pointed at scratch.
+    # Production runs Ghidra under exactly these flags, so a decompile that fails here is a
+    # real breakage — which is the point of the gate.
     cmd = [
         "docker", "run", "--rm",
         "--network", "none",
+        "--read-only",
+        "--cap-drop", "ALL",
+        "--security-opt", "no-new-privileges",
+        "--user", "1000:1000",
         "-v", f"{fixture}:/artifact:ro",
         "-v", f"{PROBES_DIR}:/opt/hexgraph:ro",
         "--tmpfs", "/scratch:rw,exec,mode=1777",
+        "--tmpfs", "/dev/shm:rw,mode=1777",
         "--workdir", "/scratch",
         "-e", "HOME=/scratch",
         "-e", "TMPDIR=/scratch",
