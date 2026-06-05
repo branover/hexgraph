@@ -84,6 +84,12 @@ The graph is relational, and Neo4j is out of scope. Node identity for functions,
 is the *normalized* name within a target, with decompiler prefixes stripped, so `sym.get_param` and
 `get_param` are the same node.
 
+The graph deliberately stays a curated set of results rather than a copy of the whole program. Every
+deterministic tool that runs against a target, decompilation, function listing, xrefs, strings, records
+its output as a durable **Tool Result** that you can find and reuse, and only the results you choose to
+keep become graph nodes. [observations.md](observations.md) covers that store and how prior tool results
+are surfaced.
+
 ## The Finding schema is frozen
 
 Every task and every backend, the mock included, emits exactly the shape defined in
