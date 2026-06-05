@@ -6,6 +6,15 @@ and (b) executing a requested call. Static tools are read-only and need no polic
 change; `fuzz_function` is dynamic and offered only when fuzzing is enabled
 (policy-gated). Tools return bounded TEXT; errors come back as text so the model
 can recover rather than the task failing.
+
+**The query/enrich/promote contract (design §5.3).** Every tool result is recorded
+as a durable Observation (the substrate — discoverable, reusable, scoped to the
+exact bytes), but the GRAPH stays a curated result set. QUERY verbs (list_functions/
+disassemble/xrefs/list_strings) mutate no graph; they only enrich already-existing
+nodes via the Observation-write path. decompile_function is the PROMOTE act: it adds
+THIS one function and draws `calls` edges ONLY to callees already in the graph — new
+callees are surfaced as promotable, never auto-spawned (the both-endpoints-exist rule,
+the fan-out guard). A per-call promotion budget backstops it, reporting any overflow.
 """
 
 from __future__ import annotations
@@ -19,6 +28,12 @@ from hexgraph.llm.base import ToolSpec
 
 _MAX = 6000  # cap any single tool result so the context stays bounded
 
+# Per-call promotion budget (design §5.3, the backstop): a single tool call may add
+# at most this many NEW nodes/edges to the graph. A promotion that would exceed it
+# returns the overflow as promotable results with an explicit "capped" note — never
+# silent truncation (the repo's no-silent-caps discipline).
+_PROMOTE_BUDGET = 50
+
 
 @dataclass
 class ToolContext:
@@ -31,21 +46,31 @@ class ToolContext:
 # --- specs (advertised to the model) ------------------------------------------
 
 _STATIC_SPECS = [
-    ToolSpec("list_functions", "List the function names discovered in the target binary.",
+    ToolSpec("list_functions", "List the function names discovered in the target binary. QUERY: "
+             "returns the inventory and records an Observation; does NOT add graph nodes — the "
+             "enumeration is an answer, not a graph object. Promote a function deliberately by "
+             "decompiling it.",
              {"type": "object", "properties": {}}),
     ToolSpec("decompile_function", "Decompile one function to pseudo-C and list its callees. "
-             "Use this to read the actual code before judging a vulnerability.",
+             "Use this to read the actual code before judging a vulnerability. PROMOTE: this "
+             "deliberately adds THIS function to the graph (enriched in place with its recovered "
+             "prototype/address) and draws `calls` edges only to callees ALREADY in the graph — "
+             "new callees are listed for optional promotion, never auto-added (no fan-out).",
              {"type": "object", "properties": {"function": {"type": "string"}}, "required": ["function"]}),
-    ToolSpec("disassemble", "Disassemble one function (when pseudo-C is unclear).",
+    ToolSpec("disassemble", "Disassemble one function (when pseudo-C is unclear). QUERY: records "
+             "an Observation; adds no graph nodes.",
              {"type": "object", "properties": {"function": {"type": "string"}}, "required": ["function"]}),
     ToolSpec("xrefs", "Find which functions CALL a given symbol/sink (e.g. system, popen, "
              "strcpy) and where. With no symbol, map the binary's dangerous sinks, format-string "
              "sinks, AND network/socket surface (bind/listen/connect/recv) + who reaches each. Use "
-             "to trace a sink back to its caller, or to find listen/connect sites for socket nodes.",
+             "to trace a sink back to its caller, or to find listen/connect sites for socket nodes. "
+             "QUERY: records an Observation and tags is_sink on any dangerous-import symbol ALREADY "
+             "in the graph; adds no new graph nodes.",
              {"type": "object", "properties": {"symbol": {"type": "string"}}}),
     ToolSpec("read_imports", "Return the target's imported symbols, linked libraries, and mitigation flags.",
              {"type": "object", "properties": {}}),
-    ToolSpec("list_strings", "List notable strings in the target, optionally filtered by a substring.",
+    ToolSpec("list_strings", "List notable strings in the target, optionally filtered by a substring. "
+             "QUERY: records an Observation; adds no graph nodes.",
              {"type": "object", "properties": {"pattern": {"type": "string"}}}),
     ToolSpec("check_decompiler", "Verify the decompiler decompile_function/disassemble use ACTUALLY "
              "works (not just the configured name): radare2 needs the sandbox image up; Ghidra needs "
@@ -95,8 +120,62 @@ def _clip(s: str) -> str:
     return s if len(s) <= _MAX else s[:_MAX] + "\n…[truncated]"
 
 
+def _callee_names(callees) -> list[str]:
+    """Callee names from the decompiler's callee list (entries are bare names or dicts)."""
+    out = []
+    for c in callees or []:
+        n = c.get("name") if isinstance(c, dict) else c
+        if n:
+            out.append(n)
+    return out
+
+
+def _record_obs(ctx: ToolContext, *, tool: str, args: dict | None, result_kind: str,
+                payload, summary: str, status: str = "ok", node_refs: list | None = None):
+    """Record one deterministic tool call as a durable Observation (design §5.2/§5.6)
+    and return `(observation, cached)`. Passes the TARGET's analyzed-bytes content_hash
+    (via content_hash_for) so the extract-at-write enrichment + passive invalidation fire
+    correctly — a producer that omits this would write facts under a None hash that a
+    properly-keyed node never matches. Recording an Observation creates ZERO graph nodes;
+    enrichment of ALREADY-existing nodes happens automatically inside record_observation.
+    Best-effort: a store failure must never break the tool call."""
+    from hexgraph.engine import observations as O
+
+    try:
+        return O.record_observation(
+            ctx.session, project_id=ctx.project.id, target_id=ctx.target.id,
+            source="agent", tool=tool, args=args, result_kind=result_kind,
+            payload=payload, summary=summary, status=status,
+            content_hash=O.content_hash_for(ctx.target), node_refs=node_refs or [],
+        )
+    except Exception:  # noqa: BLE001 — discoverability is best-effort, never load-bearing
+        return None, False
+
+
+def _function_node(ctx: ToolContext, name: str):
+    """The EXISTING (non-archived) function node for `name` in this target, by canonical
+    identity (normalized), or None. Used for the both-endpoints-exist rule — we never
+    mint a node here, only check whether one is already curated."""
+    from hexgraph.db.models import Node
+    from hexgraph.engine.nodes import normalize_symbol_name
+
+    key = normalize_symbol_name(name)
+    if not key:
+        return None
+    for n in (ctx.session.query(Node)
+              .filter(Node.project_id == ctx.project.id, Node.target_id == ctx.target.id,
+                      Node.node_type == "function", Node.archived.is_(False)).all()):
+        if normalize_symbol_name(n.fq_name or n.name) == key:
+            return n
+    return None
+
+
 def _decomp(ctx: ToolContext, function: str | None):
-    """Run the decompiler (cached per function) and, for a focus, grow the graph."""
+    """Run the decompiler (cached per function), record the result as an Observation,
+    and for a focused decompile PROMOTE that one function (the deliberate curation act).
+
+    Returns the decompiler dict, augmented (on a focused decompile) with `observation_id`
+    and `promotable_callees` — callees NOT yet in the graph that the agent may promote."""
     key = f"decomp:{function or '*'}"
     if key in ctx.cache:
         return ctx.cache[key]
@@ -111,28 +190,76 @@ def _decomp(ctx: ToolContext, function: str | None):
     except Exception as exc:  # noqa: BLE001
         out = {"error": f"decompiler failed: {exc}"}
     ctx.cache[key] = out
-    if function and isinstance(out, dict) and out.get("focus"):
-        _materialize(ctx, out["focus"])
+    if not isinstance(out, dict):
+        return out
+    if out.get("error"):
+        return out
+
+    if function and out.get("focus"):
+        # A focused decompile is a QUERY (recorded) + an explicit PROMOTE of THIS one
+        # function. result_kind="decompilation" so the enrichment extractor distills the
+        # focus's whitelisted facts (prototype/address/callees) into the index.
+        focus = out["focus"]
+        obs, _cached = _record_obs(
+            ctx, tool="decompile_function", args={"function": function},
+            result_kind="decompilation", payload=out,
+            summary=f"decompiled {focus.get('name') or function}",
+            node_refs=[focus.get("name")] if focus.get("name") else [])
+        promotable = _materialize(ctx, focus)
+        out["observation_id"] = obs.id if obs is not None else None
+        out["promotable_callees"] = promotable
+    else:
+        # A bare list_functions is a pure QUERY: record it, mutate NO graph.
+        obs, _cached = _record_obs(
+            ctx, tool="list_functions", args={}, result_kind="function_list",
+            payload={"functions": out.get("functions", [])},
+            summary=f"{len(out.get('functions', []))} functions")
+        out["observation_id"] = obs.id if obs is not None else None
     return out
 
 
-def _materialize(ctx: ToolContext, focus: dict) -> None:
-    """Materialize the decompiled focus function + callees into the graph (so the
-    agent's exploration is recorded), mirroring the single-pass path."""
+def _materialize(ctx: ToolContext, focus: dict) -> list[str]:
+    """Promote the decompiled FOCUS function into the graph (the deliberate curation act
+    of decompiling THIS function), and draw `calls` edges ONLY to callees that ALREADY
+    exist as nodes (the both-endpoints-exist rule, design §5.3). New callees are NOT
+    spawned as nodes — they surface in the result as promotable.
+
+    Bounded by the per-call promotion budget (one new focus node + edges to existing
+    callees). Returns the callee names NOT promoted (so the caller can report them).
+
+    The focus's enrichment (prototype/address/calling_convention) lands automatically:
+    _record_obs already indexed the facts, and get_or_create_node pulls them at create."""
     from hexgraph.db.models import EdgeType
     from hexgraph.engine.edges import add_edge
     from hexgraph.engine.nodes import materialize_function
 
     if not focus.get("name"):
-        return
+        return []
+    budget = _PROMOTE_BUDGET
     fnode = materialize_function(ctx.session, project_id=ctx.project.id, target_id=ctx.target.id,
                                  name=focus["name"], address=focus.get("address"),
                                  pseudocode=focus.get("pseudocode") or None, created_by="agent")
+    budget -= 1  # the focus node is the one promotion this call makes
+    promotable: list[str] = []
     for callee in focus.get("callees", []) or []:
-        cnode = materialize_function(ctx.session, project_id=ctx.project.id, target_id=ctx.target.id,
-                                     name=callee, created_by="agent")
+        cname = callee.get("name") if isinstance(callee, dict) else callee
+        if not cname:
+            continue
+        cnode = _function_node(ctx, cname)
+        if cnode is None:
+            # Callee isn't curated yet: do NOT mint it (no fan-out). Surface it so the
+            # agent can decompile/promote it deliberately if it matters.
+            promotable.append(cname)
+            continue
+        if budget <= 0:
+            # Edge to an existing endpoint would otherwise be free, but honor the
+            # backstop strictly and report the overflow rather than silently truncate.
+            promotable.append(cname)
+            continue
         add_edge(ctx.session, project_id=ctx.project.id, src=("node", fnode.id), dst=("node", cnode.id),
                  type=EdgeType.calls, origin="tool", confidence=1.0, created_by_tool="agent")
+        budget -= 1
+    return promotable
 
 
 def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
@@ -150,6 +277,10 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
             pat = (args.get("pattern") or "").lower()
             if pat:
                 strings = [s for s in strings if pat in str(s).lower()]
+            _record_obs(ctx, tool="list_strings",
+                        args={"pattern": pat} if pat else {}, result_kind="strings",
+                        payload={"strings": [str(s) for s in strings[:200]]},
+                        summary=f"{len(strings)} strings" + (f" matching {pat!r}" if pat else ""))
             return _clip("strings:\n" + ("\n".join(str(s) for s in strings[:200]) or "(none)"))
         if name == "list_functions":
             out = _decomp(ctx, None)
@@ -175,6 +306,10 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
             if not disasm:
                 return f"function {fn!r} not found / no disassembly (functions: " \
                        f"{', '.join((out or {}).get('functions', [])[:40])})"
+            # Record the disassembly as a QUERY observation (no graph mutation).
+            _record_obs(ctx, tool="disassemble", args={"function": fn},
+                        result_kind="disassembly", payload={"function": fn, "disasm": disasm},
+                        summary=f"disassembled {fn}")
             return _clip(f"// {fn} disassembly\n{disasm}")
         if name == "decompile_function":
             fn = args.get("function")
@@ -187,8 +322,15 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
             if not focus:
                 return f"function {fn!r} not found among: {', '.join(out.get('functions', [])[:40])}"
             addr = f" @ {focus['address']}" if focus.get("address") else ""
-            return _clip(f"// {fn}{addr} (callees: {', '.join(focus.get('callees', []) or [])})\n"
-                         f"{focus.get('pseudocode', '')}")
+            promo = out.get("promotable_callees") or []
+            note = ""
+            if promo:
+                # New callees were NOT added to the graph (no fan-out). Surface them for
+                # deliberate promotion — decompile_function one of these to promote it.
+                note = ("\n// callees not yet in the graph (promote any by decompiling it): "
+                        + ", ".join(promo))
+            return _clip(f"// {fn}{addr} (callees: {', '.join(_callee_names(focus.get('callees')))})\n"
+                         f"{focus.get('pseudocode', '')}{note}")
         if name == "check_decompiler":
             from hexgraph.engine.mcp_tools import check_decompiler
             d = check_decompiler()
@@ -251,6 +393,11 @@ def _xrefs(ctx: ToolContext, symbol: str | None) -> str:
         )
     except Exception as exc:  # noqa: BLE001
         return f"xrefs failed: {exc}"
+    # Record the xref result (a QUERY) — the enrichment extractor tags is_sink on any
+    # already-curated dangerous-import symbol; no graph nodes are created here.
+    _record_obs(ctx, tool="xrefs", args={"symbol": symbol} if symbol else {},
+                result_kind="xrefs", payload=out,
+                summary=f"xrefs for {symbol}" if symbol else "dangerous-sink map")
     if symbol:
         callers = out.get("callers") or []
         if not callers:
