@@ -608,14 +608,17 @@ args = getScriptArgs()
 out_path = args[0]
 focus = args[1] if len(args) > 1 and args[1] else None
 MAX_STEPS = 500000
-# A return-address sentinel: when the emulated routine executes `ret`, the PC becomes this value,
-# which tells us the function returned. Chosen to be far from any real code mapping.
-RET_SENTINEL = 0x0000babecafe0000
-STACK_TOP = 0x0000000010000000
+# A stack base for the emulated frame. The return-address SENTINEL (when the routine executes
+# `ret` the PC becomes this, telling us it returned) is width-matched to the target's pointer
+# size below, so 32-bit ARM/MIPS firmware works as well as 64-bit. Chosen far from real code.
+STACK_TOP = 0x10000000
 try:
     monitor = ConsoleTaskMonitor()
     fm = currentProgram.getFunctionManager()
+    ptr_size = currentProgram.getDefaultPointerSize()
+    ret_sentinel = 0xbabecafe if ptr_size <= 4 else 0x0000babecafe0000
     target = None
+    err_msg = None
     if focus is not None:
         if re.match(r"^0x[0-9a-fA-F]+$", focus):
             try:
@@ -623,11 +626,15 @@ try:
             except:
                 target = None
         else:
-            for f in fm.getFunctions(True):
-                if f.getName() == focus:
-                    target = f
-                    break
-    if target is None:
+            matches = [f for f in fm.getFunctions(True) if f.getName() == focus]
+            if len(matches) > 1:
+                err_msg = ("ambiguous function name %s (%d matches) - pass an address"
+                           % (focus, len(matches)))
+            elif matches:
+                target = matches[0]
+    if err_msg is not None:
+        result = {"emulation": {"error": err_msg}}
+    elif target is None:
         result = {"emulation": {"error": "function not found: %s" % focus}}
     else:
         ret = target.getReturn()
@@ -639,8 +646,9 @@ try:
         pc_reg = emu.getPCRegister()
         sp_reg = emu.getStackPointerRegister()
         emu.writeRegister(sp_reg, STACK_TOP)
-        # Push the sentinel as the return address at [SP] (so the routine's `ret` lands there).
-        emu.writeStackValue(0, 8, RET_SENTINEL)
+        # Push the sentinel as the return address at [SP] (so the routine's `ret` lands there),
+        # width-matched to the target's pointer size (8 on x86-64/AArch64, 4 on 32-bit).
+        emu.writeStackValue(0, ptr_size, ret_sentinel)
         emu.writeRegister(pc_reg, entry.getOffset())
 
         steps = 0
@@ -648,7 +656,7 @@ try:
         err = None
         while steps < MAX_STEPS:
             pc = emu.getExecutionAddress()
-            if pc.getOffset() == RET_SENTINEL:
+            if pc.getOffset() == ret_sentinel:
                 reached_ret = True
                 break
             try:
