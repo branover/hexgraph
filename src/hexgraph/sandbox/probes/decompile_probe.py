@@ -68,6 +68,56 @@ def _containing_function(addr: int, funcs: list[dict]) -> dict | None:
     return None
 
 
+def _function_facts(r2, seek: str) -> dict:
+    """Rich, always-welcome function facts for the focus — recovered prototype/signature,
+    calling convention, and arg/local variables — from r2's function info (`afij`: the
+    signature, calling convention, arg/local counts) and variables (`afvj`). `seek` is the
+    same already-validated flag/address used for the `pdc`/`pdf` seek, so this adds no new
+    injection surface. Best-effort: every field is guarded, so a missing/odd shape just
+    omits that fact rather than failing the decompile."""
+    facts: dict = {}
+    try:
+        info = json.loads(r2.cmd(f"afij @ {seek}") or "[]")
+    except (json.JSONDecodeError, TypeError):
+        info = []
+    if isinstance(info, list) and info and isinstance(info[0], dict):
+        fi = info[0]
+        sig = fi.get("signature")
+        if sig:
+            # r2's signature IS the recovered C prototype; expose it under both keys the
+            # enrichment whitelist accepts (prototype is the primary, signature the synonym).
+            facts["prototype"] = sig
+            facts["signature"] = sig
+        if fi.get("calltype"):
+            facts["calling_convention"] = fi["calltype"]
+        if isinstance(fi.get("nargs"), int):
+            facts["param_count"] = fi["nargs"]
+        if isinstance(fi.get("nlocals"), int):
+            facts["local_count"] = fi["nlocals"]
+    # afvj groups variables by storage class; each entry carries a name/type and a `kind`
+    # ("arg" for parameters, otherwise a local). Collect names+types defensively.
+    try:
+        vars_ = json.loads(r2.cmd(f"afvj @ {seek}") or "{}")
+    except (json.JSONDecodeError, TypeError):
+        vars_ = {}
+    params: list = []
+    locals_: list = []
+    groups = vars_.values() if isinstance(vars_, dict) else []
+    for group in groups:
+        for v in (group or []):
+            if not isinstance(v, dict) or not v.get("name"):
+                continue
+            entry = {"name": v.get("name"), "type": v.get("type")}
+            (params if v.get("kind") == "arg" else locals_).append(entry)
+    if params:
+        facts["params"] = params
+        facts.setdefault("param_count", len(params))
+    if locals_:
+        facts["locals"] = locals_
+        facts.setdefault("local_count", len(locals_))
+    return facts
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print(json.dumps({"error": "usage: decompile_probe.py <artifact> [function|0xADDR] [--reanalyze]"}))
@@ -123,6 +173,7 @@ def main() -> int:
                 "pseudocode": pseudo,
                 "disasm": disasm,
                 "callees": _callees(disasm),
+                **_function_facts(r2, seek),
             }
         elif focus_arg:
             # NAME focus. Resolve the function symbol r2 actually knows.
@@ -149,6 +200,7 @@ def main() -> int:
                 "pseudocode": pseudo,
                 "disasm": disasm,
                 "callees": _callees(disasm),
+                **(_function_facts(r2, seek) if seek else {}),
             }
 
         print(json.dumps({"tool": "decompile_probe", "functions": functions[:200], "focus": focus}))

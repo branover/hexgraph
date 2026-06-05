@@ -156,9 +156,24 @@ dtm = currentProgram.getDataTypeManager()
 try:
     for dt in dtm.getAllStructures():
         comps = dt.getComponents()
+        # Flag compiler/library built-ins so the enrichment extractor drops them and only
+        # program-recovered (DWARF/GDT) layouts reach the substrate. A built-in type comes
+        # from the BUILTIN source archive (or, as a fallback, a system category path).
+        builtin = False
+        try:
+            sa = dt.getSourceArchive()
+            if sa is not None and str(sa.getArchiveType()) == "BUILTIN":
+                builtin = True
+            else:
+                cp = dt.getCategoryPath().getPath()
+                if cp.startswith("/DWARF") is False and ("/std" in cp or "/__" in cp):
+                    builtin = True
+        except:
+            pass
         result["structs"].append({
-            "name": dt.getName(), "size": dt.getLength(),
-            "fields": [{"name": c.getFieldName(), "type": str(c.getDataType())} for c in comps[:64]],
+            "name": dt.getName(), "size": dt.getLength(), "builtin": builtin,
+            "fields": [{"name": c.getFieldName(), "type": str(c.getDataType()),
+                        "offset": c.getOffset()} for c in comps[:64]],
         })
         if len(result["structs"]) >= 200:
             break
@@ -199,8 +214,44 @@ if focus:
             addr = "0x" + target.getEntryPoint().toString()
         except:
             addr = None
-        result["focus"] = {"name": target.getName(), "resolved": target.getName(),
-                           "address": addr, "pseudocode": pseudo, "disasm": "", "callees": callees}
+        # Rich, always-welcome facts recovered for the function being promoted: the C
+        # prototype, calling convention, and parameter/local variables. Each guarded so a
+        # single failing Jython API call drops only that fact, never the whole focus.
+        prototype = None
+        try:
+            prototype = target.getSignature().getPrototypeString()
+        except:
+            pass
+        calling_convention = None
+        try:
+            calling_convention = target.getCallingConventionName()
+        except:
+            pass
+        params = []
+        try:
+            params = [{"name": p.getName(), "type": str(p.getDataType())}
+                      for p in target.getParameters()]
+        except:
+            pass
+        local_vars = []
+        try:
+            local_vars = [{"name": v.getName(), "type": str(v.getDataType())}
+                          for v in target.getLocalVariables()]
+        except:
+            pass
+        focus_out = {"name": target.getName(), "resolved": target.getName(),
+                     "address": addr, "pseudocode": pseudo, "disasm": "", "callees": callees}
+        if prototype:
+            focus_out["prototype"] = prototype
+        if calling_convention:
+            focus_out["calling_convention"] = calling_convention
+        if params:
+            focus_out["params"] = params
+            focus_out["param_count"] = len(params)
+        if local_vars:
+            focus_out["locals"] = local_vars
+            focus_out["local_count"] = len(local_vars)
+        result["focus"] = focus_out
 
 fh = open(out_path, "w")
 fh.write(json.dumps(result))
