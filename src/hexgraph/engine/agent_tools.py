@@ -82,6 +82,20 @@ _STATIC_SPECS = [
              "QUERY: records an Observation and tags is_sink on any dangerous-import symbol ALREADY "
              "in the graph; adds no new graph nodes.",
              {"type": "object", "properties": {"symbol": {"type": "string"}}}),
+    ToolSpec("call_graph", "The target's call graph — who-calls-whom across the program, or (with a "
+             "`function`) the neighbourhood rooted at it out to `depth` (default 2). QUERY: records a "
+             "call_graph Observation and SELF-WIRES `calls` edges among functions ALREADY in the graph "
+             "(creates no new nodes — promote functions first to grow the wired graph).",
+             {"type": "object", "properties": {"function": {"type": "string"},
+                                               "depth": {"type": "integer"}}}),
+    ToolSpec("function_xrefs", "Both directions for ONE function: its CALLERS (who calls it) and its "
+             "CALLEES (what it calls) — walk the call graph around a function of interest. QUERY: "
+             "records an Observation; adds no graph nodes.",
+             {"type": "object", "properties": {"function": {"type": "string"}}, "required": ["function"]}),
+    ToolSpec("data_xrefs", "Cross-references TO a hex ADDRESS (or a symbol/label that resolves to one) "
+             "— every code/data/string reference that points at it (who reads/writes/points to this "
+             "datum or string constant). QUERY: records an Observation; adds no graph nodes.",
+             {"type": "object", "properties": {"address": {"type": "string"}}, "required": ["address"]}),
     ToolSpec("read_imports", "Return the target's imported symbols, linked libraries, and mitigation flags.",
              {"type": "object", "properties": {}}),
     ToolSpec("list_strings", "List notable strings in the target, optionally filtered by a substring. "
@@ -425,6 +439,18 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
             return _observations(ctx, name, args)
         if name == "xrefs":
             return _xrefs(ctx, args.get("symbol"))
+        if name == "call_graph":
+            return _call_graph_tool(ctx, args.get("function"), args.get("depth"))
+        if name == "function_xrefs":
+            fn = args.get("function")
+            if not fn:
+                return "error: 'function' argument is required"
+            return _function_xrefs(ctx, fn)
+        if name == "data_xrefs":
+            addr = args.get("address")
+            if not addr:
+                return "error: 'address' argument is required"
+            return _data_xrefs(ctx, addr)
         if name == "fuzz_function":
             return _fuzz(ctx, args)
         return f"error: unknown tool {name!r}"
@@ -517,6 +543,144 @@ def _xrefs(ctx: ToolContext, symbol: str | None) -> str:
                          "listens_on/connects_to edges:\n" + "\n".join(fmt_group(net)))
         text = "\n\n".join(parts) if parts else \
             "no dangerous, format-string, or network sinks referenced in this target"
+    ctx.cache[key] = _clip(text)
+    return ctx.cache[key]
+
+
+def _run_xrefs_probe(ctx: ToolContext, subject: str | None, mode: str):
+    """Run xrefs_probe in `mode`, returning (out, error_text). `mode="callers"` passes no
+    --mode flag (legacy compat); the breadth modes pass `--mode function|data|callgraph`."""
+    from hexgraph.sandbox.executor import get_executor
+    from hexgraph.sandbox.runner import docker_available
+
+    if not docker_available():
+        return None, f"{mode} unavailable (Docker/sandbox not running)"
+    extra = ([subject] if subject else []) + (["--mode", mode] if mode != "callers" else [])
+    try:
+        return get_executor().run_json_probe("xrefs_probe.py", ctx.target.path,
+                                             extra_args=extra or None), None
+    except Exception as exc:  # noqa: BLE001
+        return None, f"{mode} xrefs failed: {exc}"
+
+
+def _function_xrefs(ctx: ToolContext, function: str) -> str:
+    """Callers AND callees of one function (the bidirectional neighbourhood). QUERY."""
+    key = f"fxrefs:{function}"
+    if key in ctx.cache:
+        return ctx.cache[key]
+    out, err = _run_xrefs_probe(ctx, function, "function")
+    if err:
+        return err
+    if out.get("error"):
+        return f"function {function!r} not found"
+    callers = out.get("callers") or []
+    callees = out.get("callees") or []
+    _record_obs(ctx, tool="function_xrefs", args={"function": function},
+                result_kind="function_xrefs", payload=out,
+                summary=f"{function}: {len(callers)} callers, {len(callees)} callees")
+    lines = [f"// {function}: callers (who calls it) and callees (what it calls)", "callers:"]
+    lines += [f"- {c['caller']} (@ {c.get('caller_addr')}) at {c.get('at')}" for c in callers] or ["  (none)"]
+    more_c = out.get("total_callers", len(callers)) - len(callers)
+    if more_c > 0:
+        lines.append(f"  … and {more_c} more callers")
+    lines.append("callees:")
+    lines += [f"- {c.get('name')} (@ {c.get('addr')})" for c in callees] or ["  (none)"]
+    more_e = out.get("total_callees", len(callees)) - len(callees)
+    if more_e > 0:
+        lines.append(f"  … and {more_e} more callees")
+    ctx.cache[key] = _clip("\n".join(lines))
+    return ctx.cache[key]
+
+
+def _data_xrefs(ctx: ToolContext, address: str) -> str:
+    """Every code/data/string reference TO an address. QUERY."""
+    key = f"dxrefs:{address}"
+    if key in ctx.cache:
+        return ctx.cache[key]
+    out, err = _run_xrefs_probe(ctx, address, "data")
+    if err:
+        return err
+    if out.get("error"):
+        return f"no resolvable references to {address!r}"
+    refs = out.get("data_refs") or []
+    _record_obs(ctx, tool="data_xrefs", args={"address": address},
+                result_kind="data_xrefs", payload=out,
+                summary=f"{len(refs)} refs to {address}")
+    if not refs:
+        ctx.cache[key] = f"no references to {address} found"
+        return ctx.cache[key]
+    more = out.get("total", len(refs)) - len(refs)
+    lines = [f"references to {address}:"]
+    lines += [f"- {r['from_function']} at {r.get('at')} ({r.get('kind')})" for r in refs]
+    if more > 0:
+        lines.append(f"  … and {more} more")
+    ctx.cache[key] = _clip("\n".join(lines))
+    return ctx.cache[key]
+
+
+def _bfs_subgraph(edges: list, root: str, depth: int) -> list[tuple[str, str]]:
+    """Edges reachable from `root` (matched by normalized name) within `depth` hops, deduped."""
+    from collections import defaultdict, deque
+
+    from hexgraph.engine.nodes import normalize_symbol_name as _norm
+
+    adj: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for pair in edges:
+        if isinstance(pair, (list, tuple)) and len(pair) == 2 and pair[0] and pair[1]:
+            adj[_norm(pair[0])].append((pair[0], pair[1]))
+    out: list[tuple[str, str]] = []
+    seen_edge: set[tuple[str, str]] = set()
+    visited = {_norm(root)}
+    q = deque([(_norm(root), 0)])
+    while q:
+        nk, d = q.popleft()
+        if d >= depth:
+            continue
+        for a, b in adj.get(nk, []):
+            if (a, b) not in seen_edge:
+                seen_edge.add((a, b))
+                out.append((a, b))
+            bk = _norm(b)
+            if bk not in visited:
+                visited.add(bk)
+                q.append((bk, d + 1))
+    return out
+
+
+def _call_graph_tool(ctx: ToolContext, function: str | None, depth) -> str:
+    """The whole-program call graph (or the neighbourhood rooted at `function`). QUERY: records
+    a call_graph Observation whose facts SELF-WIRE `calls` edges among already-curated functions
+    (both-endpoints-safe); creates no new nodes."""
+    key = f"callgraph:{function or '*'}:{depth or ''}"
+    if key in ctx.cache:
+        return ctx.cache[key]
+    out, err = _run_xrefs_probe(ctx, None, "callgraph")
+    if err:
+        return err
+    edges = out.get("calls") or []
+    # Record as a call_graph Observation in the per-caller shape the extractor reads, so the
+    # `A calls B` facts wire edges among functions ALREADY promoted (no new nodes). The payload
+    # is the whole-program graph regardless of `function` (the root only shapes the returned
+    # TEXT), so record under args={} — it dedups to ONE Observation no matter how many rooted
+    # views are requested, instead of re-storing the identical graph per root.
+    from hexgraph.engine.ghidra import _call_graph_records
+    _record_obs(ctx, tool="call_graph", args={},
+                result_kind="call_graph", payload={"functions": _call_graph_records(edges)},
+                summary=f"{len(edges)} call edges")
+    if function:
+        d = max(1, min(int(depth or 2), 6))
+        sub = _bfs_subgraph(edges, function, d)
+        if not sub:
+            ctx.cache[key] = f"{function!r} not found in the call graph (or it calls nothing)"
+            return ctx.cache[key]
+        text = f"call graph from {function} (depth {d}, {len(sub)} edges):\n" + \
+               "\n".join(f"- {a} → {b}" for a, b in sub)
+        ctx.cache[key] = _clip(text)
+        return ctx.cache[key]
+    shown = edges[:200]
+    note = f"\n  … and {len(edges) - len(shown)} more edges" if len(edges) > len(shown) else ""
+    text = f"call graph ({len(edges)} edges):\n" + \
+           "\n".join(f"- {p[0]} → {p[1]}" for p in shown if len(p) == 2) + note
     ctx.cache[key] = _clip(text)
     return ctx.cache[key]
 

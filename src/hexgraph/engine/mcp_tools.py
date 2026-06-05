@@ -732,6 +732,26 @@ def xrefs(target_id: str, symbol: str | None = None) -> str:
     return _tool(target_id, "xrefs", {"symbol": symbol} if symbol else {})
 
 
+def call_graph(target_id: str, function: str | None = None, depth: int | None = None) -> str:
+    """The target's call graph (or the neighbourhood rooted at `function` out to `depth`)."""
+    a: dict = {}
+    if function:
+        a["function"] = function
+    if depth is not None:
+        a["depth"] = depth
+    return _tool(target_id, "call_graph", a)
+
+
+def function_xrefs(target_id: str, function: str) -> str:
+    """Callers AND callees of one function — the bidirectional call-graph neighbourhood."""
+    return _tool(target_id, "function_xrefs", {"function": function})
+
+
+def data_xrefs(target_id: str, address: str) -> str:
+    """Every code/data/string reference TO a hex address (or a symbol that resolves to one)."""
+    return _tool(target_id, "data_xrefs", {"address": address})
+
+
 def _node_dict(n: Node) -> dict:
     return {"id": n.id, "node_type": n.node_type, "name": n.name, "fq_name": n.fq_name,
             "address": n.address, "target_id": n.target_id, "attrs": n.attrs_json or {}}
