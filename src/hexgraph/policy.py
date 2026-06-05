@@ -56,17 +56,138 @@ class AnalysisPolicy:
     network: NetworkScope | None = None
 
 
+# ── Startup policy ceiling (a long-lived process freezes what it may relax) ──────────
+# The features.* gates that RELAX the policy. Enabling any of these widens the
+# sandbox / execution / egress boundary, so a long-lived server (the API server, an MCP
+# session) snapshots the set that was enabled at *startup* and refuses to widen past it
+# until the next restart — `snapshot_ceiling()`. This closes the escalation where an
+# agent (or any host-local writer) flips a `features.*` toggle in settings.json
+# mid-session to grant itself execution/egress: the running process honors the frozen
+# ceiling, not the live write. NARROWING is always live (disabling takes effect at
+# once); only ENABLING a gate that was off at startup is deferred to a restart. Short-
+# lived processes (the CLI, tests) never snapshot, so `_ceiling is None` and the policy
+# reads live settings exactly as before — each invocation is its own "boot".
+POLICY_GATES = ("fuzzing", "poc", "build", "build_fetch", "network", "rehost", "remote", "fuzz_remote")
+
+# None ⇒ no ceiling captured (read live settings — the historical behavior). A frozenset
+# ⇒ the gates enabled at this process's startup; current_policy() refuses to enable
+# anything outside it.
+_ceiling: frozenset[str] | None = None
+
+
+def _configured_gates() -> frozenset[str]:
+    """The policy gates currently enabled in settings (no ceiling clamp). A settings
+    problem on any single gate is swallowed → that gate reads as off (fail-closed)."""
+    from hexgraph import settings
+
+    on: set[str] = set()
+    for g in POLICY_GATES:
+        try:
+            if bool(settings.get(f"features.{g}.enabled")):
+                on.add(g)
+        except Exception:  # noqa: BLE001 — a settings problem must never widen the policy
+            pass
+    return frozenset(on)
+
+
+def snapshot_ceiling() -> frozenset[str]:
+    """Freeze the policy gates enabled right now as this process's ceiling. Call once at
+    server / MCP-session startup. Afterwards, enabling a gate that was OFF at startup is
+    written to settings.json (so the next restart picks it up) but does NOT take effect
+    in this process; disabling stays live. Returns the captured set."""
+    global _ceiling
+    _ceiling = _configured_gates()
+    return _ceiling
+
+
+def reset_ceiling() -> None:
+    """Drop the ceiling, restoring live-settings behavior. For tests and any short-lived
+    process that re-reads settings every run."""
+    global _ceiling
+    _ceiling = None
+
+
+def current_ceiling() -> frozenset[str] | None:
+    """The frozen startup ceiling, or None if this process never snapshotted."""
+    return _ceiling
+
+
+def _gate_effective(feat: str, configured: bool) -> bool:
+    """Clamp a single gate to the startup ceiling: a gate may be ON only if it is also
+    within the frozen ceiling (or no ceiling was captured). Disabling is always honored
+    — `configured=False` ⇒ off regardless of the ceiling."""
+    if _ceiling is not None and feat not in _ceiling:
+        return False
+    return configured
+
+
+def effective_gates() -> frozenset[str]:
+    """The policy gates whose own toggle is enabled AND within the startup ceiling — i.e.
+    the gates the RUNNING process honors right now. A gate flipped on in settings.json
+    mid-session but clamped by the ceiling is NOT here until a restart. This is the single
+    source of truth any non-policy consumer (the capability table, the UI) must read when
+    it advertises or branches on a gate, so it never promises a capability the clamped
+    policy will refuse. NOTE: this is the per-toggle clamped set; it does NOT resolve the
+    inter-gate dependencies current_policy() enforces (build implied by exec, build_fetch
+    needs build) — callers that care about those compose them explicitly (as the capability
+    table does for build_fetch)."""
+    conf = _configured_gates()
+    return conf if _ceiling is None else (conf & _ceiling)
+
+
+def policy_feature_states() -> dict:
+    """Per policy gate, for the Settings UI: `configured` (the toggle in settings.json),
+    `effective` (whether the capability is actually active in the RUNNING policy — this
+    folds in the inter-gate dependencies current_policy() enforces, so e.g. build_fetch is
+    only effective when build is too), and `pending_restart` (the toggle is on but the
+    startup ceiling is clamping THIS gate off — a restart is what would change that). The
+    two axes differ on purpose: pending_restart tracks only what a restart changes (the
+    ceiling), while effective tracks the real policy outcome including dependencies, so a
+    saved-but-inactive toggle is never mistaken for a live one. `restart_required` /
+    `pending` summarize the gates a restart would newly honor."""
+    from hexgraph import settings
+
+    p = current_policy()  # the resolved running outcome (already ceiling-clamped + deps)
+    # gates whose real per-capability outcome carries a cross-gate dependency the bare
+    # ceiling clamp can't express; the rest map 1:1 to their clamped own-toggle.
+    policy_outcome = {"build": p.allow_build, "build_fetch": p.allow_build_fetch}
+
+    states: dict[str, dict] = {}
+    pending: list[str] = []
+    for g in POLICY_GATES:
+        try:
+            configured = bool(settings.get(f"features.{g}.enabled"))
+        except Exception:  # noqa: BLE001
+            configured = False
+        within_ceiling = _gate_effective(g, configured)  # this gate's own toggle, clamped
+        effective = policy_outcome.get(g, within_ceiling)
+        # A restart only changes the ceiling, so pending_restart keys off the clamp of the
+        # gate's OWN toggle — never off `effective` (build_fetch can be ineffective because
+        # build is off, which no restart fixes). Suppress it if the capability is already
+        # active anyway (build implied by exec): nothing to wait for.
+        is_pending = configured and not within_ceiling and not effective
+        states[g] = {"configured": configured, "effective": effective, "pending_restart": is_pending}
+        if is_pending:
+            pending.append(g)
+    return {"restart_required": bool(pending), "pending": pending, "features": states}
+
+
 def current_policy() -> AnalysisPolicy:
     # Static-only by default. Enabling PoC/fuzzing flips on execution; enabling
     # `features.build` permits compiling source in the sandbox (a sub-capability of
     # the sandboxed-exec tier — D5); enabling `features.network` flips on bounded
     # egress (the local-network tier); enabling `features.rehost` permits full-system
     # emulation. This is the single, explicit place the static-only invariant is
-    # relaxed; a settings error fails closed at tier 0.
+    # relaxed; a settings error fails closed at tier 0. Every gate is read through
+    # `_gate_effective`, which clamps it to the frozen startup ceiling (a no-op when no
+    # ceiling was captured) — so a mid-session widen of settings.json can't raise it.
     try:
         from hexgraph import settings
 
-        exec_on = bool(settings.get("features.fuzzing.enabled") or settings.get("features.poc.enabled"))
+        def on(feat: str) -> bool:
+            return _gate_effective(feat, bool(settings.get(f"features.{feat}.enabled")))
+
+        exec_on = on("fuzzing") or on("poc")
         # Building runs UNTRUSTED third-party code (configure/make is arbitrary execution
         # and the highest supply-chain risk in the design), so it is gated — but it is NOT
         # the same as executing the TARGET: a useful workflow is "build instrumented,
@@ -74,7 +195,7 @@ def current_policy() -> AnalysisPolicy:
         # exec (fuzzing/poc) implies you'll build, so it also lifts allow_build. Running
         # the produced artifact still hits assert_allows_execution() — two independent,
         # fail-closed checks.
-        build_on = bool(settings.get("features.build.enabled")) or exec_on
+        build_on = on("build") or exec_on
         # features.build_fetch is its OWN opt-in gate (D6), NEVER folded into
         # features.network (fetching a public package registry is categorically
         # different from the loopback/private local-network tier). It is a
@@ -82,10 +203,10 @@ def current_policy() -> AnalysisPolicy:
         # so it is meaningless without build_on; it raises NO tier (the fetch is a
         # SEPARATE sandbox run on a registry-allowlist egress, and the compile that
         # follows is still --network none). Fail-closed: off ⇒ a fetch build is refused.
-        build_fetch_on = build_on and bool(settings.get("features.build_fetch.enabled"))
-        net_on = bool(settings.get("features.network.enabled"))
-        rehost_on = bool(settings.get("features.rehost.enabled"))
-        remote_on = bool(settings.get("features.remote.enabled"))
+        build_fetch_on = build_on and on("build_fetch")
+        net_on = on("network")
+        rehost_on = on("rehost")
+        remote_on = on("remote")
         # features.fuzz_remote is ORTHOGONAL to the tier ladder (like allow_build /
         # allow_rehost): it governs WHERE a campaign's container runs (a user-owned remote
         # Docker host the operator authorizes), NOT what the sandbox may do. It does not
@@ -93,7 +214,7 @@ def current_policy() -> AnalysisPolicy:
         # peer flag, fail-closed (off => a remote-environment campaign is refused). Like
         # build, it is implied by enabling exec OR can stand alone (register + health-check
         # a remote without yet running a campaign that executes the target).
-        fuzz_remote_on = bool(settings.get("features.fuzz_remote.enabled"))
+        fuzz_remote_on = on("fuzz_remote")
         if exec_on or build_on or net_on or rehost_on or remote_on or fuzz_remote_on:
             # features.remote raises the live-remote tier and inherently permits egress (to the
             # one operator-authorized host — enforced by remote_scope, not by allow_network alone).

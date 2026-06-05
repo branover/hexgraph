@@ -474,10 +474,15 @@ def feature_availability() -> dict:
 
 def read_settings() -> dict:
     """Full redacted view for the API/UI: resolved non-secret settings + secret
-    presence status + live feature availability."""
+    presence status + live feature availability + the running policy ceiling."""
+    from hexgraph import policy  # lazy: policy imports settings
+
     return {
         "settings": resolved(),
         "secrets": secret_status(),
         "availability": feature_availability(),
+        # configured-vs-effective per policy gate, so the UI can flag a saved-but-not-yet-
+        # active toggle ("takes effect on next restart") instead of implying it's live.
+        "policy": policy.policy_feature_states(),
         "paths": {"config_toml": str(_cfg.config_path()), "settings_json": str(settings_path())},
     }

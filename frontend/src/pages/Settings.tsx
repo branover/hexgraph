@@ -4,6 +4,20 @@ import { FuzzEnvironment, GhidraStatus, SettingsView, api } from "../api";
 import Header from "../components/Header";
 import { Icon } from "../components/Icon";
 
+// Human labels for the policy gates that require a restart to *enable* (matches
+// policy.POLICY_GATES). rehost/remote have no toggle on this page, but can still
+// show up in the top "restart required" banner if configured on elsewhere.
+const GATE_LABELS: Record<string, string> = {
+  fuzzing: "Fuzzing",
+  poc: "PoC verification",
+  build: "Source & build",
+  build_fetch: "Bounded dependency fetch",
+  network: "Network egress",
+  rehost: "Firmware rehosting",
+  remote: "Remote live devices",
+  fuzz_remote: "Remote fuzz environments",
+};
+
 // Self-service configuration: optional features + non-secret prefs. API keys are
 // status-only here (env/config.toml BYOK) — the server never writes secrets.
 export default function Settings() {
@@ -40,6 +54,17 @@ export default function Settings() {
 
   if (!v) return <><Header /><div className="settings"><div className="empty">{err || "Loading settings…"}</div></div></>;
   const g = v.settings.features.ghidra;
+  // A "restart to apply" chip next to a policy gate whose toggle is saved-on but the
+  // running server started with it off (the frozen startup ceiling clamps it off until
+  // the next restart). Disabling is always live, so it never shows for an off toggle.
+  const pending = (gate: string) =>
+    v.policy?.features?.[gate]?.pending_restart ? (
+      <span className="badge warn" style={{ marginLeft: 8 }}
+            title="Saved in settings, but this running server started with it OFF. Restart `hexgraph serve` to activate.">
+        <Icon name="refresh" size={11} /> restart to apply
+      </span>
+    ) : null;
+  const pendingNames = (v.policy?.pending ?? []).map((k) => GATE_LABELS[k] ?? k);
 
   return (
     <>
@@ -53,6 +78,17 @@ export default function Settings() {
           </h2>
           {err && <div className="banner err">{err}</div>}
           {saving && <div className="muted" style={{ fontSize: 12 }}>saving…</div>}
+          {v.policy?.restart_required && (
+            <div className="banner warn">
+              <b>Restart required to activate.</b>{" "}
+              {pendingNames.join(", ")} {pendingNames.length > 1 ? "are" : "is"} enabled in settings, but this
+              running server started with {pendingNames.length > 1 ? "them" : "it"} off. A long-lived server
+              freezes which capabilities it may use at startup, so a capability turned on now is <b>saved</b> but
+              stays <b>inactive</b> until you restart <code>hexgraph serve</code>. This is deliberate: it stops a
+              capability (execution, network egress, …) from being silently granted to an already-running server
+              or agent session. Turning a capability <i>off</i> always takes effect immediately.
+            </div>
+          )}
 
           {/* Model access */}
           <section className="card2">
@@ -149,7 +185,7 @@ export default function Settings() {
           {/* Fuzzing */}
           <section className="card2">
             <div className="h3row">
-              <h3><Icon name="bug" size={15} /> Fuzzing <span className="muted">· optional · executes code</span></h3>
+              <h3><Icon name="bug" size={15} /> Fuzzing <span className="muted">· optional · executes code</span>{pending("fuzzing")}</h3>
               <label className="switch">
                 <input type="checkbox" checked={v.settings.features.fuzzing.enabled}
                        onChange={(e) => patch({ "features.fuzzing.enabled": e.target.checked })} />
@@ -211,7 +247,7 @@ export default function Settings() {
           {/* Source & Build */}
           <section className="card2">
             <div className="h3row">
-              <h3><Icon name="chip" size={15} /> Source &amp; Build <span className="muted">· optional · compiles source</span></h3>
+              <h3><Icon name="chip" size={15} /> Source &amp; Build <span className="muted">· optional · compiles source</span>{pending("build")}</h3>
               <label className="switch">
                 <input type="checkbox" checked={v.settings.features.build.enabled}
                        onChange={(e) => patch({ "features.build.enabled": e.target.checked })} />
@@ -253,6 +289,7 @@ export default function Settings() {
                     <input type="checkbox" checked={(v.settings.features as any).build_fetch?.enabled ?? false}
                            onChange={(e) => patch({ "features.build_fetch.enabled": e.target.checked })} />
                     <span>Bounded dependency fetch {(v.settings.features as any).build_fetch?.enabled ? "enabled" : "disabled"}</span>
+                    {pending("build_fetch")}
                   </label>
                   <p className="hint" style={{ marginTop: 4 }}>
                     ⚠ The <b>highest residual supply-chain risk</b>. A SEPARATE, audited, <b>allowlisted</b> fetch
@@ -286,7 +323,7 @@ export default function Settings() {
           {/* PoC verification */}
           <section className="card2">
             <div className="h3row">
-              <h3><Icon name="check" size={15} /> PoC verification <span className="muted">· optional · executes the target</span></h3>
+              <h3><Icon name="check" size={15} /> PoC verification <span className="muted">· optional · executes the target</span>{pending("poc")}</h3>
               <label className="switch">
                 <input type="checkbox" checked={v.settings.features.poc.enabled}
                        onChange={(e) => patch({ "features.poc.enabled": e.target.checked })} />
@@ -304,7 +341,7 @@ export default function Settings() {
           {/* Network egress — bounded local-network tier */}
           <section className="card2">
             <div className="h3row">
-              <h3><Icon name="globe" size={15} /> Network egress <span className="muted">· optional · contacts a live target</span></h3>
+              <h3><Icon name="globe" size={15} /> Network egress <span className="muted">· optional · contacts a live target</span>{pending("network")}</h3>
               <label className="switch">
                 <input type="checkbox" checked={v.settings.features.network.enabled}
                        onChange={(e) => patch({ "features.network.enabled": e.target.checked })} />
@@ -328,7 +365,7 @@ export default function Settings() {
           {/* Remote fuzz environments — run a campaign on a user-owned remote Docker host */}
           <section className="card2">
             <div className="h3row">
-              <h3><Icon name="chip" size={15} /> Remote fuzz environments <span className="muted">· optional · beefier compute</span></h3>
+              <h3><Icon name="chip" size={15} /> Remote fuzz environments <span className="muted">· optional · beefier compute</span>{pending("fuzz_remote")}</h3>
               <label className="switch">
                 <input type="checkbox" checked={Boolean(v.settings.features.fuzz_remote?.enabled)}
                        onChange={(e) => patch({ "features.fuzz_remote.enabled": e.target.checked })} />

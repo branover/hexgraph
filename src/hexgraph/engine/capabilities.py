@@ -76,33 +76,50 @@ def _flag(path: str) -> bool:
         return False
 
 
+def _gate(name: str) -> bool:
+    """A POLICY gate (fuzzing/poc/network/remote/build/build_fetch/…), read through the
+    startup ceiling clamp — NOT raw settings — so the advertised capability matches what
+    the RUNNING policy will actually permit. A gate flipped on in settings.json mid-session
+    that current_policy() is clamping off until restart must NOT be offered here (otherwise
+    the launch dialog promises a task the worker's policy seam will refuse at run time)."""
+    try:
+        from hexgraph import policy
+
+        return name in policy.effective_gates()
+    except Exception:  # noqa: BLE001 — never advertise more than the policy permits
+        return False
+
+
 def _fuzzing_enabled() -> bool:
-    return _flag("features.fuzzing.enabled")
+    return _gate("fuzzing")
 
 
 def _agent_enabled() -> bool:
+    # features.agent is NOT a policy gate (it relaxes no sandbox/exec/egress boundary — it
+    # picks which sandboxed MCP tools a delegated agent sees), so it is read live, unclamped.
     return _flag("features.agent.enabled")
 
 
 def _network_enabled() -> bool:
-    return _flag("features.network.enabled")
+    return _gate("network")
 
 
 def _remote_enabled() -> bool:
-    return _flag("features.remote.enabled")
+    return _gate("remote")
 
 
 def _poc_enabled() -> bool:
-    return _flag("features.poc.enabled")
+    return _gate("poc")
 
 
 def _build_enabled() -> bool:
-    return _flag("features.build.enabled")
+    return _gate("build")
 
 
 def _build_fetch_enabled() -> bool:
-    # The bounded dependency-fetch tier is a sub-capability of building (Phase 7).
-    return _build_enabled() and _flag("features.build_fetch.enabled")
+    # The bounded dependency-fetch tier is a sub-capability of building (Phase 7); both
+    # legs are ceiling-clamped (mirrors current_policy: build_fetch_on = build_on and ...).
+    return _gate("build") and _gate("build_fetch")
 
 
 def _source_edit_enabled() -> bool:
