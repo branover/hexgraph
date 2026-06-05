@@ -4,6 +4,7 @@
   argv: /artifact [function]        normal decompile/inventory run
         /artifact --check           report Ghidra presence + version (no analysis)
         /artifact --taint           grounded P-Code source->sink data-flow taint (Phase 4)
+        /artifact --emulate <fn>     emulate <fn> in the P-Code emulator + recover its constant
 
 Emits JSON matching the Decompiler contract plus enrichment extras:
   { tool, functions: [...], focus: {name,resolved,pseudocode,disasm,callees}|null,
@@ -587,6 +588,114 @@ fh.close()
 '''
 
 
+# Grounded P-Code EMULATION for constant/key recovery (Phase 4). Runs a self-contained routine
+# (e.g. a key-derivation / string-decode schedule whose result never appears as a literal) inside
+# Ghidra's P-Code emulator and recovers the value it returns — no native execution of the target.
+# The recipe: seed RSP + push a sentinel return address, set the PC to the function entry, single-
+# step the P-Code until the PC reaches the sentinel (the routine executed `ret`), then read the
+# architecture's return register. Bounded by a hard step budget; a routine that calls out to code
+# the emulator has no body for (an external/PLT call) stops cleanly and is reported not-returned.
+EMU_SCRIPT = r'''# -*- coding: utf-8 -*-
+# Encoding cookie REQUIRED (Jython 2.7 / PEP 263) — keep this ASCII-only; a compile failure
+# writes NO output and is undiagnosable.
+import json
+import re
+import traceback
+from ghidra.app.emulator import EmulatorHelper
+from ghidra.util.task import ConsoleTaskMonitor
+
+args = getScriptArgs()
+out_path = args[0]
+focus = args[1] if len(args) > 1 and args[1] else None
+MAX_STEPS = 500000
+# A return-address sentinel: when the emulated routine executes `ret`, the PC becomes this value,
+# which tells us the function returned. Chosen to be far from any real code mapping.
+RET_SENTINEL = 0x0000babecafe0000
+STACK_TOP = 0x0000000010000000
+try:
+    monitor = ConsoleTaskMonitor()
+    fm = currentProgram.getFunctionManager()
+    target = None
+    if focus is not None:
+        if re.match(r"^0x[0-9a-fA-F]+$", focus):
+            try:
+                target = getFunctionContaining(toAddr(focus))
+            except:
+                target = None
+        else:
+            for f in fm.getFunctions(True):
+                if f.getName() == focus:
+                    target = f
+                    break
+    if target is None:
+        result = {"emulation": {"error": "function not found: %s" % focus}}
+    else:
+        ret = target.getReturn()
+        ret_reg = ret.getRegister() if ret is not None else None
+        ret_size = ret.getLength() if ret is not None else 0
+        entry = target.getEntryPoint()
+
+        emu = EmulatorHelper(currentProgram)
+        pc_reg = emu.getPCRegister()
+        sp_reg = emu.getStackPointerRegister()
+        emu.writeRegister(sp_reg, STACK_TOP)
+        # Push the sentinel as the return address at [SP] (so the routine's `ret` lands there).
+        emu.writeStackValue(0, 8, RET_SENTINEL)
+        emu.writeRegister(pc_reg, entry.getOffset())
+
+        steps = 0
+        reached_ret = False
+        err = None
+        while steps < MAX_STEPS:
+            pc = emu.getExecutionAddress()
+            if pc.getOffset() == RET_SENTINEL:
+                reached_ret = True
+                break
+            try:
+                ok = emu.step(monitor)
+            except:
+                err = "step exception: %s" % traceback.format_exc().splitlines()[-1]
+                break
+            if not ok:
+                err = emu.getLastError()
+                break
+            steps += 1
+        emu_out = {
+            "function": target.getName(),
+            "function_addr": "0x" + entry.toString(),
+            "steps": steps,
+            "reached_ret": reached_ret,
+            "return_register": ret_reg.getName() if ret_reg is not None else None,
+        }
+        if err:
+            emu_out["error"] = err
+        if not reached_ret and steps >= MAX_STEPS:
+            emu_out["error"] = "step budget exhausted before return (%d)" % MAX_STEPS
+        # The recovered value is only trustworthy when the routine actually returned.
+        if reached_ret and ret_reg is not None:
+            raw = int(emu.readRegister(ret_reg)) & 0xFFFFFFFFFFFFFFFF
+            emu_out["value_hex"] = "0x%x" % raw
+            # Width-correct view from the C return type size (e.g. uint32_t -> low 32 bits).
+            if ret_size and ret_size < 8:
+                mask = (1 << (ret_size * 8)) - 1
+                emu_out["value"] = "0x%0*x" % (ret_size * 2, raw & mask)
+                emu_out["width_bytes"] = ret_size
+            else:
+                emu_out["value"] = "0x%x" % raw
+                emu_out["width_bytes"] = 8
+        emu.dispose()
+        result = {"emulation": emu_out}
+    _payload = json.dumps(result)
+except:
+    _payload = json.dumps({"error": "emulation postscript exception",
+                           "tb": traceback.format_exc(), "emulation": {}})
+
+fh = open(out_path, "w")
+fh.write(_payload)
+fh.close()
+'''
+
+
 def _find_headless() -> str | None:
     cand = os.path.join(GHIDRA_DIR, "support", "analyzeHeadless")
     if os.path.isfile(cand):
@@ -631,6 +740,13 @@ def main() -> int:
     # program instead of the decompile/inventory postScript. It reuses the SAME persistent
     # project (warm -process) so it pays no re-analysis cost after a prior decompile run.
     taint_mode = "--taint" in sys.argv
+    # --emulate <function> runs the P-Code emulator (EMU_SCRIPT) to recover the constant the
+    # routine returns. The function (name or address) is the arg right after --emulate; it is
+    # threaded to the postScript as its focus. Reuses the SAME persistent project (warm).
+    emu_mode = "--emulate" in sys.argv
+    if emu_mode:
+        i = sys.argv.index("--emulate")
+        focus = sys.argv[i + 1] if i + 1 < len(sys.argv) else None
     # Rename round-trip: --rename <addr> <new_name> applies the rename in the project
     # (saved by the -process/-import run) and decompiles the renamed function.
     rename_addr = rename_name = ""
@@ -649,11 +765,16 @@ def main() -> int:
     # The postScript + its JSON output ALWAYS live on the /scratch tmpfs (the project mount
     # holds only the Ghidra project itself — keeps the persistent dir lean and the hardening
     # comment honest: only the project lives on the writable mount, never user-settings/temp).
-    script_name = "hexgraph_taint.py" if taint_mode else "hexgraph_post.py"
+    if emu_mode:
+        script_name, script_body = "hexgraph_emu.py", EMU_SCRIPT
+    elif taint_mode:
+        script_name, script_body = "hexgraph_taint.py", TAINT_SCRIPT
+    else:
+        script_name, script_body = "hexgraph_post.py", POST_SCRIPT
     script_path = os.path.join(SCRATCH, script_name)
     out_path = os.path.join(SCRATCH, "ghidra_out.json")
     with open(script_path, "w") as fh:
-        fh.write(TAINT_SCRIPT if taint_mode else POST_SCRIPT)
+        fh.write(script_body)
 
     # Persistent-project cache (analyze-once / reuse). The host resolves
     # <data_dir>/ghidra/<sha256>__<version>/project and bind-mounts it writable here; if a

@@ -325,6 +325,21 @@ def assert_allows_remote(policy: AnalysisPolicy | None = None) -> None:
             "operator-authorized SSH/telnet target)")
 
 
+def assert_allows_emulation(policy: AnalysisPolicy | None = None) -> None:
+    """Gate P-Code emulation for constant/key recovery (Phase 4). Opt-in via
+    `features.emulation`. Unlike the execution/egress gates, this relaxes NO sandbox boundary —
+    emulation runs the routine inside Ghidra's JVM P-Code interpreter, never natively, with no
+    network — so it is a standalone heavy-analysis opt-in that does NOT move the policy tier (it
+    is intentionally absent from `AnalysisPolicy`/`current_policy`/the startup ceiling). `policy`
+    is accepted for signature parity; the gate reads the feature flag directly."""
+    from hexgraph import settings as _settings
+
+    if not bool(_settings.get("features.emulation.enabled")):
+        raise PolicyViolation(
+            "P-Code emulation is not enabled (set features.emulation.enabled to recover a "
+            "constant/key by emulating a routine in the sandbox)")
+
+
 def assert_allows_fuzz_remote(policy: AnalysisPolicy | None = None) -> None:
     """Gate running a fuzz campaign on a user-owned REMOTE Docker host (the
     `RemoteDockerExecutor`, design §5.8b). Opt-in via features.fuzz_remote — a remote

@@ -116,6 +116,21 @@ class GhidraDecompiler(Decompiler):
                 return self.runner.run_json_probe("ghidra_probe.py", artifact, extra_args=args)
             return self._run_locked(slot, artifact, args)
 
+    def run_emulate(self, artifact: str, function: str, *, project=None) -> dict:
+        """Emulate `function` in Ghidra's P-Code emulator and recover the constant it returns
+        (`--emulate`), reusing the SAME persistent project as `decompile()` (warm ⇒ no
+        re-analysis). Returns the probe's `{emulation: {...}}` payload. No native execution of the
+        target — the routine runs inside the JVM interpreter. Held under the slot lock; falls back
+        to a throwaway project without a cache or on lock timeout (correct, just uncached)."""
+        args = ["--emulate", function]
+        slot = self._resolve_slot(artifact, project)
+        if slot is None:
+            return self.runner.run_json_probe("ghidra_probe.py", artifact, extra_args=args)
+        with slot.lock() as locked:
+            if not locked:
+                return self.runner.run_json_probe("ghidra_probe.py", artifact, extra_args=args)
+            return self._run_locked(slot, artifact, args)
+
     def rename_function(self, artifact: str, *, address: str, new_name: str, project=None) -> dict:
         """Rename the function at `address` to `new_name` IN the persistent Ghidra project and
         re-decompile it (the rename round-trip, design §7). analyzeHeadless runs without

@@ -47,6 +47,15 @@ DEFAULTS: dict[str, Any] = {
             "project_cache_mb": 4096,
             "bridge": {"host": "127.0.0.1", "port": 4768},
         },
+        "emulation": {
+            # OFF by default. P-Code emulation for constant/key recovery (Phase 4): runs a
+            # self-contained routine inside Ghidra's JVM P-Code interpreter to recover the value
+            # it derives. It NEVER executes the target natively and relaxes NO sandbox boundary
+            # (no native exec, no network) — it is an opt-in HEAVY-analysis gate, not a policy
+            # relaxation, so it lives behind policy.assert_allows_emulation() but does not move
+            # the execution/egress tier. Requires Ghidra (features.ghidra) to be enabled.
+            "enabled": False,
+        },
         "fuzzing": {
             # OFF by default: enabling this flips the analysis policy to allow
             # execution (still --network none, capped, timed, disposable). The
@@ -234,6 +243,7 @@ ALLOWED: dict[str, tuple[Any, set | None]] = {
     "features.ghidra.project_cache_mb": (int, None),
     "features.ghidra.bridge.host": (str, None),
     "features.ghidra.bridge.port": (int, None),
+    "features.emulation.enabled": (bool, None),
     "features.fuzzing.enabled": (bool, None),
     "features.fuzzing.max_total_time": (int, None),
     "features.fuzzing.max_len": (int, None),

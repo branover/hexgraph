@@ -148,6 +148,20 @@ FEATURES: tuple[Feature, ...] = (
                       "bridge mode needs a running Ghidra + the ghidra_bridge client.",
     ),
     Feature(
+        key="features.emulation.enabled",
+        label="P-Code emulation (constant/key recovery)",
+        unlocks="Emulate a self-contained routine (a key-derivation or decode schedule whose "
+                "result never appears as a literal) in Ghidra's P-Code emulator to recover the "
+                "constant it returns at runtime.",
+        # Runs the routine in the JVM P-Code interpreter — NO native execution of the target and
+        # NO network — so it relaxes no policy gate/tier. A heavy-analysis opt-in only.
+        security="",
+        policy_changing=False,
+        tier=None,
+        builds=("sandbox_ghidra",),  # needs the with_ghidra sandbox image
+        requires_note="needs Ghidra (features.ghidra) enabled + the with_ghidra sandbox image.",
+    ),
+    Feature(
         key="features.poc.enabled",
         label="PoC verification (execute the target)",
         unlocks="The `poc` task + `verify_poc` tool run an attacker-style input against "
