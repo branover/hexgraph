@@ -52,6 +52,19 @@ _STATIC_SPECS = [
              "WITH_GHIDRA=1 (headless) or a reachable bridge. Run it if a decompile fails so you don't "
              "keep retrying a broken backend — the result's detail says what to fix.",
              {"type": "object", "properties": {}}),
+    ToolSpec("list_observations", "Prior deterministic analysis recorded on THIS target — the "
+             "OBSERVATION STORE (the substrate, NOT the curated graph): decompilations, function "
+             "lists, xrefs, strings, structs, taint, each saved once as a reusable Observation. "
+             "CHECK THIS BEFORE RE-RUNNING a heavy analysis; get_observation(id) loads a prior "
+             "payload. Results persist here — promote only what matters into the graph.",
+             {"type": "object", "properties": {"tool": {"type": "string"}, "kind": {"type": "string"}}}),
+    ToolSpec("get_observation", "Read ONE Observation in full incl. its payload — reuse a prior "
+             "decompilation/xref result instead of paying to re-run it.",
+             {"type": "object", "properties": {"observation_id": {"type": "string"}},
+              "required": ["observation_id"]}),
+    ToolSpec("search_observations", "Search prior Observations (substring over tool/summary/kind) "
+             "on this target — find earlier analysis to reuse before re-running it.",
+             {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}),
 ]
 
 _FUZZ_SPEC = ToolSpec(
@@ -183,6 +196,8 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
             mode = f" ({d['mode']})" if d.get("mode") else ""
             status = "WORKING" if d["working"] else "NOT WORKING"
             return _clip(f"decompiler: {d['active']}{ver}{mode} — {status}\n{d['detail']}")
+        if name in ("list_observations", "get_observation", "search_observations"):
+            return _observations(ctx, name, args)
         if name == "xrefs":
             return _xrefs(ctx, args.get("symbol"))
         if name == "fuzz_function":
@@ -190,6 +205,33 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
         return f"error: unknown tool {name!r}"
     except Exception as exc:  # noqa: BLE001 — tools never crash the task
         return f"error running {name}: {exc}"
+
+
+def _observations(ctx: ToolContext, name: str, args: dict) -> str:
+    """Mirror the Observation-store read verbs for the in-process agent loop, scoped
+    to this target (design §5.6). Results persist as Observations; this is how the
+    agent discovers prior analysis instead of re-running it."""
+    import json as _json
+
+    from hexgraph.engine import observations as O
+
+    if name == "get_observation":
+        oid = args.get("observation_id")
+        if not oid:
+            return "error: 'observation_id' argument is required"
+        out = O.get_observation(ctx.session, oid)
+        return _clip(_json.dumps(out, default=str)) if out else f"observation {oid!r} not found"
+    if name == "search_observations":
+        q = args.get("query") or ""
+        rows = O.search_observations(ctx.session, target_id=ctx.target.id, query=q)
+    else:  # list_observations
+        rows = O.list_observations(ctx.session, ctx.target.id,
+                                   tool=args.get("tool"), kind=args.get("kind"))
+    if not rows:
+        return "no prior observations on this target"
+    lines = [f"- {r['id']} [{r['result_kind']}] {r['tool']}: {r['summary'][:120]}" for r in rows]
+    return _clip("prior observations (get_observation(id) for the full payload):\n"
+                 + "\n".join(lines))
 
 
 def _xrefs(ctx: ToolContext, symbol: str | None) -> str:

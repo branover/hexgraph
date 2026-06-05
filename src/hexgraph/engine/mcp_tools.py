@@ -769,6 +769,55 @@ def search(project_id: str, q: str) -> dict:
         return search_project(s, project_id, q)
 
 
+# --- Observation store: discoverable prior analysis (design §5.6) --------------
+# Reuse hint appended to every result so the agent learns the contract inline.
+_OBS_REUSE = ("Tool results persist as Observations on the target; they do NOT add graph "
+              "nodes. Check list_observations(target_id) before re-running an analysis, and "
+              "get_observation(id) for a prior payload.")
+
+
+def list_observations(target_id: str, tool: str | None = None, kind: str | None = None,
+                      limit: int = 100) -> dict:
+    """Prior deterministic analysis recorded on this target (decompilations, function
+    lists, xrefs, taint, strings, structs, …) — the substrate, NOT the curated graph.
+    Returns row metadata newest-first; pull a payload with get_observation(id). CHECK
+    THIS BEFORE RE-RUNNING a heavy analysis (analyze once, reuse forever)."""
+    from hexgraph.engine import observations as O
+
+    with session_scope() as s:
+        if s.get(Target, target_id) is None:
+            return {"error": "target not found"}
+        rows = O.list_observations(s, target_id, tool=tool, kind=kind, limit=limit)
+        return {"observations": rows, "count": len(rows), "reuse_hint": _OBS_REUSE}
+
+
+def get_observation(observation_id: str) -> dict:
+    """Read ONE Observation in full, including the complete payload loaded back from
+    CAS — so you can reuse a prior decompilation/xref/taint result instead of paying
+    to re-run it. Results live here; promote the few that matter into the graph."""
+    from hexgraph.engine import observations as O
+
+    with session_scope() as s:
+        out = O.get_observation(s, observation_id)
+        if out is None:
+            return {"error": "observation not found"}
+        out["observation_id"] = out["id"]
+        out["reuse_hint"] = _OBS_REUSE
+        return out
+
+
+def search_observations(query: str, project_id: str | None = None,
+                        target_id: str | None = None, limit: int = 100) -> dict:
+    """Search prior Observations (substring over tool / summary / result_kind) across a
+    project or one target — find earlier analysis to reuse before re-running it."""
+    from hexgraph.engine import observations as O
+
+    with session_scope() as s:
+        rows = O.search_observations(s, project_id=project_id, target_id=target_id,
+                                     query=query, limit=limit)
+        return {"observations": rows, "count": len(rows), "reuse_hint": _OBS_REUSE}
+
+
 def list_findings(project_id: str) -> list[dict]:
     """Existing findings, so the agent doesn't re-report what's already known. Each row
     carries `verified`, the compact `assurance` triple {standard, method, precondition} (the
@@ -1349,6 +1398,28 @@ def get_schemas() -> dict:
                             "one MERGES: it fills a missing address and unions attrs (it won't overwrite "
                             "a known address). The returned address/attrs show what actually landed.",
         "decompiler": _decompiler_info(),
+        "substrate_vs_graph": "Two distinct stores, never conflated. The SUBSTRATE (the "
+                              "Observation store + future persistent project) is the exhaustive, "
+                              "queryable record of every tool result — the full function inventory, "
+                              "the call graph, decompilations, xrefs. The GRAPH is the CURATED "
+                              "subset you deliberately PROMOTE because it's an analysis result (the "
+                              "functions under investigation, the sinks that matter, the taint path "
+                              "behind a finding). Query freely against the substrate; promote only "
+                              "what matters into the graph.",
+        "observations": {
+            "what": "Every deterministic tool call (decompile/list/xref/strings/structs/taint/…) "
+                    "writes a durable Observation: the call + a summary + the FULL payload in CAS, "
+                    "scoped to the exact bytes by content_hash. Read them with list_observations"
+                    "(target_id) / get_observation(id) / search_observations(query).",
+            "contract": "Results persist HERE — they do NOT auto-populate the graph. CHECK HERE "
+                        "BEFORE RE-RUNNING a heavy analysis (an identical call against identical "
+                        "bytes is returned from the store, flagged cached — analyze once, reuse "
+                        "forever). PROMOTE what matters into the graph deliberately (record a "
+                        "finding, create a node/edge); an Observation is never itself a graph node.",
+            "provenance": "A node/edge/finding promoted or enriched from a call carries "
+                          "attrs.provenance=[observation_id,…]; the Observation carries node_refs "
+                          "back — bidirectional navigation without polluting the graph.",
+        },
         "annotation_kinds": sorted(ANN_KINDS),
         "annotation_node_kinds": sorted(ANN_NODE_KINDS),
         "annotation_note": "Annotations from an agent land status='proposed' (pending analyst approval).",
