@@ -21,13 +21,32 @@ class Decompiler(ABC):
     name: str
 
     @abstractmethod
-    def decompile(self, artifact: str, function: str | None = None, *, project=None) -> dict:
-        """Return {functions: [...], focus: {name, pseudocode, disasm}|null}.
+    def decompile(self, artifact: str, function: str | None = None, *,
+                  address: str | None = None, reanalyze: bool = False, project=None) -> dict:
+        """Return {functions: [...], focus: {name, address, pseudocode, disasm}|null}.
+
+        A focus is given EITHER as a `function` name OR an `address` (hex, e.g. "0x401200");
+        an address resolves to the function CONTAINING it (analyze-at-address). `reanalyze`
+        raises the analysis depth / busts any cached analysis so a missed function or edge
+        gets a second chance.
 
         `project` (a `Project`, optional) lets a decompiler that supports it cache its analysis
         on that project's data dir (the persistent Ghidra project — analyze once, reuse). It is
         ignored by decompilers without a persistent project (radare2)."""
         ...
+
+
+def _focus_args(function: str | None, address: str | None, reanalyze: bool) -> list[str] | None:
+    """The probe's positional focus (name or address) + the --reanalyze flag. Address
+    wins if both are given (callers pass one or the other)."""
+    args: list[str] = []
+    if address:
+        args.append(address)
+    elif function:
+        args.append(function)
+    if reanalyze:
+        args.append("--reanalyze")
+    return args or None
 
 
 class R2Decompiler(Decompiler):
@@ -36,10 +55,12 @@ class R2Decompiler(Decompiler):
     def __init__(self, runner: Executor | None = None) -> None:
         self.runner = runner or get_executor()
 
-    def decompile(self, artifact: str, function: str | None = None, *, project=None) -> dict:
+    def decompile(self, artifact: str, function: str | None = None, *,
+                  address: str | None = None, reanalyze: bool = False, project=None) -> dict:
         # radare2 has no persistent project; `project` is accepted for seam parity, ignored.
-        args = [function] if function else None
-        return self.runner.run_json_probe("decompile_probe.py", artifact, extra_args=args)
+        return self.runner.run_json_probe(
+            "decompile_probe.py", artifact,
+            extra_args=_focus_args(function, address, reanalyze))
 
 
 class GhidraDecompiler(Decompiler):
@@ -56,12 +77,23 @@ class GhidraDecompiler(Decompiler):
     def __init__(self, runner: Executor | None = None) -> None:
         self.runner = runner or get_executor()
 
-    def decompile(self, artifact: str, function: str | None = None, *, project=None) -> dict:
-        args = [function] if function else None
+    def decompile(self, artifact: str, function: str | None = None, *,
+                  address: str | None = None, reanalyze: bool = False, project=None) -> dict:
+        args = _focus_args(function, address, reanalyze=False)  # the probe focus only; see below
         slot = self._resolve_slot(artifact, project)
         if slot is None:
             # No cache (no project / radare path / resolve failure) → throwaway /scratch project.
             return self.runner.run_json_probe("ghidra_probe.py", artifact, extra_args=args)
+        if reanalyze:
+            # Ghidra's "raise depth" is a fresh auto-analysis: drop the warm slot so the next
+            # run re-imports cold under the lock (a persisted project is not re-analyzed in
+            # place). Best-effort — a clear failure just means the warm path is reused.
+            with slot.lock() as locked:
+                if locked:
+                    try:
+                        slot.clear_project()
+                    except Exception:  # noqa: BLE001 — never break a decompile over a cache clear
+                        pass
 
         # CROSS-PROCESS lock for the WHOLE use of the slot: the web app and an agent's MCP server
         # are separate OS processes sharing this data dir, and a Ghidra project is NOT

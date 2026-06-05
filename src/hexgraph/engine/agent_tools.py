@@ -60,9 +60,21 @@ _STATIC_SPECS = [
              "prototype/address) and draws `calls` edges only to callees ALREADY in the graph — "
              "new callees are listed for optional promotion, never auto-added (no fan-out).",
              {"type": "object", "properties": {"function": {"type": "string"}}, "required": ["function"]}),
-    ToolSpec("disassemble", "Disassemble one function (when pseudo-C is unclear). QUERY: records "
-             "an Observation; adds no graph nodes.",
-             {"type": "object", "properties": {"function": {"type": "string"}}, "required": ["function"]}),
+    ToolSpec("decompile_at", "Decompile the function CONTAINING a hex ADDRESS (e.g. 0x401200) — "
+             "analyze-at-address for when you have an address (from xrefs/strings/a crash) but not "
+             "a name. PROMOTE: same as decompile_function for the resolved function (adds it, draws "
+             "`calls` edges only to callees already in the graph; new callees listed, not auto-added).",
+             {"type": "object", "properties": {"address": {"type": "string"}}, "required": ["address"]}),
+    ToolSpec("disassemble", "Disassemble one function by NAME or by ADDRESS (an address resolves to "
+             "the function containing it) — when pseudo-C is unclear. QUERY: records an Observation; "
+             "adds no graph nodes.",
+             {"type": "object", "properties": {"function": {"type": "string"},
+                                               "address": {"type": "string"}}}),
+    ToolSpec("reanalyze", "Re-run the target's analysis at a HIGHER depth (and bust the cache) so a "
+             "function or call edge the fast pass missed gets a second chance — use when "
+             "list_functions/decompile look incomplete. QUERY: refreshes the inventory, adds no graph "
+             "nodes.",
+             {"type": "object", "properties": {}}),
     ToolSpec("xrefs", "Find which functions CALL a given symbol/sink (e.g. system, popen, "
              "strcpy) and where. With no symbol, map the binary's dangerous sinks, format-string "
              "sinks, AND network/socket surface (bind/listen/connect/recv) + who reaches each. Use "
@@ -133,6 +145,25 @@ def _callee_names(callees) -> list[str]:
     return out
 
 
+def _format_decomp(out: dict, label: str) -> str:
+    """Render a focused decompile (decompile_function / decompile_at) result as text:
+    the resolved name+address, callees, pseudocode, and any not-yet-promoted callees."""
+    focus = out.get("focus")
+    if not focus:
+        return f"{label} not found among: {', '.join(out.get('functions', [])[:40])}"
+    addr = f" @ {focus['address']}" if focus.get("address") else ""
+    name = focus.get("name") or label
+    promo = out.get("promotable_callees") or []
+    note = ""
+    if promo:
+        # New callees were NOT added to the graph (no fan-out). Surface them for
+        # deliberate promotion — decompile_function one of these to promote it.
+        note = ("\n// callees not yet in the graph (promote any by decompiling it): "
+                + ", ".join(promo))
+    return _clip(f"// {name}{addr} (callees: {', '.join(_callee_names(focus.get('callees')))})\n"
+                 f"{focus.get('pseudocode', '')}{note}")
+
+
 def _record_obs(ctx: ToolContext, *, tool: str, args: dict | None, result_kind: str,
                 payload, summary: str, status: str = "ok", node_refs: list | None = None):
     """Record one deterministic tool call as a durable Observation (design §5.2/§5.6)
@@ -177,13 +208,26 @@ def _function_node(ctx: ToolContext, name: str):
     return None
 
 
-def _decomp(ctx: ToolContext, function: str | None):
-    """Run the decompiler (cached per function), record the result as an Observation,
-    and for a focused decompile PROMOTE that one function (the deliberate curation act).
+def _decomp(ctx: ToolContext, function: str | None, *,
+            address: str | None = None, reanalyze: bool = False):
+    """Run the decompiler (cached per focus), record the result as an Observation, and for
+    a focused decompile PROMOTE that one function (the deliberate curation act). A focus is
+    a function NAME or a hex ADDRESS (resolved to the function CONTAINING it); `reanalyze`
+    raises the analysis depth and busts the cache so a missed function/edge gets a retry.
 
     Returns the decompiler dict, augmented (on a focused decompile) with `observation_id`
     and `promotable_callees` — callees NOT yet in the graph that the agent may promote."""
-    key = f"decomp:{function or '*'}"
+    focused = bool(function or address)
+    # The tool name + args this call is attributed to, for a discoverable, correctly-keyed
+    # Observation: an address decompile is a decompile_at call, a name one decompile_function.
+    if address:
+        req_tool, req_args = "decompile_at", {"address": address}
+    elif function:
+        req_tool, req_args = "decompile_function", {"function": function}
+    else:
+        req_tool, req_args = ("reanalyze", {}) if reanalyze else ("list_functions", {})
+
+    key = f"decomp:{function or address or '*'}:{int(reanalyze)}"
     if key in ctx.cache:
         return ctx.cache[key]
     from hexgraph.sandbox.decompiler import get_decompiler
@@ -193,7 +237,8 @@ def _decomp(ctx: ToolContext, function: str | None):
         ctx.cache[key] = {"error": "decompilation unavailable (Docker/sandbox not running)"}
         return ctx.cache[key]
     try:
-        out = get_decompiler().decompile(ctx.target.path, function, project=ctx.project)
+        out = get_decompiler().decompile(ctx.target.path, function, address=address,
+                                         reanalyze=reanalyze, project=ctx.project)
     except Exception as exc:  # noqa: BLE001
         out = {"error": f"decompiler failed: {exc}"}
     ctx.cache[key] = out
@@ -202,34 +247,36 @@ def _decomp(ctx: ToolContext, function: str | None):
     if out.get("error"):
         return out
 
-    if function and out.get("focus"):
+    if focused and out.get("focus"):
         # A focused decompile is a QUERY (recorded) + an explicit PROMOTE of THIS one
         # function. result_kind="decompilation" so the enrichment extractor distills the
         # focus's whitelisted facts (prototype/address/callees) into the index.
         focus = out["focus"]
         obs, _cached = _record_obs(
-            ctx, tool="decompile_function", args={"function": function},
+            ctx, tool=req_tool, args=req_args,
             result_kind="decompilation", payload=out,
-            summary=f"decompiled {focus.get('name') or function}",
+            summary=f"decompiled {focus.get('name') or function or address}",
             node_refs=[focus.get("name")] if focus.get("name") else [])
         promotable = _materialize(ctx, focus)
         out["observation_id"] = obs.id if obs is not None else None
         out["promotable_callees"] = promotable
     else:
         # A pure QUERY: record it, mutate NO graph. Attribute it to the call the agent
-        # actually made — a requested-but-not-found focused decompile is a
-        # decompile_function call (that yielded no focus), not a list_functions call, so
-        # it must not pollute the discoverability index under the wrong tool name.
+        # actually made — a requested-but-not-found focused decompile is a decompile_*
+        # call (that yielded no focus), not a list_functions call, so it must not pollute
+        # the discoverability index under the wrong tool name.
         fns = out.get("functions", [])
-        if function:
+        if focused:
+            subj = function or address
             obs, _cached = _record_obs(
-                ctx, tool="decompile_function", args={"function": function},
-                result_kind="function_list", payload={"functions": fns},
-                summary=f"{function!r} not found; {len(fns)} functions available")
+                ctx, tool=req_tool, args=req_args, result_kind="function_list",
+                payload={"functions": fns},
+                summary=f"{subj!r} not found; {len(fns)} functions available")
         else:
             obs, _cached = _record_obs(
-                ctx, tool="list_functions", args={}, result_kind="function_list",
-                payload={"functions": fns}, summary=f"{len(fns)} functions")
+                ctx, tool=req_tool, args=req_args, result_kind="function_list",
+                payload={"functions": fns},
+                summary=f"{len(fns)} functions" + (" (re-analyzed)" if reanalyze else ""))
         out["observation_id"] = obs.id if obs is not None else None
     return out
 
@@ -305,28 +352,36 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
             return _clip("functions:\n" + "\n".join(out.get("functions", [])[:300]))
         if name == "disassemble":
             fn = args.get("function")
-            if not fn:
-                return "error: 'function' argument is required"
+            addr = args.get("address")
+            if not fn and not addr:
+                return "error: 'function' or 'address' argument is required"
+            subj = fn or addr
             # Always disassemble with radare2 — it gives real instruction listings;
-            # the Ghidra decompiler path returns empty disasm (it's a decompiler).
+            # the Ghidra decompiler path returns empty disasm (it's a decompiler). An
+            # address resolves to the function CONTAINING it (analyze-at-address).
             from hexgraph.sandbox.decompiler import R2Decompiler
             from hexgraph.sandbox.runner import docker_available
             if not docker_available():
                 return "disassembly unavailable (Docker/sandbox not running)"
             try:
-                out = R2Decompiler().decompile(ctx.target.path, fn)  # defaults to get_executor()
+                out = R2Decompiler().decompile(ctx.target.path, fn, address=addr)
             except Exception as exc:  # noqa: BLE001
                 return f"disassembly failed: {exc}"
             focus = (out or {}).get("focus")
             disasm = (focus or {}).get("disasm") if focus else None
             if not disasm:
-                return f"function {fn!r} not found / no disassembly (functions: " \
+                return f"{subj!r} not found / no disassembly (functions: " \
                        f"{', '.join((out or {}).get('functions', [])[:40])})"
-            # Record the disassembly as a QUERY observation (no graph mutation).
-            _record_obs(ctx, tool="disassemble", args={"function": fn},
-                        result_kind="disassembly", payload={"function": fn, "disasm": disasm},
-                        summary=f"disassembled {fn}")
-            return _clip(f"// {fn} disassembly\n{disasm}")
+            at = f" @ {focus['address']}" if focus.get("address") else ""
+            # Record the disassembly as a QUERY observation (no graph mutation), keyed to
+            # the call the agent made (by name or by address).
+            obs_args = {"address": addr} if addr else {"function": fn}
+            _record_obs(ctx, tool="disassemble", args=obs_args,
+                        result_kind="disassembly",
+                        payload={"function": focus.get("name") or subj,
+                                 "address": focus.get("address"), "disasm": disasm},
+                        summary=f"disassembled {focus.get('name') or subj}")
+            return _clip(f"// {focus.get('name') or subj}{at} disassembly\n{disasm}")
         if name == "decompile_function":
             fn = args.get("function")
             if not fn:
@@ -334,19 +389,25 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
             out = _decomp(ctx, fn)
             if out.get("error"):
                 return out["error"]
-            focus = out.get("focus")
-            if not focus:
-                return f"function {fn!r} not found among: {', '.join(out.get('functions', [])[:40])}"
-            addr = f" @ {focus['address']}" if focus.get("address") else ""
-            promo = out.get("promotable_callees") or []
-            note = ""
-            if promo:
-                # New callees were NOT added to the graph (no fan-out). Surface them for
-                # deliberate promotion — decompile_function one of these to promote it.
-                note = ("\n// callees not yet in the graph (promote any by decompiling it): "
-                        + ", ".join(promo))
-            return _clip(f"// {fn}{addr} (callees: {', '.join(_callee_names(focus.get('callees')))})\n"
-                         f"{focus.get('pseudocode', '')}{note}")
+            return _format_decomp(out, f"function {fn!r}")
+        if name == "decompile_at":
+            addr = args.get("address")
+            if not addr:
+                return "error: 'address' argument is required"
+            # Decompile (and PROMOTE) the function CONTAINING this address — analyze-at-address
+            # for when you have an address (from xrefs/strings) but not a function name.
+            out = _decomp(ctx, None, address=addr)
+            if out.get("error"):
+                return out["error"]
+            return _format_decomp(out, f"address {addr}")
+        if name == "reanalyze":
+            # Raise the analysis depth and bust the cache so a function/edge the fast pass
+            # missed gets a retry. QUERY: re-runs the inventory, mutates no graph.
+            out = _decomp(ctx, None, reanalyze=True)
+            if out.get("error"):
+                return out["error"]
+            fns = out.get("functions", [])
+            return _clip(f"re-analyzed ({len(fns)} functions):\n" + "\n".join(fns[:300]))
         if name == "check_decompiler":
             from hexgraph.engine.mcp_tools import check_decompiler
             d = check_decompiler()

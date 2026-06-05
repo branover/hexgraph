@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """Decompile a target INSIDE the sandbox using radare2 (r2pipe).
 
-argv[1] = /artifact (read-only), argv[2] = optional function name to focus.
-Emits JSON: { functions: [...], focus: {name, pseudocode, disasm} | null }.
+argv[1] = /artifact (read-only); the remaining args are an optional focus
+(a function NAME or a hex ADDRESS like 0x401200) plus an optional --reanalyze
+flag. A focus given as an address resolves to the function CONTAINING it
+(analyze-at-address), so a bare address from xrefs/strings is decompilable
+without first knowing the function name.
+
+Emits JSON: { functions: [...], focus: {name, address, pseudocode, disasm,
+callees} | null }.
 
 radare2 is the v1 decompiler (the Decompiler seam lets Ghidra drop in later).
 We use built-in `pdc` (pseudo-C) with a `pdf` (disassembly) fallback — no
@@ -40,18 +46,38 @@ def _callees(disasm: str) -> list[str]:
 # occur in real symbol names, so an unresolved name can never inject a command.
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9_.@$:]+$")
 
+# A focus given as a hex address (e.g. from xrefs/strings). Validated separately and
+# strictly so it, too, can never inject a command when interpolated into an r2 seek.
+_ADDR = re.compile(r"^0x[0-9a-fA-F]+$")
+
 
 def _name_candidates(fn: str) -> list[str]:
     fn = fn.lstrip(".")
     return [f"sym.{fn}", f"sym.imp.{fn}", f"fcn.{fn}", fn]
 
 
+def _containing_function(addr: int, funcs: list[dict]) -> dict | None:
+    """The aflj function record whose [offset, offset+size) contains `addr`, or None.
+    Pure-Python over r2's own function table — no command interpolation, so resolving
+    an attacker-influenced address is injection-safe."""
+    for f in funcs:
+        off = f.get("offset")
+        size = f.get("size") or f.get("realsz") or 0
+        if isinstance(off, int) and off <= addr < off + (size or 1):
+            return f
+    return None
+
+
 def main() -> int:
     if len(sys.argv) < 2:
-        print(json.dumps({"error": "usage: decompile_probe.py <artifact> [function]"}))
+        print(json.dumps({"error": "usage: decompile_probe.py <artifact> [function|0xADDR] [--reanalyze]"}))
         return 2
     path = sys.argv[1]
-    focus_name = sys.argv[2] if len(sys.argv) > 2 else None
+    # Remaining args: an optional positional focus (name or 0xADDR) + a --reanalyze flag.
+    rest = sys.argv[2:]
+    reanalyze = "--reanalyze" in rest
+    positionals = [a for a in rest if not a.startswith("--")]
+    focus_arg = positionals[0] if positionals else None
 
     try:
         import r2pipe
@@ -65,37 +91,59 @@ def main() -> int:
         print(json.dumps({"error": f"radare2 failed to open the target: {exc}"}))
         return 4
     try:
-        r2.cmd("aaa")  # analyze all
+        # --reanalyze raises the analysis depth (aaaa: the deeper, more aggressive pass)
+        # so a missed function/edge gets a second chance; the default aaa is the fast path.
+        r2.cmd("aaaa" if reanalyze else "aaa")
+        records = []
         offsets = {}
         try:
             for f in (json.loads(r2.cmd("aflj") or "[]")):
                 if f.get("name"):
+                    records.append(f)
                     offsets[f["name"]] = f.get("offset")
         except json.JSONDecodeError:
             pass
         functions = list(offsets.keys())
 
         focus = None
-        if focus_name:
-            # Resolve the function symbol r2 actually knows.
+        if focus_arg and _ADDR.match(focus_arg):
+            # ADDRESS focus (analyze-at-address): resolve the function CONTAINING it.
+            addr = int(focus_arg, 16)
+            hit = _containing_function(addr, records)
+            # Seek to the containing function by its r2-known name, else to the raw
+            # (validated) address — `pdc @ 0xADDR` decompiles from there regardless.
+            seek = hit["name"] if hit else focus_arg
+            pseudo = r2.cmd(f"pdc @ {seek}").strip()
+            disasm = r2.cmd(f"pdf @ {seek}").strip()
+            off = hit.get("offset") if hit else addr
+            focus = {
+                "name": hit["name"] if hit else focus_arg,
+                "resolved": hit["name"] if hit else None,
+                "address": hex(off) if isinstance(off, int) else focus_arg,
+                "pseudocode": pseudo,
+                "disasm": disasm,
+                "callees": _callees(disasm),
+            }
+        elif focus_arg:
+            # NAME focus. Resolve the function symbol r2 actually knows.
             resolved = next(
-                (c for c in _name_candidates(focus_name) if c in functions),
-                focus_name if focus_name in functions else None,
+                (c for c in _name_candidates(focus_arg) if c in functions),
+                focus_arg if focus_arg in functions else None,
             )
             # Never interpolate an unvalidated name into an r2 command. Use the
             # resolved flag, or the sym.<name> fallback ONLY if the name is safe;
             # otherwise refuse to seek (treated as "function not found").
             if resolved:
                 seek = resolved
-            elif _SAFE_NAME.match(focus_name):
-                seek = f"sym.{focus_name.lstrip('.')}"
+            elif _SAFE_NAME.match(focus_arg):
+                seek = f"sym.{focus_arg.lstrip('.')}"
             else:
                 seek = None
             pseudo = r2.cmd(f"pdc @ {seek}").strip() if seek else ""
             disasm = r2.cmd(f"pdf @ {seek}").strip() if seek else ""
             off = offsets.get(resolved) if resolved else None
             focus = {
-                "name": focus_name,
+                "name": focus_arg,
                 "resolved": resolved,
                 "address": hex(off) if isinstance(off, int) else None,
                 "pseudocode": pseudo,

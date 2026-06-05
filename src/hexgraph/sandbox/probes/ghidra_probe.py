@@ -166,10 +166,19 @@ except:
 
 if focus:
     target = None
-    for f in funcs:
-        if f.getName() == focus:
-            target = f
-            break
+    # A focus given as a hex address resolves to the function CONTAINING it
+    # (analyze-at-address); otherwise match by name.
+    is_addr = focus[:2].lower() == "0x"
+    if is_addr:
+        try:
+            target = getFunctionContaining(toAddr(focus))
+        except:
+            target = None
+    else:
+        for f in funcs:
+            if f.getName() == focus:
+                target = f
+                break
     if target is not None:
         deci = DecompInterface()
         deci.openProgram(currentProgram)
@@ -184,8 +193,12 @@ if focus:
             callees = [c.getName() for c in target.getCalledFunctions(monitor)]
         except:
             pass
-        result["focus"] = {"name": focus, "resolved": target.getName(),
-                           "pseudocode": pseudo, "disasm": "", "callees": callees}
+        try:
+            addr = "0x" + target.getEntryPoint().toString()
+        except:
+            addr = None
+        result["focus"] = {"name": target.getName(), "resolved": target.getName(),
+                           "address": addr, "pseudocode": pseudo, "disasm": "", "callees": callees}
 
 fh = open(out_path, "w")
 fh.write(json.dumps(result))
