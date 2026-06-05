@@ -82,18 +82,56 @@ async def _shoot(page, name: str) -> None:
     print(f"  ✓ {name}")
 
 
+# Pull the loosely-connected island nodes back toward the main cluster so the hero frames
+# TIGHTLY. fcose tiles disconnected / low-degree islands far out — the firmware's network-bus
+# sockets (target_id=None, no compound parent) and a lone fuzz-harness file float way above /
+# beside the room cluster, which forces Fit to zoom out and shrinks the graph in the canvas.
+# We clamp every PARENTLESS, non-room leaf node into the bounding box of the room structure
+# (+ a margin), leaving the legitimate compound rooms untouched. This is a screenshot-only
+# nudge of the live Cytoscape positions — it never touches the product's layout code, and it
+# is robust to fcose's per-run randomization because it recomputes the box at capture time.
+_COMPACT_ISLANDS_JS = """(margin) => {
+  let cy = null;
+  document.querySelectorAll('*').forEach(el => { if (el._cyreg && el._cyreg.cy) cy = el._cyreg.cy; });
+  if (!cy) return 'no-cy';
+  const core = cy.nodes(':visible').filter(n => n.data('gtype') === 'room' || n.parent().nonempty());
+  if (core.length === 0) return 'no-core';
+  const bb = core.boundingBox();
+  // Cap the inset at half each axis so a small core box can never invert the clamp (lower
+  // bound passing the upper) and pile every island onto one corner. With the showcase seed the
+  // box dwarfs the margin, so mx/my == margin and positions are unchanged — this only guards a
+  // future seed whose room cluster is narrower than 2*margin.
+  const mx = Math.min(margin, Math.max(0, (bb.w - 1) / 2));
+  const my = Math.min(margin, Math.max(0, (bb.h - 1) / 2));
+  const islands = cy.nodes(':visible').filter(n => n.data('gtype') !== 'room' && n.parent().empty());
+  const moved = [];
+  islands.forEach(n => {
+    const p = n.position();
+    const nx = Math.max(bb.x1 + mx, Math.min(bb.x2 - mx, p.x));
+    const ny = Math.max(bb.y1 + my, Math.min(bb.y2 - my, p.y));
+    if (nx !== p.x || ny !== p.y) { n.position({ x: nx, y: ny }); moved.push(n.data('label')); }
+  });
+  return 'compacted: ' + (moved.join(', ') || '(none)');
+}"""
+
+
 async def _fit_graph(page, zoom_in: int = 0) -> None:
-    """Click the graph 'Fit' control so the whole graph is framed nicely. `zoom_in` then clicks
-    the zoom-in control that many times so the nodes read LARGER (at 1440p a bare fit leaves the
-    graph small in the roomy canvas) while staying centred on the fitted graph."""
+    """Compact the outlier island nodes, then click the graph 'Fit to view' control so the
+    whole graph is framed nicely and tightly. After compaction a bare fit already fills the
+    canvas, so `zoom_in` (extra zoom-in clicks) defaults to 0 — bumping it risks clipping a
+    randomly-far room at the frame edge. Errors are swallowed so a control rename never aborts
+    a capture run silently leaving the graph un-framed."""
     try:
-        await page.click("button[title='Fit']", timeout=2500)
+        result = await page.evaluate(_COMPACT_ISLANDS_JS, 90)
+        print(f"  · {result}")
+        await page.wait_for_timeout(300)
+        await page.click("button[title='Fit to view']", timeout=2500)
         await page.wait_for_timeout(700)
         for _ in range(zoom_in):
             await page.click("button[title='Zoom in']", timeout=2000)
             await page.wait_for_timeout(250)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  ! _fit_graph: {e}")
 
 
 async def _capture(base: str, pid: str) -> None:
@@ -133,7 +171,7 @@ async def _capture(base: str, pid: str) -> None:
         # re-fit so the whole graph is re-centered and clears the bottom-right controls (a fit
         # mid-animation leaves it off-centre and bleeding under the control cluster).
         await pg.wait_for_timeout(1300)
-        await _fit_graph(pg, zoom_in=2)
+        await _fit_graph(pg)
         await pg.wait_for_timeout(800)
         await _shoot(pg, "graph.png")
 
@@ -153,7 +191,7 @@ async def _capture(base: str, pid: str) -> None:
                 return False
 
         await search_select("cgi_handler", "cgi_handler")
-        await _fit_graph(pg, zoom_in=2)
+        await _fit_graph(pg)
         await pg.wait_for_timeout(600)
         await _shoot(pg, "graph-selected.png")
 
