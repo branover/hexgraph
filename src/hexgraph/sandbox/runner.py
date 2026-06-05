@@ -216,6 +216,21 @@ class SandboxRunner:
             *(["--network", f"container:{net_container}" if net_container else "bridge"]
               if allow_network else ["--network", "none"]),
             "--read-only",
+            # Run a real PID 1 (Docker's bundled tini) that REAPS orphaned children.
+            # Without it the probe's `python3` is PID 1, and a process that is PID 1 does
+            # NOT reap reparented orphans. libFuzzer's `-fork=1` / AFL's forkserver kill
+            # child fuzzers hard (an ASan abort, or the cgroup OOM-killer) before the child
+            # reaps ITS OWN grandchildren (e.g. the `llvm-symbolizer` ASan spawns to
+            # symbolize a crash); those grandchildren reparent to PID 1 and, unreaped, pile
+            # up as ZOMBIES. Over a crash-dense campaign the zombies exhaust `--pids-limit`
+            # until `fork()` returns EAGAIN and the forkserver dies mid-run — the long-
+            # observed "fragile forkserver under the hardened sandbox" (empty/truncated
+            # crash reports, campaigns wrongly finalized `degraded`). tini reaps them, so
+            # the PID table never fills from orphan accumulation. NOT a security relaxation:
+            # the daemon injects its own static init, it runs as our `--user`, forwards
+            # signals, and propagates the child's exit code (the detached reaper still sees
+            # the real status) — every other hardening flag below is untouched.
+            "--init",
             # Defense-in-depth at the hostile-target boundary: no Linux capabilities,
             # no privilege escalation, pin the unprivileged uid. UNCONDITIONAL.
             "--cap-drop", "ALL",
