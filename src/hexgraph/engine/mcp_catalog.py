@@ -48,7 +48,7 @@ _CATALOG = [
      {"type": "object", "properties": {"target_id": {"type": "string"}, "function": {"type": "string"}, "depth": {"type": "integer"}}, "required": ["target_id"]}),
     ("read", "function_xrefs", _t.function_xrefs, "Both directions for ONE function: its CALLERS (who calls it) AND its CALLEES (what it calls) — walk the call graph around a function of interest (the bidirectional complement to xrefs, which is callers-of-a-sink only). QUERY: records an Observation; adds no graph nodes.",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "function": {"type": "string"}}, "required": ["target_id", "function"]}),
-    ("read", "data_xrefs", _t.data_xrefs, "Cross-references TO a hex ADDRESS — every code/data/string reference that points at it (who reads/writes/points to this datum or string constant). Use after list_strings/decompile surfaces an interesting address to find who touches it. QUERY: records an Observation; adds no graph nodes.",
+    ("read", "data_xrefs", _t.data_xrefs, "Cross-references TO a hex ADDRESS (or a symbol/label that resolves to one) — every code/data/string reference that points at it (who reads/writes/points to this datum or string constant). Use after list_strings/decompile surfaces an interesting address to find who touches it. QUERY: records an Observation; adds no graph nodes.",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "address": {"type": "string"}}, "required": ["target_id", "address"]}),
     ("read", "search", _t.search, "Search the project graph (findings + functions).",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "q": {"type": "string"}}, "required": ["project_id", "q"]}),

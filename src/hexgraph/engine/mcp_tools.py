@@ -748,7 +748,7 @@ def function_xrefs(target_id: str, function: str) -> str:
 
 
 def data_xrefs(target_id: str, address: str) -> str:
-    """Every code/data/string reference TO a hex address."""
+    """Every code/data/string reference TO a hex address (or a symbol that resolves to one)."""
     return _tool(target_id, "data_xrefs", {"address": address})
 
 

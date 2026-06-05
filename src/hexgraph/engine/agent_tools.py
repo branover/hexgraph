@@ -92,9 +92,9 @@ _STATIC_SPECS = [
              "CALLEES (what it calls) — walk the call graph around a function of interest. QUERY: "
              "records an Observation; adds no graph nodes.",
              {"type": "object", "properties": {"function": {"type": "string"}}, "required": ["function"]}),
-    ToolSpec("data_xrefs", "Cross-references TO a hex ADDRESS — every code/data/string reference that "
-             "points at it (who reads/writes/points to this datum or string constant). QUERY: records "
-             "an Observation; adds no graph nodes.",
+    ToolSpec("data_xrefs", "Cross-references TO a hex ADDRESS (or a symbol/label that resolves to one) "
+             "— every code/data/string reference that points at it (who reads/writes/points to this "
+             "datum or string constant). QUERY: records an Observation; adds no graph nodes.",
              {"type": "object", "properties": {"address": {"type": "string"}}, "required": ["address"]}),
     ToolSpec("read_imports", "Return the target's imported symbols, linked libraries, and mitigation flags.",
              {"type": "object", "properties": {}}),
@@ -659,12 +659,14 @@ def _call_graph_tool(ctx: ToolContext, function: str | None, depth) -> str:
         return err
     edges = out.get("calls") or []
     # Record as a call_graph Observation in the per-caller shape the extractor reads, so the
-    # `A calls B` facts wire edges among functions ALREADY promoted (no new nodes).
+    # `A calls B` facts wire edges among functions ALREADY promoted (no new nodes). The payload
+    # is the whole-program graph regardless of `function` (the root only shapes the returned
+    # TEXT), so record under args={} — it dedups to ONE Observation no matter how many rooted
+    # views are requested, instead of re-storing the identical graph per root.
     from hexgraph.engine.ghidra import _call_graph_records
-    _record_obs(ctx, tool="call_graph", args={"function": function} if function else {},
+    _record_obs(ctx, tool="call_graph", args={},
                 result_kind="call_graph", payload={"functions": _call_graph_records(edges)},
-                summary=f"{len(edges)} call edges"
-                        + (f" (rooted at {function})" if function else ""))
+                summary=f"{len(edges)} call edges")
     if function:
         d = max(1, min(int(depth or 2), 6))
         sub = _bfs_subgraph(edges, function, d)
