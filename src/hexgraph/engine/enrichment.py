@@ -342,10 +342,26 @@ def _materialize_relationship(session: Session, *, project_id: str, target_id: s
     dst = _lookup_named(session, project_id, target_id, fact.node_type, dst_key)
     if src is None or dst is None:
         return False  # both endpoints must exist
+    from hexgraph.db.models import Edge
     from hexgraph.engine.edges import add_edge
 
     attrs = dict(fact.fact_json)
     if source_observation_id:
+        # Accumulate provenance across DISTINCT observations contributing the same
+        # edge. add_edge(merge=True) defers to merge_edge_attrs, which only unions
+        # attrs the edge schema marks list=True (call_sites) — `provenance` is not in
+        # that schema, so a bare merge would OVERWRITE it. Seed the incoming list with
+        # the existing edge's provenance first so the overwrite lands on the union
+        # (mirrors the node path's add_provenance-reads-existing behavior; §5.2).
+        existing = (
+            session.query(Edge)
+            .filter(Edge.project_id == project_id, Edge.type == edge_type,
+                    Edge.src_kind == "node", Edge.src_id == src.id,
+                    Edge.dst_kind == "node", Edge.dst_id == dst.id)
+            .first()
+        )
+        if existing is not None:
+            attrs["provenance"] = list((existing.attrs_json or {}).get("provenance") or [])
         add_provenance(attrs, source_observation_id)
     add_edge(session, project_id=project_id, src=("node", src.id), dst=("node", dst.id),
              type=edge_type, origin="derived", confidence=1.0,

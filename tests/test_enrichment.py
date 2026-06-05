@@ -209,6 +209,33 @@ def test_calls_edge_idempotent_merge(hg_home):
         assert (calls[0].attrs_json or {}).get("call_sites") == ["0x10"]
 
 
+def test_calls_edge_provenance_accumulates_across_distinct_observations(hg_home):
+    """Two DISTINCT observations that both report `a calls b` must retain BOTH
+    provenance ids on the single merged edge (design §5.2), not overwrite to the
+    latest — the edge path must accumulate provenance like the node path does."""
+    pid, tid = _seed()
+    with session_scope() as s:
+        get_or_create_node(s, project_id=pid, node_type="function", name="a", target_id=tid)
+        get_or_create_node(s, project_id=pid, node_type="function", name="b", target_id=tid)
+        # Distinct args so neither dedups as cached → two real observations, same edge.
+        O.record_observation(
+            s, project_id=pid, target_id=tid, source="task", tool="decompile_function",
+            args={"function": "a", "depth": 1}, result_kind="decompilation",
+            payload={"focus": {"name": "a", "callees": [{"name": "b", "address": "0x10"}]}},
+            summary="a", content_hash=HASH)
+        O.record_observation(
+            s, project_id=pid, target_id=tid, source="task", tool="decompile_function",
+            args={"function": "a", "depth": 2}, result_kind="decompilation",
+            payload={"focus": {"name": "a", "callees": [{"name": "b", "address": "0x20"}]}},
+            summary="a", content_hash=HASH)
+        calls = s.query(Edge).filter(Edge.type == "calls").all()
+        assert len(calls) == 1  # one merged edge
+        prov = (calls[0].attrs_json or {}).get("provenance") or []
+        assert len(prov) == 2  # BOTH observations retained, not overwritten
+        # call_sites still accumulate too (sanity).
+        assert set((calls[0].attrs_json or {}).get("call_sites") or []) == {"0x10", "0x20"}
+
+
 # --- whitelist discipline -----------------------------------------------------
 
 def test_non_whitelisted_fact_never_auto_applied(hg_home):
