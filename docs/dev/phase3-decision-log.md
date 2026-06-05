@@ -4,11 +4,15 @@ Decisions and divergences made while implementing Phase 3 (decompiler output →
 truth, per `docs/design/design-re-tooling.md` §7), recorded for maintainer review.
 Planned as a reviewable PR stack:
 
-- **PR1 — rich function facts + real structs** (this PR).
-- **PR2 — switch/jump-table edges**.
-- **PR3 — C++ class/vtable kinds + overrides/virtual-call edges** (a deferral candidate —
-  see below).
-- **PR4 — rename/retype round-trip into the persistent Ghidra project**.
+- **PR1 — rich function facts + real structs** (merged, #144).
+- **PR2 — switch/jump-table edges** — **DEFERRED** (maintainer decision 2026-06-05):
+  jump-table targets are intra-function addresses, not function entry points, so modeling
+  them as edges between function nodes rarely materializes under the both-endpoints rule;
+  better as a function attribute or revisited later.
+- **PR3 — C++ class/vtable kinds + overrides/virtual-call edges** — **DEFERRED** (maintainer
+  decision 2026-06-05): no C++ target in scope, and it fights the always-welcome model
+  (class/vtable nodes can only be promoted, not auto-enriched).
+- **PR4 — rename/retype round-trip into the persistent Ghidra project** (this PR).
 
 ## PR1 decisions
 
@@ -73,3 +77,82 @@ existing whitelist keys, and the `builtin`/`offset` keys on struct payloads. Per
 `record_observation` → join-at-create. The builtin-struct filter is already covered by
 `tests/test_ghidra.py`. The probes' actual emission (r2 + Ghidra Jython) is validated by
 the live-sandbox / WITH_GHIDRA CI lanes.
+
+## PR4 decisions (rename/retype round-trip — full)
+
+### 1. The persistent project already saves — no separate "write" probe needed
+The warm decompile already runs `analyzeHeadless … -process` **without `-readOnly`**, so
+analyzeHeadless **saves the program back into the persistent project** after the postScript
+runs. So the rename round-trip is a tiny prelude added to the *existing* POST_SCRIPT
+(`getFunctionContaining(toAddr(addr)).setName(new_name, USER_DEFINED)`), not a new write
+path: the `-process`/`-import` save persists it. The host passes `--rename <addr> <name>`,
+which becomes postScript args; the prelude renames then focuses on that function so the
+emitted result reflects the new name, and `GhidraDecompiler.rename_function` runs it under
+the slot lock (a Ghidra project is not concurrency-safe — the write holds the lock for its
+whole duration; if the lock can't be taken it refuses rather than risk corruption).
+
+### 2. Cache-coherence solved by keying the re-decompile on the NEW name
+The flagged subtlety — a rename doesn't change `content_hash`, so the Observation dedup
+(`tool, args, content_hash, result_kind`) would serve the STALE pre-rename decompile — is
+sidestepped without an epoch/version dimension: the re-decompile is recorded under
+`args={"function": new_name}`, which differs from the pre-rename `args={"function":
+old_name}`, so it's a naturally DISTINCT Observation. The new name IS the cache-bust. The
+old observation is left intact as historical provenance.
+
+### 3. Re-enrich + refresh the node body
+Recording the fresh decompile re-indexes the renamed function's always-welcome facts
+(prototype/cc/params), which enrich the node (whose name is already the new name). The
+node's stored `pseudocode` attr is also refreshed directly (it isn't a whitelisted
+enrichment fact), so the body reflects the rename, not just the attrs.
+
+### 4. Best-effort, gated, radare2 pays nothing
+`_apply_rename` calls `propagate_function_rename` in a `try/except` and the function itself
+returns a status dict (never raises) — a Ghidra hiccup never breaks the confirmed graph
+rename. It is a NO-OP unless **headless Ghidra is the active backend** (radare2 has no
+persistent project to write to), so the default-backend path pays only a couple of config
+checks, never a Docker run. Address (`^0x…$`) and new-name (a C/C++ identifier) are
+validated before any probe — `setName` takes the name as a Java arg, not a shell command,
+so this guards against garbage, not injection.
+
+### 5. Synchronous, with a known latency note
+Propagation runs synchronously inside the annotate-confirm path. Under headless Ghidra the
+warm `-process` run is a few seconds; a cold import (renaming a never-decompiled function)
+is minutes. Renames typically follow a decompile (warm), so the common cost is seconds.
+Making propagation asynchronous (a background task) is a sensible follow-up if the latency
+bites; kept synchronous here for correctness/simplicity.
+
+### 6. Validation honesty
+The Python orchestration (gating, validation, the cache-bust re-record, the wiring, the
+graph-rename-survives-a-Ghidra-failure invariant) is covered offline by
+`tests/test_rename_roundtrip.py` with the decompiler faked. The actual Ghidra **project
+write** (the Jython `setName` + the `-process` save) cannot run in an offline unit test, so
+it is validated by: the WITH_GHIDRA decompile-gate (which compiles + runs the shared
+POST_SCRIPT against a real fixture — and this caught a real bug, see §9); **a local run of
+that gate against the actual Ghidra image during development** (`scripts/ci_ghidra_decompile_check.py`
+on the Ghidra-enabled sandbox image, confirmed PASS); reasoning about documented
+analyzeHeadless behavior; and the independent review. A follow-up that adds a WITH_GHIDRA-gated
+end-to-end rename test (rename → re-open warm → assert persistence) is still worthwhile once a
+Ghidra fixture harness exists, but the script-integrity + decompile path is now CI-gated.
+
+### 9. Lesson: the POST_SCRIPT runs under Jython 2.7 — keep it ASCII / declare an encoding
+The first cut of this PR put an **em-dash in a POST_SCRIPT comment**. CPython 3.12 (where
+the offline tests + `ast.parse` run) defaults to UTF-8 and accepted it, but Ghidra runs the
+script under **Jython 2.7**, which (PEP 263) rejects any non-ASCII byte with a hard
+`SyntaxError` when no encoding is declared — so the whole script failed to compile and wrote
+**no output**, turning the WITH_GHIDRA gate red with an undiagnosable "produced no output".
+Two durable fixes landed: (a) an **encoding cookie** (`# -*- coding: utf-8 -*-`) as the
+script's first line, and (b) the **whole postScript body is now wrapped** so it ALWAYS writes
+out_path — on any exception it writes an `{error, tb}` payload instead of nothing, so a future
+failure is diagnosable from the host. A cheap offline regression test
+(`test_ghidra_post_script_is_jython_safe`) now asserts the script is ASCII-or-has-a-cookie,
+catching this class without needing Ghidra. (This is exactly the kind of break the gate exists
+to catch — it worked.)
+
+### 7. retype
+The same path supports retype in principle (the postScript could `setReturnType`/edit the
+DataTypeManager alongside `setName`), but this PR ships **rename** only — the annotate
+`rename` kind is the wired trigger. retype is an additive follow-up on the same seam.
+
+### 8. Zero migration
+No new tables/node/edge kinds — the round-trip writes to the Ghidra project on disk and
+records a (existing-kind) `decompilation` Observation. Per design §8, migration-free.

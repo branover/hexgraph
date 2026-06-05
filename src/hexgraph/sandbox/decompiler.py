@@ -101,6 +101,26 @@ class GhidraDecompiler(Decompiler):
             # the slot in the gap and silently no-op the reanalyze.
             return self._run_locked(slot, artifact, args, force_cold=reanalyze)
 
+    def rename_function(self, artifact: str, *, address: str, new_name: str, project=None) -> dict:
+        """Rename the function at `address` to `new_name` IN the persistent Ghidra project and
+        re-decompile it (the rename round-trip, design §7). analyzeHeadless runs without
+        -readOnly, so the -process/-import run SAVES the rename back into the project — every
+        future decompile sees it (analyze-once). Held under the slot lock for the whole write,
+        since a Ghidra project is not concurrency-safe. Returns the re-decompiled focus dict.
+
+        Without a persistent project (no project / resolve failure) this still renames in a
+        throwaway project and returns the focus, but the rename does not persist (nothing to
+        persist to) — callers gate on Ghidra being the active, project-backed backend."""
+        args = ["--rename", address, new_name]
+        slot = self._resolve_slot(artifact, project)
+        if slot is None:
+            return self.runner.run_json_probe("ghidra_probe.py", artifact, extra_args=args)
+        with slot.lock() as locked:
+            if not locked:
+                # Couldn't take the lock — refuse rather than risk a concurrent corrupt write.
+                return {"error": "ghidra project busy (could not lock for rename); try again"}
+            return self._run_locked(slot, artifact, args)
+
     def _run_locked(self, slot, artifact: str, args, *, force_cold: bool = False):
         """Run the probe with the slot held exclusively. Decides cold vs warm on the AUTHORITATIVE
         committed marker (`slot.exists()`); cleans a partially-written slot before a cold run; and
