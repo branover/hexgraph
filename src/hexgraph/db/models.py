@@ -647,6 +647,75 @@ class AnalysisRun(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class Observation(Base):
+    """A durable, content-addressed record of one deterministic tool call (Phase O,
+    design §5.2). The Observation store is the substrate's home for "results that
+    aren't promoted yet": every decompile/list/xref/taint/strings/structs call writes
+    one, so a later agent or user can mine prior analysis instead of re-running it.
+
+    Observations are NOT graph nodes — that would re-create the program-model
+    explosion the curated graph deliberately avoids. The tie to the graph is
+    bidirectional *by reference*: a node/edge/finding enriched from a call carries
+    `attrs.provenance = [observation_id, …]`; the Observation carries `node_refs`
+    back to what it was about. The full payload lives in CAS (`result_cas`), so large
+    outputs don't bloat the DB and identical re-runs dedup."""
+
+    __tablename__ = "observation"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("project.id"), index=True)
+    # Always scoped to a target (a decompilation is *of* a specific binary).
+    target_id: Mapped[str] = mapped_column(String(36), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Who/what produced it: an agent-task id, an MCP session label, or "user-ui".
+    source: Mapped[str] = mapped_column(String(64), default="")
+    tool: Mapped[str] = mapped_column(String(64), index=True)
+    args_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)  # the call, normalized
+    # sha256 of the analyzed bytes — scopes/invalidates facts to the exact binary.
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # String column (zero-migration vocab, like NodeType): decompilation | function_list
+    # | call_graph | xrefs | taint | strings | structs | gadgets | …
+    result_kind: Mapped[str] = mapped_column(String(40), index=True)
+    result_cas: Mapped[str | None] = mapped_column(String(64), nullable=True)  # full payload in CAS
+    summary: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(16), default="ok")  # ok | error
+    size: Mapped[int] = mapped_column(default=0)  # payload bytes stored in CAS
+    # The function/struct/address the call was *about* — back-refs for navigation.
+    node_refs: Mapped[list[Any]] = mapped_column(JSON, default=list)
+
+
+class EnrichmentFact(Base):
+    """A distilled, always-welcome fact extracted from an Observation at write time,
+    keyed by canonical node identity so a node added LATER can pull waiting facts with
+    one indexed lookup instead of rescanning every Observation (Phase O, design §5.5).
+
+    In Phase O (PR 1 of 3) the table + model exist but are NOT populated — the
+    extractor registry and the join-at-`get_or_create_node` lifecycle land in PR 2.
+    The table ships now so the program keeps its one-migration promise.
+
+    `subject_key` is the SAME identity `engine.nodes.get_or_create_node` computes:
+    `engine.nodes.normalize_symbol_name` for a name subject, the address for an
+    address subject, and the ordered endpoint pair for a relationship (`pair`)."""
+
+    __tablename__ = "enrichment_fact"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("project.id"), index=True)
+    target_id: Mapped[str] = mapped_column(String(36))
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    subject_kind: Mapped[str] = mapped_column(String(16))  # name | address | pair
+    subject_key: Mapped[str] = mapped_column(String(255))
+    node_type: Mapped[str] = mapped_column(String(40))     # the kind the fact applies to
+    fact_kind: Mapped[str] = mapped_column(String(40))     # String vocab (zero-migration)
+    fact_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    source_observation_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        Index("ix_enrichment_fact_subject", "target_id", "node_type", "subject_kind", "subject_key"),
+    )
+
+
 class EgressEvent(Base):
     """Audit record for every outbound network action against a live target. Mandatory
     once the bounded-egress (local-network) tier is enabled — a durable, queryable log
