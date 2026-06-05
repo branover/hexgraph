@@ -17,6 +17,7 @@ Observation carries `node_refs` back (`add_node_ref`).
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from typing import Any
 
@@ -215,7 +216,10 @@ def search_decompiled(
     if not rows:
         return []
     project = session.get(Project, rows[0].project_id)
-    low = needle.lower()
+    # Case-insensitive search ON THE ORIGINAL body so the match offsets index the original
+    # string (lowercasing first can change length for some Unicode chars and shift the
+    # snippet off the match). Matching + snippet are both derived from re.search's indices.
+    pat = re.compile(re.escape(needle), re.IGNORECASE)
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     for r in rows:
@@ -233,12 +237,12 @@ def search_decompiled(
             continue
         name = focus.get("name") or "?"
         body = focus.get("pseudocode") or ""
-        idx = body.lower().find(low)
-        if idx < 0 or name in seen:
+        m = pat.search(body)
+        if m is None or name in seen:
             continue
         seen.add(name)
-        start = max(0, idx - 60)
-        snippet = body[start:idx + len(needle) + 60].replace("\n", " ").strip()
+        start = max(0, m.start() - 60)
+        snippet = body[start:m.end() + 60].replace("\n", " ").strip()
         out.append({"observation_id": r.id, "function": name, "snippet": snippet})
         if len(out) >= limit:
             break
