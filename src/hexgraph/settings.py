@@ -39,6 +39,12 @@ DEFAULTS: dict[str, Any] = {
             "mode": "headless",          # "headless" (sandbox) | "bridge" (running Ghidra)
             "enrich_recon": False,       # materialize Ghidra function/call-graph/struct nodes
             "timeout": 600,              # headless analyzeHeadless wall-clock budget (s)
+            # Persistent Ghidra project cache (analyze-once / reuse, Phase 1). Each
+            # analyzed artifact keeps its imported+analyzed project under
+            # <data_dir>/ghidra/<sha256>__<ghidra-version>/ so subsequent decompiles
+            # of OTHER functions skip the full re-analysis. Bounded by a total-size cap
+            # (MiB) with LRU eviction (the runner logs every eviction — no silent cap).
+            "project_cache_mb": 4096,
             "bridge": {"host": "127.0.0.1", "port": 4768},
         },
         "fuzzing": {
@@ -225,6 +231,7 @@ ALLOWED: dict[str, tuple[Any, set | None]] = {
     "features.ghidra.mode": (str, {"headless", "bridge"}),
     "features.ghidra.enrich_recon": (bool, None),
     "features.ghidra.timeout": (int, None),
+    "features.ghidra.project_cache_mb": (int, None),
     "features.ghidra.bridge.host": (str, None),
     "features.ghidra.bridge.port": (int, None),
     "features.fuzzing.enabled": (bool, None),

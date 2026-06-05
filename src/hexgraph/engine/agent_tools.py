@@ -94,7 +94,7 @@ def _decomp(ctx: ToolContext, function: str | None):
         ctx.cache[key] = {"error": "decompilation unavailable (Docker/sandbox not running)"}
         return ctx.cache[key]
     try:
-        out = get_decompiler().decompile(ctx.target.path, function)
+        out = get_decompiler().decompile(ctx.target.path, function, project=ctx.project)
     except Exception as exc:  # noqa: BLE001
         out = {"error": f"decompiler failed: {exc}"}
     ctx.cache[key] = out

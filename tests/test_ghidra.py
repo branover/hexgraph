@@ -23,8 +23,9 @@ class FakeExecutor:
         self.payload = payload
         self.calls = []
 
-    def run_json_probe(self, probe, artifact, *, outdir=None, extra_args=None, requires_execution=False):
-        self.calls.append((probe, extra_args))
+    def run_json_probe(self, probe, artifact, *, outdir=None, extra_args=None,
+                       requires_execution=False, project_mount=None):
+        self.calls.append((probe, extra_args, project_mount))
         return self.payload
 
     def run_probe(self, *a, **k):  # pragma: no cover - unused
@@ -49,7 +50,8 @@ def test_env_override_beats_settings(hg_home, monkeypatch):
 def test_ghidra_decompiler_uses_ghidra_probe(hg_home):
     fake = FakeExecutor({"tool": "ghidra_probe", "functions": ["main"], "focus": None})
     out = GhidraDecompiler(runner=fake).decompile("/artifact", "main")
-    assert fake.calls == [("ghidra_probe.py", ["main"])]
+    # No project ⇒ no persistent-project mount (the throwaway path), still uses ghidra_probe.
+    assert fake.calls == [("ghidra_probe.py", ["main"], None)]
     assert out["functions"] == ["main"]
 
 
@@ -69,7 +71,9 @@ def test_enrich_target_materializes_graph(hg_home, monkeypatch):
         "structs": [{"name": "Packet", "size": 16, "fields": [{"name": "len", "type": "int"}]}],
     }
     fake = FakeExecutor(payload)
-    monkeypatch.setattr("hexgraph.sandbox.executor.get_executor", lambda *a, **k: fake)
+    # enrich_target routes through GhidraDecompiler, which resolves its executor via the
+    # name imported into the decompiler module — patch THAT reference.
+    monkeypatch.setattr("hexgraph.sandbox.decompiler.get_executor", lambda *a, **k: fake)
 
     from hexgraph.engine.ghidra import enrich_target
 

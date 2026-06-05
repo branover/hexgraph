@@ -102,9 +102,12 @@ def enrich_target(session, project, target) -> dict:
     from hexgraph.db.models import EdgeType, NodeType
     from hexgraph.engine.edges import add_edge
     from hexgraph.engine.nodes import get_or_create_node, materialize_function
-    from hexgraph.sandbox.executor import get_executor
+    from hexgraph.sandbox.decompiler import GhidraDecompiler
 
-    data = get_executor().run_json_probe("ghidra_probe.py", target.path)
+    # Route through the decompiler seam (passing `project`) so the full-inventory analysis
+    # PERSISTS to the project's Ghidra-project cache and is reused by later decompiles — same
+    # JSON contract (functions/calls/structs), analyze-once.
+    data = GhidraDecompiler().decompile(target.path, project=project)
     if "error" in data:
         return {"ok": False, "detail": data["error"]}
 

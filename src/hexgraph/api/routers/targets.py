@@ -143,9 +143,11 @@ def api_decompile(target_id: str, body: dict):
         if not runner.docker_available():
             return {"available": False, "detail": "Docker/sandbox not running — decompilation needs it."}
         try:
+            from hexgraph.db.models import Project
             from hexgraph.sandbox.decompiler import get_decompiler
 
-            out = get_decompiler().decompile(t.path, body.get("function"))
+            project = s.get(Project, t.project_id)
+            out = get_decompiler().decompile(t.path, body.get("function"), project=project)
         except Exception as exc:  # noqa: BLE001
             return {"available": False, "detail": f"decompilation failed: {exc}"}
         return {"available": True, "functions": out.get("functions", []), "focus": out.get("focus")}
