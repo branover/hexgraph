@@ -38,7 +38,13 @@ arg/local counts) and `afvj` (the arg/local variables). r2's `signature` IS the 
 C prototype, so it's exposed under both `prototype` and `signature`. The parser
 (`_function_facts`) is fully defensive — malformed/odd r2 JSON yields empty facts, never a
 failed decompile — and unit-tested with a fake r2 (the real r2 path is validated by the
-live-sandbox CI lane).
+live-sandbox CI lane). The `afvj` parsing handles **both** shapes r2 emits across versions
+(a `{storage_class: [vars]}` map and a flat `[vars]` list), and classifies a parameter by
+the **union** of arg markers (`isarg`/`arg` boolean, or the legacy `kind=="arg"`) — `kind`
+itself is the *storage class* (reg/bpv/…), not an arg/local discriminator, so it is NOT
+used for the split. An unmarked variable defaults to a **local** (omitting a param is
+better than a wrong one; the prototype + `param_count` from `afij` still convey the args).
+(These shape/marker fixes came from the independent merge-gate review of this PR.)
 
 ### 4. Ghidra real-struct filter via the source archive
 The Ghidra POST_SCRIPT now sets `builtin: True` on a struct whose **source archive is

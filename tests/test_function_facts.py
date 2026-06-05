@@ -33,14 +33,15 @@ class _FakeR2:
         return ""
 
 
-def test_function_facts_parses_afij_and_afvj():
+def test_function_facts_dict_of_groups_with_isarg_marker():
+    # Real r2 `afvj` (dict-of-storage-groups): `kind` is the STORAGE class (reg/bpv), and a
+    # parameter is flagged by the `isarg` boolean — NOT kind=="arg".
     r2 = _FakeR2({
         "afij": json.dumps([{"signature": "int handler(char *buf)", "calltype": "cdecl",
                              "nargs": 1, "nlocals": 2}]),
-        "afvj": json.dumps({"stack": [
-            {"name": "buf", "type": "char *", "kind": "arg"},
-            {"name": "i", "type": "int", "kind": "var"},
-            {"name": "len", "type": "size_t", "kind": "var"}]}),
+        "afvj": json.dumps({"reg": [{"name": "buf", "type": "char *", "kind": "reg", "isarg": True}],
+                            "bp": [{"name": "i", "type": "int", "kind": "bpv"},
+                                   {"name": "len", "type": "size_t", "kind": "bpv"}]}),
     })
     facts = DP._function_facts(r2, "sym.handler")
     assert facts["prototype"] == "int handler(char *buf)"
@@ -50,6 +51,34 @@ def test_function_facts_parses_afij_and_afvj():
     assert facts["local_count"] == 2
     assert facts["params"] == [{"name": "buf", "type": "char *"}]
     assert {v["name"] for v in facts["locals"]} == {"i", "len"}
+
+
+def test_function_facts_flat_list_shape():
+    # Some r2 versions return `afvj` as a flat list, not a dict-of-groups — handle it.
+    r2 = _FakeR2({
+        "afij": json.dumps([{"signature": "void f(int a)"}]),
+        "afvj": json.dumps([{"name": "a", "type": "int", "isarg": True},
+                            {"name": "tmp", "type": "int", "kind": "bpv"}]),
+    })
+    facts = DP._function_facts(r2, "sym.f")
+    assert facts["params"] == [{"name": "a", "type": "int"}]
+    assert facts["locals"] == [{"name": "tmp", "type": "int"}]
+
+
+def test_function_facts_legacy_kind_arg_marker_still_works():
+    # Older r2 used kind=="arg"; keep it in the marker union.
+    r2 = _FakeR2({"afij": "[]",
+                  "afvj": json.dumps([{"name": "x", "type": "int", "kind": "arg"}])})
+    assert DP._function_facts(r2, "x")["params"] == [{"name": "x", "type": "int"}]
+
+
+def test_function_facts_unmarked_vars_default_to_local():
+    # No arg marker present → classify as local (omitting a param beats a wrong param).
+    r2 = _FakeR2({"afij": "[]",
+                  "afvj": json.dumps([{"name": "v", "type": "int", "kind": "bpv"}])})
+    facts = DP._function_facts(r2, "x")
+    assert "params" not in facts and facts["locals"] == [{"name": "v", "type": "int"}]
+    assert facts["local_count"] == 1
 
 
 def test_function_facts_is_defensive_on_garbage():
@@ -62,8 +91,8 @@ def test_function_facts_counts_fall_back_to_list_lengths():
     # afij gives no counts, but afvj has vars → counts derive from the lists
     r2 = _FakeR2({
         "afij": json.dumps([{"signature": "void f(int a)"}]),
-        "afvj": json.dumps({"reg": [{"name": "a", "type": "int", "kind": "arg"}],
-                            "stack": [{"name": "tmp", "type": "int", "kind": "var"}]}),
+        "afvj": json.dumps([{"name": "a", "type": "int", "isarg": True},
+                            {"name": "tmp", "type": "int", "kind": "bpv"}]),
     })
     facts = DP._function_facts(r2, "sym.f")
     assert facts["param_count"] == 1 and facts["local_count"] == 1

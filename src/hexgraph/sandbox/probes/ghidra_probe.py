@@ -235,8 +235,12 @@ if focus:
             pass
         local_vars = []
         try:
+            param_names = set(p.get("name") for p in params)
+            # getLocalVariables() excludes parameters by definition; still, drop any name
+            # that surfaced as a parameter so a spilled-param slot can't double-count.
             local_vars = [{"name": v.getName(), "type": str(v.getDataType())}
-                          for v in target.getLocalVariables()]
+                          for v in target.getLocalVariables()
+                          if v.getName() not in param_names]
         except:
             pass
         focus_out = {"name": target.getName(), "resolved": target.getName(),

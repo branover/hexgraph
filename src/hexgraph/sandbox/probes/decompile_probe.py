@@ -94,21 +94,33 @@ def _function_facts(r2, seek: str) -> dict:
             facts["param_count"] = fi["nargs"]
         if isinstance(fi.get("nlocals"), int):
             facts["local_count"] = fi["nlocals"]
-    # afvj groups variables by storage class; each entry carries a name/type and a `kind`
-    # ("arg" for parameters, otherwise a local). Collect names+types defensively.
+    # afvj's shape varies across r2 versions: either a {storage_class: [vars]} map
+    # ("reg"/"sp"/"bp"/"stack") OR a flat [vars] list — handle both. A variable's `kind`
+    # is its STORAGE class, NOT an arg/local marker, so don't key on kind=="arg"; r2 marks
+    # a parameter with an `isarg`/`arg` boolean (newer) or kind=="arg" (older), so take the
+    # union of those signals and default to local. Misclassifying is worse than omitting,
+    # so unmarked variables are locals (the prototype + param_count still convey the args).
     try:
-        vars_ = json.loads(r2.cmd(f"afvj @ {seek}") or "{}")
+        vars_ = json.loads(r2.cmd(f"afvj @ {seek}") or "[]")
     except (json.JSONDecodeError, TypeError):
-        vars_ = {}
+        vars_ = []
+    if isinstance(vars_, dict):
+        entries = [v for group in vars_.values() for v in (group or []) if isinstance(v, dict)]
+    elif isinstance(vars_, list):
+        entries = [v for v in vars_ if isinstance(v, dict)]
+    else:
+        entries = []
+
+    def _is_arg(v: dict) -> bool:
+        return bool(v.get("isarg") or v.get("arg") or v.get("kind") == "arg")
+
     params: list = []
     locals_: list = []
-    groups = vars_.values() if isinstance(vars_, dict) else []
-    for group in groups:
-        for v in (group or []):
-            if not isinstance(v, dict) or not v.get("name"):
-                continue
-            entry = {"name": v.get("name"), "type": v.get("type")}
-            (params if v.get("kind") == "arg" else locals_).append(entry)
+    for v in entries:
+        if not v.get("name"):
+            continue
+        entry = {"name": v.get("name"), "type": v.get("type")}
+        (params if _is_arg(v) else locals_).append(entry)
     if params:
         facts["params"] = params
         facts.setdefault("param_count", len(params))
