@@ -19,12 +19,15 @@ the fan-out guard). A per-call promotion budget backstops it, reporting any over
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Project, Target
 from hexgraph.llm.base import ToolSpec
+
+logger = logging.getLogger(__name__)
 
 _MAX = 6000  # cap any single tool result so the context stays bounded
 
@@ -149,6 +152,10 @@ def _record_obs(ctx: ToolContext, *, tool: str, args: dict | None, result_kind: 
             content_hash=O.content_hash_for(ctx.target), node_refs=node_refs or [],
         )
     except Exception:  # noqa: BLE001 — discoverability is best-effort, never load-bearing
+        # Swallow so a store hiccup never breaks the tool call, but debug-log so genuine
+        # CAS/DB corruption is diagnosable rather than silently invisible.
+        logger.debug("failed to record observation for tool=%s on target=%s",
+                     tool, ctx.target.id, exc_info=True)
         return None, False
 
 
@@ -209,11 +216,20 @@ def _decomp(ctx: ToolContext, function: str | None):
         out["observation_id"] = obs.id if obs is not None else None
         out["promotable_callees"] = promotable
     else:
-        # A bare list_functions is a pure QUERY: record it, mutate NO graph.
-        obs, _cached = _record_obs(
-            ctx, tool="list_functions", args={}, result_kind="function_list",
-            payload={"functions": out.get("functions", [])},
-            summary=f"{len(out.get('functions', []))} functions")
+        # A pure QUERY: record it, mutate NO graph. Attribute it to the call the agent
+        # actually made — a requested-but-not-found focused decompile is a
+        # decompile_function call (that yielded no focus), not a list_functions call, so
+        # it must not pollute the discoverability index under the wrong tool name.
+        fns = out.get("functions", [])
+        if function:
+            obs, _cached = _record_obs(
+                ctx, tool="decompile_function", args={"function": function},
+                result_kind="function_list", payload={"functions": fns},
+                summary=f"{function!r} not found; {len(fns)} functions available")
+        else:
+            obs, _cached = _record_obs(
+                ctx, tool="list_functions", args={}, result_kind="function_list",
+                payload={"functions": fns}, summary=f"{len(fns)} functions")
         out["observation_id"] = obs.id if obs is not None else None
     return out
 
