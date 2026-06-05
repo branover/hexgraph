@@ -30,6 +30,26 @@ are declared in `pyproject.toml`'s `package-data` and are bundled automatically;
 the one piece that depends on a prior build step. After building, sanity-check the wheel
 actually contains `hexgraph/web/dist/index.html`.
 
+## Automated releases (release-please)
+
+In practice the version bump, `CHANGELOG.md` section, and tag are handled for you by
+release-please (`.github/workflows/release-please.yml`). On every push to `main` it keeps a
+standing "release PR" open, rolling up the pending Conventional-Commits changes into the next
+version. You review that PR like any other, and merging it writes the version into
+`pyproject.toml`, tags it, and cuts the GitHub release. The manual steps above are the
+fallback for when you need to cut a release by hand.
+
+One piece of operator setup is required for this to work: the release PR must be created by an
+identity **other than** the default `GITHUB_TOKEN`. GitHub will not run workflows for events
+made with `GITHUB_TOKEN` (a recursion guard), so a release PR opened that way never triggers
+`ci.yml`, the required status checks never report, and the `protect-main` ruleset blocks the
+merge forever. Store a fine-grained PAT or a GitHub App token as the **`RELEASE_PLEASE_TOKEN`**
+repository secret (scoped to this repo, with `contents: write` + `pull-requests: write`); the
+workflow passes it to the action. If the secret is missing the workflow falls back to
+`GITHUB_TOKEN` and you'll see exactly this symptom — a mergeable release PR stuck `BLOCKED`
+with no checks. The one-off rescue is to close and reopen the release PR (the reopen comes
+from your own identity, so CI fires).
+
 ## Tagging
 
 ```bash

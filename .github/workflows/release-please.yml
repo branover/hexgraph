@@ -5,6 +5,15 @@ name: release-please
 # writes the new version into pyproject.toml, tags it, and cuts the GitHub release.
 # Config lives in release-please-config.json; the current version in
 # .release-please-manifest.json.
+#
+# Why the explicit token below: GitHub deliberately does not run workflows for events made
+# with the default GITHUB_TOKEN (a recursion guard). If release-please opened the release PR
+# with GITHUB_TOKEN, our ci.yml `pull_request` lane would never fire on it, the required
+# status checks (`tests (offline, py3.11/3.12)`, `frontend build`) would never report, and
+# the protect-main ruleset would block the merge forever. Creating the PR with a separate
+# identity — a fine-grained PAT or a GitHub App token in the RELEASE_PLEASE_TOKEN secret
+# (needs contents: write + pull-requests: write on this repo) — makes the release PR trigger
+# CI like any human-authored branch. See docs/dev/releasing.md.
 
 on:
   push:
@@ -20,5 +29,8 @@ jobs:
     steps:
       - uses: googleapis/release-please-action@v4
         with:
+          # Falls back to GITHUB_TOKEN if the secret is unset, but then CI won't run on the
+          # release PR (see the header comment) — configure RELEASE_PLEASE_TOKEN to fix that.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
