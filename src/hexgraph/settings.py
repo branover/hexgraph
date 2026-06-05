@@ -33,6 +33,25 @@ DEFAULTS: dict[str, Any] = {
     # inviting saved entry points. Persisted here (managed prefs, NO DB/schema
     # change); deep-linkable by `name`. A pure presentation pref — never a secret.
     "ui": {"lenses": []},
+    # Docker per-container resource ceilings (design §5.8a). `default` is the SHARED
+    # baseline EVERY container HexGraph spawns inherits (the analysis sandbox, the build
+    # image, a fuzz campaign); the per-type sections override only the keys they set, so
+    # an empty section means "same as default" and setting a key diverges that type alone.
+    # Memory-tied ceilings (the `unconstrained` tmpfs, libFuzzer's RSS limit) are DERIVED
+    # from `mem` in sandbox/resources.py — raise `mem` and they move with it. NONE of this
+    # is a security/policy relaxation: `unconstrained` lifts mem/cpu/pids ONLY, and the
+    # sandbox security flags (--network none, cap-drop, no-new-privileges, read-only, user)
+    # always hold regardless of the ResourceSpec (ResourceSpec NEVER touches policy.py).
+    # Keep `default` in sync with sandbox/resources.py's DEFAULT_* (a test asserts it).
+    "resources": {
+        "default": {
+            "mem": "2g", "cpus": 2.0, "pids": 256, "tmpfs": "512m",
+            "timeout": 300, "unconstrained": False,
+        },
+        "sandbox": {},   # the analysis sandbox (decompile/strings/recon/poc probes)
+        "build": {},     # the dedicated build image (compile + dependency fetch)
+        "fuzzing": {},   # fuzz campaigns (a per-campaign override still folds on top)
+    },
     "features": {
         "ghidra": {
             "enabled": False,
@@ -71,16 +90,11 @@ DEFAULTS: dict[str, Any] = {
             # an exploitable-style classifier, design §5.4 D4). NEVER the shared sandbox
             # image; set HEXGRAPH_FUZZ_IMAGE to override (worktree: a private tag).
             "image": "hexgraph-fuzz:latest",
-            # The user-tunable ResourceSpec DEFAULT (design §5.8a) — a global default a
-            # campaign inherits unless it carries a per-campaign override. `unconstrained`
-            # lifts mem/cpu/pids ONLY so a campaign can use the whole machine; it is a
-            # RESOURCE knob, NOT a security/policy relaxation (the sandbox security flags
-            # — --network none, cap-drop, no-new-privileges, read-only, user — always
-            # hold, regardless of the ResourceSpec; ResourceSpec NEVER touches policy.py).
-            "resources": {
-                "mem": "2g", "cpus": 2.0, "pids": 256, "tmpfs": "512m",
-                "timeout": 300, "unconstrained": False,
-            },
+            # The user-tunable ResourceSpec a campaign inherits now lives in the unified,
+            # top-level `resources` section (`resources.default` ← `resources.fuzzing`),
+            # so every container type tunes the same way. A pre-existing settings.json that
+            # still carries `features.fuzzing.resources` keeps working — resource_spec_for
+            # ("fuzzing") folds those USER-SET values in for back-compat.
         },
         "poc": {
             # OFF by default. Like fuzzing, enabling this relaxes the static-only
@@ -250,14 +264,6 @@ ALLOWED: dict[str, tuple[Any, set | None]] = {
     "features.fuzzing.max_crashes": (int, None),
     "features.fuzzing.timeout": (int, None),
     "features.fuzzing.image": (str, None),
-    # The user-tunable ResourceSpec default (design §5.8a). `unconstrained` lifts
-    # mem/cpu/pids ONLY — never a security/policy relaxation (see DEFAULTS comment).
-    "features.fuzzing.resources.mem": (str, None),
-    "features.fuzzing.resources.cpus": ((int, float), None),
-    "features.fuzzing.resources.pids": (int, None),
-    "features.fuzzing.resources.tmpfs": (str, None),
-    "features.fuzzing.resources.timeout": (int, None),
-    "features.fuzzing.resources.unconstrained": (bool, None),
     "features.poc.enabled": (bool, None),
     "features.poc.timeout": (int, None),
     "features.build.enabled": (bool, None),
@@ -295,6 +301,21 @@ ALLOWED: dict[str, tuple[Any, set | None]] = {
     # fuzz_environment table, their secret connections in env/config.toml.
     "features.fuzz_remote.enabled": (bool, None),
 }
+
+# Docker resource ceilings: the SHARED `resources.default` plus a per-type override for
+# each container type. Same scalar (type, choices) model as everything above, generated so
+# every section stays identical (a new container type only needs adding to CONTAINER_TYPES).
+# `unconstrained` lifts mem/cpu/pids ONLY — never a security/policy relaxation.
+from hexgraph.sandbox.resources import CONTAINER_TYPES as _CONTAINER_TYPES  # noqa: E402
+
+for _sect in ("default", *_CONTAINER_TYPES):
+    ALLOWED[f"resources.{_sect}.mem"] = (str, None)
+    ALLOWED[f"resources.{_sect}.cpus"] = ((int, float), None)
+    ALLOWED[f"resources.{_sect}.pids"] = (int, None)
+    ALLOWED[f"resources.{_sect}.tmpfs"] = (str, None)
+    ALLOWED[f"resources.{_sect}.timeout"] = (int, None)
+    ALLOWED[f"resources.{_sect}.unconstrained"] = (bool, None)
+del _sect
 
 
 class SettingsError(ValueError):

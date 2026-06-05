@@ -40,14 +40,20 @@ export interface SavedLens {
   focus?: string | null;
   hop?: number;
 }
+// Docker per-container resource ceilings. `default` is the shared baseline every container
+// type inherits; the per-type sections override only the keys they set (empty ⇒ same as
+// default). `unconstrained` lifts mem/cpu/pids ONLY — never a security relaxation.
+export interface ResourceSpec { mem: string; cpus: number; pids: number; tmpfs: string; timeout: number; unconstrained: boolean }
+export interface ResourcesView { default: ResourceSpec; sandbox?: Partial<ResourceSpec>; build?: Partial<ResourceSpec>; fuzzing?: Partial<ResourceSpec> }
 export interface SettingsView {
   settings: {
     llm: { backend: string; model: string | null };
     server: { host: string; port: number };
     ui: { lenses: SavedLens[] };
+    resources: ResourcesView;
     features: {
       ghidra: { enabled: boolean; mode: string; enrich_recon: boolean; timeout: number; bridge: { host: string; port: number } };
-      fuzzing: { enabled: boolean; max_total_time: number; max_len: number; max_crashes: number; timeout: number; image?: string; resources?: { mem: string; cpus: number; pids: number; tmpfs: string; timeout: number; unconstrained: boolean } };
+      fuzzing: { enabled: boolean; max_total_time: number; max_len: number; max_crashes: number; timeout: number; image?: string };
       build: { enabled: boolean; image?: string; timeout?: number };
       poc: { enabled: boolean; timeout: number };
       network: { enabled: boolean; timeout: number };

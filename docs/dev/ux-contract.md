@@ -1218,10 +1218,22 @@ later PR).
 - 🔌 Backend: `PATCH` + the Ghidra test endpoint.
 - Prereq: none (test may report unavailable offline — that's a legible state, not a failure).
 
-**SET-05 — Resource ceilings (fuzzing)**
-- Steps: with Fuzzing on, set max time / max len / max crashes / sandbox timeout + default campaign resources
-  (mem/cpus/pids or unconstrained).
-- Functional: each persists on blur; unconstrained hides the per-field ceilings.
+**SET-05 — Container resources (shared default)**
+- Steps: in the always-visible **Container resources** card, set memory / cpus / pids / scratch tmpfs / timeout,
+  or toggle **unconstrained**.
+- Functional: each persists on blur (`resources.default.*`); unconstrained hides the per-field ceilings. The
+  shared default is inherited by every container type (sandbox / build / fuzzing) unless a per-type key overrides
+  it; per-type sandbox/build overrides are settable via the Settings API / `hexgraph config set` (not on this page).
+- 🔌 Backend: `PATCH resources.default.*`; verify a sandbox/build/campaign container picks up the new ceiling.
+- Qualitative: the hint is explicit that tuning ceilings / unconstrained is NOT a security relaxation, and that
+  raising memory also raises the memory-derived limits (honesty). Always visible (not gated behind a feature).
+
+**SET-05b — Resource ceilings (fuzzing override)**
+- Steps: with Fuzzing on, set max time / max len / max crashes / sandbox timeout + the **Default campaign
+  resources** override (mem/cpus/pids or unconstrained).
+- Functional: each persists on blur; the resources block writes `resources.fuzzing.*` (layered over the shared
+  Container-resources default); unconstrained hides the per-field ceilings. The Fuzz modal prefills from the merged
+  default ← fuzzing override and can override again per run.
 - 🔌 Backend: `PATCH`; verify.
 - Qualitative: the note is explicit that ceilings/unconstrained are NOT a security relaxation (honesty).
 - Prereq: Fuzzing on.

@@ -43,7 +43,7 @@ from pathlib import Path
 
 from dataclasses import dataclass, field
 
-from hexgraph.sandbox.resources import ResourceSpec
+from hexgraph.sandbox.resources import resource_spec_for
 from hexgraph.sandbox.runner import (
     DEFAULT_TIMEOUT,
     PROBES_DIR,
@@ -248,7 +248,7 @@ class RemoteDockerExecutor(SandboxRunner):
             artifact = Path(artifact).resolve()
             if not artifact.is_file():
                 raise SandboxError(f"artifact not found: {artifact}")
-        resources = resources or ResourceSpec()
+        resources = resources or resource_spec_for("sandbox")
         timeout = resources.timeout or self.timeout
         name = f"hexgraph-{uuid.uuid4().hex[:12]}"
         local_out = Path(outdir).resolve() if outdir is not None else None
@@ -329,7 +329,7 @@ class RemoteDockerExecutor(SandboxRunner):
             artifact = Path(artifact).resolve()
             if not artifact.is_file():
                 raise SandboxError(f"artifact not found: {artifact}")
-        resources = resources or ResourceSpec()
+        resources = resources or resource_spec_for("sandbox")
         local_out = Path(outdir).resolve()
         local_out.mkdir(parents=True, exist_ok=True)
 

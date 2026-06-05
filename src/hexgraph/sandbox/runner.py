@@ -22,7 +22,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from hexgraph.sandbox.resources import ResourceSpec
+from hexgraph.sandbox.resources import ResourceSpec, resource_spec_for
 
 DEFAULT_IMAGE = "hexgraph-sandbox:latest"
 DEFAULT_TIMEOUT = 300  # seconds
@@ -359,7 +359,7 @@ class SandboxRunner:
             if not artifact.is_file():
                 raise SandboxError(f"artifact not found: {artifact}")
 
-        resources = resources or ResourceSpec()
+        resources = resources or resource_spec_for("sandbox")
         timeout = resources.timeout or self.timeout
         name = f"hexgraph-{uuid.uuid4().hex[:12]}"
         cmd = [
@@ -528,7 +528,7 @@ class SandboxRunner:
             if not artifact.is_file():
                 raise SandboxError(f"artifact not found: {artifact}")
 
-        resources = resources or ResourceSpec()
+        resources = resources or resource_spec_for("sandbox")
         outdir = Path(outdir).resolve()
         outdir.mkdir(parents=True, exist_ok=True)
         _ensure_outdir_writable(outdir)  # so the --user 1000 container can write /out

@@ -40,7 +40,7 @@ def test_rss_limit_falls_back_when_uncapped():
 def test_rss_limit_stays_below_even_a_tiny_cap():
     # The invariant that matters: the RSS limit is ALWAYS strictly below the cap (and > 0)
     # so libFuzzer's limiter trips before the cgroup OOM-killer. NO floor that could reach
-    # the cap — `mem` is user-tunable (features.fuzzing.resources), and a 256 MB floor
+    # the cap — `mem` is user-tunable (the `resources` settings section), and a 256 MB floor
     # against a mem="256m" cap would re-create the rss>=cap inversion this fixes.
     for cap_mb in (256, 128, 64, 32):
         rss = rss_limit_mb_for_cap(cap_mb * 1024 * 1024)
