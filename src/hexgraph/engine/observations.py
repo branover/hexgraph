@@ -107,6 +107,19 @@ def record_observation(
     )
     session.add(obs)
     session.flush()
+
+    # Extract-at-write (design §5.5): distill the always-welcome facts from this
+    # payload into the enrichment index, keyed by canonical node identity, and enrich
+    # any node/edge that already exists. A node added later pulls the rest at create.
+    # Only OK results carry trustworthy facts; extraction never breaks the call.
+    if status == "ok":
+        from hexgraph.engine import enrichment
+
+        enrichment.extract_and_index(
+            session, project_id=project_id, target_id=target_id,
+            content_hash=content_hash, result_kind=result_kind, payload=payload,
+            source_observation_id=obs.id,
+        )
     return obs, False
 
 
