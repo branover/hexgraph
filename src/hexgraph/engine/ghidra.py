@@ -172,7 +172,8 @@ def propagate_function_rename(session, node, new_name: str) -> dict:
     serves the stale decompile — the new name IS the cache-bust dimension, no epoch needed."""
     if node.node_type != "function" or not node.address:
         return {"propagated": False, "reason": "not an addressed function node"}
-    if not ghidra_config().get("enabled") or ghidra_config().get("mode") != "headless":
+    gcfg = ghidra_config()
+    if not gcfg.get("enabled") or gcfg.get("mode") != "headless":
         return {"propagated": False, "reason": "headless Ghidra is not the active backend"}
     if not (_RENAME_ADDR.match(str(node.address)) and _RENAME_IDENT.match(new_name)):
         return {"propagated": False, "reason": "address or name failed validation"}
