@@ -5,6 +5,31 @@ All notable changes to HexGraph are recorded here. The format loosely follows
 [semantic versioning](https://semver.org/) properly once it reaches 1.0. Until then,
 expect breaking changes between minor versions.
 
+## [0.4.0](https://github.com/branover/hexgraph/compare/hexgraph-v0.3.0...hexgraph-v0.4.0) (2026-06-05)
+
+
+### Features
+
+* address-level access — decompile/disassemble by address + reanalyze (Phase 2 PR1) ([#139](https://github.com/branover/hexgraph/issues/139)) ([dcf0903](https://github.com/branover/hexgraph/commit/dcf09034a2d13a57363a75faa680783dc59224ef))
+* breadth verbs — call_graph + bidirectional/data xrefs (Phase 2 PR2) ([#142](https://github.com/branover/hexgraph/issues/142)) ([8e78c1b](https://github.com/branover/hexgraph/commit/8e78c1b236386fa3aa0bd3f1fbaddfee0c023e53))
+* persist and reuse the Ghidra project (analyze once) ([#132](https://github.com/branover/hexgraph/issues/132)) ([0e9cdf0](https://github.com/branover/hexgraph/commit/0e9cdf01eb4e88be353ed688f40317b69b02edad))
+* query/enrich/promote curation contract + enrich_recon/_materialize redirects + instruction surfaces (Phase O, PR 3 of 3) ([#136](https://github.com/branover/hexgraph/issues/136)) ([6271e87](https://github.com/branover/hexgraph/commit/6271e87a27011b9e916116ad01fd2abf45a8b0b1))
+* rich function facts on the decompiled focus + real-struct filter (Phase 3 PR1) ([#144](https://github.com/branover/hexgraph/issues/144)) ([d102734](https://github.com/branover/hexgraph/commit/d102734e5f3e85dc8197c8f1c6f1c712d460ff91))
+* search_decompiled + Phase 2 discoverability/instruction wiring (PR3) ([#143](https://github.com/branover/hexgraph/issues/143)) ([a4bcb75](https://github.com/branover/hexgraph/commit/a4bcb7507c6ea79a75dfdfa26a90aa6b8de3a0a5))
+* Tool Results UI panel + observation REST endpoints (Phase O) ([#138](https://github.com/branover/hexgraph/issues/138)) ([bae1d0d](https://github.com/branover/hexgraph/commit/bae1d0dd83080453510b7925f6c129b57a3cc3e8))
+
+
+### Bug Fixes
+
+* **capture:** tightly frame the hero graph screenshot ([#140](https://github.com/branover/hexgraph/issues/140)) ([12e61f9](https://github.com/branover/hexgraph/commit/12e61f96cd797b977c8c15445810813dca542c99))
+* **ci:** run CI on release-please PRs via a separate token ([#145](https://github.com/branover/hexgraph/issues/145)) ([46a7404](https://github.com/branover/hexgraph/commit/46a7404d9d9eb3b7ec873627a0bf3c1260e7bf7b))
+
+
+### Documentation
+
+* Phase O observation store + curation model + decision log ([#137](https://github.com/branover/hexgraph/issues/137)) ([1653d91](https://github.com/branover/hexgraph/commit/1653d91448fb006b3fc1dc79a8828821187d3d1c))
+* protect-main now requires 0 approvals — no --admin in the merge flow ([#141](https://github.com/branover/hexgraph/issues/141)) ([3a68e1e](https://github.com/branover/hexgraph/commit/3a68e1e41f84703bc82560f2add11e3d5932b2e1))
+
 ## [0.3.0](https://github.com/branover/hexgraph/compare/hexgraph-v0.2.0...hexgraph-v0.3.0) (2026-06-04)
 
 
