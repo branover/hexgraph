@@ -358,20 +358,22 @@ def _flag_all(args: list[str], name: str) -> list[str]:
 # that raised `--memory` (or runs unconstrained) gets a proportionally higher RSS budget.
 _RSS_DEFAULT_MB = 2048
 _RSS_FRACTION = 0.8
-_RSS_FLOOR_MB = 256
 _CGROUP_V1_UNLIMITED = 1 << 62  # v1 reports ~PAGE_COUNTER_MAX when uncapped; treat huge as none
 
 
 def rss_limit_mb_for_cap(cap_bytes: int | None, *, default_mb: int = _RSS_DEFAULT_MB,
-                         fraction: float = _RSS_FRACTION, floor_mb: int = _RSS_FLOOR_MB) -> int:
+                         fraction: float = _RSS_FRACTION) -> int:
     """libFuzzer `-rss_limit_mb` for a given memory-cap (bytes), pure + testable.
 
-    With a finite cap, return `fraction` of it (a floor keeps it usable on a tiny cap) so
-    libFuzzer's limiter trips below the cgroup OOM-killer. With no cap (None), fall back to
-    the historical default."""
+    With a finite cap, return `fraction` of it — ALWAYS strictly below the cap so libFuzzer's
+    limiter trips before the cgroup OOM-killer. Deliberately NO floor: `mem` is user-tunable
+    (`features.fuzzing.resources`), and any floor that could reach the cap (e.g. a 256 MB
+    floor against a `mem="256m"` cap) would re-create the very rss>=cap inversion this fixes.
+    Clamp to >=1 so a pathologically tiny cap never yields 0, which libFuzzer reads as
+    'no limit'. With no cap (None/0), fall back to the historical default."""
     if not cap_bytes or cap_bytes <= 0:
         return default_mb
-    return max(floor_mb, int(cap_bytes / (1024 * 1024) * fraction))
+    return max(1, int(cap_bytes / (1024 * 1024) * fraction))
 
 
 def _memory_cap_bytes() -> int | None:

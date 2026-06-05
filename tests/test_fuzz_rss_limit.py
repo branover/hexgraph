@@ -37,9 +37,22 @@ def test_rss_limit_falls_back_when_uncapped():
     assert rss_limit_mb_for_cap(0) == 2048
 
 
-def test_rss_limit_floored_on_a_tiny_cap():
-    # A pathologically small cap is clamped to a usable floor (never below 256 MB).
-    assert rss_limit_mb_for_cap(64 * 1024 * 1024) == 256
+def test_rss_limit_stays_below_even_a_tiny_cap():
+    # The invariant that matters: the RSS limit is ALWAYS strictly below the cap (and > 0)
+    # so libFuzzer's limiter trips before the cgroup OOM-killer. NO floor that could reach
+    # the cap — `mem` is user-tunable (features.fuzzing.resources), and a 256 MB floor
+    # against a mem="256m" cap would re-create the rss>=cap inversion this fixes.
+    for cap_mb in (256, 128, 64, 32):
+        rss = rss_limit_mb_for_cap(cap_mb * 1024 * 1024)
+        assert 0 < rss < cap_mb, f"cap={cap_mb}MB -> rss={rss} must be >0 and below the cap"
+
+
+def test_rss_limit_below_cap_invariant_holds_across_caps():
+    # Sweep a wide range of caps: the limit is below the cap at every size (the property
+    # libFuzzer relies on to OOM-report gracefully instead of being SIGKILLed).
+    for cap_mb in (16, 64, 256, 512, 2048, 8192, 65536):
+        rss = rss_limit_mb_for_cap(cap_mb * 1024 * 1024)
+        assert 0 < rss < cap_mb, (cap_mb, rss)
 
 
 # ── Docker-gated: the real container reads its actual cgroup --memory cap ─────────────
