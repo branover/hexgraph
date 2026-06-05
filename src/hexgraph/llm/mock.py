@@ -113,6 +113,14 @@ class MockLLMBackend:
         env = os.environ.get("HEXGRAPH_MOCK_SCENARIO")
         if env:
             return env
+        # static_analysis with no explicit scenario must NOT fabricate a finding (design §6):
+        # the canned critical_overflow is a binary-agnostic "Stack buffer overflow in
+        # cgi_handler()" the auto-pick used to emit on ANY target. The deterministic core's
+        # GROUNDED taint findings stand alone, so the synthesis layer contributes nothing by
+        # default. Explicit scenarios (--mock-scenario, the demo, the fidelity tests) still
+        # replay via the arg/env precedence above.
+        if req.task_type == "static_analysis":
+            return "no_findings"
         # 3) deterministic hash(task_id) % len(pool) for a realistic demo mix.
         # Exclude error_* scenarios here: faults are reachable explicitly (arg/env),
         # but the auto-pick should land on a *successful* scenario so interactive
