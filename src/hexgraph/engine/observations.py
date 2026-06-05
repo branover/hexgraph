@@ -17,6 +17,7 @@ Observation carries `node_refs` back (`add_node_ref`).
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from typing import Any
 
@@ -192,6 +193,60 @@ def search_observations(
         )
     rows = q.order_by(Observation.created_at.desc()).limit(limit).all()
     return [_row_dict(r) for r in rows]
+
+
+def search_decompiled(
+    session: Session, target_id: str, *, query: str, limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Substring search ACROSS recorded decompilation BODIES (pseudocode) on a target —
+    which decompiled function(s) contain a string/identifier — by mining the Observation
+    store (no re-decompile). Case-insensitive; one hit per function (newest decompilation
+    wins). Returns [{observation_id, function, snippet}]."""
+    needle = (query or "").strip()
+    if not needle:
+        return []
+    rows = (
+        session.query(Observation)
+        .filter(Observation.target_id == target_id,
+                Observation.result_kind == "decompilation",
+                Observation.status == "ok")
+        .order_by(Observation.created_at.desc())
+        .all()
+    )
+    if not rows:
+        return []
+    project = session.get(Project, rows[0].project_id)
+    # Case-insensitive search ON THE ORIGINAL body so the match offsets index the original
+    # string (lowercasing first can change length for some Unicode chars and shift the
+    # snippet off the match). Matching + snippet are both derived from re.search's indices.
+    pat = re.compile(re.escape(needle), re.IGNORECASE)
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for r in rows:
+        if not r.result_cas or project is None:
+            continue
+        raw = cas.get_text(project, r.result_cas)
+        if not raw:
+            continue
+        try:
+            payload = json.loads(raw)
+        except (ValueError, TypeError):
+            continue
+        focus = payload.get("focus") if isinstance(payload, dict) else None
+        if not isinstance(focus, dict):
+            continue
+        name = focus.get("name") or "?"
+        body = focus.get("pseudocode") or ""
+        m = pat.search(body)
+        if m is None or name in seen:
+            continue
+        seen.add(name)
+        start = max(0, m.start() - 60)
+        snippet = body[start:m.end() + 60].replace("\n", " ").strip()
+        out.append({"observation_id": r.id, "function": name, "snippet": snippet})
+        if len(out) >= limit:
+            break
+    return out
 
 
 def observation_index(session: Session, target_id: str) -> dict[str, Any]:
