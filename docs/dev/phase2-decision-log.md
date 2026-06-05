@@ -64,3 +64,51 @@ decompiler (no Docker — the curation/observation contract, not the sandboxed
 decompiler), plus pure-unit tests for the probe's `_containing_function`/`_ADDR` and the
 seam's `_focus_args`. End-to-end address resolution against a real binary is covered by
 the Docker-gated decompiler tests / the live-sandbox CI lane.
+
+## PR2 decisions
+
+### 1. Distinct verbs, not an overloaded `xrefs`
+`function_xrefs` (callers AND callees of one function) and `data_xrefs` (refs TO an
+address) are their own verbs rather than modes of the existing `xrefs` (which stays
+callers-of-a-sink). The `xrefs` description is already dense; distinct verbs keep each
+schema and contract legible. The single radare2 probe (`xrefs_probe.py`) gained a
+`--mode function|data|callgraph` flag, so all xref/graph logic lives in one place while
+the legacy default (`--mode callers`, no flag) is byte-for-byte unchanged.
+
+### 2. `call_graph` is uniform radare2, rooted-BFS optional
+`call_graph` always builds the graph from radare2 (`aflj` + per-function `axffj`,
+bounded to 600 funcs / 2000 edges, mirroring the Ghidra POST_SCRIPT caps) rather than
+branching on the active decompiler — radare2 is always available and runs in the same
+sandbox, so the verb works identically regardless of the Ghidra setting. With a
+`function` arg it renders a rooted BFS to `depth` (default 2, capped 6); without one it
+prints the bounded whole-graph with an explicit "… and N more edges" note (no silent
+truncation). **Decision point for the maintainer:** the design noted "the POST_SCRIPT
+already emits the call graph" — we chose r2-uniform over consuming Ghidra's `calls` to
+avoid backend-branching; revisit if Ghidra-faithful call edges are wanted.
+
+### 3. `call_graph` self-wires edges — the killer property — via the existing extractor
+`call_graph` records `result_kind="call_graph"` in the per-caller shape
+(`_call_graph_records`, reused from `engine/ghidra.py`), so the already-registered
+`call_graph` → `_extract_functions` extractor distills `A calls B` facts that
+`index_facts`/`_draw_pair_edge` materialize as `calls` edges **only between functions
+already promoted** (both-endpoints rule). So `call_graph` is a QUERY that creates no new
+nodes yet *enriches* the curated graph by wiring edges among its existing function nodes —
+consistent with the Phase O contract (the same path `enrich_recon` uses). The test pins
+this: two curated functions get an edge; an uncurated callee is neither minted nor wired.
+
+### 4. `function_xrefs` / `data_xrefs` are pure queries (no extractor)
+Both record free result_kinds (`function_xrefs`, `data_xrefs`) with no registered
+extractor, so they enrich nothing and create nothing — a function's callers/callees and
+an address's referrers are answers to read, not always-welcome node facts. Edge-wiring is
+`call_graph`'s job alone, keeping the "which verb mutates what" story crisp.
+
+### 5. Zero migration
+No new tables, node, or edge kinds. New `result_kind` strings are String-column vocab;
+`call_graph` reuses the already-registered extractor. Per design §8, migration-free.
+
+### 6. Offline tests + pure-unit probe coverage
+`tests/test_breadth_xrefs.py` exercises the three verbs with a faked xrefs probe (no
+Docker), asserts the call_graph self-wiring + no-new-nodes property, and unit-tests the
+rooted-BFS helper (`_bfs_subgraph`, normalized + depth-bounded) and the probe's
+`_ADDR`/`_resolve_seek` injection-safety. Real radare2 xref/callgraph output is covered
+by the Docker-gated / live-sandbox CI lane.
