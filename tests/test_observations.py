@@ -62,6 +62,24 @@ def test_identical_rerun_is_cached_no_duplicate(hg_home):
         assert s.query(Observation).count() == 1
 
 
+def test_explicit_none_arg_dedups_with_omitted(hg_home):
+    pid, tid = _seed()
+    payload = {"pseudocode": "void f(){}"}
+    with session_scope() as s:
+        o1, c1 = O.record_observation(
+            s, project_id=pid, target_id=tid, source="a", tool="decompile_function",
+            args={"function": "f"}, result_kind="decompilation", payload=payload,
+            summary="f", content_hash="deadbeef")
+        # An explicit None for an optional arg is the same call as omitting it ⇒ cached.
+        o2, c2 = O.record_observation(
+            s, project_id=pid, target_id=tid, source="b", tool="decompile_function",
+            args={"function": "f", "depth": None}, result_kind="decompilation",
+            payload=payload, summary="f", content_hash="deadbeef")
+        assert c1 is False and c2 is True
+        assert o1.id == o2.id
+        assert s.query(Observation).count() == 1
+
+
 def test_different_bytes_not_cached(hg_home):
     pid, tid = _seed()
     with session_scope() as s:

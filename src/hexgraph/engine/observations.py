@@ -20,6 +20,7 @@ import json
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Observation, Project, Target
@@ -28,8 +29,8 @@ from hexgraph.engine import cas
 
 def _normalize_args(args: dict[str, Any] | None) -> dict[str, Any]:
     """Canonical form of the call args so dedup is order-insensitive. Drops None
-    values (an omitted optional arg must dedup with an explicit None)."""
-    return {k: args[k] for k in sorted(args)} if args else {}
+    values so an omitted optional arg dedups with an explicit None."""
+    return {k: args[k] for k in sorted(args) if args[k] is not None} if args else {}
 
 
 def _args_key(args: dict[str, Any] | None) -> str:
@@ -166,16 +167,18 @@ def search_observations(
         q = q.filter(Observation.project_id == project_id)
     if target_id:
         q = q.filter(Observation.target_id == target_id)
-    needle = (query or "").lower()
-    rows = q.order_by(Observation.created_at.desc()).all()
-    out = []
-    for r in rows:
-        hay = " ".join([r.tool or "", r.summary or "", r.result_kind or ""]).lower()
-        if needle in hay:
-            out.append(_row_dict(r))
-        if len(out) >= limit:
-            break
-    return out
+    needle = (query or "").strip()
+    if needle:
+        like = f"%{needle}%"
+        q = q.filter(
+            or_(
+                Observation.tool.ilike(like),
+                Observation.summary.ilike(like),
+                Observation.result_kind.ilike(like),
+            )
+        )
+    rows = q.order_by(Observation.created_at.desc()).limit(limit).all()
+    return [_row_dict(r) for r in rows]
 
 
 def observation_index(session: Session, target_id: str) -> dict[str, Any]:
