@@ -165,25 +165,43 @@ def _compile_harnesses(findings) -> None:
 
 
 def _materialize_decomp_graph(session: Session, project_id: str, target_id: str, decomp: dict) -> None:
-    """Turn decompilation into graph: a function node for the focus + its callees,
-    joined by `calls` edges (design §3.2 lazy materialization, §3.3 `calls`)."""
+    """Promote the decompiled FOCUS function into the graph (the deliberate curation
+    act of decompiling THIS function) and record the decompilation as a durable
+    Observation, mirroring the agent-tool PROMOTE path (design §5.3). The single-pass
+    path obeys the SAME curation contract: callees are NOT mass-minted — `calls` edges
+    self-wire only to callees ALREADY curated (the both-endpoints-exist rule, handled by
+    the enrichment relationship-materializer the recorded Observation drives). Without
+    this, decompiling one focus would bulk-spawn every callee as a node — the graph
+    explosion this Phase exists to stop."""
     focus = decomp.get("focus")
     if not focus or not focus.get("name"):
         return
-    fnode = materialize_function(
+    from hexgraph.engine import observations as O
+
+    target = session.get(Target, target_id)
+    # Record first so extract-at-write indexes the focus's facts + the `A calls B`
+    # relationship facts under the target's content_hash; the edge to any callee that
+    # is already a node self-wires, new callees do not get minted. Best-effort — a
+    # store hiccup must never break task execution.
+    if target is not None:
+        try:
+            O.record_observation(
+                session, project_id=project_id, target_id=target_id, source="decompile",
+                tool="decompile_function", args={"function": focus["name"]},
+                result_kind="decompilation", payload=decomp,
+                summary=f"decompiled {focus['name']}",
+                content_hash=O.content_hash_for(target),
+                node_refs=[focus["name"]],
+            )
+        except Exception:  # noqa: BLE001 — discoverability is best-effort, never load-bearing
+            pass
+    # Promote ONLY the focus. get_or_create_node pulls the just-indexed prototype/
+    # address facts at create, and self-wires `calls` edges to callees already curated.
+    materialize_function(
         session, project_id=project_id, target_id=target_id, name=focus["name"],
         address=focus.get("address"), pseudocode=focus.get("pseudocode") or None,
         created_by="decompile",
     )
-    for callee in focus.get("callees", []):
-        cnode = materialize_function(
-            session, project_id=project_id, target_id=target_id, name=callee, created_by="decompile",
-        )
-        add_edge(
-            session, project_id=project_id,
-            src=("node", fnode.id), dst=("node", cnode.id),
-            type=EdgeType.calls, origin="tool", confidence=1.0, created_by_tool="radare2",
-        )
 
 
 def execute_llm_task(session: Session, project: Project, target: Target, task: Task) -> int:
