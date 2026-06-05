@@ -14,6 +14,7 @@ Findings' `related_target_refs` become `related_to` edges and
 
 from __future__ import annotations
 
+import logging
 import os
 
 from sqlalchemy.orm import Session
@@ -215,6 +216,19 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
         ctx.tool_outputs["decompilation"] = decomp
         _materialize_decomp_graph(session, project.id, target.id, decomp)
 
+    # Phase 4 deterministic core (design §6): for static_analysis, compute grounded source→sink
+    # taint and emit a finding per flow BEFORE the LLM synthesizes — so the model reasons over a
+    # graph that already carries real taint/sink truth. Backend-independent + always-on; degrades
+    # to nothing when Ghidra is off (no fabrication). Best-effort: never fail the task over it.
+    core_finding_ids: list[str] = []
+    if task.type == "static_analysis":
+        try:
+            from hexgraph.engine.static_core import run_static_core
+
+            core_finding_ids = run_static_core(session, project, target, task=task)
+        except Exception:  # noqa: BLE001 — the deterministic core is best-effort
+            logging.getLogger(__name__).warning("deterministic static core failed", exc_info=True)
+
     # Assemble the content bundle (the frozen, content-addressed input).
     from hexgraph.engine.context import build_context_bundle, estimate_tokens
     from hexgraph.llm.cassette import maybe_wrap_cassette
@@ -339,10 +353,11 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
     # Best-effort + envelope-only: it only UPGRADES a code_present/static floor (never downgrades a
     # dynamic claim), so a stronger assurance the agent recorded is untouched. A failure here must
     # not fail the task (the findings are already persisted).
-    if persisted_ids:
+    all_finding_ids = core_finding_ids + persisted_ids
+    if all_finding_ids:
         from hexgraph.engine.reachability import argue_reachability_for_finding
 
-        for fid in persisted_ids:
+        for fid in all_finding_ids:
             try:
                 argue_reachability_for_finding(session, fid)
             except Exception:  # noqa: BLE001 — reachability is advisory, never fatal
@@ -353,6 +368,7 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
 
     record_run(
         session, project_id=project.id, anchor_kind="target", anchor_id=target.id,
-        task=task, bundle_sha=bundle.row.bundle_sha, finding_count=len(findings),
+        task=task, bundle_sha=bundle.row.bundle_sha,
+        finding_count=len(findings) + len(core_finding_ids),
     )
-    return len(findings)
+    return len(findings) + len(core_finding_ids)
