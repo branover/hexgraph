@@ -5,6 +5,8 @@ import Launcher from "./Launcher";
 import Annotations from "./Annotations";
 import HypothesisPanel from "./HypothesisPanel";
 import FilesystemBrowser from "./FilesystemBrowser";
+import ToolResults from "./ToolResults";
+import Provenance from "./Provenance";
 
 // Node-type-aware detail shown when a target/function/symbol/string node is
 // selected in the graph (findings use the richer Inspector instead).
@@ -109,6 +111,7 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
           {node.kind === "firmware_image" && projectId && (
             <FilesystemBrowser projectId={projectId} targetId={node.id} onChanged={onChanged} />
           )}
+          {projectId && <ToolResults projectId={projectId} targetId={node.id} />}
         </>
       )}
 
@@ -163,7 +166,9 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
           ) : (
             <div className="kvs">
               {node.address && <><span className="k">address</span><code>{node.address}</code></>}
-              {Object.entries(node.attrs || {}).map(([k, v]) => (
+              {/* `provenance` is rendered as its own "Derived from these tool results"
+                  section below — keep it out of the raw attribute dump (a long id array). */}
+              {Object.entries(node.attrs || {}).filter(([k]) => k !== "provenance").map(([k, v]) => (
                 <span key={k} style={{ display: "contents" }}><span className="k">{k}</span><code>{String(typeof v === "object" ? JSON.stringify(v) : v)}</code></span>
               ))}
             </div>
@@ -179,6 +184,7 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
               ? "Part of a dataflow path — follow its taints / bypasses edges in the graph to the source or sink."
               : "Explore this node's edges in the graph for its relationships."}
           </div>
+          <Provenance ids={(node.attrs as any)?.provenance} />
           {projectId && (
             <div className="actions" style={{ marginTop: 12 }}>
               <button className="btn sm ghost danger" onClick={removeNode} title="Soft-remove (reversible)">

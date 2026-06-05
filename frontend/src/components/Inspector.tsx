@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, Finding } from "../api";
 import { Icon } from "./Icon";
 import Annotations from "./Annotations";
+import Provenance from "./Provenance";
 
 const LIFECYCLE = ["new", "triaging", "confirmed", "reported"];
 function Lifecycle({ status }: { status: string }) {
@@ -390,6 +391,10 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
       )}
 
       {finding.human_notes && (<><div className="sec">Analyst notes</div><p>{finding.human_notes}</p></>)}
+
+      {/* Provenance: the tool results this finding was derived from (read-only).
+          Stored on evidence.extra.provenance — renders nothing when absent. */}
+      <Provenance ids={ev.extra?.provenance} />
 
       {nextSteps.length > 0 && (
         <>

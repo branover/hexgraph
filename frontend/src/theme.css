@@ -609,6 +609,18 @@ select.sel:focus, .settings select.sel:focus { outline: none; border-color: var(
 .fsfile .sz { font-size: 10.5px; }
 .badge.warn { color: #e3b341; }
 
+/* Tool Results (Phase O Observations) — per-target list rows + provenance links. A
+   calm, clickable card matching the finding-card feel, with the kind/tool on row 1 and
+   a dimmed one-line summary below. */
+.toolresult { display: block; width: 100%; text-align: left; background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 7px 9px; cursor: pointer; font: inherit; color: var(--fg); transition: border-color .12s, background .12s; }
+.toolresult:hover { border-color: var(--border-strong); background: var(--surface-3); }
+.toolresult .tr-row1 { display: flex; align-items: center; gap: 7px; }
+.toolresult .tr-tool { font-size: 11px; color: var(--fg-dim); }
+.toolresult .tr-time { font-size: 10.5px; white-space: nowrap; }
+.toolresult .tr-summary { font-size: 11px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; line-height: 1.4; }
+
 /* full-screen findings/tasks management view */
 .maxscreen { position: fixed; inset: 56px 0 0 0; background: var(--bg); display: grid;
   grid-template-columns: 1.45fr 1fr; gap: 12px; padding: 12px; z-index: 40; }
