@@ -27,7 +27,7 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     steps:
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@v5
         with:
           # Falls back to GITHUB_TOKEN if the secret is unset, but then CI won't run on the
           # release PR (see the header comment) — configure RELEASE_PLEASE_TOKEN to fix that.
