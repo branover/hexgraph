@@ -98,6 +98,14 @@ _STATIC_SPECS = [
              {"type": "object", "properties": {"address": {"type": "string"}}, "required": ["address"]}),
     ToolSpec("read_imports", "Return the target's imported symbols, linked libraries, and mitigation flags.",
              {"type": "object", "properties": {}}),
+    ToolSpec("binutils_facts", "Authoritative low-level ELF facts via GNU binutils (nm/objdump/readelf/"
+             "strings): the symbol table, dynamic imports/exports, relocations (incl. PLT jump-slot "
+             "imports), sections, ELF/program headers, and the security mitigations (NX, RELRO, PIE, "
+             "stack canary, FORTIFY). The fast first-minute facts pass — sharper than read_imports "
+             "(recon caps imports/strings). QUERY: records a binutils_facts Observation and tags "
+             "is_sink on any dangerous import ALREADY in the graph + folds mitigation flags onto the "
+             "target; adds NO new graph nodes — promote what matters.",
+             {"type": "object", "properties": {}}),
     ToolSpec("list_strings", "List notable strings in the target, optionally filtered by a substring. "
              "QUERY: records an Observation; adds no graph nodes.",
              {"type": "object", "properties": {"pattern": {"type": "string"}}}),
@@ -365,6 +373,8 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
                         payload={"strings": [str(s) for s in strings[:200]]},
                         summary=f"{len(strings)} strings" + (f" matching {pat!r}" if pat else ""))
             return _clip("strings:\n" + ("\n".join(str(s) for s in strings[:200]) or "(none)"))
+        if name == "binutils_facts":
+            return _binutils(ctx)
         if name == "list_functions":
             out = _decomp(ctx, None)
             if out.get("error"):
@@ -494,6 +504,42 @@ def _observations(ctx: ToolContext, name: str, args: dict) -> str:
     lines = [f"- {r['id']} [{r['result_kind']}] {r['tool']}: {r['summary'][:120]}" for r in rows]
     return _clip("prior observations (get_observation(id) for the full payload):\n"
                  + "\n".join(lines))
+
+
+def _binutils(ctx: ToolContext) -> str:
+    """Run the binutils quick-facts probe (the engine helper records the Observation +
+    enriches already-curated symbols/the target's mitigations) and render a compact text
+    summary for the agent. QUERY: mutates no graph beyond the always-welcome enrichment."""
+    key = "binutils:*"
+    if key in ctx.cache:
+        return ctx.cache[key]
+    from hexgraph.engine.binutils import collect_binutils_facts
+
+    out = collect_binutils_facts(ctx.session, ctx.project, ctx.target, source="agent")
+    if out.get("error"):
+        return out["error"]
+    f = out.get("facts", {})
+    mit = f.get("mitigations", {}) or {}
+    imports = f.get("imports", []) or []
+    exports = f.get("exports", []) or []
+    libs = f.get("libraries", []) or []
+    sections = f.get("sections", []) or []
+    jslots = f.get("jump_slot_imports", []) or []
+    lines = [
+        f"// binutils facts for {ctx.target.name}"
+        + (" (cached)" if out.get("cached") else ""),
+        f"type: {f.get('elf_type')}  machine: {f.get('machine')}  entry: {f.get('entry')}"
+        + (f"  soname: {f.get('soname')}" if f.get("soname") else ""),
+        "mitigations: " + ", ".join(f"{k}={mit.get(k)}" for k in ("nx", "relro", "pie", "canary", "fortify")),
+        f"libraries ({len(libs)}): " + ", ".join(libs[:30]) if libs else "libraries: (none)",
+        f"imports ({len(imports)}): " + ", ".join(imports[:60]),
+        f"exports ({len(exports)}): " + ", ".join(exports[:60]),
+        f"sections ({len(sections)}): " + ", ".join(sections[:40]),
+        f"relocations: {f.get('relocation_count', 0)}"
+        + (f"; PLT jump-slot imports: {', '.join(jslots[:40])}" if jslots else ""),
+    ]
+    ctx.cache[key] = _clip("\n".join(lines))
+    return ctx.cache[key]
 
 
 def _xrefs(ctx: ToolContext, symbol: str | None) -> str:
