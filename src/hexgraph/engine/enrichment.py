@@ -262,11 +262,33 @@ def _extract_structs(payload: Any) -> list[Fact]:
     return facts
 
 
+def _extract_binutils(payload: Any) -> list[Fact]:
+    """binutils_facts → `is_sink` tags for the dangerous imports that appear (the same
+    always-welcome subset the xref extractor emits, via the SHARED DANGEROUS_IMPORTS
+    set — never a broadened whitelist). The binutils probe lists imports under
+    `imports`; we tag ONLY the unambiguous dangerous ones — a non-dangerous import
+    carries no auto-fact (no verdict for the rest). Mitigation flags are NOT here: they
+    describe the TARGET, not a node, so engine.binutils.apply_mitigations_to_target
+    records them on the target's metadata, the target analogue of node enrichment."""
+    facts: list[Fact] = []
+    imports = payload.get("imports") if isinstance(payload, dict) else None
+    if not isinstance(imports, list):
+        return facts
+    for name in imports:
+        nkey = name_key(name)
+        if nkey and nkey in DANGEROUS_IMPORTS:
+            f = _attr_fact("symbol", "name", nkey, {"is_sink": True})
+            if f:
+                facts.append(f)
+    return facts
+
+
 register_extractor("function_list", _extract_functions)
 register_extractor("decompilation", _extract_functions)
 register_extractor("call_graph", _extract_functions)
 register_extractor("xrefs", _extract_xrefs)
 register_extractor("structs", _extract_structs)
+register_extractor("binutils_facts", _extract_binutils)
 
 
 # --- conflict resolution & idempotent merge ----------------------------------

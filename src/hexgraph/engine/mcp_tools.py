@@ -721,6 +721,11 @@ def read_imports(target_id: str) -> str:
     return _tool(target_id, "read_imports", {})
 
 
+def binutils_facts(target_id: str) -> str:
+    """Authoritative low-level ELF facts via GNU binutils (nm/objdump/readelf/strings)."""
+    return _tool(target_id, "binutils_facts", {})
+
+
 def list_strings(target_id: str, pattern: str | None = None) -> str:
     return _tool(target_id, "list_strings", {"pattern": pattern} if pattern else {})
 

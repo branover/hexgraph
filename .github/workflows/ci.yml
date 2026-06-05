@@ -110,6 +110,18 @@ jobs:
           build-args: WITH_GHIDRA=0
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Assert the binutils quick-facts tools are present in the image
+        # The binutils_probe (Phase 5A) shells out to nm/objdump/readelf/strings — these
+        # ship transitively via the `binutils` apt package already in sandbox.Dockerfile.
+        # Fail the build loudly if an image change ever drops them, so the probe can't
+        # silently regress to an empty result (design §2.7).
+        run: |
+          docker run --rm hexgraph-sandbox:latest sh -c '
+            set -e
+            for t in nm objdump readelf strings; do
+              command -v "$t" >/dev/null || { echo "MISSING binutils tool: $t"; exit 1; }
+            done
+            echo "binutils quick-facts tools present: nm objdump readelf strings"'
       - name: Install into .venv
         # `just test-ci` / `just demo` run `.venv/bin/python` (the justfile's `py` var),
         # so install into a venv the way `just install` does — not the system interpreter.
