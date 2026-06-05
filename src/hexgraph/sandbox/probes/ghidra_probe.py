@@ -330,7 +330,9 @@ try:
     # tainted source into an unbounded copy => memory corruption.
     SINK_EXEC = set(["system", "popen", "execl", "execlp", "execle",
                      "execv", "execvp", "execvpe", "execve"])
-    SINK_OVERFLOW = set(["strcpy", "strcat", "sprintf", "gets"])
+    # Unbounded copies: a tainted SOURCE arg (input[2:]) => overflow. (gets() is excluded —
+    # it has only a dest arg and IS a source, so it can never carry a tainted SOURCE arg.)
+    SINK_OVERFLOW = set(["strcpy", "strcat", "sprintf"])
     SINKS = SINK_EXEC | SINK_OVERFLOW
     # Names that, if called on the path, indicate an (UNVERIFIED) sanitization attempt. We only
     # record that one was present; we never assume it is sufficient.
@@ -441,9 +443,11 @@ try:
             if mn in ("COPY", "CAST"):
                 return slot_key(df.getInput(0), depth + 1)
             if mn == "INT_ADD" and df.getNumInputs() == 2 and df.getInput(1).isConstant():
-                base = slot_key(df.getInput(0), depth + 1)
-                if base is not None:
-                    return base + (df.getInput(1).getOffset(),)
+                # A pointer INTO a stack buffer (buffer base + constant index) maps to the SAME
+                # slot as the buffer itself — whole-buffer taint granularity — so a write to the
+                # buffer and a read at buffer+k connect (appending the index would split one
+                # buffer across two keys and drop the flow).
+                return slot_key(df.getInput(0), depth + 1)
             return None
 
         def arg_taint(vn):

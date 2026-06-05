@@ -70,7 +70,13 @@ class GhidraTaintAnalyzer(TaintAnalyzer):
         if run_taint is None:
             return {"available": False, "flows": [], "analyzed": 0,
                     "error": "active decompiler has no taint backend"}
-        out = run_taint(artifact, project=project) or {}
+        try:
+            out = run_taint(artifact, project=project) or {}
+        except Exception as exc:  # noqa: BLE001 — a sandbox/Ghidra failure DEGRADES (no flows,
+            # an error note), it never aborts the analysis task. Honors the graceful-degrade
+            # contract analyze_taint documents, so a future static_analysis caller need not guard.
+            log.warning("taint analysis failed (%s): %s", type(exc).__name__, exc)
+            return {"available": True, "flows": [], "analyzed": 0, "error": str(exc)}
         taint = out.get("taint") or {}
         return {"available": True, "flows": taint.get("flows", []),
                 "analyzed": taint.get("analyzed", 0), "error": out.get("error")}
