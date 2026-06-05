@@ -490,25 +490,23 @@ try:
             pass
 
         ops = list(hf.getPcodeOps())
-        # Sources B: returns of source-producing library calls (getenv, ...).
+        # Sources B/C: library-call sources, in ONE pass over the CALL ops. B = a
+        # source-producing call's RETURN value (getenv, ...). C = a buffer-filling input call
+        # (fgets/read/recv/...) -> the untrusted bytes land in the DEST BUFFER, not the return,
+        # so taint that buffer's stack SLOT (the same domain COPY_TO_DEST uses); C-arg i is op
+        # input i+1. SOURCE_RET and SOURCE_BUF are disjoint, so the elif is exact.
         for op in ops:
-            if op.getOpcode() == PcodeOp.CALL and op.getOutput() is not None:
-                cn = callee_name(op)
-                if cn in SOURCE_RET:
-                    vmark(op.getOutput(), {"kind": "call_return", "detail": cn})
-
-        # Sources C: library calls that FILL a dest buffer with untrusted input (fgets/read/
-        # recv/...). The data lands in the buffer, not the return, so taint the dest stack SLOT
-        # (the same domain COPY_TO_DEST/the buffer-overflow path read). C-arg i => op input i+1.
-        for op in ops:
-            if op.getOpcode() == PcodeOp.CALL:
-                cn = callee_name(op)
-                if cn in SOURCE_BUF:
-                    di = SOURCE_BUF[cn] + 1
-                    if op.getNumInputs() > di:
-                        k = slot_key(op.getInput(di))
-                        if k is not None and k not in tainted_slot:
-                            tainted_slot[k] = {"kind": "libc_input", "detail": cn}
+            if op.getOpcode() != PcodeOp.CALL:
+                continue
+            cn = callee_name(op)
+            if cn in SOURCE_RET and op.getOutput() is not None:
+                vmark(op.getOutput(), {"kind": "call_return", "detail": cn})
+            elif cn in SOURCE_BUF:
+                di = SOURCE_BUF[cn] + 1
+                if op.getNumInputs() > di:
+                    k = slot_key(op.getInput(di))
+                    if k is not None and k not in tainted_slot:
+                        tainted_slot[k] = {"kind": "libc_input", "detail": cn}
 
         # Forward propagation to a fixpoint over BOTH domains.
         changed = True
