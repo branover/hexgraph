@@ -101,6 +101,12 @@ _STATIC_SPECS = [
     ToolSpec("list_strings", "List notable strings in the target, optionally filtered by a substring. "
              "QUERY: records an Observation; adds no graph nodes.",
              {"type": "object", "properties": {"pattern": {"type": "string"}}}),
+    ToolSpec("search_decompiled", "Search ACROSS already-decompiled function BODIES on this target for a "
+             "string/identifier (a variable, constant, call, format string) — mines PRIOR "
+             "decompilations in the Observation store, NO re-decompile. Returns the matching functions "
+             "+ a snippet. Decompile candidates first if nothing's been decompiled yet. QUERY: records "
+             "an Observation; adds no graph nodes.",
+             {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}),
     ToolSpec("check_decompiler", "Verify the decompiler decompile_function/disassemble use ACTUALLY "
              "works (not just the configured name): radare2 needs the sandbox image up; Ghidra needs "
              "WITH_GHIDRA=1 (headless) or a reachable bridge. Run it if a decompile fails so you don't "
@@ -451,6 +457,11 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
             if not addr:
                 return "error: 'address' argument is required"
             return _data_xrefs(ctx, addr)
+        if name == "search_decompiled":
+            q = args.get("query")
+            if not q:
+                return "error: 'query' argument is required"
+            return _search_decompiled(ctx, q)
         if name == "fuzz_function":
             return _fuzz(ctx, args)
         return f"error: unknown tool {name!r}"
@@ -683,6 +694,24 @@ def _call_graph_tool(ctx: ToolContext, function: str | None, depth) -> str:
            "\n".join(f"- {p[0]} → {p[1]}" for p in shown if len(p) == 2) + note
     ctx.cache[key] = _clip(text)
     return ctx.cache[key]
+
+
+def _search_decompiled(ctx: ToolContext, query: str) -> str:
+    """Grep already-decompiled function bodies on this target (mines the Observation store —
+    no re-decompile). QUERY: records an Observation; adds no graph nodes."""
+    from hexgraph.engine import observations as O
+
+    hits = O.search_decompiled(ctx.session, ctx.target.id, query=query)
+    _record_obs(ctx, tool="search_decompiled", args={"query": query},
+                result_kind="search_decompiled", payload={"query": query, "hits": hits},
+                summary=f"{len(hits)} functions matching {query!r}")
+    if not hits:
+        return (f"no decompiled body contains {query!r}. search_decompiled mines PRIOR "
+                "decompilations — decompile_function the candidates first if nothing's been "
+                "decompiled yet (it does not decompile on demand).")
+    lines = [f"functions whose decompiled body contains {query!r}:"]
+    lines += [f"- {h['function']}: …{h['snippet']}…" for h in hits]
+    return _clip("\n".join(lines))
 
 
 def _fuzz(ctx: ToolContext, args: dict) -> str:

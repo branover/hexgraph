@@ -752,6 +752,12 @@ def data_xrefs(target_id: str, address: str) -> str:
     return _tool(target_id, "data_xrefs", {"address": address})
 
 
+def search_decompiled(target_id: str, query: str) -> str:
+    """Substring search across already-decompiled function bodies on a target (mines the
+    Observation store; no re-decompile)."""
+    return _tool(target_id, "search_decompiled", {"query": query})
+
+
 def _node_dict(n: Node) -> dict:
     return {"id": n.id, "node_type": n.node_type, "name": n.name, "fq_name": n.fq_name,
             "address": n.address, "target_id": n.target_id, "attrs": n.attrs_json or {}}
@@ -1440,10 +1446,12 @@ def get_schemas() -> dict:
                               "behind a finding). Query freely against the substrate; promote only "
                               "what matters into the graph.",
         "observations": {
-            "what": "Every deterministic tool call (decompile/list/xref/strings/structs/taint/…) "
-                    "writes a durable Observation: the call + a summary + the FULL payload in CAS, "
-                    "scoped to the exact bytes by content_hash. Read them with list_observations"
-                    "(target_id) / get_observation(id) / search_observations(query).",
+            "what": "Every deterministic tool call (decompile/decompile_at/disassemble/list/"
+                    "call_graph/xrefs/function_xrefs/data_xrefs/strings/structs/taint/…) writes a "
+                    "durable Observation: the call + a summary + the FULL payload in CAS, scoped to "
+                    "the exact bytes by content_hash. Read them with list_observations(target_id) / "
+                    "get_observation(id) / search_observations(query) over the metadata, or "
+                    "search_decompiled(query) to grep across the decompiled function BODIES.",
             "contract": "Results persist HERE — they do NOT auto-populate the graph. CHECK HERE "
                         "BEFORE RE-RUNNING a heavy analysis (an identical call against identical "
                         "bytes is returned from the store, flagged cached — analyze once, reuse "

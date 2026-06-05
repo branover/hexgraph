@@ -34,10 +34,13 @@ should be written back as nodes, edges, findings, hypotheses, and annotations, s
 **How analysis flows into the graph.** The graph is a CURATED result set, not the
 program model. On a target, first read the existing graph AND the Observation index
 (`list_observations(target_id)`) so you don't re-derive what's there. Then:
-- **Query freely.** Tool results (list_functions / decompile_function / disassemble /
-  xrefs / list_strings) persist as durable Observations on the target — check
-  `list_observations` before re-running a heavy analysis, and `get_observation(id)` to
-  reuse a prior payload (analyze once, reuse forever). A query adds NO graph nodes.
+- **Query freely.** Tool results (list_functions / decompile_function / decompile_at /
+  disassemble / xrefs / function_xrefs / data_xrefs / call_graph / list_strings /
+  search_decompiled) persist as durable Observations on the target — check
+  `list_observations` before re-running a heavy analysis, `get_observation(id)` to reuse
+  a prior payload, and `search_decompiled(query)` to grep across decompiled bodies
+  (analyze once, reuse forever). A query adds NO graph nodes (call_graph only wires
+  `calls` edges among functions ALREADY promoted).
 - **Enrich for free.** When a tool recovers richer info about something already in the
   graph (a function's prototype/address, a dangerous import's is_sink tag), HexGraph
   attaches it in place automatically — no action needed.

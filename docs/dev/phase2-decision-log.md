@@ -112,3 +112,42 @@ Docker), asserts the call_graph self-wiring + no-new-nodes property, and unit-te
 rooted-BFS helper (`_bfs_subgraph`, normalized + depth-bounded) and the probe's
 `_ADDR`/`_resolve_seek` injection-safety. Real radare2 xref/callgraph output is covered
 by the Docker-gated / live-sandbox CI lane.
+
+## PR3 decisions
+
+### 1. `search_decompiled` mines the Observation store — no re-decompile
+Per the design's §5.2 "reuse the store" steer, `search_decompiled` greps across the
+pseudocode BODIES of prior `decompilation` Observations (loaded from CAS) rather than
+running a fresh batch decompile. It's therefore fully offline-testable and cheap, and it
+only finds what's already been decompiled — the verb's text says so and points the agent
+at `decompile_function` first. **Decision point for the maintainer:** if you want
+search-everything-even-if-not-yet-decompiled, that's a follow-up sandbox batch-decompile
+probe; we chose store-first for cost + reuse.
+
+### 2. One hit per function, newest decompilation wins
+The helper dedups by function name (a re-decompile of the same function shouldn't double a
+hit), keyed off the newest-first Observation order. A 60-char-each-side snippet around the
+match is returned so the agent sees context without loading the whole body.
+
+### 3. Pure QUERY, free result_kind
+`search_decompiled` records a `search_decompiled` Observation (no registered extractor) and
+mutates no graph — a search is an answer, not a graph object. Consistent with the other
+breadth/address query verbs.
+
+### 4. Discoverability + instruction wiring (the §5.6/§5.7 close-out for Phase 2)
+`get_schemas.observations.what` now enumerates the address/breadth/search verbs and points
+at `search_decompiled(query)` for body-grep; the two instruction surfaces
+(`llm/prompting.py` for the BYOK agent loop, `agent_setup.py` for MCP driver mode) list the
+full query-verb set and note that `call_graph` self-wires edges among already-promoted
+functions while everything else adds no nodes. The user-level VR skill
+(`~/.claude/skills/hexgraph-vr/SKILL.md`) lives outside the repo — an operator action, not
+part of this PR.
+
+### 5. Zero migration
+New `result_kind` (`search_decompiled`) is String vocab; no tables/node/edge kinds. Per
+design §8, migration-free.
+
+### 6. Offline tests
+`tests/test_search_decompiled.py` records decompilation Observations and greps across them
+(no Docker), asserts the QUERY/no-mutation contract, the dedup-by-function behavior, the
+"decompile first" hint on a miss, and that the catalog + `get_schemas` advertise the verb.
