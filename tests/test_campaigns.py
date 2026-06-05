@@ -219,6 +219,23 @@ def test_resolve_resources_honors_legacy_fuzzing_resources(hg_home):
     assert C.resolve_resources(None).mem == "9g"
 
 
+def test_new_resources_override_legacy_fuzzing_value(hg_home):
+    """Legacy `features.fuzzing.resources` is the LOWEST user layer: a value the user later
+    sets through the new `resources` section must WIN over the migrated legacy value (it
+    can't be cleared through the API, so a higher-precedence legacy overlay would silently
+    shadow the new config on upgraded installs)."""
+    import json
+    raw = json.loads(st.settings_path().read_text()) if st.settings_path().exists() else {}
+    raw.setdefault("features", {}).setdefault("fuzzing", {})["resources"] = {"mem": "8g"}
+    st._cfg.ensure_dirs(); st.settings_path().write_text(json.dumps(raw))
+    # New per-type override wins over the legacy value…
+    st.update_settings({"resources.fuzzing.mem": "4g"})
+    assert C.resolve_resources(None).mem == "4g"
+    # …and so does the shared default (set on a key the per-type section leaves alone).
+    st.update_settings({"resources.default.cpus": 7})
+    assert C.resolve_resources(None).cpus == 7.0
+
+
 # ── The detached campaign lifecycle: start → running → reap → finalize (mock) ─────
 
 def test_campaign_lifecycle_mock(hg_home, monkeypatch):

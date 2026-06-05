@@ -111,24 +111,29 @@ def resource_spec_for(container_type: str = "default") -> ResourceSpec:
     sets). So leaving the per-type section empty makes that container share the common
     default; setting a key there diverges that type alone.
 
-    For `"fuzzing"` it ALSO folds in any USER-SET legacy `features.fuzzing.resources`
-    (the pre-`resources`-section location) so an existing settings.json keeps working —
-    only keys the user actually wrote (`managed_only`, never the old defaults) override,
-    so a value moved to `resources.default` still reaches fuzzing.
+    For `"fuzzing"` a USER-SET legacy `features.fuzzing.resources` (the pre-`resources`-
+    section location) is folded in as the LOWEST user layer — below `resources.default`
+    and `resources.fuzzing` — so an existing settings.json still takes effect, but anything
+    the user later sets through the new section (or the UI) cleanly overrides it. (It must be
+    lowest: the legacy key was retired from the writable schema, so a higher-precedence live
+    overlay could never be cleared and would silently shadow the new config on upgrades.)
 
-    Fails CLOSED to the shipped floor if Settings is unreadable — a settings problem
-    must never silently WIDEN a ceiling."""
+    Every layer reads `managed_only` (only keys the user actually wrote, never the shipped
+    defaults), so an unset section contributes nothing and the layer below shows through —
+    the shipped floor is the base. Fails CLOSED to that floor if Settings is unreadable —
+    a settings problem must never silently WIDEN a ceiling."""
     try:
         from hexgraph import settings
 
-        res = settings.get("resources") or {}
-        merged = ResourceSpec().to_dict()
-        merged.update({k: v for k, v in (res.get("default") or {}).items() if v is not None})
-        if container_type in CONTAINER_TYPES:
-            merged.update({k: v for k, v in (res.get(container_type) or {}).items() if v is not None})
-        if container_type == "fuzzing":
-            legacy = settings.managed_only("features.fuzzing.resources") or {}
-            merged.update({k: v for k, v in legacy.items() if v is not None})
+        def _set(path: str) -> dict:
+            return {k: v for k, v in (settings.managed_only(path) or {}).items() if v is not None}
+
+        merged = ResourceSpec().to_dict()                  # shipped floor
+        if container_type == "fuzzing":                    # legacy: lowest user layer
+            merged.update(_set("features.fuzzing.resources"))
+        merged.update(_set("resources.default"))           # the shared default
+        if container_type in CONTAINER_TYPES:              # the per-type override
+            merged.update(_set(f"resources.{container_type}"))
         return ResourceSpec.from_dict(merged)
     except Exception:  # noqa: BLE001 — a settings problem must never widen resources
         return ResourceSpec()
