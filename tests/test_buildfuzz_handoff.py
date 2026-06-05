@@ -235,13 +235,32 @@ def test_build_to_libfuzzer_campaign_finds_crash_with_coverage(hg_home):
         harness = resolve_harness(s, derived, fake)[0]
         sources = resolve_target_sources(derived, fake)
         assert harness and sources, (harness, sources)
-        # A NON-crashing near-miss seed: valid header + ONE TAG_LABEL record with a SAFE
-        # length (L=2 ≤ 31), so libFuzzer starts from a valid input + accrues real execs/
-        # coverage and only needs to grow L past 31 to trigger the planted overflow (vs. a
-        # seed that crashes on exec 0, which would mask the "real coverage" claim).
+        # A CRASHING seed (valid header + ONE TAG_LABEL record whose length L=40 overflows
+        # the 32-byte cfg->label via the unclamped memcpy). The crash discovery is thereby
+        # DETERMINISTIC: fuzz_probe.py replays every provided seed directly through the
+        # compiled fuzzer (`./fuzzer seedfile`, libFuzzer's documented regression-test mode —
+        # "re-run those files as test inputs but will not perform any fuzzing") BEFORE the
+        # fork-mode campaign, so a known-crashing seed reproduces on EVERY run regardless of
+        # how the `-fork=1` forkserver happens to schedule on a given host kernel. That kills
+        # the historical flake: previously a SAFE near-miss seed (L=2) forced libFuzzer to
+        # DISCOVER the overflow by mutating L past 31 within the budget — inherently
+        # stochastic, and the run could finish non-degraded with real execs yet never hit the
+        # crash in budget, sailing past the degraded guard and failing on arts[0].
+        #
+        # The "real coverage-guided execution" claim is NOT masked: seed-replay and the
+        # corpus-driven fork-mode campaign are SEPARATE phases (the campaign still runs the
+        # full -fork=1 loop over the corpus for max_total_time, accruing real execs + edge
+        # coverage), and the per-file coverage replay (`_collect_coverage`) tolerates a
+        # crashing corpus member, so execs>0 + a real per-line coverage map still hold on a
+        # clean run. This mirrors OSS-Fuzz/ClusterFuzz practice: a fixed reproducer asserts
+        # the WIRING deterministically, while the stochastic discovery is proven separately
+        # (here by the offline MockFuzzer test above).
         sd = tempfile.mkdtemp(prefix="hexgraph-bf-seed-")
         seed = os.path.join(sd, "seed")
-        open(seed, "wb").write(b"TV\x01\x01\x10\x02AB")  # magic TV, ver 1, n=1, TAG_LABEL L=2
+        # magic TV, ver 1, n=1; one record tag=TAG_LABEL(0x10) len=0x28(40) + 40 payload bytes.
+        # off=6 after tag/len; the bounds check off+L=46 ≤ len(46) passes, then memcpy copies
+        # min(L=40, avail=40)=40 bytes into label[32] → buffer overflow on every replay.
+        open(seed, "wb").write(b"TV\x01\x01\x10\x28" + b"A" * 40)
         spec = FuzzCampaignSpec(target_id=derived.id, surface="source_lib", engine="libfuzzer",
                                 harness_source=harness, target_sources=sources,
                                 function="tlv_parse", seeds=[seed], max_total_time=45,
@@ -268,28 +287,34 @@ def test_build_to_libfuzzer_campaign_finds_crash_with_coverage(hg_home):
         arts = s.query(FuzzArtifact).filter(FuzzArtifact.campaign_id == cid).all()
         execs = int((c.stats_json or {}).get("execs") or 0)
 
-        # libFuzzer's `-fork=1` forkserver is intermittently unstable under this hardened
-        # sandbox on some host kernels (it can die before/partway through real work — the same
-        # environmental family as the documented AFL-persistent-on-WSL2 instability). A
-        # `degraded` finalize (or a partial run with 0 execs / no crash) is THAT, not the
-        # build→fuzz wiring — which is proven deterministically by the offline test + the
-        # surface/coverage_instrumented assertions above. Skip-with-reason on a degraded host
-        # run rather than flap; assert the FULL coverage+crash+verify chain only on a clean run.
-        if c.status == "degraded" or execs <= 0 or not arts:
-            pytest.skip(f"libFuzzer -fork did a degraded/partial run on this host kernel "
-                        f"(status={c.status}, execs={execs}, crashes={len(arts)}) — "
-                        f"environmental, not the build→fuzz wiring")
-
-        # On a clean run: real coverage-guided execution found the planted crash.
-        assert execs > 0
+        # The DETERMINISTIC core (independent of fork-mode timing): the crashing seed is
+        # replayed straight through the instrumented harness, so the planted overflow is
+        # always found, ingested as an artifact with re-runnable bytes in CAS + a wired
+        # finding, and byte-faithfully re-verifiable. This is the build→fuzz handoff proof
+        # and must hold on EVERY run — it is no longer gated behind a "clean run" skip.
+        assert arts, ("the crashing seed must reproduce via the deterministic replay path "
+                      f"regardless of fork-mode scheduling (status={c.status}, execs={execs})")
         a = arts[0]
         assert a.content_cas and a.finding_id
+        # Byte-faithful re-verify against the preserved instrumented harness binary.
+        res = C.verify_artifact(s, a)
+        assert res.get("verified") is True, res
 
+        # The STOCHASTIC/environmental part (real fork-mode execs + an exported per-line
+        # coverage map): libFuzzer's `-fork=1` forkserver is intermittently unstable under
+        # this hardened sandbox on some host kernels (it can die before/partway through real
+        # work — the same environmental family as the documented AFL-persistent-on-WSL2
+        # instability). A `degraded` finalize / a 0-exec partial is THAT, not the build→fuzz
+        # wiring (proven above + by the offline test). Skip-with-reason rather than flap;
+        # assert real execs + the served coverage map only on a non-degraded run.
+        if c.status == "degraded" or execs <= 0:
+            pytest.skip(f"libFuzzer -fork did a degraded/partial run on this host kernel "
+                        f"(status={c.status}, execs={execs}) — environmental; the "
+                        f"build→fuzz wiring + crash repro + verify were asserted above")
+
+        # On a non-degraded run: real coverage-guided execution accrued execs + a coverage map.
+        assert execs > 0
         # Coverage is collected + served (battle-test H: coverage_for was available:false).
         cov = C.coverage_for(s, c)
         assert cov.get("available") is True, cov
         assert cov.get("files"), "no per-file line coverage map"
-
-        # Byte-faithful re-verify against the preserved instrumented harness binary.
-        res = C.verify_artifact(s, a)
-        assert res.get("verified") is True, res

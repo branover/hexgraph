@@ -345,6 +345,55 @@ def _flag_all(args: list[str], name: str) -> list[str]:
     return [a.split("=", 1)[1] for a in args if a.startswith(name + "=")]
 
 
+# A report carries a usable sanitizer classification iff one of the recognized signatures
+# is present (an ASan SUMMARY/ERROR line, the (double-)free phrasing, or a libFuzzer
+# deadly-signal/timeout/oom line). Without one, parse_asan falls back to the bare "crash"
+# kind and classify_exploitability to "unknown" — a real, classified crash would then be
+# silently downgraded.
+def _has_sanitizer_signature(report: str) -> bool:
+    text = report or ""
+    return bool(_ASAN_SUMMARY_TYPE.search(text) or _ASAN_ERROR_TYPE.search(text)
+                or _ASAN_ATTEMPTING.search(text) or _LIBFUZZER_DEADLY.search(text))
+
+
+def _replay_for_report(fuzzer: str, path: str, outdir: str) -> tuple[str, int]:
+    """Replay one crashing input through the compiled fuzzer and return (report, rc).
+
+    libFuzzer's documented regression-test mode (`./fuzzer <file>` re-runs the input
+    without fuzzing). A crash exits nonzero with the ASan/libFuzzer report on stderr.
+    Under the hardened sandbox that stderr is OCCASIONALLY captured empty/truncated when
+    the child aborts under load — the crash is still detected (rc != 0) but the report
+    carries no classifiable signature, so the kind degrades to bare "crash" and the
+    exploitability to "unknown" (the historical e2e flake, AND a latent production
+    mis-classification of a genuine crash). When that happens we replay ONCE more to
+    capture the report; the replay is deterministic (same input, same instrumented
+    binary), so a clean run recovers the full classification every time. A hang is itself
+    a finding (treated as a timeout)."""
+    report, rc = "", 0
+    crash_report, crash_rc = "", 0  # the FIRST observed crash (rc != 0), preserved
+    for _attempt in range(2):
+        try:
+            repro = subprocess.run([fuzzer, path], capture_output=True, text=True, cwd=outdir,
+                                   timeout=60, env=symbolizer_env())
+        except subprocess.TimeoutExpired:
+            return "libFuzzer: timeout\n", 1
+        report = (repro.stdout or "") + (repro.stderr or "")
+        rc = repro.returncode
+        if rc != 0 and not crash_rc:
+            crash_report, crash_rc = report, rc  # remember the first crash we saw
+        # A clean (non-crashing) input, or a crash whose report already classifies, is done.
+        # Only retry the narrow bad case: a detected crash with an unclassifiable report.
+        if rc == 0 or _has_sanitizer_signature(report):
+            break
+    # Never let a genuinely-flaky crash be reported as clean: if the input crashed on the
+    # first replay but a later attempt came back rc==0, the OLD single-replay would have
+    # counted that crash — so prefer the observed crash over the clean re-run. A
+    # classifiable report (the loop's break condition) is still preferred when we have one.
+    if rc == 0 and crash_rc:
+        return crash_report, crash_rc
+    return report, rc
+
+
 # libFuzzer progress / final-stats parsing. A `-fork=1` run prints periodic
 #   #NNN: cov: C ft: F corp: ... exec/s: ...
 # lines (the LAST `#NNN:` is the cumulative exec count; `cov:`/`ft:` are the edges /
@@ -583,17 +632,7 @@ def main() -> int:
     for path in candidates:
         data = open(path, "rb").read()
         sha = hashlib.sha256(data).hexdigest()
-        try:
-            repro = subprocess.run([FUZZER, path], capture_output=True, text=True, cwd=outdir,
-                                   timeout=60, env=symbolizer_env())
-        except subprocess.TimeoutExpired:
-            # A single input that hangs the replay is a finding (a hang/DoS), but we
-            # can't symbolize it; treat it as a timeout crash so it's not lost, and
-            # never let it kill the whole triage phase.
-            report, rc = "libFuzzer: timeout\n", 1
-        else:
-            report = (repro.stdout or "") + (repro.stderr or "")
-            rc = repro.returncode
+        report, rc = _replay_for_report(FUZZER, path, outdir)
         # libFuzzer exits nonzero on a crash/leak/timeout; a clean replay (e.g. a
         # benign seed) is not a finding.
         if rc == 0:
