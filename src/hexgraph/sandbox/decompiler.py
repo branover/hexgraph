@@ -21,13 +21,32 @@ class Decompiler(ABC):
     name: str
 
     @abstractmethod
-    def decompile(self, artifact: str, function: str | None = None, *, project=None) -> dict:
-        """Return {functions: [...], focus: {name, pseudocode, disasm}|null}.
+    def decompile(self, artifact: str, function: str | None = None, *,
+                  address: str | None = None, reanalyze: bool = False, project=None) -> dict:
+        """Return {functions: [...], focus: {name, address, pseudocode, disasm}|null}.
+
+        A focus is given EITHER as a `function` name OR an `address` (hex, e.g. "0x401200");
+        an address resolves to the function CONTAINING it (analyze-at-address). `reanalyze`
+        raises the analysis depth / busts any cached analysis so a missed function or edge
+        gets a second chance.
 
         `project` (a `Project`, optional) lets a decompiler that supports it cache its analysis
         on that project's data dir (the persistent Ghidra project — analyze once, reuse). It is
         ignored by decompilers without a persistent project (radare2)."""
         ...
+
+
+def _focus_args(function: str | None, address: str | None, reanalyze: bool) -> list[str] | None:
+    """The probe's positional focus (name or address) + the --reanalyze flag. Address
+    wins if both are given (callers pass one or the other)."""
+    args: list[str] = []
+    if address:
+        args.append(address)
+    elif function:
+        args.append(function)
+    if reanalyze:
+        args.append("--reanalyze")
+    return args or None
 
 
 class R2Decompiler(Decompiler):
@@ -36,10 +55,12 @@ class R2Decompiler(Decompiler):
     def __init__(self, runner: Executor | None = None) -> None:
         self.runner = runner or get_executor()
 
-    def decompile(self, artifact: str, function: str | None = None, *, project=None) -> dict:
+    def decompile(self, artifact: str, function: str | None = None, *,
+                  address: str | None = None, reanalyze: bool = False, project=None) -> dict:
         # radare2 has no persistent project; `project` is accepted for seam parity, ignored.
-        args = [function] if function else None
-        return self.runner.run_json_probe("decompile_probe.py", artifact, extra_args=args)
+        return self.runner.run_json_probe(
+            "decompile_probe.py", artifact,
+            extra_args=_focus_args(function, address, reanalyze))
 
 
 class GhidraDecompiler(Decompiler):
@@ -56,8 +77,9 @@ class GhidraDecompiler(Decompiler):
     def __init__(self, runner: Executor | None = None) -> None:
         self.runner = runner or get_executor()
 
-    def decompile(self, artifact: str, function: str | None = None, *, project=None) -> dict:
-        args = [function] if function else None
+    def decompile(self, artifact: str, function: str | None = None, *,
+                  address: str | None = None, reanalyze: bool = False, project=None) -> dict:
+        args = _focus_args(function, address, reanalyze=False)  # the probe focus only; see below
         slot = self._resolve_slot(artifact, project)
         if slot is None:
             # No cache (no project / radare path / resolve failure) → throwaway /scratch project.
@@ -74,14 +96,29 @@ class GhidraDecompiler(Decompiler):
         with slot.lock() as locked:
             if not locked:
                 return self.runner.run_json_probe("ghidra_probe.py", artifact, extra_args=args)
-            return self._run_locked(slot, artifact, args)
+            # reanalyze drops the warm slot INSIDE this same lock (force_cold) so the clear +
+            # re-import is atomic — otherwise a concurrent same-target decompile could re-warm
+            # the slot in the gap and silently no-op the reanalyze.
+            return self._run_locked(slot, artifact, args, force_cold=reanalyze)
 
-    def _run_locked(self, slot, artifact: str, args):
+    def _run_locked(self, slot, artifact: str, args, *, force_cold: bool = False):
         """Run the probe with the slot held exclusively. Decides cold vs warm on the AUTHORITATIVE
         committed marker (`slot.exists()`); cleans a partially-written slot before a cold run; and
         passes the warm/cold verdict to the probe explicitly (the probe re-affirms via the same
         marker). The probe COMMITS the marker as the last step of a successful cold import, so the
-        host no longer races a separate write_meta."""
+        host no longer races a separate write_meta.
+
+        `force_cold` (reanalyze) drops any committed warm project so the run re-imports cold —
+        a persisted Ghidra project is not re-analyzed in place. Done here, under the run's own
+        lock, so no concurrent decompile can re-warm the slot between the clear and the run."""
+        if force_cold and slot.exists():
+            log.info(
+                "ghidra project cache: reanalyze — clearing slot %s to re-import cold",
+                slot.root.name)
+            try:
+                slot.clear_project()
+            except Exception:  # noqa: BLE001 — never break a decompile over a cache clear
+                pass
         warm = slot.exists()
         if not warm and slot.project_dir.is_dir() and any(slot.project_dir.iterdir()):
             # Non-empty project dir with NO committed marker ⇒ a prior cold run died mid-import.

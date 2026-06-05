@@ -696,8 +696,21 @@ def decompile_function(target_id: str, function: str) -> str:
     return _tool(target_id, "decompile_function", {"function": function})
 
 
-def disassemble(target_id: str, function: str) -> str:
-    return _tool(target_id, "disassemble", {"function": function})
+def decompile_at(target_id: str, address: str) -> str:
+    """Decompile (and promote) the function CONTAINING a hex address — analyze-at-address."""
+    return _tool(target_id, "decompile_at", {"address": address})
+
+
+def disassemble(target_id: str, function: str | None = None, address: str | None = None) -> str:
+    """Disassemble one function by name or by address (the address resolves to the
+    function containing it)."""
+    a = {"address": address} if address else {"function": function}
+    return _tool(target_id, "disassemble", a)
+
+
+def reanalyze(target_id: str) -> str:
+    """Re-run analysis at a higher depth (busting the cache) so a missed function/edge retries."""
+    return _tool(target_id, "reanalyze", {})
 
 
 def list_functions(target_id: str) -> str:

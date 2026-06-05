@@ -127,6 +127,7 @@ os.environ["_JAVA_OPTIONS"] = (f"-Djava.io.tmpdir={SCRATCH} {_existing_jopts}").
 # args[1] (optional) is the focus function to decompile.
 POST_SCRIPT = r'''
 import json
+import re
 from ghidra.app.decompiler import DecompInterface
 from ghidra.util.task import ConsoleTaskMonitor
 
@@ -166,10 +167,20 @@ except:
 
 if focus:
     target = None
-    for f in funcs:
-        if f.getName() == focus:
-            target = f
-            break
+    # A focus given as a strict hex address resolves to the function CONTAINING it
+    # (analyze-at-address); otherwise match by name. The strict regex matches the
+    # radare2 path so the two backends agree on what counts as an address.
+    is_addr = bool(re.match(r"^0x[0-9a-fA-F]+$", focus))
+    if is_addr:
+        try:
+            target = getFunctionContaining(toAddr(focus))
+        except:
+            target = None
+    else:
+        for f in funcs:
+            if f.getName() == focus:
+                target = f
+                break
     if target is not None:
         deci = DecompInterface()
         deci.openProgram(currentProgram)
@@ -184,8 +195,12 @@ if focus:
             callees = [c.getName() for c in target.getCalledFunctions(monitor)]
         except:
             pass
-        result["focus"] = {"name": focus, "resolved": target.getName(),
-                           "pseudocode": pseudo, "disasm": "", "callees": callees}
+        try:
+            addr = "0x" + target.getEntryPoint().toString()
+        except:
+            addr = None
+        result["focus"] = {"name": target.getName(), "resolved": target.getName(),
+                           "address": addr, "pseudocode": pseudo, "disasm": "", "callees": callees}
 
 fh = open(out_path, "w")
 fh.write(json.dumps(result))
