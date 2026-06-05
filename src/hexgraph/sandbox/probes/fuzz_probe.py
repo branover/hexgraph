@@ -345,6 +345,69 @@ def _flag_all(args: list[str], name: str) -> list[str]:
     return [a.split("=", 1)[1] for a in args if a.startswith(name + "=")]
 
 
+# ── libFuzzer RSS limit: trip libFuzzer's OWN limiter before the cgroup OOM-killer ──
+#
+# libFuzzer's `-rss_limit_mb` is its graceful memory ceiling: cross it and it prints an
+# `out-of-memory` report and saves the input — a CLASSIFIABLE crash finding. The container
+# also has a HARD cgroup `--memory` cap; if that cap is hit first, the kernel OOM-killer
+# SIGKILLs the process opaquely (no report, and — pre-#150 — orphaned children/forkserver
+# instability). Historically `-rss_limit_mb` was hardcoded to 2048, exactly equal to the
+# default `--memory 2g`, so the two tripped at the same threshold and the kernel often won.
+# We instead set it to a FRACTION of the actual cgroup cap so libFuzzer's own limiter
+# always fires first, leaving the cgroup cap as a pure backstop. Self-adjusting: a campaign
+# that raised `--memory` (or runs unconstrained) gets a proportionally higher RSS budget.
+_RSS_DEFAULT_MB = 2048
+_RSS_FRACTION = 0.8
+_RSS_FLOOR_MB = 256
+_CGROUP_V1_UNLIMITED = 1 << 62  # v1 reports ~PAGE_COUNTER_MAX when uncapped; treat huge as none
+
+
+def rss_limit_mb_for_cap(cap_bytes: int | None, *, default_mb: int = _RSS_DEFAULT_MB,
+                         fraction: float = _RSS_FRACTION, floor_mb: int = _RSS_FLOOR_MB) -> int:
+    """libFuzzer `-rss_limit_mb` for a given memory-cap (bytes), pure + testable.
+
+    With a finite cap, return `fraction` of it (a floor keeps it usable on a tiny cap) so
+    libFuzzer's limiter trips below the cgroup OOM-killer. With no cap (None), fall back to
+    the historical default."""
+    if not cap_bytes or cap_bytes <= 0:
+        return default_mb
+    return max(floor_mb, int(cap_bytes / (1024 * 1024) * fraction))
+
+
+def _memory_cap_bytes() -> int | None:
+    """The container's effective memory ceiling in bytes, or None if uncapped. Reads the
+    cgroup `--memory` cap (v2 then v1); when the cgroup is unlimited, falls back to the
+    host's MemTotal so an unconstrained campaign still scales its RSS limit to the box."""
+    # cgroup v2: a single file, "max" when unlimited.
+    try:
+        v = open("/sys/fs/cgroup/memory.max").read().strip()
+        if v != "max":
+            return int(v)
+    except OSError:
+        pass
+    # cgroup v1: a sentinel near PAGE_COUNTER_MAX when unlimited.
+    try:
+        v = int(open("/sys/fs/cgroup/memory/memory.limit_in_bytes").read().strip())
+        if 0 < v < _CGROUP_V1_UNLIMITED:
+            return v
+    except (OSError, ValueError):
+        pass
+    # Uncapped cgroup → scale to the host's total RAM (unconstrained campaigns).
+    try:
+        for line in open("/proc/meminfo"):
+            if line.startswith("MemTotal:"):
+                return int(line.split()[1]) * 1024
+    except OSError:
+        pass
+    return None
+
+
+def libfuzzer_rss_limit_mb() -> int:
+    """The `-rss_limit_mb` to pass libFuzzer in THIS container: a fraction of the effective
+    memory cap so libFuzzer's graceful OOM limiter fires before the cgroup OOM-killer."""
+    return rss_limit_mb_for_cap(_memory_cap_bytes())
+
+
 # A report carries a usable sanitizer classification iff one of the recognized signatures
 # is present (an ASan SUMMARY/ERROR line, the (double-)free phrasing, or a libFuzzer
 # deadly-signal/timeout/oom line). Without one, parse_asan falls back to the bare "crash"
@@ -556,7 +619,8 @@ def main() -> int:
     proc = subprocess.Popen(
         [FUZZER, "-fork=1", "-ignore_crashes=1", "-ignore_timeouts=1", "-ignore_ooms=1",
          f"-max_total_time={max_total_time}", f"-max_len={max_len}",
-         "-rss_limit_mb=2048", f"-artifact_prefix={outdir.rstrip('/')}/", corpus_dir],
+         f"-rss_limit_mb={libfuzzer_rss_limit_mb()}",
+         f"-artifact_prefix={outdir.rstrip('/')}/", corpus_dir],
         stdout=logfh, stderr=subprocess.STDOUT, cwd=outdir,
     )
 
