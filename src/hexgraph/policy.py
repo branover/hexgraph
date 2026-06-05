@@ -121,12 +121,36 @@ def _gate_effective(feat: str, configured: bool) -> bool:
     return configured
 
 
+def effective_gates() -> frozenset[str]:
+    """The policy gates whose own toggle is enabled AND within the startup ceiling — i.e.
+    the gates the RUNNING process honors right now. A gate flipped on in settings.json
+    mid-session but clamped by the ceiling is NOT here until a restart. This is the single
+    source of truth any non-policy consumer (the capability table, the UI) must read when
+    it advertises or branches on a gate, so it never promises a capability the clamped
+    policy will refuse. NOTE: this is the per-toggle clamped set; it does NOT resolve the
+    inter-gate dependencies current_policy() enforces (build implied by exec, build_fetch
+    needs build) — callers that care about those compose them explicitly (as the capability
+    table does for build_fetch)."""
+    conf = _configured_gates()
+    return conf if _ceiling is None else (conf & _ceiling)
+
+
 def policy_feature_states() -> dict:
-    """Per policy gate: what's *configured* in settings.json, what the RUNNING policy
-    actually enforces (*effective*), and whether enabling it is waiting on a restart.
-    Drives the Settings UI so a saved-but-inactive toggle is never mistaken for a live
-    one. `restart_required` / `pending` summarize the gates configured-on-but-clamped."""
+    """Per policy gate, for the Settings UI: `configured` (the toggle in settings.json),
+    `effective` (whether the capability is actually active in the RUNNING policy — this
+    folds in the inter-gate dependencies current_policy() enforces, so e.g. build_fetch is
+    only effective when build is too), and `pending_restart` (the toggle is on but the
+    startup ceiling is clamping THIS gate off — a restart is what would change that). The
+    two axes differ on purpose: pending_restart tracks only what a restart changes (the
+    ceiling), while effective tracks the real policy outcome including dependencies, so a
+    saved-but-inactive toggle is never mistaken for a live one. `restart_required` /
+    `pending` summarize the gates a restart would newly honor."""
     from hexgraph import settings
+
+    p = current_policy()  # the resolved running outcome (already ceiling-clamped + deps)
+    # gates whose real per-capability outcome carries a cross-gate dependency the bare
+    # ceiling clamp can't express; the rest map 1:1 to their clamped own-toggle.
+    policy_outcome = {"build": p.allow_build, "build_fetch": p.allow_build_fetch}
 
     states: dict[str, dict] = {}
     pending: list[str] = []
@@ -135,8 +159,13 @@ def policy_feature_states() -> dict:
             configured = bool(settings.get(f"features.{g}.enabled"))
         except Exception:  # noqa: BLE001
             configured = False
-        effective = _gate_effective(g, configured)
-        is_pending = configured and not effective
+        within_ceiling = _gate_effective(g, configured)  # this gate's own toggle, clamped
+        effective = policy_outcome.get(g, within_ceiling)
+        # A restart only changes the ceiling, so pending_restart keys off the clamp of the
+        # gate's OWN toggle — never off `effective` (build_fetch can be ineffective because
+        # build is off, which no restart fixes). Suppress it if the capability is already
+        # active anyway (build implied by exec): nothing to wait for.
+        is_pending = configured and not within_ceiling and not effective
         states[g] = {"configured": configured, "effective": effective, "pending_restart": is_pending}
         if is_pending:
             pending.append(g)

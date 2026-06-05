@@ -1199,7 +1199,12 @@ later PR).
   plus top-level `restart_required` / `pending`. The PATCH response carries the fresh block, so the chip/banner
   appear in the same render with no extra round trip. `policy.current_policy()` clamps each gate to the set
   captured by `policy.snapshot_ceiling()` at server / MCP-session startup, so a mid-session widen of
-  settings.json can never grant execution/egress to the running process.
+  settings.json can never grant execution/egress to the running process. The capability/launch menu also
+  honors the ceiling (`engine/capabilities.py` reads `policy.effective_gates()`, not raw settings), so a
+  mid-session-enabled gate is not advertised as a launchable task until the restart that would actually
+  permit it. (`effective` in the policy block reflects the *resolved* running outcome — it folds in the
+  inter-gate dependencies, e.g. build_fetch is effective only when build is too — while `pending_restart`
+  tracks only what a restart changes: this gate's own toggle being clamped by the startup ceiling.)
 - Qualitative: the operator is never misled into thinking a saved-but-inactive toggle is live (the failure
   this kills), and never confused about why a click "didn't work" — the banner explains *why* (a long-lived
   server freezes its capabilities at startup) and *what to do* (restart). Honesty + Forgiveness.

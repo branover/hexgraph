@@ -99,3 +99,69 @@ def test_ceiling_does_not_block_a_gate_that_was_on_at_startup(hg_home):
     policy.snapshot_ceiling()
     p = policy.current_policy()
     assert p.allow_network and not p.static_only
+
+
+def test_ceiling_clamps_the_network_tier_and_egress(hg_home):
+    # The clamp must hold for the egress path, not just execution. Boot with everything
+    # off, then enable network mid-session.
+    policy.snapshot_ceiling()
+    st.update_settings({"features.network.enabled": True})
+
+    p = policy.current_policy()
+    assert not p.allow_network and p.static_only and p.tier == policy.TIER_STATIC_ONLY
+    # assert_allows_egress fails closed on the (clamped) policy regardless of the scope.
+    scope = policy.local_network_scope("http://127.0.0.1")
+    with pytest.raises(policy.PolicyViolation):
+        policy.assert_allows_egress("127.0.0.1:80", scope)
+
+
+def test_ceiling_clamps_the_remote_tier(hg_home):
+    policy.snapshot_ceiling()  # boot with remote off
+    st.update_settings({"features.remote.enabled": True})
+
+    p = policy.current_policy()
+    assert not p.allow_remote and not p.allow_network and p.tier == policy.TIER_STATIC_ONLY
+    with pytest.raises(policy.PolicyViolation):
+        policy.assert_allows_remote()
+
+
+def test_build_fetch_effective_is_honest_about_its_build_dependency(hg_home):
+    # No ceiling: enabling build_fetch WITHOUT build leaves it ineffective in the real
+    # policy (build_fetch_on = build_on and ...). `effective` must reflect that, while
+    # pending_restart stays False (no restart fixes a missing prerequisite).
+    st.update_settings({"features.build_fetch.enabled": True})
+    bf = policy.policy_feature_states()["features"]["build_fetch"]
+    assert bf == {"configured": True, "effective": False, "pending_restart": False}
+    assert policy.current_policy().allow_build_fetch is False
+
+    # Turn build on too → build_fetch becomes effective.
+    st.update_settings({"features.build.enabled": True})
+    assert policy.current_policy().allow_build_fetch is True
+    assert policy.policy_feature_states()["features"]["build_fetch"]["effective"] is True
+
+
+def test_build_is_effective_when_implied_by_execution(hg_home):
+    # build is implied by exec (build_on = on('build') or exec_on). With fuzzing on and
+    # build's own toggle off, build's capability is active — `effective` reflects the real
+    # policy outcome, not just build's own toggle.
+    st.update_settings({"features.fuzzing.enabled": True})
+    states = policy.policy_feature_states()["features"]
+    assert policy.current_policy().allow_build is True
+    assert states["build"]["effective"] is True
+    assert states["build"]["configured"] is False
+
+
+def test_capability_table_respects_the_ceiling(hg_home):
+    from hexgraph.engine.capabilities import capabilities_for
+
+    # No ceiling (CLI/test default): enabling fuzzing offers the fuzzing task.
+    st.update_settings({"features.fuzzing.enabled": True})
+    assert "fuzzing" in capabilities_for("target", "executable")
+
+    # A running server that booted with fuzzing OFF must NOT advertise it after a
+    # mid-session enable — the worker's policy seam would refuse it at run time.
+    policy.reset_ceiling()
+    st.update_settings({"features.fuzzing.enabled": False})
+    policy.snapshot_ceiling()  # boot: fuzzing off
+    st.update_settings({"features.fuzzing.enabled": True})  # mid-session widen
+    assert "fuzzing" not in capabilities_for("target", "executable")
