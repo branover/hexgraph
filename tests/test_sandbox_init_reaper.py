@@ -107,7 +107,13 @@ _ZOMBIE_PRESSURE = textwrap.dedent(
             os._exit(0)            # child exits, leaving the grandchild for PID 1 to reap
         else:
             os.waitpid(pid, 0)     # the forkserver reaps its OWN direct child
-    time.sleep(0.5)                # let the last orphans reparent + (hopefully) get reaped
+    # Wait (bounded) for the last orphans to reparent and be reaped. With a real reaper
+    # this drains to 0 within a few ms; WITHOUT one the zombies never clear, so the loop
+    # runs the full deadline and still reports them — the test fails closed either way,
+    # and the bound makes it robust to a slow/loaded host (no fixed-sleep flakiness).
+    deadline = time.time() + 5.0
+    while time.time() < deadline and zombies() > 0:
+        time.sleep(0.05)
     print("SUMMARY fork_failures=%d leftover_zombies=%d" % (fork_failures, zombies()))
     sys.exit(1 if (fork_failures or zombies()) else 0)
     """
