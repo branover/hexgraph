@@ -29,6 +29,7 @@ from hexgraph.api.routers import (
     ghidra,
     graph,
     hypotheses,
+    observations,
     projects,
     settings,
     source,
@@ -107,6 +108,7 @@ def create_app() -> FastAPI:
     app.include_router(graph.router)
     app.include_router(findings.router)
     app.include_router(hypotheses.router)
+    app.include_router(observations.router)
     app.include_router(annotations.router)
     app.include_router(settings.router)
     app.include_router(source.router)
