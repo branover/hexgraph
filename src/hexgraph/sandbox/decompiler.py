@@ -101,6 +101,21 @@ class GhidraDecompiler(Decompiler):
             # the slot in the gap and silently no-op the reanalyze.
             return self._run_locked(slot, artifact, args, force_cold=reanalyze)
 
+    def run_taint(self, artifact: str, *, project=None) -> dict:
+        """Run the grounded P-Code data-flow taint pass (`--taint`) over the analyzed program,
+        reusing the SAME persistent project as `decompile()` (warm ⇒ NO re-analysis — taint after
+        a prior decompile is fast). Returns the probe's `{taint: {flows, analyzed}}` payload (plus
+        tool/cached). Held under the slot lock like every other use of the project; falls back to a
+        throwaway project when there's no cache or the lock times out (correct, just uncached)."""
+        args = ["--taint"]
+        slot = self._resolve_slot(artifact, project)
+        if slot is None:
+            return self.runner.run_json_probe("ghidra_probe.py", artifact, extra_args=args)
+        with slot.lock() as locked:
+            if not locked:
+                return self.runner.run_json_probe("ghidra_probe.py", artifact, extra_args=args)
+            return self._run_locked(slot, artifact, args)
+
     def rename_function(self, artifact: str, *, address: str, new_name: str, project=None) -> dict:
         """Rename the function at `address` to `new_name` IN the persistent Ghidra project and
         re-decompile it (the rename round-trip, design §7). analyzeHeadless runs without
