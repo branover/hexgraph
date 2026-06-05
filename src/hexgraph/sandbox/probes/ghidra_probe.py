@@ -3,11 +3,14 @@
 
   argv: /artifact [function]        normal decompile/inventory run
         /artifact --check           report Ghidra presence + version (no analysis)
+        /artifact --taint           grounded P-Code source->sink data-flow taint (Phase 4)
 
 Emits JSON matching the Decompiler contract plus enrichment extras:
   { tool, functions: [...], focus: {name,resolved,pseudocode,disasm,callees}|null,
     calls: [[caller,callee],...], structs: [{name,size,fields}], cached: bool }
 For --check: { present: bool, version: str|null, detail: str }.
+For --taint: { tool, cached, taint: { analyzed: int, flows: [ {function, function_addr,
+    source:{kind,detail}, sink:{func,category,call_addr,arg_index}, sanitized:[...]} ] } }.
 
 Ghidra must be installed in the image (built with WITH_GHIDRA=1). The target is
 imported and statically analyzed — NEVER executed. Runs with --network none, a
@@ -293,6 +296,293 @@ fh.close()
 '''
 
 
+# Grounded P-Code data-flow taint (Phase 4). Runs after auto-analysis, over each function's
+# HighFunction SSA P-Code: marks untrusted SOURCES (function parameters + returns of
+# source-producing library calls), propagates taint forward to a fixpoint through data ops
+# AND string/mem copy CALLS (which carry taint into their dest buffer), and reports every
+# tainted value that reaches a dangerous SINK (command-exec / unbounded-copy). The claim is
+# grounded in the real decompiled bytes — no LLM. Intra-procedural for this PR (reachability
+# stitches across calls via the call graph); inter-procedural summaries are a follow-up.
+TAINT_SCRIPT = r'''# -*- coding: utf-8 -*-
+# Encoding cookie REQUIRED (Jython 2.7 / PEP 263) — keep this ASCII-only; a compile failure
+# here writes NO output and is undiagnosable.
+import json
+import traceback
+from java.lang import System
+from ghidra.app.decompiler import DecompInterface
+from ghidra.program.model.pcode import PcodeOp
+from ghidra.util.task import ConsoleTaskMonitor
+
+args = getScriptArgs()
+out_path = args[0]
+try:
+    monitor = ConsoleTaskMonitor()
+
+    # Library calls whose RETURN value is attacker-influenced (a taint source).
+    SOURCE_RET = set(["getenv", "getchar", "fgetc"])
+    # Calls that COPY a (possibly tainted) source arg into a dest pointer = input[1]; any
+    # tainted later arg taints the dest buffer (models string/mem propagation across the call).
+    COPY_TO_DEST = set(["strcpy", "strncpy", "strcat", "strncat", "memcpy", "memmove",
+                        "stpcpy", "sprintf", "snprintf", "vsprintf", "vsnprintf"])
+    # Calls whose RETURN is tainted iff a source arg is tainted (duplicators).
+    COPY_TO_RET = set(["strdup", "strndup"])
+    # Dangerous sinks. command_exec: a tainted command/path => injection. buffer_overflow: a
+    # tainted source into an unbounded copy => memory corruption.
+    SINK_EXEC = set(["system", "popen", "execl", "execlp", "execle",
+                     "execv", "execvp", "execvpe", "execve"])
+    SINK_OVERFLOW = set(["strcpy", "strcat", "sprintf", "gets"])
+    SINKS = SINK_EXEC | SINK_OVERFLOW
+    # Names that, if called on the path, indicate an (UNVERIFIED) sanitization attempt. We only
+    # record that one was present; we never assume it is sufficient.
+    SANITIZERS = set(["sanitize", "escape", "quote", "filter", "validate", "clean", "encode"])
+
+    # P-Code opcodes that propagate taint from any input to the output (copy/arith/ptr/phi/load).
+    PROP_OPS = set([PcodeOp.COPY, PcodeOp.CAST, PcodeOp.INT_ADD, PcodeOp.INT_SUB,
+        PcodeOp.INT_AND, PcodeOp.INT_OR, PcodeOp.INT_XOR, PcodeOp.INT_MULT,
+        PcodeOp.INT_ZEXT, PcodeOp.INT_SEXT, PcodeOp.INT_2COMP, PcodeOp.INT_NEGATE,
+        PcodeOp.INT_LEFT, PcodeOp.INT_RIGHT, PcodeOp.INT_SRIGHT, PcodeOp.INT_DIV,
+        PcodeOp.INT_REM, PcodeOp.SUBPIECE, PcodeOp.PIECE, PcodeOp.PTRADD, PcodeOp.PTRSUB,
+        PcodeOp.MULTIEQUAL, PcodeOp.INDIRECT, PcodeOp.LOAD])
+
+    fm = currentProgram.getFunctionManager()
+    funcs = list(fm.getFunctions(True))
+
+    def callee_name(op):
+        t = op.getInput(0)
+        if t is None:
+            return None
+        try:
+            fa = getFunctionAt(t.getAddress())
+        except:
+            fa = None
+        if fa is None:
+            return None
+        return fa.getName()
+
+    def addr_of(op):
+        try:
+            return "0x" + op.getSeqnum().getTarget().toString()
+        except:
+            return None
+
+    # Pre-filter: only decompile functions that actually CALL a sink — bounds the heavy
+    # HighFunction pass to functions that could possibly host a source->sink flow.
+    def calls_a_sink(f):
+        try:
+            for c in f.getCalledFunctions(monitor):
+                if c.getName() in SINKS:
+                    return True
+        except:
+            pass
+        return False
+    candidates = [f for f in funcs if not f.isExternal() and calls_a_sink(f)][:200]
+
+    deci = DecompInterface()
+    deci.openProgram(currentProgram)
+
+    flows = []
+    for f in candidates:
+        try:
+            res = deci.decompileFunction(f, 60, monitor)
+        except:
+            res = None
+        if res is None or not res.decompileCompleted():
+            continue
+        hf = res.getHighFunction()
+        if hf is None:
+            continue
+
+        # Two taint domains, both needed because stack buffers are addressed BY POINTER:
+        #   * VALUE taint — an identity-keyed varnode set (HighFunction interns its VarnodeAST
+        #     objects, so identityHashCode separates distinct SSA values that Varnode.equals
+        #     would collapse). For scalar/pointer VALUES (a param, a getenv() return).
+        #   * SLOT taint — a set of stack-slot keys whose CONTENTS are tainted. A stack array
+        #     (`char hbuf[128]`) is reached at each use via a freshly-computed pointer
+        #     (PTRSUB(frame, const)), so the pointer varnodes differ every time; we canonicalize
+        #     a pointer to its (frame, offset) slot and taint the SLOT — so strncpy(hbuf, host)
+        #     then snprintf(cmd, .., hbuf) then popen(cmd) connect through the hbuf/cmd buffers.
+        tainted = set()        # identity hashes of value-tainted varnodes
+        src_of = {}            # identity hash -> source descriptor
+        tainted_slot = {}      # stack-slot key -> source descriptor
+
+        def vmark(vn, desc):
+            if vn is None:
+                return False
+            h = System.identityHashCode(vn)
+            if h in tainted:
+                return False
+            tainted.add(h)
+            src_of[h] = desc
+            return True
+
+        def slot_key(vn, depth=0):
+            # Canonicalize a pointer varnode to a frame-relative stack-slot key, or None. The
+            # buffer pointer is PTRSUB(frame_reg, const_off) (seen via -O0/Ghidra); two uses of
+            # the same buffer share that (frame, offset), so the slot key is stable.
+            if vn is None or depth > 6:
+                return None
+            df = vn.getDef()
+            if df is None:
+                try:
+                    sp = vn.getAddress().getAddressSpace().getName()
+                except:
+                    sp = None
+                if sp == "stack":
+                    return ("stk", sp, vn.getOffset())
+                return None
+            mn = df.getMnemonic()
+            if mn == "PTRSUB" and df.getNumInputs() == 2 and df.getInput(1).isConstant():
+                b = df.getInput(0)
+                try:
+                    bs = b.getAddress().getAddressSpace().getName()
+                except:
+                    bs = "?"
+                return ("stk", bs, b.getOffset(), df.getInput(1).getOffset())
+            if mn in ("COPY", "CAST"):
+                return slot_key(df.getInput(0), depth + 1)
+            if mn == "INT_ADD" and df.getNumInputs() == 2 and df.getInput(1).isConstant():
+                base = slot_key(df.getInput(0), depth + 1)
+                if base is not None:
+                    return base + (df.getInput(1).getOffset(),)
+            return None
+
+        def arg_taint(vn):
+            # Source descriptor if this arg is tainted by VALUE or points to a tainted stack
+            # SLOT, else None — unifies the two domains for propagation + sink checks.
+            if vn is None:
+                return None
+            h = System.identityHashCode(vn)
+            if h in tainted:
+                return src_of[h]
+            k = slot_key(vn)
+            if k is not None and k in tainted_slot:
+                return tainted_slot[k]
+            return None
+
+        # Sources A: function parameters (untrusted at the boundary; reachability decides
+        # whether the function is actually reachable from a real entry/source).
+        try:
+            it = hf.getLocalSymbolMap().getSymbols()
+            while it.hasNext():
+                sym = it.next()
+                if sym.isParameter():
+                    hv = sym.getHighVariable()
+                    if hv is not None:
+                        for inst in hv.getInstances():
+                            vmark(inst, {"kind": "param", "detail": sym.getName()})
+        except:
+            pass
+
+        ops = list(hf.getPcodeOps())
+        # Sources B: returns of source-producing library calls (getenv, ...).
+        for op in ops:
+            if op.getOpcode() == PcodeOp.CALL and op.getOutput() is not None:
+                cn = callee_name(op)
+                if cn in SOURCE_RET:
+                    vmark(op.getOutput(), {"kind": "call_return", "detail": cn})
+
+        # Forward propagation to a fixpoint over BOTH domains.
+        changed = True
+        guard = 0
+        while changed and guard < 4096:
+            changed = False
+            guard += 1
+            for op in ops:
+                oc = op.getOpcode()
+                out = op.getOutput()
+                n = op.getNumInputs()
+                ins = [op.getInput(i) for i in range(n)]
+                if oc in PROP_OPS:
+                    d = None
+                    for v in ins:
+                        d = arg_taint(v)
+                        if d is not None:
+                            break
+                    if d is not None and out is not None and vmark(out, d):
+                        changed = True
+                elif oc == PcodeOp.CALL:
+                    cn = callee_name(op)
+                    if cn in COPY_TO_DEST and n > 2:
+                        # dest = input[1]; sources = input[2:]. A tainted source taints the dest
+                        # stack SLOT (the buffer contents), not the dest pointer varnode.
+                        d = None
+                        for i in range(2, n):
+                            d = arg_taint(ins[i])
+                            if d is not None:
+                                break
+                        if d is not None:
+                            k = slot_key(ins[1])
+                            if k is not None and k not in tainted_slot:
+                                tainted_slot[k] = d
+                                changed = True
+                    if cn in COPY_TO_RET and out is not None:
+                        d = None
+                        for i in range(1, n):
+                            d = arg_taint(ins[i])
+                            if d is not None:
+                                break
+                        if d is not None and vmark(out, d):
+                            changed = True
+
+        # Sanitizer-looking calls present in this function (an UNVERIFIED mitigation note).
+        sanitizer_hits = set()
+        for op in ops:
+            if op.getOpcode() == PcodeOp.CALL and callee_name(op) in SANITIZERS:
+                sanitizer_hits.add(callee_name(op))
+
+        # Sinks: a tainted argument reaching a dangerous call is a grounded source->sink flow.
+        # command_exec: the command/path arg (from input[1]) is tainted => injection.
+        # buffer_overflow: a tainted SOURCE (input[2:], skipping the dest) into an unbounded
+        # copy => memory corruption.
+        for op in ops:
+            if op.getOpcode() != PcodeOp.CALL:
+                continue
+            cn = callee_name(op)
+            cat = None
+            lo = 1
+            if cn in SINK_EXEC:
+                cat = "command_exec"
+            elif cn in SINK_OVERFLOW:
+                cat = "buffer_overflow"
+                lo = 2
+            if cat is None:
+                continue
+            n = op.getNumInputs()
+            hit_idx = None
+            src = None
+            for i in range(lo, n):
+                d = arg_taint(op.getInput(i))
+                if d is not None:
+                    hit_idx = i
+                    src = d
+                    break
+            if hit_idx is None:
+                continue
+            flows.append({
+                "function": f.getName(),
+                "function_addr": "0x" + f.getEntryPoint().toString(),
+                "source": src or {"kind": "unknown"},
+                "sink": {"func": cn, "category": cat,
+                         "call_addr": addr_of(op), "arg_index": hit_idx},
+                "sanitized": sorted(list(sanitizer_hits)),
+            })
+            if len(flows) >= 200:
+                break
+        if len(flows) >= 200:
+            break
+
+    result = {"taint": {"flows": flows, "analyzed": len(candidates)}}
+    _payload = json.dumps(result)
+except:
+    _payload = json.dumps({"error": "taint postscript exception",
+                           "tb": traceback.format_exc(), "taint": {"flows": []}})
+
+fh = open(out_path, "w")
+fh.write(_payload)
+fh.close()
+'''
+
+
 def _find_headless() -> str | None:
     cand = os.path.join(GHIDRA_DIR, "support", "analyzeHeadless")
     if os.path.isfile(cand):
@@ -333,6 +623,10 @@ def main() -> int:
         return 2
     artifact = sys.argv[1]
     focus = sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith("--") else None
+    # --taint runs the grounded P-Code data-flow analysis (TAINT_SCRIPT) over the analyzed
+    # program instead of the decompile/inventory postScript. It reuses the SAME persistent
+    # project (warm -process) so it pays no re-analysis cost after a prior decompile run.
+    taint_mode = "--taint" in sys.argv
     # Rename round-trip: --rename <addr> <new_name> applies the rename in the project
     # (saved by the -process/-import run) and decompiles the renamed function.
     rename_addr = rename_name = ""
@@ -351,10 +645,11 @@ def main() -> int:
     # The postScript + its JSON output ALWAYS live on the /scratch tmpfs (the project mount
     # holds only the Ghidra project itself — keeps the persistent dir lean and the hardening
     # comment honest: only the project lives on the writable mount, never user-settings/temp).
-    script_path = os.path.join(SCRATCH, "hexgraph_post.py")
+    script_name = "hexgraph_taint.py" if taint_mode else "hexgraph_post.py"
+    script_path = os.path.join(SCRATCH, script_name)
     out_path = os.path.join(SCRATCH, "ghidra_out.json")
     with open(script_path, "w") as fh:
-        fh.write(POST_SCRIPT)
+        fh.write(TAINT_SCRIPT if taint_mode else POST_SCRIPT)
 
     # Persistent-project cache (analyze-once / reuse). The host resolves
     # <data_dir>/ghidra/<sha256>__<version>/project and bind-mounts it writable here; if a
@@ -391,7 +686,7 @@ def main() -> int:
             "-process", prog,
             "-noanalysis",
             "-scriptPath", SCRATCH,
-            "-postScript", "hexgraph_post.py", out_path, focus or "", rename_addr, rename_name,
+            "-postScript", script_name, out_path, focus or "", rename_addr, rename_name,
         ]
     else:
         # COLD: import + analyze. Persist the project (no -deleteProject) only when the
@@ -400,7 +695,7 @@ def main() -> int:
             hl, proj_dir, PROJECT_NAME,
             "-import", artifact,
             "-scriptPath", SCRATCH,
-            "-postScript", "hexgraph_post.py", out_path, focus or "", rename_addr, rename_name,
+            "-postScript", script_name, out_path, focus or "", rename_addr, rename_name,
         ]
         if not persistent:
             cmd.append("-deleteProject")
