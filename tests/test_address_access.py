@@ -118,6 +118,26 @@ def test_disassemble_requires_a_focus(hg_home):
         assert "required" in run_tool(ctx, "disassemble", {})
 
 
+def test_disassemble_miss_records_observation_for_discoverability(hg_home, monkeypatch):
+    """A requested-but-unresolved disassemble still records a discoverable Observation
+    (parity with decompile_at's not-found path) and mutates no graph."""
+    class _FakeR2:
+        def decompile(self, artifact, function=None, *, address=None, reanalyze=False, project=None):
+            return {"functions": ["main", "helper"], "focus": None}  # nothing resolved
+
+    monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
+    monkeypatch.setattr("hexgraph.sandbox.decompiler.R2Decompiler", _FakeR2)
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        nb = s.query(Node).count()
+        out = run_tool(ctx, "disassemble", {"function": "ghost"})
+        assert "not found" in out
+        assert s.query(Node).count() == nb  # QUERY: no mutation even on a miss
+        obs = s.query(Observation).filter(Observation.target_id == t.id,
+                                          Observation.tool == "disassemble").all()
+        assert len(obs) == 1 and obs[0].result_kind == "function_list"
+
+
 # --- reanalyze: raise depth, bust cache, QUERY only ---------------------------
 
 def test_reanalyze_raises_depth_busts_cache_and_records(hg_home, monkeypatch):

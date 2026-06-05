@@ -127,6 +127,7 @@ os.environ["_JAVA_OPTIONS"] = (f"-Djava.io.tmpdir={SCRATCH} {_existing_jopts}").
 # args[1] (optional) is the focus function to decompile.
 POST_SCRIPT = r'''
 import json
+import re
 from ghidra.app.decompiler import DecompInterface
 from ghidra.util.task import ConsoleTaskMonitor
 
@@ -166,9 +167,10 @@ except:
 
 if focus:
     target = None
-    # A focus given as a hex address resolves to the function CONTAINING it
-    # (analyze-at-address); otherwise match by name.
-    is_addr = focus[:2].lower() == "0x"
+    # A focus given as a strict hex address resolves to the function CONTAINING it
+    # (analyze-at-address); otherwise match by name. The strict regex matches the
+    # radare2 path so the two backends agree on what counts as an address.
+    is_addr = bool(re.match(r"^0x[0-9a-fA-F]+$", focus))
     if is_addr:
         try:
             target = getFunctionContaining(toAddr(focus))

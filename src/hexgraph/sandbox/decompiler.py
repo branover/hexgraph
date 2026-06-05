@@ -84,16 +84,6 @@ class GhidraDecompiler(Decompiler):
         if slot is None:
             # No cache (no project / radare path / resolve failure) → throwaway /scratch project.
             return self.runner.run_json_probe("ghidra_probe.py", artifact, extra_args=args)
-        if reanalyze:
-            # Ghidra's "raise depth" is a fresh auto-analysis: drop the warm slot so the next
-            # run re-imports cold under the lock (a persisted project is not re-analyzed in
-            # place). Best-effort — a clear failure just means the warm path is reused.
-            with slot.lock() as locked:
-                if locked:
-                    try:
-                        slot.clear_project()
-                    except Exception:  # noqa: BLE001 — never break a decompile over a cache clear
-                        pass
 
         # CROSS-PROCESS lock for the WHOLE use of the slot: the web app and an agent's MCP server
         # are separate OS processes sharing this data dir, and a Ghidra project is NOT
@@ -106,14 +96,29 @@ class GhidraDecompiler(Decompiler):
         with slot.lock() as locked:
             if not locked:
                 return self.runner.run_json_probe("ghidra_probe.py", artifact, extra_args=args)
-            return self._run_locked(slot, artifact, args)
+            # reanalyze drops the warm slot INSIDE this same lock (force_cold) so the clear +
+            # re-import is atomic — otherwise a concurrent same-target decompile could re-warm
+            # the slot in the gap and silently no-op the reanalyze.
+            return self._run_locked(slot, artifact, args, force_cold=reanalyze)
 
-    def _run_locked(self, slot, artifact: str, args):
+    def _run_locked(self, slot, artifact: str, args, *, force_cold: bool = False):
         """Run the probe with the slot held exclusively. Decides cold vs warm on the AUTHORITATIVE
         committed marker (`slot.exists()`); cleans a partially-written slot before a cold run; and
         passes the warm/cold verdict to the probe explicitly (the probe re-affirms via the same
         marker). The probe COMMITS the marker as the last step of a successful cold import, so the
-        host no longer races a separate write_meta."""
+        host no longer races a separate write_meta.
+
+        `force_cold` (reanalyze) drops any committed warm project so the run re-imports cold —
+        a persisted Ghidra project is not re-analyzed in place. Done here, under the run's own
+        lock, so no concurrent decompile can re-warm the slot between the clear and the run."""
+        if force_cold and slot.exists():
+            log.info(
+                "ghidra project cache: reanalyze — clearing slot %s to re-import cold",
+                slot.root.name)
+            try:
+                slot.clear_project()
+            except Exception:  # noqa: BLE001 — never break a decompile over a cache clear
+                pass
         warm = slot.exists()
         if not warm and slot.project_dir.is_dir() and any(slot.project_dir.iterdir()):
             # Non-empty project dir with NO committed marker ⇒ a prior cold run died mid-import.

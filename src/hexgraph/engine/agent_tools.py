@@ -369,13 +369,19 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
                 return f"disassembly failed: {exc}"
             focus = (out or {}).get("focus")
             disasm = (focus or {}).get("disasm") if focus else None
-            if not disasm:
-                return f"{subj!r} not found / no disassembly (functions: " \
-                       f"{', '.join((out or {}).get('functions', [])[:40])})"
-            at = f" @ {focus['address']}" if focus.get("address") else ""
-            # Record the disassembly as a QUERY observation (no graph mutation), keyed to
-            # the call the agent made (by name or by address).
+            # Keyed to the call the agent made (by name or by address).
             obs_args = {"address": addr} if addr else {"function": fn}
+            if not disasm:
+                # A requested-but-unresolved focus is still a discoverable disassemble call —
+                # record the available inventory (mirrors decompile_at's not-found path) so the
+                # miss is visible in the index, not silently dropped.
+                fns = (out or {}).get("functions", [])
+                _record_obs(ctx, tool="disassemble", args=obs_args, result_kind="function_list",
+                            payload={"functions": fns},
+                            summary=f"{subj!r} not found; {len(fns)} functions available")
+                return f"{subj!r} not found / no disassembly (functions: {', '.join(fns[:40])})"
+            at = f" @ {focus['address']}" if focus.get("address") else ""
+            # Record the disassembly as a QUERY observation (no graph mutation).
             _record_obs(ctx, tool="disassemble", args=obs_args,
                         result_kind="disassembly",
                         payload={"function": focus.get("name") or subj,
