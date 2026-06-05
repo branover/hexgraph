@@ -370,6 +370,7 @@ def _replay_for_report(fuzzer: str, path: str, outdir: str) -> tuple[str, int]:
     binary), so a clean run recovers the full classification every time. A hang is itself
     a finding (treated as a timeout)."""
     report, rc = "", 0
+    crash_report, crash_rc = "", 0  # the FIRST observed crash (rc != 0), preserved
     for _attempt in range(2):
         try:
             repro = subprocess.run([fuzzer, path], capture_output=True, text=True, cwd=outdir,
@@ -378,10 +379,18 @@ def _replay_for_report(fuzzer: str, path: str, outdir: str) -> tuple[str, int]:
             return "libFuzzer: timeout\n", 1
         report = (repro.stdout or "") + (repro.stderr or "")
         rc = repro.returncode
+        if rc != 0 and not crash_rc:
+            crash_report, crash_rc = report, rc  # remember the first crash we saw
         # A clean (non-crashing) input, or a crash whose report already classifies, is done.
         # Only retry the narrow bad case: a detected crash with an unclassifiable report.
         if rc == 0 or _has_sanitizer_signature(report):
             break
+    # Never let a genuinely-flaky crash be reported as clean: if the input crashed on the
+    # first replay but a later attempt came back rc==0, the OLD single-replay would have
+    # counted that crash — so prefer the observed crash over the clean re-run. A
+    # classifiable report (the loop's break condition) is still preferred when we have one.
+    if rc == 0 and crash_rc:
+        return crash_report, crash_rc
     return report, rc
 
 

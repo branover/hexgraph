@@ -182,6 +182,38 @@ def test_has_sanitizer_signature():
     assert not _has_sanitizer_signature("some unrelated stderr noise without a sanitizer line")
 
 
+def test_replay_preserves_flaky_crash(monkeypatch):
+    """`_replay_for_report` must never DROP a genuinely flaky crash. If the first replay
+    crashes (rc != 0) with an unclassifiable report but the second comes back clean
+    (rc == 0), the old single-replay would still have counted the crash — so we return the
+    observed crash, not the clean re-run. The deterministic and clean-input paths are
+    unchanged."""
+    from hexgraph.sandbox.probes import fuzz_probe as FP
+
+    class _R:
+        def __init__(self, rc, out=""):
+            self.returncode, self.stdout, self.stderr = rc, out, ""
+
+    # Flaky: attempt 1 crashes with an empty/unclassifiable report, attempt 2 is clean.
+    # The crash must survive (rc != 0), not be masked by the clean re-run.
+    seq = iter([_R(1, ""), _R(0, "")])
+    monkeypatch.setattr(FP.subprocess, "run", lambda *a, **k: next(seq))
+    _, rc = FP._replay_for_report("/fuzzer", "/crash", "/out")
+    assert rc != 0, "a crash observed on any replay must not be reported as clean"
+
+    # Deterministic: a classifiable crash on the first replay returns it immediately.
+    seq2 = iter([_R(1, "==1==ERROR: AddressSanitizer: heap-buffer-overflow\nWRITE of size 4")])
+    monkeypatch.setattr(FP.subprocess, "run", lambda *a, **k: next(seq2))
+    report2, rc2 = FP._replay_for_report("/fuzzer", "/crash", "/out")
+    assert rc2 != 0 and _has_sanitizer_signature(report2)
+
+    # Clean input (never crashes) is still reported clean.
+    seq3 = iter([_R(0, "")])
+    monkeypatch.setattr(FP.subprocess, "run", lambda *a, **k: next(seq3))
+    _, rc3 = FP._replay_for_report("/fuzzer", "/crash", "/out")
+    assert rc3 == 0
+
+
 # ── engine severity merge ────────────────────────────────────────────────────────
 
 def test_severity_merge():
