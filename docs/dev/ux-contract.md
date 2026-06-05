@@ -761,6 +761,75 @@ loud only where you are looking; every node/edge/color kept, mute never deletes.
 
 ---
 
+## SURFACE 4b — Tool Results panel + provenance (Phase O Observations)
+
+The Observation store (design §5.6) surfaced for the user: every deterministic tool call on a
+target (decompile / list / xrefs / taint / strings / structs) is recorded as a durable "Tool
+Result". The panel lets a researcher browse and read those prior results before re-running, and a
+node/finding shows the tool results it was derived from. Read/browse only — results persist here and
+do **not** auto-populate the graph (promoting a result is a separate, deliberate act, deferred to a
+later PR).
+
+**OBS-01 — Tool Results panel on a target**
+- Steps: select a target in the Targets pane (or its node in the graph) → in its NodeInspector scroll
+  to the **Tool Results** section.
+- Functional: a count and a list of the target's recorded tool results, newest first; each row shows
+  the result kind, the tool, an error tag when failed, a relative time, and a one-line summary.
+- 🔌 Backend: `GET /api/projects/{id}/targets/{targetId}/observations` (row metadata only, bounded);
+  the rows must match the recorded `observation` table for that target. Empty state when none exist.
+- Qualitative: rows read as calm, scannable cards in the app's card idiom (Aesthetics/Consistency);
+  the empty state explains how results get here rather than showing a bare "none" (Discoverable); the
+  panel sits naturally below the recon facts, not bolted on (Aesthetics).
+- Principle: tool results are never lost — they're discoverable per target.
+- Prereq: a target with ≥1 recorded observation.
+
+**OBS-02 — Filter the Tool Results by tool / kind**
+- Steps: in the Tool Results section, use the **tool** and/or **kind** select(s).
+- Functional: the list filters live; a select appears only when >1 distinct value exists; "all …"
+  clears it.
+- Qualitative: filters compose; controls match the findings-filter idiom (Consistency); a too-narrow
+  filter shows a clear "no tool results match" rather than an empty void (Feedback).
+- Principle: a busy target's results stay navigable.
+- Prereq: a target with observations spanning ≥2 tools or kinds.
+
+**OBS-03 — View a raw tool-result payload**
+- Steps: click a Tool Results row.
+- Functional: a modal opens showing the result's metadata (tool, kind, args, summary, status, the
+  analyzed-bytes hash, recorded time/source, size) and the full **raw payload**, pretty-printed and
+  scrollable, with a copy button.
+- 🔌 Backend: `GET /api/observations/{obsId}` — the full payload, faithfully restored from CAS (the
+  list/search responses deliberately omit it). Verify the payload matches what the tool recorded.
+- Qualitative: the payload is the point — it's legible (monospace, wrapped, bounded height) and
+  copyable (Feedback); the modal dismisses on backdrop click / ✕ (Friction); it never blocks on a
+  huge blob (the single-get is the only place the payload is fetched).
+- Principle: the researcher can always read exactly what a tool produced.
+- Prereq: a target with ≥1 recorded observation.
+
+**OBS-04 — Provenance link on a node**
+- Steps: select a graph node enriched from a tool call (its `attrs.provenance` is non-empty) → in its
+  NodeInspector read **Derived from these tool results**.
+- Functional: a list of the tool results that produced/enriched the node; clicking one opens its raw
+  payload (OBS-03). The section renders nothing when there's no provenance.
+- 🔌 Backend: each `attrs.provenance` id resolved via `GET /api/observations/{obsId}`; a missing/pruned
+  id shows an "unavailable" stub rather than erroring.
+- Qualitative: the link makes the graph auditable — "where did this come from" is one click
+  (Discoverable); it's clearly read-only, distinct from authoring controls (Consistency).
+- Principle: the graph stays curated, but every curated fact is traceable back to its tool result.
+- Prereq: a node carrying `attrs.provenance`.
+
+**OBS-05 — Provenance link on a finding**
+- Steps: select a finding whose `evidence.extra.provenance` is non-empty → in the Inspector read
+  **Derived from these tool results**.
+- Functional: same as OBS-04, for a finding; clicking a row opens the raw payload; absent when the
+  finding has no provenance.
+- 🔌 Backend: resolved via `GET /api/observations/{obsId}`.
+- Qualitative: consistent with the node provenance block (Consistency); does not crowd the already
+  dense Inspector — it sits after the analyst notes (Aesthetics).
+- Principle: a finding is traceable to the grounded results behind it.
+- Prereq: a finding carrying `evidence.extra.provenance`.
+
+---
+
 ## SURFACE 5 — Tasks panel + task detail
 
 **TASK-01 — Tasks list: sort / filter**
@@ -1193,6 +1262,7 @@ column names the step in `.claude/skills/ux-assessment/SKILL.md` (Role 1) that p
 | S28 | A LARGE / PATHOLOGICAL / REAL-scale project | A14 seed/ingest a many-target firmware (or use `just graph-tiers`) | GRAPH-01/23/25/26, VIEW-02, SHELL-* at scale |
 | S29 | Optional features enabled (fuzzing, poc, build, network, source.edit) | A0b enable the needed gates in Settings | TGT-07, FUZZ-*, SRC-02/04/05, FIND-12, SET-03 |
 | S30 | A saved lens | A15 customize a view and save a lens | VIEW-06/07/08 |
+| S31 | A target with recorded tool results (observations), some spanning ≥2 tools/kinds, with ≥1 node and/or finding carrying provenance | A5 (analysis tasks / agent tool calls record observations and provenance) | OBS-01/02/03/04/05 |
 
 **Coverage check:** the VR sequence steps A0–A15 (in the skill) produce S1–S30, which between them are the
 Prereq of every interaction above. If a new contract entry introduces a Prereq not in this matrix, the same
