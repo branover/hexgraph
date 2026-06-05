@@ -97,12 +97,18 @@ _COMPACT_ISLANDS_JS = """(margin) => {
   const core = cy.nodes(':visible').filter(n => n.data('gtype') === 'room' || n.parent().nonempty());
   if (core.length === 0) return 'no-core';
   const bb = core.boundingBox();
+  // Cap the inset at half each axis so a small core box can never invert the clamp (lower
+  // bound passing the upper) and pile every island onto one corner. With the showcase seed the
+  // box dwarfs the margin, so mx/my == margin and positions are unchanged — this only guards a
+  // future seed whose room cluster is narrower than 2*margin.
+  const mx = Math.min(margin, Math.max(0, (bb.w - 1) / 2));
+  const my = Math.min(margin, Math.max(0, (bb.h - 1) / 2));
   const islands = cy.nodes(':visible').filter(n => n.data('gtype') !== 'room' && n.parent().empty());
   const moved = [];
   islands.forEach(n => {
     const p = n.position();
-    const nx = Math.max(bb.x1 + margin, Math.min(bb.x2 - margin, p.x));
-    const ny = Math.max(bb.y1 + margin, Math.min(bb.y2 - margin, p.y));
+    const nx = Math.max(bb.x1 + mx, Math.min(bb.x2 - mx, p.x));
+    const ny = Math.max(bb.y1 + my, Math.min(bb.y2 - my, p.y));
     if (nx !== p.x || ny !== p.y) { n.position({ x: nx, y: ny }); moved.push(n.data('label')); }
   });
   return 'compacted: ' + (moved.join(', ') || '(none)');
