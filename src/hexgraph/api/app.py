@@ -48,8 +48,15 @@ _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 async def _lifespan(app: FastAPI):
     # Migrate the persistent DB to head (backs up first; adopts legacy/create_all'd DBs).
     from hexgraph.db.migrate import prepare_database
+    from hexgraph import policy
 
     prepare_database(backup=True)
+    # Freeze the policy ceiling for this server's lifetime: the gates enabled right now
+    # are the most this process will ever permit. Enabling more in settings.json later
+    # (via the UI, the CLI, or a host-local agent) is saved but stays inactive until the
+    # next restart, so a mid-session widen can't silently grant execution/egress. The
+    # worker runs in this same process, so launched tasks inherit the frozen ceiling.
+    policy.snapshot_ceiling()
     await get_worker().start()
     yield
     await get_worker().stop()

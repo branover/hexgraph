@@ -488,6 +488,8 @@ select.sel:focus, .settings select.sel:focus { outline: none; border-color: var(
 .switch input[type="checkbox"]:focus-visible { outline: none; box-shadow: var(--ring); }
 .settings .paths { font-size: 11px; line-height: 1.7; margin-top: 10px; }
 .settings .banner.err { background: rgba(255,93,108,.12); border: 1px solid rgba(255,93,108,.4); color: #ff8a93; padding: 9px 12px; border-radius: 8px; font-size: 12.5px; margin-bottom: 14px; }
+.settings .banner.warn { background: rgba(227,179,65,.12); border: 1px solid rgba(227,179,65,.45); color: #e3b341; padding: 9px 12px; border-radius: 8px; font-size: 12.5px; line-height: 1.55; margin-bottom: 14px; }
+.settings .banner.warn code { background: rgba(227,179,65,.16); padding: 0 4px; border-radius: 4px; }
 .dot.ok { background: #2ea043; } .dot.off { background: #6e7681; }
 
 /* ---- Source code viewer (syntax-highlighted, continuous block) ---- */

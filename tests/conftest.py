@@ -80,6 +80,21 @@ def _restore_socket_guard():
     mod.uninstall_socket_guard()
 
 
+@pytest.fixture(autouse=True)
+def _reset_policy_ceiling():
+    """`policy._ceiling` is a process-global frozen at server / MCP-session startup
+    (`snapshot_ceiling`). In production each process snapshots once; in-process tests
+    share the interpreter, so a test that runs the app lifespan (which snapshots an
+    all-off ceiling) would otherwise clamp execution OFF for every later test that
+    enables fuzzing/poc/etc. Reset to the no-ceiling (read-live) default around every
+    test — the same discipline as `_restore_socket_guard`."""
+    from hexgraph import policy
+
+    policy.reset_ceiling()
+    yield
+    policy.reset_ceiling()
+
+
 @pytest.fixture
 def sandbox():
     """A SandboxRunner; skips the test if the sandbox isn't available."""

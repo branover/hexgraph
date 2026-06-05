@@ -1182,9 +1182,30 @@ later PR).
 - 🔌 Backend: each is a `PATCH /api/settings`; verify each in `GET` and that the gate actually changes behavior.
 - Qualitative: every policy-relaxing feature carries an explicit ⚠ SECURITY IMPLICATION (executes code /
   executes the target / contacts a live target / supply-chain risk) — the honesty the setup catalog requires;
-  the resource note is clear it's not a security relaxation.
+  the resource note is clear it's not a security relaxation. Enabling a policy gate on a *running* server does
+  not take effect until restart — see SET-03b.
 - Principle: each gate is opt-in, with its security implication stated.
 - Prereq: none.
+
+**SET-03b — Policy gate "restart to apply" (the startup ceiling)**
+- Steps: with the server already running, enable a policy gate that was OFF at startup (e.g. Fuzzing, PoC,
+  Network egress). Then, separately, *disable* a gate that was ON at startup.
+- Functional: enabling shows an amber **restart to apply** chip next to that gate AND a top-of-page amber
+  **Restart required to activate** banner naming the pending gate(s); the toggle stays on (the choice is
+  saved). The behavior it unlocks does NOT activate until `hexgraph serve` is restarted. Disabling, by
+  contrast, takes effect immediately (no chip, no banner) — and re-enabling a gate that was on at startup is
+  also immediate (it's within the frozen ceiling).
+- 🔌 Backend: `read_settings()` returns a `policy` block — per gate `{configured, effective, pending_restart}`
+  plus top-level `restart_required` / `pending`. The PATCH response carries the fresh block, so the chip/banner
+  appear in the same render with no extra round trip. `policy.current_policy()` clamps each gate to the set
+  captured by `policy.snapshot_ceiling()` at server / MCP-session startup, so a mid-session widen of
+  settings.json can never grant execution/egress to the running process.
+- Qualitative: the operator is never misled into thinking a saved-but-inactive toggle is live (the failure
+  this kills), and never confused about why a click "didn't work" — the banner explains *why* (a long-lived
+  server freezes its capabilities at startup) and *what to do* (restart). Honesty + Forgiveness.
+- Principle: enabling a policy gate is the one direction deferred to a restart; disabling is always live. The
+  ceiling is the deterministic guard that an agent/host-local writer can't self-escalate a running session.
+- Prereq: a running server (not the CLI, which re-reads live each invocation — it never snapshots a ceiling).
 
 **SET-04 — Ghidra modes + test connection**
 - Steps: enable Ghidra → pick headless/bridge → (headless: timeout; bridge: host/port) → **Test connection**.

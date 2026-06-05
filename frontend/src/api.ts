@@ -58,8 +58,14 @@ export interface SettingsView {
   };
   secrets: Record<string, SecretStatus>;
   availability: { docker: boolean; ghidra: { enabled: boolean; mode: string; bridge_client_installed: boolean } };
+  policy: PolicyView;
   paths: { config_toml: string; settings_json: string };
 }
+// Per policy gate: what's saved in settings.json vs. what the RUNNING server enforces.
+// `pending_restart` is true when a gate is configured-on but the server's startup
+// ceiling has it off — saved, but inactive until the next restart.
+export interface PolicyFeatureState { configured: boolean; effective: boolean; pending_restart: boolean }
+export interface PolicyView { restart_required: boolean; pending: string[]; features: Record<string, PolicyFeatureState> }
 export interface GhidraStatus { enabled: boolean; ok: boolean; detail: string; mode?: string; [k: string]: any; }
 export interface FsEntry { rel: string; size?: number; is_elf?: boolean; child_target_id?: string | null; added?: boolean; }
 export interface SourceTreeRow { id: string; name: string; origin: string; editable: boolean; can_edit?: boolean; vcs_rev?: string | null; content_hash?: string | null; file_count: number; archived: boolean; target_ids: string[]; }

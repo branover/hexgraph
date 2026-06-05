@@ -42,8 +42,13 @@ def serve_stdio(groups: set[str] | None = None) -> None:
     # Ensure the persistent DB exists/upgraded (same as the API server lifespan),
     # so an agent connecting to a fresh home doesn't hit missing tables.
     from hexgraph.db.migrate import prepare_database
+    from hexgraph import policy
 
     prepare_database(backup=True)
+    # Freeze the policy ceiling for this MCP session: an agent can't widen its own
+    # execution/egress by writing settings.json mid-session — the running session
+    # honors the gates that were enabled when it started (a new session re-snapshots).
+    policy.snapshot_ceiling()
 
     import sys
 
