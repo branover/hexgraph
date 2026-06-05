@@ -125,13 +125,28 @@ bites; kept synchronous here for correctness/simplicity.
 The Python orchestration (gating, validation, the cache-bust re-record, the wiring, the
 graph-rename-survives-a-Ghidra-failure invariant) is covered offline by
 `tests/test_rename_roundtrip.py` with the decompiler faked. The actual Ghidra **project
-write** (the Jython `setName` + the `-process` save) cannot run without Ghidra, so it is
-validated by: reasoning about documented analyzeHeadless behavior; the existing WITH_GHIDRA
-decompile-gate CI lane, which compiles + runs the shared POST_SCRIPT (so a syntax error or
-break in the rename prelude is caught even though the gate doesn't pass rename args); and
-the independent review. **Recommended before relying on it heavily: a manual verification
-of the rename-persists behavior on a real headless-Ghidra setup** (or a follow-up that adds
-a WITH_GHIDRA-gated end-to-end rename test once a Ghidra fixture harness exists).
+write** (the Jython `setName` + the `-process` save) cannot run in an offline unit test, so
+it is validated by: the WITH_GHIDRA decompile-gate (which compiles + runs the shared
+POST_SCRIPT against a real fixture — and this caught a real bug, see §9); **a local run of
+that gate against the actual Ghidra image during development** (`scripts/ci_ghidra_decompile_check.py`
+on the Ghidra-enabled sandbox image, confirmed PASS); reasoning about documented
+analyzeHeadless behavior; and the independent review. A follow-up that adds a WITH_GHIDRA-gated
+end-to-end rename test (rename → re-open warm → assert persistence) is still worthwhile once a
+Ghidra fixture harness exists, but the script-integrity + decompile path is now CI-gated.
+
+### 9. Lesson: the POST_SCRIPT runs under Jython 2.7 — keep it ASCII / declare an encoding
+The first cut of this PR put an **em-dash in a POST_SCRIPT comment**. CPython 3.12 (where
+the offline tests + `ast.parse` run) defaults to UTF-8 and accepted it, but Ghidra runs the
+script under **Jython 2.7**, which (PEP 263) rejects any non-ASCII byte with a hard
+`SyntaxError` when no encoding is declared — so the whole script failed to compile and wrote
+**no output**, turning the WITH_GHIDRA gate red with an undiagnosable "produced no output".
+Two durable fixes landed: (a) an **encoding cookie** (`# -*- coding: utf-8 -*-`) as the
+script's first line, and (b) the **whole postScript body is now wrapped** so it ALWAYS writes
+out_path — on any exception it writes an `{error, tb}` payload instead of nothing, so a future
+failure is diagnosable from the host. A cheap offline regression test
+(`test_ghidra_post_script_is_jython_safe`) now asserts the script is ASCII-or-has-a-cookie,
+catching this class without needing Ghidra. (This is exactly the kind of break the gate exists
+to catch — it worked.)
 
 ### 7. retype
 The same path supports retype in principle (the postScript could `setReturnType`/edit the

@@ -147,6 +147,23 @@ def test_rename_still_applies_when_ghidra_write_errors(hg_home, monkeypatch):
         assert node.name == "renamed_anyway"  # graph rename succeeded despite the Ghidra boom
 
 
+def test_ghidra_post_script_is_jython_safe(hg_home):
+    """Ghidra runs POST_SCRIPT under Jython 2.7, which (PEP 263) rejects ANY non-ASCII byte —
+    e.g. an em-dash in a comment — with a hard SyntaxError when no encoding is declared, and a
+    compile failure writes NO output (undiagnosable). The rename prelude added a non-ASCII
+    char and broke the WITH_GHIDRA gate; this guards the fix offline: the shared script must be
+    pure-ASCII OR declare an encoding cookie on its first line."""
+    from hexgraph.sandbox.probes import ghidra_probe as GP
+
+    src = GP.POST_SCRIPT
+    first_line = src.lstrip("\n").splitlines()[0]
+    has_cookie = "coding" in first_line and ("utf-8" in first_line.lower() or "latin" in first_line.lower())
+    is_ascii = all(ord(c) < 128 for c in src)
+    assert has_cookie or is_ascii, (
+        "POST_SCRIPT contains non-ASCII but declares no encoding cookie — Jython 2.7 will "
+        "reject it with a SyntaxError and the probe will silently produce no output")
+
+
 def test_rename_error_result_does_not_record(hg_home, monkeypatch):
     _ghidra_active(monkeypatch)
 

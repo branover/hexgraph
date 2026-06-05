@@ -125,157 +125,170 @@ os.environ["_JAVA_OPTIONS"] = (f"-Djava.io.tmpdir={SCRATCH} {_existing_jopts}").
 
 # Jython postScript Ghidra runs after auto-analysis. It writes JSON to args[0];
 # args[1] (optional) is the focus function to decompile.
-POST_SCRIPT = r'''
+POST_SCRIPT = r'''# -*- coding: utf-8 -*-
+# Encoding cookie REQUIRED: Ghidra runs this under Jython 2.7, which (PEP 263) rejects any
+# non-ASCII byte (e.g. an em-dash in a comment) with a hard SyntaxError when no encoding is
+# declared — and a compile failure here writes NO output, which is undiagnosable. Keep this.
 import json
 import re
+import traceback
 from ghidra.app.decompiler import DecompInterface
 from ghidra.util.task import ConsoleTaskMonitor
 
 args = getScriptArgs()
 out_path = args[0]
-focus = args[1] if len(args) > 1 and args[1] else None
-rename_addr = args[2] if len(args) > 2 and args[2] else None
-rename_name = args[3] if len(args) > 3 and args[3] else None
-monitor = ConsoleTaskMonitor()
-
-# Rename round-trip (Phase 3): apply the analyst's rename to the function CONTAINING
-# rename_addr, then focus on it so the emitted result reflects the new name.
-# analyzeHeadless runs -process WITHOUT -readOnly, so it SAVES the program back into the
-# persistent project — the rename persists for every future decompile (analyze-once).
-if rename_addr and rename_name:
-    from ghidra.program.model.symbol import SourceType
-    try:
-        _fn = getFunctionContaining(toAddr(rename_addr))
-        if _fn is not None:
-            _fn.setName(rename_name, SourceType.USER_DEFINED)
-            focus = rename_addr  # decompile the just-renamed function in the focus block below
-    except:
-        pass
-
-fm = currentProgram.getFunctionManager()
-funcs = list(fm.getFunctions(True))
-result = {"functions": [f.getName() for f in funcs][:400], "focus": None, "calls": [], "structs": []}
-
-edges = []
-for f in funcs[:600]:
-    try:
-        for callee in f.getCalledFunctions(monitor):
-            edges.append([f.getName(), callee.getName()])
-            if len(edges) >= 2000:
-                break
-    except:
-        pass
-    if len(edges) >= 2000:
-        break
-result["calls"] = edges
-
-dtm = currentProgram.getDataTypeManager()
+# Whole body wrapped so the probe ALWAYS writes out_path — on any failure it writes an
+# {error, tb} payload instead of producing nothing (the old silent "produced no output"
+# was undiagnosable). The host surfaces the tb.
 try:
-    for dt in dtm.getAllStructures():
-        comps = dt.getComponents()
-        # Flag compiler/library built-ins so the enrichment extractor drops them and only
-        # program-recovered (DWARF/GDT) layouts reach the substrate. A built-in type comes
-        # from the BUILTIN source archive (or, as a fallback, a system category path).
-        builtin = False
-        try:
-            sa = dt.getSourceArchive()
-            if sa is not None and str(sa.getArchiveType()) == "BUILTIN":
-                builtin = True
-            else:
-                cp = dt.getCategoryPath().getPath()
-                if cp.startswith("/DWARF") is False and ("/std" in cp or "/__" in cp):
-                    builtin = True
-        except:
-            pass
-        result["structs"].append({
-            "name": dt.getName(), "size": dt.getLength(), "builtin": builtin,
-            "fields": [{"name": c.getFieldName(), "type": str(c.getDataType()),
-                        "offset": c.getOffset()} for c in comps[:64]],
-        })
-        if len(result["structs"]) >= 200:
-            break
-except:
-    pass
+    focus = args[1] if len(args) > 1 and args[1] else None
+    rename_addr = args[2] if len(args) > 2 and args[2] else None
+    rename_name = args[3] if len(args) > 3 and args[3] else None
+    monitor = ConsoleTaskMonitor()
 
-if focus:
-    target = None
-    # A focus given as a strict hex address resolves to the function CONTAINING it
-    # (analyze-at-address); otherwise match by name. The strict regex matches the
-    # radare2 path so the two backends agree on what counts as an address.
-    is_addr = bool(re.match(r"^0x[0-9a-fA-F]+$", focus))
-    if is_addr:
+    # Rename round-trip (Phase 3): apply the analyst's rename to the function CONTAINING
+    # rename_addr, then focus on it so the emitted result reflects the new name.
+    # analyzeHeadless runs -process WITHOUT -readOnly, so it SAVES the program back into the
+    # persistent project — the rename persists for every future decompile (analyze-once).
+    if rename_addr and rename_name:
+        from ghidra.program.model.symbol import SourceType
         try:
-            target = getFunctionContaining(toAddr(focus))
+            _fn = getFunctionContaining(toAddr(rename_addr))
+            if _fn is not None:
+                _fn.setName(rename_name, SourceType.USER_DEFINED)
+                focus = rename_addr  # decompile the just-renamed function in the focus block below
         except:
-            target = None
-    else:
-        for f in funcs:
-            if f.getName() == focus:
-                target = f
+            pass
+
+    fm = currentProgram.getFunctionManager()
+    funcs = list(fm.getFunctions(True))
+    result = {"functions": [f.getName() for f in funcs][:400], "focus": None, "calls": [], "structs": []}
+
+    edges = []
+    for f in funcs[:600]:
+        try:
+            for callee in f.getCalledFunctions(monitor):
+                edges.append([f.getName(), callee.getName()])
+                if len(edges) >= 2000:
+                    break
+        except:
+            pass
+        if len(edges) >= 2000:
+            break
+    result["calls"] = edges
+
+    dtm = currentProgram.getDataTypeManager()
+    try:
+        for dt in dtm.getAllStructures():
+            comps = dt.getComponents()
+            # Flag compiler/library built-ins so the enrichment extractor drops them and only
+            # program-recovered (DWARF/GDT) layouts reach the substrate. A built-in type comes
+            # from the BUILTIN source archive (or, as a fallback, a system category path).
+            builtin = False
+            try:
+                sa = dt.getSourceArchive()
+                if sa is not None and str(sa.getArchiveType()) == "BUILTIN":
+                    builtin = True
+                else:
+                    cp = dt.getCategoryPath().getPath()
+                    if cp.startswith("/DWARF") is False and ("/std" in cp or "/__" in cp):
+                        builtin = True
+            except:
+                pass
+            result["structs"].append({
+                "name": dt.getName(), "size": dt.getLength(), "builtin": builtin,
+                "fields": [{"name": c.getFieldName(), "type": str(c.getDataType()),
+                            "offset": c.getOffset()} for c in comps[:64]],
+            })
+            if len(result["structs"]) >= 200:
                 break
-    if target is not None:
-        deci = DecompInterface()
-        deci.openProgram(currentProgram)
-        res = deci.decompileFunction(target, 60, monitor)
-        pseudo = ""
-        if res is not None and res.decompileCompleted():
-            df = res.getDecompiledFunction()
-            if df is not None:
-                pseudo = df.getC()
-        callees = []
-        try:
-            callees = [c.getName() for c in target.getCalledFunctions(monitor)]
-        except:
-            pass
-        try:
-            addr = "0x" + target.getEntryPoint().toString()
-        except:
-            addr = None
-        # Rich, always-welcome facts recovered for the function being promoted: the C
-        # prototype, calling convention, and parameter/local variables. Each guarded so a
-        # single failing Jython API call drops only that fact, never the whole focus.
-        prototype = None
-        try:
-            prototype = target.getSignature().getPrototypeString()
-        except:
-            pass
-        calling_convention = None
-        try:
-            calling_convention = target.getCallingConventionName()
-        except:
-            pass
-        params = []
-        try:
-            params = [{"name": p.getName(), "type": str(p.getDataType())}
-                      for p in target.getParameters()]
-        except:
-            pass
-        local_vars = []
-        try:
-            param_names = set(p.get("name") for p in params)
-            # getLocalVariables() excludes parameters by definition; still, drop any name
-            # that surfaced as a parameter so a spilled-param slot can't double-count.
-            local_vars = [{"name": v.getName(), "type": str(v.getDataType())}
-                          for v in target.getLocalVariables()
-                          if v.getName() not in param_names]
-        except:
-            pass
-        focus_out = {"name": target.getName(), "resolved": target.getName(),
-                     "address": addr, "pseudocode": pseudo, "disasm": "", "callees": callees}
-        if prototype:
-            focus_out["prototype"] = prototype
-        if calling_convention:
-            focus_out["calling_convention"] = calling_convention
-        if params:
-            focus_out["params"] = params
-            focus_out["param_count"] = len(params)
-        if local_vars:
-            focus_out["locals"] = local_vars
-            focus_out["local_count"] = len(local_vars)
-        result["focus"] = focus_out
+    except:
+        pass
+
+    if focus:
+        target = None
+        # A focus given as a strict hex address resolves to the function CONTAINING it
+        # (analyze-at-address); otherwise match by name. The strict regex matches the
+        # radare2 path so the two backends agree on what counts as an address.
+        is_addr = bool(re.match(r"^0x[0-9a-fA-F]+$", focus))
+        if is_addr:
+            try:
+                target = getFunctionContaining(toAddr(focus))
+            except:
+                target = None
+        else:
+            for f in funcs:
+                if f.getName() == focus:
+                    target = f
+                    break
+        if target is not None:
+            deci = DecompInterface()
+            deci.openProgram(currentProgram)
+            res = deci.decompileFunction(target, 60, monitor)
+            pseudo = ""
+            if res is not None and res.decompileCompleted():
+                df = res.getDecompiledFunction()
+                if df is not None:
+                    pseudo = df.getC()
+            callees = []
+            try:
+                callees = [c.getName() for c in target.getCalledFunctions(monitor)]
+            except:
+                pass
+            try:
+                addr = "0x" + target.getEntryPoint().toString()
+            except:
+                addr = None
+            # Rich, always-welcome facts recovered for the function being promoted: the C
+            # prototype, calling convention, and parameter/local variables. Each guarded so a
+            # single failing Jython API call drops only that fact, never the whole focus.
+            prototype = None
+            try:
+                prototype = target.getSignature().getPrototypeString()
+            except:
+                pass
+            calling_convention = None
+            try:
+                calling_convention = target.getCallingConventionName()
+            except:
+                pass
+            params = []
+            try:
+                params = [{"name": p.getName(), "type": str(p.getDataType())}
+                          for p in target.getParameters()]
+            except:
+                pass
+            local_vars = []
+            try:
+                param_names = set(p["name"] for p in params)
+                # getLocalVariables() excludes parameters by definition; still, drop any name
+                # that surfaced as a parameter so a spilled-param slot can't double-count.
+                local_vars = [{"name": v.getName(), "type": str(v.getDataType())}
+                              for v in target.getLocalVariables()
+                              if v.getName() not in param_names]
+            except:
+                pass
+            focus_out = {"name": target.getName(), "resolved": target.getName(),
+                         "address": addr, "pseudocode": pseudo, "disasm": "", "callees": callees}
+            if prototype:
+                focus_out["prototype"] = prototype
+            if calling_convention:
+                focus_out["calling_convention"] = calling_convention
+            if params:
+                focus_out["params"] = params
+                focus_out["param_count"] = len(params)
+            if local_vars:
+                focus_out["locals"] = local_vars
+                focus_out["local_count"] = len(local_vars)
+            result["focus"] = focus_out
+
+    _payload = json.dumps(result)
+except:
+    _payload = json.dumps({"error": "postscript exception", "tb": traceback.format_exc(),
+                           "functions": [], "focus": None, "calls": [], "structs": []})
 
 fh = open(out_path, "w")
-fh.write(json.dumps(result))
+fh.write(_payload)
 fh.close()
 '''
 
