@@ -349,6 +349,7 @@ class SandboxBuilder(Builder):
               fetch_session=None, project=None, target_id=None, task_id=None) -> BuildResult:
         from hexgraph.policy import assert_allows_build
         from hexgraph.sandbox.executor import get_executor
+        from hexgraph.sandbox.resources import resource_spec_for
         from hexgraph.sandbox.runner import SandboxError, docker_available
 
         assert_allows_build()  # opt-in gate — the ONLY place the build gate is relaxed
@@ -420,6 +421,9 @@ class SandboxBuilder(Builder):
                 # even with features.build_fetch on, compile has NO network). A malicious dep
                 # fetched in Phase F cannot run/exfiltrate here.
                 requires_execution=False,
+                # The `build` container-type ceilings (resources.default ← resources.build) —
+                # a compile is its own resource profile, tunable apart from the analysis sandbox.
+                resources=resource_spec_for("build"),
             )
         except SandboxError as exc:
             # A non-zero probe exit (e.g. a compile failure surfaced as an exception by
@@ -472,7 +476,9 @@ class SandboxBuilder(Builder):
             "system": spec.system,
         }
         timeout = int(settings.get("features.build_fetch.timeout", 600) or 600)
-        from hexgraph.sandbox.resources import ResourceSpec
+        from hexgraph.sandbox.resources import ResourceSpec, resource_spec_for
+        # The `build` container ceilings, but with the fetch phase's own wall-clock budget.
+        fetch_res = ResourceSpec.from_dict({**resource_spec_for("build").to_dict(), "timeout": timeout})
         try:
             # network ON, bounded to the allowlist (the probe enforces per-host). A SEPARATE
             # sandbox run — its container is torn down before the compile run starts.
@@ -482,7 +488,7 @@ class SandboxBuilder(Builder):
                 extra_ro_mounts=[(str(root), "/src")],
                 image=self.image,  # the dedicated build image (package managers + toolchain)
                 allow_network=True, network_gate="build_fetch",  # the SEPARATE fetch gate, NOT features.network
-                resources=ResourceSpec(timeout=timeout),
+                resources=fetch_res,
             )
         except Exception as exc:  # noqa: BLE001
             raise BuildError(f"dependency fetch failed: {exc}") from exc

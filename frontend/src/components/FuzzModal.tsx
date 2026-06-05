@@ -36,8 +36,11 @@ export default function FuzzModal({ projectId, target: initialTarget, targets, s
   const [port, setPort] = useState("");
   const [protocol, setProtocol] = useState("tcp");
   const [protoSpec, setProtoSpec] = useState("");
-  // ResourceSpec defaults from Settings (the global default a campaign inherits).
-  const rdef = settings?.settings.features.fuzzing?.resources;
+  // ResourceSpec defaults from Settings: the shared container default overlaid with the
+  // fuzzing-type override (resources.default ← resources.fuzzing) — the same merge the
+  // server applies as a campaign's inherited baseline.
+  const rsCfg = settings?.settings.resources;
+  const rdef = { ...(rsCfg?.default ?? {}), ...(rsCfg?.fuzzing ?? {}) };
   const [mem, setMem] = useState(rdef?.mem ?? "2g");
   const [cpus, setCpus] = useState(String(rdef?.cpus ?? 2));
   const [pids, setPids] = useState(String(rdef?.pids ?? 256));

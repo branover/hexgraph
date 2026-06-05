@@ -367,7 +367,7 @@ def rss_limit_mb_for_cap(cap_bytes: int | None, *, default_mb: int = _RSS_DEFAUL
 
     With a finite cap, return `fraction` of it — ALWAYS strictly below the cap so libFuzzer's
     limiter trips before the cgroup OOM-killer. Deliberately NO floor: `mem` is user-tunable
-    (`features.fuzzing.resources`), and any floor that could reach the cap (e.g. a 256 MB
+    (the `resources` settings section), and any floor that could reach the cap (e.g. a 256 MB
     floor against a `mem="256m"` cap) would re-create the very rss>=cap inversion this fixes.
     Clamp to >=1 so a pathologically tiny cap never yields 0, which libFuzzer reads as
     'no limit'. With no cap (None/0), fall back to the historical default."""

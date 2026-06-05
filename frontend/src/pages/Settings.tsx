@@ -54,6 +54,10 @@ export default function Settings() {
 
   if (!v) return <><Header /><div className="settings"><div className="empty">{err || "Loading settings…"}</div></div></>;
   const g = v.settings.features.ghidra;
+  // Docker container ceilings: the shared default + the effective fuzz-campaign override
+  // (resources.default ← resources.fuzzing) the Fuzzing card edits.
+  const rd = v.settings.resources.default;
+  const rf = { ...rd, ...(v.settings.resources.fuzzing ?? {}) };
   // A "restart to apply" chip next to a policy gate whose toggle is saved-on but the
   // running server started with it off (the frozen startup ceiling clamps it off until
   // the next restart). Disabling is always live, so it never shows for an off toggle.
@@ -116,6 +120,49 @@ export default function Settings() {
             <p className="hint">
               API keys are <b>never stored or transmitted by HexGraph</b>. Set <code>ANTHROPIC_API_KEY</code> in your
               environment or under <code>[anthropic]</code> in <code>{v.paths.config_toml}</code>. BYOK only.
+            </p>
+          </section>
+
+          {/* Container resources */}
+          <section className="card2">
+            <div className="h3row">
+              <h3><Icon name="chip" size={15} /> Container resources <span className="muted">· docker ceilings</span></h3>
+            </div>
+            <p className="hint">
+              The per-container CPU / memory / pids / scratch ceilings every sandboxed container runs under. This is the
+              <b> shared default</b> — the analysis sandbox, the build image and fuzz campaigns all inherit it. Raising
+              <b> memory</b> also raises the memory-derived limits (the unconstrained scratch size, libFuzzer's RSS bound).
+              Tuning these is <b>not</b> a security relaxation: containers stay <code>--network none</code>, cap-dropped,
+              no-new-privileges, read-only and non-root regardless.
+            </p>
+            <label className="switch" style={{ display: "flex", gap: 8, marginTop: 4 }}>
+              <input type="checkbox" checked={Boolean(rd.unconstrained)}
+                     onChange={(e) => patch({ "resources.default.unconstrained": e.target.checked })} />
+              <span>unconstrained (use the whole machine — lifts mem/cpu/pids only)</span>
+            </label>
+            {!rd.unconstrained && (
+              <div className="grid2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginTop: 8 }}>
+                <div className="row"><label>memory</label>
+                  <input className="inp" defaultValue={rd.mem ?? "2g"}
+                         onBlur={(e) => patch({ "resources.default.mem": e.target.value.trim() || "2g" })} /></div>
+                <div className="row"><label>cpus</label>
+                  <input className="inp num-input" type="number" step="0.5" defaultValue={rd.cpus ?? 2}
+                         onBlur={(e) => patch({ "resources.default.cpus": parseFloat(e.target.value) || 2 })} /></div>
+                <div className="row"><label>pids</label>
+                  <input className="inp num-input" type="number" defaultValue={rd.pids ?? 256}
+                         onBlur={(e) => patch({ "resources.default.pids": parseInt(e.target.value) || 256 })} /></div>
+                <div className="row"><label>scratch tmpfs</label>
+                  <input className="inp" defaultValue={rd.tmpfs ?? "512m"}
+                         onBlur={(e) => patch({ "resources.default.tmpfs": e.target.value.trim() || "512m" })} /></div>
+                <div className="row"><label>timeout (s)</label>
+                  <input className="inp num-input" type="number" defaultValue={rd.timeout ?? 300}
+                         onBlur={(e) => patch({ "resources.default.timeout": parseInt(e.target.value) || 300 })} /></div>
+              </div>
+            )}
+            <p className="hint" style={{ marginTop: 8 }}>
+              Need different ceilings per container type? Fuzz campaigns have their own override in the Fuzzing card below;
+              the analysis sandbox and build image can diverge via <code>resources.sandbox.*</code> / <code>resources.build.*</code>
+              (Settings API or <code>hexgraph config set</code>) — each inherits this default for anything it doesn't set.
             </p>
           </section>
 
@@ -215,29 +262,30 @@ export default function Settings() {
             )}
             {v.settings.features.fuzzing.enabled && (
               <>
-                <div className="sec-label" style={{ marginTop: 12 }}>Default campaign resources (per-container ceilings)</div>
+                <div className="sec-label" style={{ marginTop: 12 }}>Default campaign resources (overrides the shared default)</div>
                 <p className="hint" style={{ marginTop: 2 }}>
-                  A campaign inherits these unless its Fuzz modal overrides them. <b>Unconstrained</b> lets a
-                  campaign use the whole machine — it lifts <code>mem/cpu/pids</code> ONLY and is <b>not</b> a
-                  security relaxation (the sandbox stays <code>--network none</code>, cap-dropped, non-root,
-                  read-only regardless).
+                  Campaign ceilings layered over the shared <b>Container resources</b> above — set a value here to
+                  diverge fuzzing from it, or leave it and campaigns inherit the default. A campaign's Fuzz modal can
+                  override these again per run. <b>Unconstrained</b> lets a campaign use the whole machine — it lifts
+                  <code>mem/cpu/pids</code> ONLY and is <b>not</b> a security relaxation (the sandbox stays
+                  <code>--network none</code>, cap-dropped, non-root, read-only regardless).
                 </p>
                 <label className="switch" style={{ display: "flex", gap: 8, marginTop: 6 }}>
-                  <input type="checkbox" checked={Boolean(v.settings.features.fuzzing.resources?.unconstrained)}
-                         onChange={(e) => patch({ "features.fuzzing.resources.unconstrained": e.target.checked })} />
+                  <input type="checkbox" checked={Boolean(rf.unconstrained)}
+                         onChange={(e) => patch({ "resources.fuzzing.unconstrained": e.target.checked })} />
                   <span>unconstrained (use the whole machine)</span>
                 </label>
-                {!v.settings.features.fuzzing.resources?.unconstrained && (
+                {!rf.unconstrained && (
                   <div className="grid2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginTop: 8 }}>
                     <div className="row"><label>memory</label>
-                      <input className="inp" defaultValue={v.settings.features.fuzzing.resources?.mem ?? "2g"}
-                             onBlur={(e) => patch({ "features.fuzzing.resources.mem": e.target.value.trim() || "2g" })} /></div>
+                      <input className="inp" defaultValue={rf.mem ?? "2g"}
+                             onBlur={(e) => patch({ "resources.fuzzing.mem": e.target.value.trim() || "2g" })} /></div>
                     <div className="row"><label>cpus</label>
-                      <input className="inp num-input" type="number" step="0.5" defaultValue={v.settings.features.fuzzing.resources?.cpus ?? 2}
-                             onBlur={(e) => patch({ "features.fuzzing.resources.cpus": parseFloat(e.target.value) || 2 })} /></div>
+                      <input className="inp num-input" type="number" step="0.5" defaultValue={rf.cpus ?? 2}
+                             onBlur={(e) => patch({ "resources.fuzzing.cpus": parseFloat(e.target.value) || 2 })} /></div>
                     <div className="row"><label>pids</label>
-                      <input className="inp num-input" type="number" defaultValue={v.settings.features.fuzzing.resources?.pids ?? 256}
-                             onBlur={(e) => patch({ "features.fuzzing.resources.pids": parseInt(e.target.value) || 256 })} /></div>
+                      <input className="inp num-input" type="number" defaultValue={rf.pids ?? 256}
+                             onBlur={(e) => patch({ "resources.fuzzing.pids": parseInt(e.target.value) || 256 })} /></div>
                   </div>
                 )}
               </>

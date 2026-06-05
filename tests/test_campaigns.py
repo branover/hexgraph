@@ -83,6 +83,39 @@ def test_resourcespec_unconstrained_drops_only_resource_flags():
     assert "--pids-limit" in rs2.docker_resource_args()
 
 
+def test_unconstrained_tmpfs_follows_mem():
+    """The unconstrained tmpfs size is DERIVED from `mem`, not a hardcoded 2g — so raising
+    the memory limit widens the scratch in lockstep. Constrained tmpfs stays independent."""
+    assert ResourceSpec().tmpfs_arg() == "512m"                       # constrained: the tmpfs field
+    assert ResourceSpec(unconstrained=True).tmpfs_arg() == "2g"       # default mem 2g → 2g (was hardcoded)
+    assert ResourceSpec(mem="16g", unconstrained=True).tmpfs_arg() == "16g"   # tracks mem
+
+
+def test_settings_resources_default_matches_shipped_floor():
+    """The shipped `resources.default` in settings.py must equal sandbox/resources.py's
+    DEFAULT_* floor (a drift between the two would surprise on a fresh vs. legacy install)."""
+    from hexgraph.settings import DEFAULTS
+    assert DEFAULTS["resources"]["default"] == ResourceSpec().to_dict()
+
+
+def test_resource_spec_for_per_container_type(hg_home):
+    """resources.default is the shared baseline; resources.<type> diverges only that type's
+    overridden keys — the analysis sandbox and build image can differ from each other and
+    from the default, while inheriting it for everything they don't set."""
+    from hexgraph.sandbox.resources import resource_spec_for
+    st.update_settings({
+        "resources.default.mem": "3g", "resources.default.cpus": 4,
+        "resources.sandbox.mem": "1g",          # sandbox alone shrinks memory
+        "resources.build.cpus": 8,              # build alone gets more cpus
+    })
+    base = resource_spec_for("sandbox")
+    assert base.mem == "1g" and base.cpus == 4.0       # mem diverged, cpus inherited
+    bld = resource_spec_for("build")
+    assert bld.mem == "3g" and bld.cpus == 8.0         # mem inherited, cpus diverged
+    dflt = resource_spec_for("default")
+    assert dflt.mem == "3g" and dflt.cpus == 4.0       # the shared baseline
+
+
 def test_unconstrained_keeps_all_security_flags():
     """The CRUCIAL invariant: unconstrained relaxes resource ceilings ONLY — every
     security flag still appears in the container args. Audited explicitly (design §5.8a)."""
@@ -156,10 +189,34 @@ def test_disable_aslr_swaps_minimal_seccomp_and_keeps_hardening():
 
 
 def test_resolve_resources_merges_settings_default_and_override(hg_home):
-    st.update_settings({"features.fuzzing.resources.mem": "4g"})
+    st.update_settings({"resources.fuzzing.mem": "4g"})
     rs = C.resolve_resources({"unconstrained": True})
-    assert rs.mem == "4g"                 # from Settings default
+    assert rs.mem == "4g"                 # from the fuzzing-type Settings default
     assert rs.unconstrained is True       # from the per-campaign override
+
+
+def test_resolve_resources_inherits_shared_default(hg_home):
+    """The fuzzing type inherits resources.default for any key it doesn't override —
+    "all share the same" unless a per-type key diverges it."""
+    st.update_settings({"resources.default.mem": "6g", "resources.default.cpus": 5})
+    rs = C.resolve_resources(None)
+    assert rs.mem == "6g" and rs.cpus == 5.0     # inherited from the shared default
+    # A per-type override wins over the shared default for that key only.
+    st.update_settings({"resources.fuzzing.cpus": 8})
+    rs2 = C.resolve_resources(None)
+    assert rs2.mem == "6g" and rs2.cpus == 8.0   # mem still shared, cpus diverged
+
+
+def test_resolve_resources_honors_legacy_fuzzing_resources(hg_home):
+    """A pre-existing settings.json that set features.fuzzing.resources.* (the old
+    location) keeps working — resource_spec_for folds the USER-SET legacy values in."""
+    # Write the legacy key straight into the managed layer (update_settings no longer
+    # accepts it, mirroring an upgraded install that wrote it under the old schema).
+    import json
+    raw = json.loads(st.settings_path().read_text()) if st.settings_path().exists() else {}
+    raw.setdefault("features", {}).setdefault("fuzzing", {})["resources"] = {"mem": "9g"}
+    st._cfg.ensure_dirs(); st.settings_path().write_text(json.dumps(raw))
+    assert C.resolve_resources(None).mem == "9g"
 
 
 # ── The detached campaign lifecycle: start → running → reap → finalize (mock) ─────
