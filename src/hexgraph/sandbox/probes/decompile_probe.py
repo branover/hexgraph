@@ -68,6 +68,68 @@ def _containing_function(addr: int, funcs: list[dict]) -> dict | None:
     return None
 
 
+def _function_facts(r2, seek: str) -> dict:
+    """Rich, always-welcome function facts for the focus — recovered prototype/signature,
+    calling convention, and arg/local variables — from r2's function info (`afij`: the
+    signature, calling convention, arg/local counts) and variables (`afvj`). `seek` is the
+    same already-validated flag/address used for the `pdc`/`pdf` seek, so this adds no new
+    injection surface. Best-effort: every field is guarded, so a missing/odd shape just
+    omits that fact rather than failing the decompile."""
+    facts: dict = {}
+    try:
+        info = json.loads(r2.cmd(f"afij @ {seek}") or "[]")
+    except (json.JSONDecodeError, TypeError):
+        info = []
+    if isinstance(info, list) and info and isinstance(info[0], dict):
+        fi = info[0]
+        sig = fi.get("signature")
+        if sig:
+            # r2's signature IS the recovered C prototype; expose it under both keys the
+            # enrichment whitelist accepts (prototype is the primary, signature the synonym).
+            facts["prototype"] = sig
+            facts["signature"] = sig
+        if fi.get("calltype"):
+            facts["calling_convention"] = fi["calltype"]
+        if isinstance(fi.get("nargs"), int):
+            facts["param_count"] = fi["nargs"]
+        if isinstance(fi.get("nlocals"), int):
+            facts["local_count"] = fi["nlocals"]
+    # afvj's shape varies across r2 versions: either a {storage_class: [vars]} map
+    # ("reg"/"sp"/"bp"/"stack") OR a flat [vars] list — handle both. A variable's `kind`
+    # is its STORAGE class, NOT an arg/local marker, so don't key on kind=="arg"; r2 marks
+    # a parameter with an `isarg`/`arg` boolean (newer) or kind=="arg" (older), so take the
+    # union of those signals and default to local. Misclassifying is worse than omitting,
+    # so unmarked variables are locals (the prototype + param_count still convey the args).
+    try:
+        vars_ = json.loads(r2.cmd(f"afvj @ {seek}") or "[]")
+    except (json.JSONDecodeError, TypeError):
+        vars_ = []
+    if isinstance(vars_, dict):
+        entries = [v for group in vars_.values() for v in (group or []) if isinstance(v, dict)]
+    elif isinstance(vars_, list):
+        entries = [v for v in vars_ if isinstance(v, dict)]
+    else:
+        entries = []
+
+    def _is_arg(v: dict) -> bool:
+        return bool(v.get("isarg") or v.get("arg") or v.get("kind") == "arg")
+
+    params: list = []
+    locals_: list = []
+    for v in entries:
+        if not v.get("name"):
+            continue
+        entry = {"name": v.get("name"), "type": v.get("type")}
+        (params if _is_arg(v) else locals_).append(entry)
+    if params:
+        facts["params"] = params
+        facts.setdefault("param_count", len(params))
+    if locals_:
+        facts["locals"] = locals_
+        facts.setdefault("local_count", len(locals_))
+    return facts
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print(json.dumps({"error": "usage: decompile_probe.py <artifact> [function|0xADDR] [--reanalyze]"}))
@@ -123,6 +185,7 @@ def main() -> int:
                 "pseudocode": pseudo,
                 "disasm": disasm,
                 "callees": _callees(disasm),
+                **_function_facts(r2, seek),
             }
         elif focus_arg:
             # NAME focus. Resolve the function symbol r2 actually knows.
@@ -149,6 +212,7 @@ def main() -> int:
                 "pseudocode": pseudo,
                 "disasm": disasm,
                 "callees": _callees(disasm),
+                **(_function_facts(r2, seek) if seek else {}),
             }
 
         print(json.dumps({"tool": "decompile_probe", "functions": functions[:200], "focus": focus}))
