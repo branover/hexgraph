@@ -58,12 +58,16 @@ def _run(argv: list[str]) -> tuple[int, str, str]:
     return proc.returncode, proc.stdout, proc.stderr
 
 
-def _readelf_header(path: str) -> dict:
-    """The ELF/program header facts via `readelf -hl`: type, machine, entry, and the
-    program-header-derived NX (GNU_STACK exec bit) + PIE/RELRO signals."""
-    rc, out, _err = _run(["readelf", "-W", "-h", "-l", path])
+def parse_readelf_header(out: str) -> dict:
+    """Pure parser for `readelf -W -h -l` text → the ELF/program-header facts.
+
+    Split out from `_readelf_header` so the NX / RELRO / PIE signal extraction is
+    unit-testable on synthetic text WITHOUT a sandbox or subprocess. Returns the same
+    dict shape `_readelf_header` does: `elf_type`/`machine`/`entry` plus a
+    `mitigations_partial` sub-dict the mitigation fold consumes.
+    """
     facts: dict = {}
-    if rc != 0 or not out:
+    if not out:
         return facts
     etype = None
     for line in out.splitlines():
@@ -86,9 +90,12 @@ def _readelf_header(path: str) -> dict:
         s = line.strip()
         if "GNU_STACK" in s:
             has_gnu_stack = True
-            # The flags column follows on the GNU_STACK line: "... RW " (no E => NX on).
-            tail = s.split("GNU_STACK", 1)[1]
-            nx = " E " not in f" {tail} " and not tail.rstrip().endswith("E")
+            # GNU_STACK Flg column (readelf -lW): "RW " => non-exec, "RWE" => exec stack.
+            # The line ends with the Align column, so the flags are the second-to-last
+            # token (always contiguous — RW/RWE — on a GNU_STACK row).
+            cols = s.split()
+            flags = cols[-2] if len(cols) >= 2 else ""
+            nx = "E" not in flags
         if "GNU_RELRO" in s:
             relro = "partial"
         if "INTERP" in s:
@@ -97,6 +104,15 @@ def _readelf_header(path: str) -> dict:
                                     "_has_gnu_stack": has_gnu_stack, "_interp": interp,
                                     "_etype": etype}
     return facts
+
+
+def _readelf_header(path: str) -> dict:
+    """The ELF/program header facts via `readelf -hl`: type, machine, entry, and the
+    program-header-derived NX (GNU_STACK exec bit) + PIE/RELRO signals."""
+    rc, out, _err = _run(["readelf", "-W", "-h", "-l", path])
+    if rc != 0 or not out:
+        return {}
+    return parse_readelf_header(out)
 
 
 def _readelf_dynamic(path: str) -> dict:
@@ -242,6 +258,8 @@ def _mitigations(header: dict, dynamic: dict, syms: dict) -> dict:
         relro = "full"
     etype = (partial.get("_etype") or "").upper()
     # PIE: a DYN ELF that is an executable (has an INTERP) — a DYN without INTERP is a .so.
+    # Caveat: a static-PIE (ET_DYN, no INTERP) reads as pie=False here; it's rare and
+    # indistinguishable from a shared object by this signal alone.
     pie = etype.startswith("DYN") and bool(partial.get("_interp"))
     canary = _canary(syms.get("symbols", []), syms.get("imports", []))
     fortify = _fortify(syms.get("imports", []))

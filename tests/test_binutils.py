@@ -111,6 +111,101 @@ def test_extractor_registered_under_binutils_facts():
     assert E.extractor_for("binutils_facts") is E._extract_binutils
 
 
+# --- readelf-header parser: NX / RELRO / PIE on synthetic text (offline) -----
+# Locks in the GNU_STACK flags-column read so an executable stack (RWE) is detected
+# without needing Docker — the regression the inline review caught (nx was hard-coded
+# True for every input because the old code looked for " E " / a trailing "E").
+
+def _readelf_text(*, gnu_stack="RW", etype="EXEC (Executable file)",
+                  interp=True, relro=True):
+    """Synthesize the shape of `readelf -W -h -l` output with a chosen GNU_STACK Flg
+    column. The flags are the second-to-last token; the Align column trails them."""
+    lines = [
+        "ELF Header:",
+        f"  Type:                              {etype}",
+        "  Machine:                           Advanced Micro Devices X86-64",
+        "  Entry point address:               0x4010b0",
+        "",
+        "Program Headers:",
+        "  Type           Offset   VirtAddr           PhysAddr           FileSiz  MemSiz   Flg Align",
+        "  LOAD           0x000000 0x0000000000000000 0x0000000000000000 0x0005f0 0x0005f0 R E 0x1000",
+    ]
+    if interp:
+        lines.append("  INTERP         0x000318 0x0000000000000318 0x0000000000000318 0x00001c 0x00001c R   0x1")
+    lines.append(
+        f"  GNU_STACK      0x000000 0x0000000000000000 0x0000000000000000 0x000000 0x000000 {gnu_stack} 0x10")
+    if relro:
+        lines.append("  GNU_RELRO      0x002df0 0x0000000000003df0 0x0000000000003df0 0x000210 0x000210 R   0x1")
+    return "\n".join(lines) + "\n"
+
+
+def test_readelf_parser_detects_nonexec_stack():
+    """A GNU_STACK with RW flags => nx=True (the hardened, non-exec-stack case)."""
+    from hexgraph.sandbox.probes import binutils_probe as B
+    mp = B.parse_readelf_header(_readelf_text(gnu_stack="RW "))["mitigations_partial"]
+    assert mp["nx"] is True and mp["_has_gnu_stack"] is True
+
+
+def test_readelf_parser_detects_executable_stack():
+    """A GNU_STACK with RWE flags => nx=False — the exec-stack weakness the probe exists
+    to surface. This is the case the old `" E "` / `.endswith("E")` logic missed."""
+    from hexgraph.sandbox.probes import binutils_probe as B
+    mp = B.parse_readelf_header(_readelf_text(gnu_stack="RWE"))["mitigations_partial"]
+    assert mp["nx"] is False and mp["_has_gnu_stack"] is True
+
+
+def test_readelf_parser_text_segment_r_e_does_not_flip_nx():
+    """The text segment's "R E" (read+exec, space-separated) Flg must NOT be mistaken
+    for an executable stack — only the GNU_STACK row's flags decide nx. With an RW
+    GNU_STACK present, the "R E" LOAD line above must leave nx=True."""
+    from hexgraph.sandbox.probes import binutils_probe as B
+    mp = B.parse_readelf_header(_readelf_text(gnu_stack="RW "))["mitigations_partial"]
+    assert mp["nx"] is True
+
+
+def test_readelf_parser_full_mitigation_signals():
+    """The parser's PIE/RELRO/no-GNU_STACK signals on synthetic text."""
+    from hexgraph.sandbox.probes import binutils_probe as B
+    # non-PIE EXEC with an INTERP => DYN check is False (not a PIE).
+    exec_facts = B.parse_readelf_header(_readelf_text(etype="EXEC (Executable file)"))
+    assert exec_facts["elf_type"].startswith("EXEC")
+    assert exec_facts["mitigations_partial"]["_etype"].startswith("EXEC")
+    assert exec_facts["mitigations_partial"]["_interp"] is True  # INTERP present
+    # a DYN executable WITH an INTERP is a PIE candidate (etype DYN + interp).
+    pie_partial = B.parse_readelf_header(
+        _readelf_text(etype="DYN (Position-Independent Executable file)"))["mitigations_partial"]
+    assert pie_partial["_etype"].startswith("DYN") and pie_partial["_interp"] is True
+    # a DYN .so (no INTERP) is NOT a PIE.
+    so_partial = B.parse_readelf_header(
+        _readelf_text(etype="DYN (Shared object file)", interp=False))["mitigations_partial"]
+    assert so_partial["_etype"].startswith("DYN") and so_partial["_interp"] is False
+    # no RELRO segment => relro stays "none".
+    no_relro = B.parse_readelf_header(_readelf_text(relro=False))["mitigations_partial"]
+    assert no_relro["relro"] == "none"
+    # with a GNU_RELRO segment => "partial" (the BIND_NOW upgrade is folded later).
+    assert exec_facts["mitigations_partial"]["relro"] == "partial"
+
+
+def test_readelf_parser_empty_text():
+    from hexgraph.sandbox.probes import binutils_probe as B
+    assert B.parse_readelf_header("") == {}
+
+
+def test_mitigations_fold_nx_and_pie_end_to_end():
+    """`_mitigations` carries the parser's nx through and computes PIE/full-RELRO —
+    an RWE stack surfaces as nx=False, and BIND_NOW upgrades partial RELRO to full."""
+    from hexgraph.sandbox.probes import binutils_probe as B
+    exec_hdr = B.parse_readelf_header(
+        _readelf_text(gnu_stack="RWE", etype="EXEC (Executable file)"))
+    mit = B._mitigations(exec_hdr, {"_bind_now": False}, {"symbols": [], "imports": []})
+    assert mit["nx"] is False and mit["pie"] is False and mit["relro"] == "partial"
+    # a PIE (DYN + INTERP) with a non-exec stack and BIND_NOW => nx, pie, full RELRO.
+    pie_hdr = B.parse_readelf_header(
+        _readelf_text(gnu_stack="RW ", etype="DYN (Position-Independent Executable file)"))
+    pie_mit = B._mitigations(pie_hdr, {"_bind_now": True}, {"symbols": [], "imports": []})
+    assert pie_mit["nx"] is True and pie_mit["pie"] is True and pie_mit["relro"] == "full"
+
+
 # --- engine helper: observation + enrichment, mints no nodes (offline) -------
 
 def test_collect_records_one_observation_and_mints_no_nodes(hg_home, monkeypatch):
