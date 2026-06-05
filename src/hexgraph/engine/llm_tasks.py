@@ -30,6 +30,8 @@ from hexgraph.llm.registry import get_backend
 from hexgraph.llm.runner import run_findings_agentic
 from hexgraph.tasks.base import TaskContext
 
+log = logging.getLogger(__name__)
+
 LLM_TASK_TYPES = {"static_analysis", "reverse_engineering", "pattern_sweep", "harness_generation"}
 _DECOMPILE_TYPES = {"static_analysis", "reverse_engineering"}
 _DECOMPILABLE_KINDS = {TargetKind.executable, TargetKind.shared_library}
@@ -220,6 +222,9 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
     # taint and emit a finding per flow BEFORE the LLM synthesizes — so the model reasons over a
     # graph that already carries real taint/sink truth. Backend-independent + always-on; degrades
     # to nothing when Ghidra is off (no fabrication). Best-effort: never fail the task over it.
+    # NOTE: these grounded findings are persisted up front and are DELIBERATELY kept even if the
+    # later LLM synthesis layer errors and the task is marked failed — they're derived from the
+    # real bytes, so they stand on their own (the two layers are independent by design).
     core_finding_ids: list[str] = []
     if task.type == "static_analysis":
         try:
@@ -227,7 +232,7 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
 
             core_finding_ids = run_static_core(session, project, target, task=task)
         except Exception:  # noqa: BLE001 — the deterministic core is best-effort
-            logging.getLogger(__name__).warning("deterministic static core failed", exc_info=True)
+            log.warning("deterministic static core failed", exc_info=True)
 
     # Assemble the content bundle (the frozen, content-addressed input).
     from hexgraph.engine.context import build_context_bundle, estimate_tokens
