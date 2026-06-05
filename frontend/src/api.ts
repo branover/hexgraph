@@ -99,6 +99,15 @@ export interface FuzzEngines { surface?: string; inferred?: boolean; engines?: s
 export interface FuzzEnvHealth { ok?: boolean; reachable?: boolean; authorized?: boolean; image_present?: boolean; docker_version?: string | null; detail?: string; checked_at?: string; }
 export interface FuzzEnvironment { id: string; name: string; transport: string; host_descriptor?: string | null; is_local: boolean; connection_present: boolean; resources: Record<string, any>; health: FuzzEnvHealth; created_at?: string | null; }
 
+// A Tool Result (Phase O Observation, design §5.6): one recorded deterministic tool
+// call on a target — the call (tool + args), a short summary, what bytes it analyzed,
+// and the full payload in CAS (returned only on the single-get). List/search omit it.
+export interface Observation {
+  id: string; project_id: string; target_id: string; created_at: string | null;
+  source: string; tool: string; args: Record<string, any>; content_hash: string | null;
+  result_kind: string; summary: string; status: string; size: number;
+  node_refs: any[]; payload?: any;  // payload present only on get_observation
+}
 export interface GraphNode { id: string; type: "target" | "node" | "finding"; label: string; [k: string]: any; }
 export interface GraphEdge { id: string; source: string; target: string; type: string; src_kind?: string; dst_kind?: string; origin?: string; confidence?: number | null; attrs?: Record<string, any>; count?: number; }
 export interface Graph { project_id: string; nodes: GraphNode[]; edges: GraphEdge[]; }
@@ -190,6 +199,21 @@ export const api = {
     return r.text();
   },
   targetRuns: (tid: string) => getJSON<AnalysisRunRow[]>(`/api/targets/${tid}/runs`),
+  // Tool Results (Phase O Observations) — read-only browse + provenance lookups.
+  observations: (pid: string, tid: string, opts: { tool?: string; kind?: string; since?: string; limit?: number } = {}) => {
+    const qs = new URLSearchParams();
+    if (opts.tool) qs.set("tool", opts.tool);
+    if (opts.kind) qs.set("kind", opts.kind);
+    if (opts.since) qs.set("since", opts.since);
+    if (opts.limit) qs.set("limit", String(opts.limit));
+    return getJSON<{ observations: Observation[] }>(`/api/projects/${pid}/targets/${tid}/observations${qs.toString() ? "?" + qs.toString() : ""}`);
+  },
+  observation: (oid: string) => getJSON<Observation>(`/api/observations/${oid}`),
+  searchObservations: (pid: string, q: string, targetId?: string) => {
+    const qs = new URLSearchParams({ q });
+    if (targetId) qs.set("target_id", targetId);
+    return getJSON<{ observations: Observation[] }>(`/api/projects/${pid}/observations/search?${qs.toString()}`);
+  },
   runsDiff: (run_a: string, run_b: string) => postJSON<RunDiff>("/api/runs/diff", { run_a, run_b }),
   // Authoring (no CLI required)
   createProject: (name: string, backend: string) => postJSON<Project>("/api/projects", { name, backend }),
