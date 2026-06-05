@@ -71,9 +71,13 @@ def test_recon_materializes_symbol_nodes(hg_home, sandbox):
         assert any(n.attrs_json.get("is_sink") for n in syms)
 
 
-def test_decompile_materializes_calls_edges(hg_home, sandbox, monkeypatch):
-    """static_analysis on a real ELF decompiles cgi_handler → function node + calls
-    edges to its callees (e.g. strcpy)."""
+def test_decompile_promotes_focus_under_curation_contract(hg_home, sandbox, monkeypatch):
+    """static_analysis on a real ELF decompiles cgi_handler and PROMOTES that one
+    function (Phase O §5.3). Under the curation contract the single-pass path obeys
+    the same both-endpoints-exist rule as the agent tools: the focus node is added,
+    callees are NOT mass-minted, and a `calls` edge self-wires only to a callee that
+    is ALREADY curated. We pre-curate `strcpy` so its edge appears, and assert no node
+    was spawned for an uncurated callee."""
     monkeypatch.delenv("HEXGRAPH_DISABLE_DECOMPILE", raising=False)
     from hexgraph.engine.pipeline import ingest_and_analyze
 
@@ -81,13 +85,27 @@ def test_decompile_materializes_calls_edges(hg_home, sandbox, monkeypatch):
         p = create_project(s, name="d")
         summary = ingest_and_analyze(s, p, fixture_path("vuln_httpd"), runner=sandbox)
         tid_target = summary["root_target_id"]
+        # Pre-curate ONE callee so the both-endpoints-exist rule has an endpoint to wire to.
+        materialize_function(s, project_id=p.id, target_id=tid_target, name="strcpy")
+        funcs_before = s.query(Node).filter(Node.node_type == NodeType.function.value).count()
         task = create_task(s, project=p, target_id=tid_target, type="static_analysis",
                            backend="mock", params={"mock_scenario": "critical_overflow", "function": "cgi_handler"})
         task_id, pid = task.id, p.id
     assert run_task_sync(task_id) == "succeeded"
     with session_scope() as s:
-        calls = s.query(Edge).filter(Edge.project_id == pid, Edge.type == EdgeType.calls.value).all()
-        assert calls, "expected calls edges from decompiled cgi_handler"
-        # the focus function node exists
+        # The focus function node was promoted.
         assert s.query(Node).filter(Node.node_type == NodeType.function.value,
                                     Node.fq_name == "cgi_handler").count() >= 1
+        # The `calls` edge self-wired to the already-curated callee (both endpoints exist).
+        calls = s.query(Edge).filter(Edge.project_id == pid, Edge.type == EdgeType.calls.value).all()
+        assert calls, "expected a calls edge to the pre-curated strcpy callee"
+        # No graph explosion: only the focus was added on top of the pre-curated strcpy,
+        # i.e. cgi_handler's OTHER callees were NOT mass-minted as nodes.
+        funcs_now = s.query(Node).filter(Node.node_type == NodeType.function.value).count()
+        assert funcs_now == funcs_before + 1, (
+            "curation contract: decompiling the focus must add only the focus node, "
+            "never bulk-spawn its callees")
+        # The decompilation was recorded as a discoverable Observation (the substrate).
+        from hexgraph.db.models import Observation
+        assert s.query(Observation).filter(Observation.target_id == tid_target,
+                                           Observation.result_kind == "decompilation").count() >= 1

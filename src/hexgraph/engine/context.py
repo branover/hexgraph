@@ -109,6 +109,19 @@ def _gather_items(session: Session, project: Project, target: Target, task, ctx)
                            + "; ".join(f"[{h['status']}] {h['statement']}" for h in hyps[:10]),
                            92, "target", target.id))
 
+    # The observation index (design §5.6.1): tell the agent what deterministic
+    # analysis already exists on this target so it reuses it instead of re-running.
+    from hexgraph.engine.observations import observation_index
+    obs_idx = observation_index(session, target.id)
+    if obs_idx:
+        kinds = ", ".join(f"{k}×{n}" for k, n in sorted(obs_idx["by_kind"].items()))
+        ids = ", ".join(obs_idx["recent_ids"][:6])
+        items.append(_Item(
+            "observation_index",
+            f"Prior analysis on this target ({obs_idx['total']} observations: {kinds}). Reuse it "
+            f"instead of re-running: list_observations(target) / get_observation(id). Recent ids: {ids}",
+            64, "target", target.id))
+
     imports = meta.get("imports", [])
     if imports:
         items.append(_Item("imports", "Imports: " + ", ".join(imports[:40]), 60, "target", target.id))

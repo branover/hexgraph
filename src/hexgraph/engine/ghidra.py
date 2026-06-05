@@ -8,8 +8,10 @@ Three ways HexGraph can use Ghidra, all opt-in via Settings (`features.ghidra`):
 - **bridge** — connect over loopback to a Ghidra you already have open (the
   `ghidra_bridge` server). HexGraph pulls decompilation / programs from your
   live analysis; bytes never leave your machine.
-- **enrich_recon** — materialize Ghidra's function inventory / call graph /
-  recovered structs into the typed graph (builds on headless).
+- **enrich_recon** — record Ghidra's function inventory / call graph / recovered
+  structs into the SUBSTRATE (the Observation store), so they become queryable and
+  ENRICH already-curated nodes without flooding the graph (builds on headless;
+  design §5.3).
 
 Everything degrades gracefully: when Ghidra is disabled or unavailable, callers
 fall back to radare2 and recon proceeds unchanged.
@@ -96,12 +98,22 @@ def enrich_enabled() -> bool:
 
 
 def enrich_target(session, project, target) -> dict:
-    """Materialize Ghidra's function inventory, call graph, and recovered structs
-    into the typed graph (best-effort). Bounded so it never floods the graph.
-    Returns a summary; raises only on a hard sandbox failure (caller guards)."""
-    from hexgraph.db.models import EdgeType, NodeType
-    from hexgraph.engine.edges import add_edge
-    from hexgraph.engine.nodes import get_or_create_node, materialize_function
+    """Run Ghidra's full-inventory analysis and record it into the SUBSTRATE — the
+    Observation store (design §5.3) — NOT as bulk graph nodes.
+
+    Ghidra computes the whole function inventory, the call graph, and the recovered
+    structs; dumping all of that straight into the typed graph was a graph-explosion
+    source (≤200 functions + ≤1000 call edges + ≤100 structs, ELF/libc struct noise
+    included). Instead we record each as an Observation: the extract-at-write machinery
+    distills the always-welcome facts (prototypes, addresses, `A calls B` relationships,
+    real-struct layouts) into the enrichment index, so they ENRICH any function/struct
+    already curated and self-wire `calls` edges among already-promoted functions — but
+    create no new bulk nodes. Built-in ELF/libc structs live in the queryable catalog,
+    filtered by the extractor, and never reach the graph.
+
+    Returns a summary of what was recorded; raises only on a hard sandbox failure
+    (caller guards)."""
+    from hexgraph.engine import observations as O
     from hexgraph.sandbox.decompiler import GhidraDecompiler
 
     # Route through the decompiler seam (passing `project`) so the full-inventory analysis
@@ -111,29 +123,44 @@ def enrich_target(session, project, target) -> dict:
     if "error" in data:
         return {"ok": False, "detail": data["error"]}
 
-    fn_nodes: dict[str, str] = {}
-    for name in (data.get("functions") or [])[:200]:
-        node = materialize_function(session, project_id=project.id, target_id=target.id,
-                                    name=name, created_by="ghidra")
-        fn_nodes[name] = node.id
+    chash = O.content_hash_for(target)
+    functions = list(data.get("functions") or [])
+    calls = list(data.get("calls") or [])
+    structs = list(data.get("structs") or [])
 
-    edges = 0
-    for caller, callee in (data.get("calls") or [])[:1000]:
-        if caller not in fn_nodes or callee not in fn_nodes:
+    def _record(tool, result_kind, payload, summary):
+        # content_hash scopes the facts to the exact bytes (extract-at-write + passive
+        # invalidation). Recording creates ZERO graph nodes.
+        O.record_observation(
+            session, project_id=project.id, target_id=target.id, source="ghidra-enrich",
+            tool=tool, args={}, result_kind=result_kind, payload=payload,
+            summary=summary, content_hash=chash)
+
+    # Function inventory + recovered prototypes/addresses → function_list facts.
+    _record("enrich_recon", "function_list",
+            {"functions": [f if isinstance(f, dict) else {"name": f} for f in functions]},
+            f"{len(functions)} functions")
+    # Call graph → `A calls B` relationship facts (edges self-wire among promoted fns).
+    _record("enrich_recon", "call_graph",
+            {"functions": _call_graph_records(calls)}, f"{len(calls)} call edges")
+    # Recovered structs → real-layout facts (the extractor drops built-ins).
+    _record("enrich_recon", "structs", {"structs": structs}, f"{len(structs)} structs")
+
+    return {"ok": True, "recorded": True, "functions": len(functions),
+            "calls": len(calls), "structs": len(structs)}
+
+
+def _call_graph_records(calls) -> list[dict]:
+    """Reshape a Ghidra call-graph (list of [caller, callee] pairs) into per-caller
+    function records with a `callees` list, the shape the function/call extractor reads."""
+    by_caller: dict[str, list[str]] = {}
+    for pair in calls:
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
             continue
-        add_edge(session, project_id=project.id, src=("node", fn_nodes[caller]),
-                 dst=("node", fn_nodes[callee]), type=EdgeType.calls, origin="ghidra", confidence=0.9)
-        edges += 1
-
-    structs = 0
-    for st_ in (data.get("structs") or [])[:100]:
-        get_or_create_node(session, project_id=project.id, node_type=NodeType.struct,
-                           name=st_.get("name", "struct"), target_id=target.id,
-                           attrs={"size": st_.get("size"), "fields": st_.get("fields", [])},
-                           created_by="ghidra")
-        structs += 1
-
-    return {"ok": True, "functions": len(fn_nodes), "calls": edges, "structs": structs}
+        caller, callee = pair
+        if caller and callee:
+            by_caller.setdefault(caller, []).append(callee)
+    return [{"name": c, "callees": cs} for c, cs in by_caller.items()]
 
 
 def _self_artifact() -> str:

@@ -34,6 +34,16 @@ NODE_ATTRIBUTE_SCHEMAS: dict[str, dict[str, Any]] = {
             "is_sink": _a("true if this function is a dangerous operation (system/exec/strcpy/…) — "
                           "set this INSTEAD of creating a separate `sink` node", type="bool"),
             "tainted_params": _a("indices/names of params that reach a dangerous use", list=True),
+            # Always-welcome auto-enrichment facts (Phase O §5.4): a decompiler/function-list
+            # observation fills these in place on an EXISTING function node, no LLM/user.
+            "address": _a("entry-point address (hex) — filled by auto-enrichment", type="hex"),
+            "prototype": _a("recovered C prototype/signature — filled by auto-enrichment"),
+            "signature": _a("recovered signature (alias of prototype) — auto-enrichment"),
+            "calling_convention": _a("recovered calling convention — auto-enrichment"),
+            "demangled_name": _a("demangled name (C++) — auto-enrichment"),
+            "param_count": _a("recovered parameter count — auto-enrichment", type="int"),
+            "local_count": _a("recovered local-variable count — auto-enrichment", type="int"),
+            "locals": _a("recovered locals — auto-enrichment", type="object", list=True),
         },
     },
     "symbol": {

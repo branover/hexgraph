@@ -91,6 +91,10 @@ def get_or_create_node(
         # Re-adding a soft-removed node restores it (and its hidden edges reappear).
         if existing.archived:
             existing.archived = False
+        # Join-at-create (design §5.5): pull any waiting always-welcome facts. Run on
+        # the existing-node path too so a later address-fill (a name-keyed node that
+        # just gained its address) re-looks-up by the address key. Idempotent.
+        _apply_waiting_facts(session, existing)
         return existing
     node = Node(
         project_id=project_id, node_type=nt, target_id=target_id, name=name,
@@ -114,7 +118,19 @@ def get_or_create_node(
             session, project_id=project_id, src=("target", target_id), dst=("node", node.id),
             type=EdgeType.contains, origin="derived", confidence=1.0, attrs={"declares": nt},
         )
+    # Join-at-create (design §5.5): a freshly-promoted node receives the always-welcome
+    # facts from tool calls that already happened, and self-wires relationship edges to
+    # endpoints already in the graph.
+    _apply_waiting_facts(session, node)
     return node
+
+
+def _apply_waiting_facts(session: Session, node: Node) -> None:
+    """Pull and apply this node's waiting enrichment facts (deferred import to avoid a
+    cycle: enrichment imports nodes for the canonical-key helpers)."""
+    from hexgraph.engine.enrichment import apply_facts_for_node
+
+    apply_facts_for_node(session, node)
 
 
 def materialize_function(

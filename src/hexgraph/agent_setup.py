@@ -31,6 +31,24 @@ should be written back as nodes, edges, findings, hypotheses, and annotations, s
 - a future agent run picks up where you left off instead of re-deriving the same
   facts (no duplicated effort).
 
+**How analysis flows into the graph.** The graph is a CURATED result set, not the
+program model. On a target, first read the existing graph AND the Observation index
+(`list_observations(target_id)`) so you don't re-derive what's there. Then:
+- **Query freely.** Tool results (list_functions / decompile_function / disassemble /
+  xrefs / list_strings) persist as durable Observations on the target — check
+  `list_observations` before re-running a heavy analysis, and `get_observation(id)` to
+  reuse a prior payload (analyze once, reuse forever). A query adds NO graph nodes.
+- **Enrich for free.** When a tool recovers richer info about something already in the
+  graph (a function's prototype/address, a dangerous import's is_sink tag), HexGraph
+  attaches it in place automatically — no action needed.
+- **Promote deliberately.** A new node enters the graph only by a deliberate act:
+  decompiling THAT function, recording a finding on it, an explicit create_node/
+  create_edge. Decompiling a function promotes that one function and links it to
+  callees ALREADY in the graph — it does NOT spawn its callees (no fan-out); new
+  callees are surfaced for you to promote if they matter. Promote the few results that
+  carry your reasoning (the functions under investigation, the sinks, the taint path,
+  the findings) — never the binary's whole structure.
+
 ## Hard rules (non-negotiable)
 - **Never execute, unpack, or open the target binary yourself.** No Bash/shell on
   the target, no downloading it, no running it. The bytes are hostile. All target

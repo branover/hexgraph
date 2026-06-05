@@ -64,32 +64,57 @@ def test_probe_check_contract_without_ghidra():
     assert out["present"] is False and "WITH_GHIDRA" in out["detail"]
 
 
-def test_enrich_target_materializes_graph(hg_home, monkeypatch):
+def test_enrich_target_records_substrate_not_bulk_graph(hg_home, monkeypatch):
+    """Phase O §5.3: enrich_recon is redirected to the SUBSTRATE (the Observation store),
+    NOT bulk graph nodes. Ghidra's whole inventory/call-graph/structs become queryable
+    Observations + enrichment facts; they enrich already-curated objects and self-wire
+    `calls` edges AMONG promoted functions, but never flood the graph with bulk nodes."""
     payload = {
         "functions": ["main", "parse", "helper"],
         "calls": [["main", "parse"], ["parse", "helper"], ["parse", "missing"]],
-        "structs": [{"name": "Packet", "size": 16, "fields": [{"name": "len", "type": "int"}]}],
+        "structs": [{"name": "Packet", "size": 16, "fields": [{"name": "len", "type": "int"}]},
+                    {"name": "__elf_builtin", "size": 8, "builtin": True}],
     }
     fake = FakeExecutor(payload)
     # enrich_target routes through GhidraDecompiler, which resolves its executor via the
     # name imported into the decompiler module — patch THAT reference.
     monkeypatch.setattr("hexgraph.sandbox.decompiler.get_executor", lambda *a, **k: fake)
 
+    from hexgraph.db.models import Edge, EnrichmentFact, Observation
     from hexgraph.engine.ghidra import enrich_target
+    from hexgraph.engine.nodes import get_or_create_node
 
     with session_scope() as s:
         p = create_project(s, name="g")
         t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
-        res = enrich_target(s, p, t)
-        assert res == {"ok": True, "functions": 3, "calls": 2, "structs": 1}  # 'missing' callee dropped
-        fns = s.query(Node).filter(Node.project_id == p.id, Node.node_type == NodeType.function.value).all()
-        assert {f.name for f in fns} >= {"main", "parse", "helper"}
-        structs = s.query(Node).filter(Node.node_type == NodeType.struct.value).all()
-        assert len(structs) == 1 and structs[0].attrs_json["size"] == 16
-        from hexgraph.db.models import Edge
+        # Curate two of the functions FIRST, so the recorded call graph can self-wire the
+        # edge between them (both-endpoints-exist) and enrich nothing it shouldn't.
+        get_or_create_node(s, project_id=p.id, node_type=NodeType.function, name="main", target_id=t.id)
+        get_or_create_node(s, project_id=p.id, node_type=NodeType.function, name="parse", target_id=t.id)
+        fn_before = s.query(Node).filter(Node.node_type == NodeType.function.value).count()
 
-        calls = s.query(Edge).filter(Edge.type == EdgeType.calls.value, Edge.origin == "ghidra").all()
-        assert len(calls) == 2
+        res = enrich_target(s, p, t)
+        assert res["ok"] and res["recorded"] is True
+        assert res["functions"] == 3 and res["calls"] == 3 and res["structs"] == 2
+
+        # NO bulk function nodes created (the curated set is unchanged — 'helper' never
+        # became a node), and NO struct nodes at all (structs live only in the substrate).
+        assert s.query(Node).filter(Node.node_type == NodeType.function.value).count() == fn_before
+        assert s.query(Node).filter(Node.node_type == NodeType.struct.value).count() == 0
+
+        # The inventory/call-graph/structs were recorded as Observations + enrichment facts.
+        kinds = {o.result_kind for o in s.query(Observation).filter(Observation.target_id == t.id).all()}
+        assert {"function_list", "call_graph", "structs"} <= kinds
+        assert s.query(EnrichmentFact).count() >= 1
+
+        # main→parse self-wired (both endpoints curated); parse→helper / parse→missing did
+        # NOT (helper/missing aren't nodes) — the both-endpoints-exist rule holds.
+        calls = s.query(Edge).filter(Edge.type == EdgeType.calls.value).all()
+        assert len(calls) == 1
+        # The real struct's layout fact is queryable; the builtin was filtered by the extractor.
+        struct_facts = s.query(EnrichmentFact).filter(EnrichmentFact.node_type == "struct").all()
+        keys = {f.subject_key for f in struct_facts}
+        assert "Packet" in keys and "__elf_builtin" not in keys
 
 
 def test_check_bridge_mode_not_running(hg_home):
