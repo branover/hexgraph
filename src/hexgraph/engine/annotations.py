@@ -97,6 +97,17 @@ def _apply_rename(session: Session, node: Node, new_name: str) -> None:
     node.attrs_json = attrs
     node.name = new_name  # display name; fq_name stays the durable identity
 
+    # Phase 3 rename round-trip: best-effort, propagate the rename INTO the persistent Ghidra
+    # project and re-decompile so it sticks for every future decompile. A no-op unless headless
+    # Ghidra is the active, project-backed backend (radare2 users pay only a couple of config
+    # checks). Never let a Ghidra hiccup break the confirmed graph rename — propagation is gravy.
+    try:
+        from hexgraph.engine.ghidra import propagate_function_rename
+
+        propagate_function_rename(session, node, new_name)
+    except Exception:  # noqa: BLE001
+        pass
+
 
 def list_for(session: Session, project_id: str, node_kind: str, node_id: str) -> list[Annotation]:
     return (

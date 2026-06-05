@@ -150,6 +150,73 @@ def enrich_target(session, project, target) -> dict:
             "calls": len(calls), "structs": len(structs)}
 
 
+# A function rename propagated into Ghidra: the address it lives at (validated before any
+# probe interpolation) and the new name (a plausible identifier — Ghidra's setName takes it
+# as a Java arg, not a shell command, so this guards against garbage, not injection).
+import re as _re
+
+_RENAME_ADDR = _re.compile(r"^0x[0-9a-fA-F]+$")
+_RENAME_IDENT = _re.compile(r"^[A-Za-z_][A-Za-z0-9_:.$]*$")
+
+
+def propagate_function_rename(session, node, new_name: str) -> dict:
+    """Phase 3 rename round-trip: when Ghidra is the active backend, write a confirmed
+    function rename INTO the persistent Ghidra project and re-decompile, so the analyst's
+    rename sticks for every future decompile and the graph reflects the fresh result.
+
+    Best-effort and never raises into the caller — the graph rename has already succeeded;
+    this only adds Ghidra propagation when it's possible. Returns a status dict.
+
+    Cache-coherence: the re-decompile is recorded under args={"function": new_name}, which is
+    a DISTINCT Observation from the pre-rename one (the dedup key includes args), so it never
+    serves the stale decompile — the new name IS the cache-bust dimension, no epoch needed."""
+    if node.node_type != "function" or not node.address:
+        return {"propagated": False, "reason": "not an addressed function node"}
+    if not ghidra_config().get("enabled") or ghidra_config().get("mode") != "headless":
+        return {"propagated": False, "reason": "headless Ghidra is not the active backend"}
+    if not (_RENAME_ADDR.match(str(node.address)) and _RENAME_IDENT.match(new_name)):
+        return {"propagated": False, "reason": "address or name failed validation"}
+
+    from hexgraph.db.models import Project, Target
+    from hexgraph.sandbox.runner import docker_available
+
+    target = session.get(Target, node.target_id)
+    project = session.get(Project, node.project_id)
+    if target is None or project is None or not getattr(target, "path", None):
+        return {"propagated": False, "reason": "no target path"}
+    if not docker_available():
+        return {"propagated": False, "reason": "Docker/sandbox not running"}
+
+    from hexgraph.sandbox.decompiler import GhidraDecompiler
+
+    try:
+        out = GhidraDecompiler().rename_function(
+            target.path, address=str(node.address), new_name=new_name, project=project)
+    except Exception as exc:  # noqa: BLE001 — propagation must never break the graph rename
+        return {"propagated": False, "reason": f"rename probe failed: {exc}"}
+    if not isinstance(out, dict) or out.get("error"):
+        return {"propagated": False, "reason": (out or {}).get("error", "no result")}
+    focus = out.get("focus")
+    if not isinstance(focus, dict):
+        return {"propagated": False, "reason": "rename produced no focus (function not found?)"}
+
+    # Record the fresh decompile (distinct args → no stale-cache hit) so the renamed function's
+    # recovered facts re-index and enrich the node (whose name is already new_name). Also refresh
+    # the node's stored pseudocode so its body reflects the rename, not just its attrs.
+    from hexgraph.engine import observations as O
+
+    O.record_observation(
+        session, project_id=project.id, target_id=target.id, source="annotate-rename",
+        tool="decompile_function", args={"function": new_name}, result_kind="decompilation",
+        payload=out, summary=f"re-decompiled {new_name} after rename",
+        content_hash=O.content_hash_for(target), node_refs=[new_name])
+    if focus.get("pseudocode"):
+        attrs = dict(node.attrs_json or {})
+        attrs["pseudocode"] = focus["pseudocode"]
+        node.attrs_json = attrs
+    return {"propagated": True, "function": new_name}
+
+
 def _call_graph_records(calls) -> list[dict]:
     """Reshape a Ghidra call-graph (list of [caller, callee] pairs) into per-caller
     function records with a `callees` list, the shape the function/call extractor reads."""

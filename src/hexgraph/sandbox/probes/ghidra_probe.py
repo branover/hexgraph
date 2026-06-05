@@ -134,7 +134,24 @@ from ghidra.util.task import ConsoleTaskMonitor
 args = getScriptArgs()
 out_path = args[0]
 focus = args[1] if len(args) > 1 and args[1] else None
+rename_addr = args[2] if len(args) > 2 and args[2] else None
+rename_name = args[3] if len(args) > 3 and args[3] else None
 monitor = ConsoleTaskMonitor()
+
+# Rename round-trip (Phase 3): apply the analyst's rename to the function CONTAINING
+# rename_addr, then focus on it so the emitted result reflects the new name.
+# analyzeHeadless runs -process WITHOUT -readOnly, so it SAVES the program back into the
+# persistent project — the rename persists for every future decompile (analyze-once).
+if rename_addr and rename_name:
+    from ghidra.program.model.symbol import SourceType
+    try:
+        _fn = getFunctionContaining(toAddr(rename_addr))
+        if _fn is not None:
+            _fn.setName(rename_name, SourceType.USER_DEFINED)
+            focus = rename_addr  # decompile the just-renamed function in the focus block below
+    except:
+        pass
+
 fm = currentProgram.getFunctionManager()
 funcs = list(fm.getFunctions(True))
 result = {"functions": [f.getName() for f in funcs][:400], "focus": None, "calls": [], "structs": []}
@@ -303,6 +320,13 @@ def main() -> int:
         return 2
     artifact = sys.argv[1]
     focus = sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith("--") else None
+    # Rename round-trip: --rename <addr> <new_name> applies the rename in the project
+    # (saved by the -process/-import run) and decompiles the renamed function.
+    rename_addr = rename_name = ""
+    if "--rename" in sys.argv:
+        i = sys.argv.index("--rename")
+        if i + 2 < len(sys.argv):
+            rename_addr, rename_name = sys.argv[i + 1], sys.argv[i + 2]
 
     hl = _find_headless()
     if not hl:
@@ -354,7 +378,7 @@ def main() -> int:
             "-process", prog,
             "-noanalysis",
             "-scriptPath", SCRATCH,
-            "-postScript", "hexgraph_post.py", out_path, focus or "",
+            "-postScript", "hexgraph_post.py", out_path, focus or "", rename_addr, rename_name,
         ]
     else:
         # COLD: import + analyze. Persist the project (no -deleteProject) only when the
@@ -363,7 +387,7 @@ def main() -> int:
             hl, proj_dir, PROJECT_NAME,
             "-import", artifact,
             "-scriptPath", SCRATCH,
-            "-postScript", "hexgraph_post.py", out_path, focus or "",
+            "-postScript", "hexgraph_post.py", out_path, focus or "", rename_addr, rename_name,
         ]
         if not persistent:
             cmd.append("-deleteProject")
