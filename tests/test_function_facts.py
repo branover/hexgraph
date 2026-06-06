@@ -12,7 +12,6 @@ set enriches a node through record_observation → join-at-create (no Docker, no
 import json
 import shutil
 import subprocess
-import tempfile
 
 import pytest
 
@@ -149,7 +148,7 @@ GHIDRA_READY = _ghidra_in_image()
 
 
 @pytest.mark.skipif(not GHIDRA_READY, reason="requires Docker + a WITH_GHIDRA=1 sandbox image")
-def test_ghidra_focus_facts_are_decompiler_refined_not_listing_db(hg_home):
+def test_ghidra_focus_facts_are_decompiler_refined_not_listing_db(hg_home, tmp_path):
     """Finding NF: the Ghidra focus prototype/locals came from the pre-decompile listing DB
     (`undefined check_password(void)`, `undefinedN` locals). With no debug info the listing
     DB has no signature, so the focus must now carry the DECOMPILER-recovered shape — a
@@ -157,7 +156,7 @@ def test_ghidra_focus_facts_are_decompiler_refined_not_listing_db(hg_home):
     if shutil.which("gcc") is None:
         pytest.skip("gcc unavailable to compile the authcheck fixture")
     src = fixture_path("challenges/authcheck.c")
-    binpath = tempfile.mktemp(prefix="authcheck-")
+    binpath = str(tmp_path / "authcheck")  # tmp_path auto-cleans, no leaked temp binary
     # NO -g: the listing DB knows the name but not the signature, so a refined prototype can
     # only come from the decompiler.
     if subprocess.run(["gcc", "-O0", "-o", binpath, src], capture_output=True).returncode != 0:

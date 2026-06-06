@@ -65,17 +65,23 @@ _RELATIONSHIP_WHITELIST: dict[str, str] = {
 
 # Compiler / C-runtime / ELF / bundled-library struct names that are NOT a program's
 # recovered layout. The `builtin` flag Ghidra emits is unreliable here — it marks the
-# bundled Elf64_*/Note*/evp_* types as builtin:false (so they leak into the graph) while
+# bundled Elf64_*/_IO_*/evp_* types as builtin:false (so they leak into the graph) while
 # flagging std::* — so we back the flag with a NAME heuristic. These carry none of the
 # analyst's reasoning; dropping them keeps the graph a curated result set. They still live
 # in the Observation substrate (the full struct catalog is queryable there) — this only
-# gates what becomes an auto-applied graph fact. Extend the pattern as new noise appears.
+# gates what becomes an auto-applied graph fact.
+#
+# Deliberately CONSERVATIVE: only distinctive, namespaced toolchain prefixes, so a program
+# struct can't be filtered out (the cost of a missed noise type is merely that it isn't
+# auto-promoted — it stays queryable in the substrate — whereas dropping a real struct
+# loses the analyst's data). So no bare `Note`/`ELF`/`x509_`/`ossl_` here (they'd swallow a
+# program's `Notebook`/`ELFView`/`x509_local`). Extend as new clearly-namespaced noise appears.
 _NOISE_STRUCT_RE = re.compile(
     r"^(?:"
-    r"Elf(?:32|64|_)|ELF|Note|GnuBuildId|Gnu[._]|Dwarf"        # ELF / DWARF metadata
-    r"|_IO_|__|_chunk|_?malloc_"                                 # libc stdio / allocator internals
-    r"|std::|__cxxabiv|_Rb_tree|__gnu_cxx|type_info|_Unwind"     # C++ runtime
-    r"|evp_|EVP_|asn1_|ossl_|x509_|bio_st|engine_st"            # bundled OpenSSL types
+    r"Elf(?:32|64)?_|GnuBuildId|Gnu[._]|Dwarf_"     # ELF / DWARF / GNU metadata
+    r"|_IO_|__"                                       # libc stdio (_IO_FILE) / dunder internals (__pthread_*, __cxxabiv1, …)
+    r"|std::|_Rb_tree|_Unwind"                        # C++ runtime
+    r"|evp_|EVP_|asn1_"                              # bundled OpenSSL/libcrypto (distinctive prefixes)
     r")"
 )
 
