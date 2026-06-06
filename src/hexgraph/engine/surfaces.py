@@ -54,7 +54,7 @@ def register_web_surface(
     return target
 
 
-def register_socket_target(
+def register_service_target(
     session: Session, project: Project, host: str, port: int, *,
     transport: str = "tcp", proto: str | None = None,
     name: str | None = None, parent: Target | None = None,
@@ -110,11 +110,11 @@ def register_socket_target(
     # write `bind_addr`/host onto the shared node — that would clobber a static-recon
     # listen site's recorded bind address (get_or_create_node merges attrs by overwrite).
     sock = materialize_socket(session, project_id=project.id, kind=transport, port=port,
-                              created_by="register_socket",
+                              created_by="register_service",
                               attrs={"proto": proto} if proto else None)
     add_edge(session, project_id=project.id, src=("target", target.id),
              dst=("node", sock.id), type=EdgeType.listens_on, origin="tool",
-             confidence=1.0, created_by_tool="register_socket",
+             confidence=1.0, created_by_tool="register_service",
              attrs={"port": port})
     return target
 

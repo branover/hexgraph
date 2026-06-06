@@ -37,7 +37,7 @@ def test_delegate_prompt_carries_ids_and_rules(hg_home):
         t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
         prompt = delegate_prompt(p.id, t, "task-123", "look at cgi_handler")
         assert "task-123" in prompt and t.id in prompt and p.id in prompt
-        assert "Never execute" in prompt and "record_finding" in prompt
+        assert "Never execute" in prompt and "finding_record" in prompt
         assert "look at cgi_handler" in prompt
 
 

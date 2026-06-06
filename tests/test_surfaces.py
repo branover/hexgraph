@@ -121,12 +121,12 @@ def test_generic_recon_on_socket_surface_fails_cleanly(hg_home):
     """A `service`/`remote` surface has no offline recon probe — the generic `recon` task
     must fail with a CLEAR error (not byte recon's confusing artifact-not-found)."""
     from hexgraph.db.models import Project, Task, TaskStatus
-    from hexgraph.engine.surfaces import register_socket_target
+    from hexgraph.engine.surfaces import register_service_target
     from hexgraph.engine.worker import _dispatch
 
     with session_scope() as s:
         p = create_project(s, name="surf-recon-sock")
-        sock = register_socket_target(s, p, "127.0.0.1", 9000)
+        sock = register_service_target(s, p, "127.0.0.1", 9000)
         task = create_task(s, project=p, target_id=sock.id, type="recon")
         tid = task.id
 
@@ -184,7 +184,7 @@ def test_mcp_register_and_recon_drive_path(hg_home):
     with session_scope() as s:
         p = create_project(s, name="surf4")
         pid = p.id
-    reg = M.register_surface(pid, "http://10.0.0.3", name="ui", endpoints=SPEC)
+    reg = M.register_web_surface(pid, "http://10.0.0.3", name="ui", endpoints=SPEC)
     assert reg["kind"] == "web_app" and reg["endpoints"] == 2
     res = M.run_task(reg["id"], "surface_recon")
     assert res.get("status") == "succeeded"

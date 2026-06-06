@@ -67,7 +67,7 @@ def build_links_against(session: Session, project: Project) -> int:
     """Create `links_against` edges from each target to sibling targets whose
     filename matches a needed library. Best-effort; returns edges created.
     Idempotent (merge=True) and skips archived targets, so it's safe to re-run on
-    every ingest/add-from-fs without drawing duplicate parallel edges."""
+    every ingest/promote-file without drawing duplicate parallel edges."""
     targets = (session.query(Target)
                .filter(Target.project_id == project.id, Target.archived.is_(False)).all())
     by_basename: dict[str, Target] = {}

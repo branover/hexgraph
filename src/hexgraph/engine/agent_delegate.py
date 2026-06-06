@@ -44,10 +44,10 @@ def delegate_prompt(project_id: str, target: Target, task_id: str, objective: st
         f"{SKILL}\n\n---\n\n## Your assignment\n"
         f"project_id: {project_id}\n"
         f"target_id: {target.id}  (name: {target.name})\n"
-        f"hexgraph task_id: {task_id}  ← pass this as task_id to record_finding\n\n"
+        f"hexgraph task_id: {task_id}  ← pass this as task_id to finding_record\n\n"
         f"Objective: {obj}\n\n"
         "Use the `hexgraph` MCP tools to investigate this target, then record each "
-        "credible finding with record_finding(..., task_id=<the task_id above>). "
+        "credible finding with finding_record(..., task_id=<the task_id above>). "
         "Do not touch the binary by any other means."
     )
 
@@ -88,7 +88,7 @@ def _default_run_cli(cmd: list[str], timeout: int) -> tuple[int, str, str]:
 
 def execute_delegate(session: Session, project: Project, target: Target, task: Task, *, run_cli=None) -> int:
     """Launch the configured coding agent against this target. The agent records
-    findings via the MCP record_finding tool (attributed to this task). Returns the
+    findings via the MCP finding_record tool (attributed to this task). Returns the
     number of findings produced. Best-effort: a CLI/agent failure marks the task
     failed with the captured output."""
     from hexgraph import settings
@@ -113,6 +113,6 @@ def execute_delegate(session: Session, project: Project, target: Target, task: T
     if rc != 0:
         raise DelegateError(f"agent exited {rc}: {err.strip()[:500] or out.strip()[:500]}")
 
-    # Findings the agent recorded (via record_finding with this task_id) are already
+    # Findings the agent recorded (via finding_record with this task_id) are already
     # in the DB attributed to this task.
     return session.query(Finding).filter(Finding.task_id == task.id).count()

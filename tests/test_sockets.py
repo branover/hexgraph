@@ -3,12 +3,12 @@
 A bare non-HTTP network service (bind shell / vendor binary protocol / custom daemon) is
 registered DIRECTLY — no misusing register_remote(transport="telnet"), which carries
 SSH/telnet shell-credential semantics a protocol endpoint doesn't have. Covers:
-  • register_socket_target → a `service` target + the tcp/udp Channel (no creds) + the
+  • register_service_target → a `service` target + the tcp/udp Channel (no creds) + the
     linked shared `socket` NODE (listens_on edge) — target (surface) vs node (annotation);
   • infer_surface → `network` (so it's fuzzable directly);
   • a (mock) network campaign on a socket target launches via the EXISTING bounded local-
     network tier — egress-gated, audited — and REFUSES a non-local host (local_tcp_scope);
-  • the REST endpoint + the register_socket MCP tool.
+  • the REST endpoint + the register_service MCP tool.
 All offline ($0) with a fake executor / fake runner; no real socket.
 """
 
@@ -22,15 +22,15 @@ from hexgraph.db.session import session_scope
 from hexgraph.engine import campaigns as C
 from hexgraph.engine.fuzzers.base import FuzzCampaignSpec
 from hexgraph.engine.ingest import create_project
-from hexgraph.engine.surfaces import register_socket_target
+from hexgraph.engine.surfaces import register_service_target
 
 
-# ── register_socket_target: the `service` target + channel + node link ────────────
+# ── register_service_target: the `service` target + channel + node link ────────────
 
-def test_register_socket_creates_service_target_and_channel(hg_home):
+def test_register_service_creates_service_target_and_channel(hg_home):
     with session_scope() as s:
         p = create_project(s, name="svc")
-        t = register_socket_target(s, p, "192.168.1.1", 1337, name="bindshell")
+        t = register_service_target(s, p, "192.168.1.1", 1337, name="bindshell")
         assert t.kind == TargetKind.service
         assert t.path == ""                       # reached via a Channel, not a file
         ch = (t.metadata_json or {}).get("channel")
@@ -40,12 +40,12 @@ def test_register_socket_creates_service_target_and_channel(hg_home):
         assert t.name == "bindshell"
 
 
-def test_register_socket_links_shared_socket_node(hg_home):
+def test_register_service_links_shared_socket_node(hg_home):
     """The reachable surface (target) links to the SHARED socket NODE (the network-map
     endpoint, target_id=None) via a `listens_on` edge — target vs node stays distinct."""
     with session_scope() as s:
         p = create_project(s, name="svc")
-        t = register_socket_target(s, p, "127.0.0.1", 9000, transport="tcp")
+        t = register_service_target(s, p, "127.0.0.1", 9000, transport="tcp")
         sock = (s.query(Edge)
                 .filter(Edge.project_id == p.id, Edge.src_kind == "target",
                         Edge.src_id == t.id, Edge.type == EdgeType.listens_on.value)
@@ -57,24 +57,24 @@ def test_register_socket_links_shared_socket_node(hg_home):
         assert node.attrs_json.get("port") == 9000
 
 
-def test_register_socket_udp_and_proto_hint(hg_home):
+def test_register_service_udp_and_proto_hint(hg_home):
     with session_scope() as s:
         p = create_project(s, name="svc")
-        t = register_socket_target(s, p, "10.0.0.5", 5683, transport="udp", proto="coap")
+        t = register_service_target(s, p, "10.0.0.5", 5683, transport="udp", proto="coap")
         ch = (t.metadata_json or {}).get("channel")
         assert ch["kind"] == "udp"
         assert (t.metadata_json or {}).get("proto") == "coap"
 
 
-def test_register_socket_validation(hg_home):
+def test_register_service_validation(hg_home):
     with session_scope() as s:
         p = create_project(s, name="svc")
         with pytest.raises(ValueError):
-            register_socket_target(s, p, "", 80)               # no host
+            register_service_target(s, p, "", 80)               # no host
         with pytest.raises(ValueError):
-            register_socket_target(s, p, "h", 70000)           # bad port
+            register_service_target(s, p, "h", 70000)           # bad port
         with pytest.raises(ValueError):
-            register_socket_target(s, p, "h", 80, transport="ssh")  # not tcp/udp
+            register_service_target(s, p, "h", 80, transport="ssh")  # not tcp/udp
 
 
 # ── infer_surface → network (so it's fuzzable directly) ───────────────────────────
@@ -82,7 +82,7 @@ def test_register_socket_validation(hg_home):
 def test_infer_surface_service_is_network(hg_home):
     with session_scope() as s:
         p = create_project(s, name="svc")
-        t = register_socket_target(s, p, "127.0.0.1", 1337)
+        t = register_service_target(s, p, "127.0.0.1", 1337)
         assert C.infer_surface(t) == "network"
 
 
@@ -119,7 +119,7 @@ def test_socket_target_network_campaign_launches_egress_gated_and_audited(hg_hom
     ex = _NetExecutor()
     with session_scope() as s:
         p = create_project(s, name="svc")
-        t = register_socket_target(s, p, "192.168.0.50", 4444, name="daemon")
+        t = register_service_target(s, p, "192.168.0.50", 4444, name="daemon")
         row = C.start_campaign(s, p, t, spec=_net_spec(t), executor=ex)
         assert row.status == "running"
         assert row.surface == "network" and row.engine == "boofuzz"
@@ -142,7 +142,7 @@ def test_socket_target_campaign_denied_and_audited_when_network_off(hg_home):
     ex = _NetExecutor()
     with session_scope() as s:
         p = create_project(s, name="svc")
-        t = register_socket_target(s, p, "192.168.0.50", 4444)
+        t = register_service_target(s, p, "192.168.0.50", 4444)
         with pytest.raises(C.CampaignError):
             C.start_campaign(s, p, t, spec=_net_spec(t), executor=ex)
         assert not ex.calls                       # never launched
@@ -157,7 +157,7 @@ def test_socket_target_campaign_refuses_public_host(hg_home):
     ex = _NetExecutor()
     with session_scope() as s:
         p = create_project(s, name="svc")
-        t = register_socket_target(s, p, "8.8.8.8", 53, transport="udp")
+        t = register_service_target(s, p, "8.8.8.8", 53, transport="udp")
         with pytest.raises((policy.PolicyViolation, C.CampaignError)):
             C.start_campaign(s, p, t, spec=_net_spec(t), executor=ex)
         assert not ex.calls
@@ -165,7 +165,7 @@ def test_socket_target_campaign_refuses_public_host(hg_home):
 
 # ── REST + MCP registration paths ─────────────────────────────────────────────────
 
-def test_rest_register_socket(hg_home):
+def test_rest_register_service(hg_home):
     from fastapi.testclient import TestClient
     from hexgraph.api.app import create_app
 
@@ -173,34 +173,34 @@ def test_rest_register_socket(hg_home):
     with session_scope() as s:
         pid = create_project(s, name="svc").id
     with TestClient(app) as c:
-        r = c.post(f"/api/projects/{pid}/targets/socket",
+        r = c.post(f"/api/projects/{pid}/targets/service",
                    json={"host": "127.0.0.1", "port": 1337, "name": "shell"})
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["kind"] == "service"
         assert body["channel"] == {"kind": "tcp", "host": "127.0.0.1", "port": 1337}
         # a bad port is a 400, not a 500
-        bad = c.post(f"/api/projects/{pid}/targets/socket",
+        bad = c.post(f"/api/projects/{pid}/targets/service",
                      json={"host": "127.0.0.1", "port": 0})
         assert bad.status_code == 400
 
 
-def test_mcp_register_socket(hg_home):
-    from hexgraph.engine.mcp_tools import register_socket
+def test_mcp_register_service(hg_home):
+    from hexgraph.engine.mcp_tools import register_service
 
     with session_scope() as s:
         pid = create_project(s, name="svc").id
-    out = register_socket(pid, "192.168.1.9", 22222, transport="tcp", proto="custom")
+    out = register_service(pid, "192.168.1.9", 22222, transport="tcp", proto="custom")
     assert out["kind"] == "service"
     assert out["channel"]["host"] == "192.168.1.9" and out["channel"]["port"] == 22222
     # bad project / bad parent are clean errors, not exceptions
-    assert "error" in register_socket("nope", "h", 80)
-    assert "error" in register_socket(pid, "h", 80, parent_ref="nope")
+    assert "error" in register_service("nope", "h", 80)
+    assert "error" in register_service(pid, "h", 80, parent_ref="nope")
 
 
-def test_mcp_register_socket_in_catalog():
-    """register_socket is advertised in the MCP catalog (so an agent can discover it)."""
+def test_mcp_register_service_in_catalog():
+    """register_service is advertised in the MCP catalog (so an agent can discover it)."""
     from hexgraph.engine.mcp_catalog import _CATALOG
 
     names = {name for _grp, name, *_ in _CATALOG}
-    assert "register_socket" in names
+    assert "target_register_service" in names

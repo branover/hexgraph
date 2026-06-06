@@ -36,7 +36,7 @@ export default function FilesystemBrowser({ projectId, targetId, onChanged }: {
 
   const add = async (rel: string) => {
     setBusy(rel);
-    try { await api.addFromFs(projectId, targetId, rel); await load(); onChanged?.(); }
+    try { await api.promoteFile(projectId, targetId, rel); await load(); onChanged?.(); }
     catch (e: any) { alert(String(e.message || e)); }
     finally { setBusy(""); }
   };

@@ -294,7 +294,7 @@ def seed(session, *, reset: bool) -> dict:
     from hexgraph.engine.source import (
         create_source_tree, link_finding_to_source, materialize_source_file, write_source_file,
     )
-    from hexgraph.engine.surfaces import register_socket_target, register_web_surface, run_surface_recon
+    from hexgraph.engine.surfaces import register_service_target, register_web_surface, run_surface_recon
     from hexgraph.engine.tasks import create_task
     from hexgraph.models.finding import Evidence, Finding, FollowupSuggestion
 
@@ -370,7 +370,7 @@ def seed(session, *, reset: bool) -> dict:
     _step("Register web_app admin surface + a raw-TCP service surface")
     web = register_web_surface(session, project, "http://192.168.1.1", name="R7000 admin UI",
                                parent=fw, endpoints=ENDPOINTS)
-    svc = register_socket_target(session, project, "192.168.1.1", 5000, transport="tcp",
+    svc = register_service_target(session, project, "192.168.1.1", 5000, transport="tcp",
                                  proto="upnp", name="upnpd control (tcp/5000)", parent=fw)
 
     # ── Source tree (a small C lib + a harness) ──────────────────────────────────────

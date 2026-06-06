@@ -18,18 +18,18 @@ the bridge between the static and dynamic views.
 
 A **`service` target** is a bare, non-HTTP network service: a bind shell, a vendor binary's control
 protocol, a custom daemon, anything reached over a raw TCP or UDP Channel `{kind, host, port}`, with no
-bytes and no credentials. You register one with `register_socket(project_id, host, port,
-transport="tcp")` over MCP, or with `POST /api/projects/{id}/targets/socket`. It links to the shared
+bytes and no credentials. You register one with `target_register_service(project_id, host, port,
+transport="tcp")` over MCP, or with `POST /api/projects/{id}/targets/service`. It links to the shared
 `socket` graph node through a `listens_on` edge, and HexGraph infers the `network` surface from there,
-so `start_fuzz_campaign` can point boofuzz straight at `host:port` and `tcp_request`/`verify_poc` can
+so `fuzz_start` can point boofuzz straight at `host:port` and `net_tcp_request`/`finding_verify_poc` can
 probe and prove it. Reach for this rather than a `remote`/telnet target when all you have is a bare
 protocol, since `remote` carries SSH/telnet shell semantics that a socket service simply does not have.
 
 ## Bounded, audited live assessment (`features.network`)
 
 Live assessment is gated by `features.network`, which is off by default. With it on, HexGraph can talk
-to the surface through an `http_request` tool (with a `session` cookie jar that persists across calls)
-and a web-flavored `verify_poc`, whose oracle is the same unforgeable `{{NONCE}}` token used for binary
+to the surface through an `net_http_request` tool (with a `session` cookie jar that persists across calls)
+and a web-flavored `finding_verify_poc`, whose oracle is the same unforgeable `{{NONCE}}` token used for binary
 PoCs, plus `body_contains` and `status` checks.
 
 ![The egress audit log — public hosts refused](images/egress-audit.png)
@@ -54,8 +54,8 @@ hexgraph rehost <firmware-target> [--brand <hint>]
 
 `rehost` auto-selects the emulator by image type (`select_rehoster`): qemu+KVM for a full-OS disk image
 (IoTGoat's x86 OpenWrt `.img`, say), or FirmAE for a vendor blob (squashfs, cramfs, and the like).
-Booting needs `features.rehost`; assessing the running device with `surface_recon`, `http_request`, or
-`verify_poc` needs `features.network`. The probe joins the emulator container's netns so it can reach
+Booting needs `features.rehost`; assessing the running device with `surface_recon`, `net_http_request`, or
+`finding_verify_poc` needs `features.network`. The probe joins the emulator container's netns so it can reach
 the device's private IP. Build the rehosting images first with `just firmae-build` (privileged, with
 `/dev/net/tun`) or `just qemu-build` (which needs `--device /dev/kvm`).
 
@@ -67,7 +67,7 @@ at it.
 The live-remote tier (`TIER_LIVE_REMOTE`, with `policy.assert_allows_remote()` and
 `remote_scope(host, port)`) covers a physical box on the bench when you have no firmware in hand. A
 `remote` target reached over SSH or telnet lets the agent run the same read-only analysis it would on a
-rootfs: `remote_list_files`, `remote_read_file`, and `remote_run`, all from a fixed read-only tool
+rootfs: `net_remote_list_files`, `net_remote_read_file`, and `net_remote_run`, all from a fixed read-only tool
 allowlist, with no arbitrary shell.
 
 Egress is pinned to the single operator-authorized host (and it can be any host, since that is the

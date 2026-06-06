@@ -33,22 +33,22 @@ should be written back as nodes, edges, findings, hypotheses, and annotations, s
 
 **How analysis flows into the graph.** The graph is a CURATED result set, not the
 program model. On a target, first read the existing graph AND the Observation index
-(`list_observations(target_id)`) so you don't re-derive what's there. Then:
-- **Query freely.** Tool results (binutils_facts / list_functions / decompile_function /
-  decompile_at / disassemble / reanalyze / xrefs / function_xrefs / data_xrefs / call_graph /
-  list_strings / search_decompiled / recover_constant) persist as durable Observations on the
+(`obs_list(target_id)`) so you don't re-derive what's there. Then:
+- **Query freely.** Tool results (re_binutils_facts / re_list_functions / re_decompile_function /
+  re_decompile_at / re_disassemble / re_reanalyze / re_xrefs / re_function_xrefs / re_data_xrefs / re_call_graph /
+  re_list_strings / re_search_decompiled / re_recover_constant) persist as durable Observations on the
   target (result_kinds: decompilation / function_list / call_graph / xrefs / taint /
-  binutils_facts / emulation / strings / structs / …) — check `list_observations` before
-  re-running a heavy analysis, `get_observation(id)` to reuse a prior payload,
-  `search_observations(q)` to find one, and `search_decompiled(query)` to grep across decompiled
-  bodies (analyze once, reuse forever). A query adds NO graph nodes (call_graph only wires
+  binutils_facts / emulation / strings / structs / …) — check `obs_list` before
+  re-running a heavy analysis, `obs_get(id)` to reuse a prior payload,
+  `obs_search(q)` to find one, and `re_search_decompiled(query)` to grep across decompiled
+  bodies (analyze once, reuse forever). A query adds NO graph nodes (re_call_graph only wires
   `calls` edges among functions ALREADY promoted).
 - **Enrich for free.** When a tool recovers richer info about something already in the
   graph (a function's prototype/address, a dangerous import's is_sink tag), HexGraph
   attaches it in place automatically — no action needed.
 - **Promote deliberately.** A new node enters the graph only by a deliberate act:
-  decompiling THAT function, recording a finding on it, an explicit create_node/
-  create_edge. Decompiling a function promotes that one function and links it to
+  decompiling THAT function, recording a finding on it, an explicit graph_create_node/
+  graph_create_edge. Decompiling a function promotes that one function and links it to
   callees ALREADY in the graph — it does NOT spawn its callees (no fan-out); new
   callees are surfaced for you to promote if they matter. Promote the few results that
   carry your reasoning (the functions under investigation, the sinks, the taint path,
@@ -62,7 +62,7 @@ program model. On a target, first read the existing graph AND the Observation in
 - Back every claim with tool output; don't invent findings.
 
 ## 0. Read the write-API contract
-Call **`get_schemas`** once up front. It lists the allowed enums (node types,
+Call **`meta_get_schemas`** once up front. It lists the allowed enums (node types,
 edge types + endpoint kinds, finding categories/severities/statuses, annotation
 kinds) and the Finding shape — so you don't guess field names. Key facts it
 encodes: `evidence.extra` is a free-form object (put the PoC spec, verification,
@@ -72,15 +72,15 @@ not new top-level evidence keys.
 ## 1. Read what's already known FIRST
 Before analyzing anything, orient on prior work so you don't repeat it and you can
 see where to go next:
-- `list_projects()` if you weren't handed a project_id — it lists every project
+- `proj_list()` if you weren't handed a project_id — it lists every project
   (id/name/backend), the starting point the other tools need.
-- `list_targets(project_id)`, `target_facts` (note its `dangerous_imports` — start
-  there), `read_imports` — scope + recon facts.
-- `list_findings(project_id)` — what's already found, **verified**, confirmed, or
+- `target_list(project_id)`, `target_facts` (note its `dangerous_imports` — start
+  there), `re_imports` — scope + recon facts.
+- `finding_list(project_id)` — what's already found, **verified**, confirmed, or
   **dismissed** (don't re-report dismissed issues). Each row carries the compact
   **`assurance`** triple `{standard, method, precondition}` (the rung), so you can read
-  the assurance at a glance without a per-finding `get_finding`.
-- `search(project_id, q)` — locate functions/strings/findings by keyword.
+  the assurance at a glance without a per-finding `finding_get`.
+- `graph_search(project_id, q)` — locate functions/strings/findings by keyword.
 Let the existing graph and any open findings/hypotheses steer your next move: pick
 up unfinished threads, follow related findings to siblings, and target functions
 that haven't been analyzed yet.
@@ -88,49 +88,49 @@ that haven't been analyzed yet.
 ## 2. Investigate (all sandboxed) — the reverse-engineering loop
 You DIRECT; HexGraph runs each tool in the sandbox and PERSISTS every result as a reusable
 Observation. Work cheap-to-expensive — orienting facts first, heavy synthesis last — and check
-`list_observations(target_id)` before any costly re-run (analyze once, reuse forever).
+`obs_list(target_id)` before any costly re-run (analyze once, reuse forever).
 - **Orient (the first minute) — get the authoritative facts before you decompile a thing.**
-  **`binutils_facts`** pulls the symbol table, dynamic imports/exports, relocations (PLT
+  **`re_binutils_facts`** pulls the symbol table, dynamic imports/exports, relocations (PLT
   jump-slots), sections, and the security mitigations (NX, RELRO, PIE, canary, FORTIFY) straight
-  from GNU binutils — sharper than `target_facts`/`read_imports`, which recon caps. Pair it with
-  `list_strings` (hardcoded creds, URLs, format strings, command fragments). If a decompile ever
-  fails or before you lean on Ghidra, **`check_decompiler`** confirms the backend actually WORKS
+  from GNU binutils — sharper than `target_facts`/`re_imports`, which recon caps. Pair it with
+  `re_list_strings` (hardcoded creds, URLs, format strings, command fragments). If a decompile ever
+  fails or before you lean on Ghidra, **`meta_check_decompiler`** confirms the backend actually WORKS
   (active vs. merely configured) so you don't burn turns against a broken decompiler.
-- **Map the attack surface — `xrefs` with NO symbol** maps every dangerous sink
+- **Map the attack surface — `re_xrefs` with NO symbol** maps every dangerous sink
   (system/popen/exec/strcpy/sprintf/memcpy/…), the format-string sinks, AND the network bind/
-  listen/connect/recv sites, with who reaches each — start here. `xrefs <sink>` lists exactly
+  listen/connect/recv sites, with who reaches each — start here. `re_xrefs <sink>` lists exactly
   which functions call a given sink and where. (For firmware, skim the filesystem in parallel —
   §2a — many bugs live in configs/scripts, not code.)
-- **Map the structure without decompiling everything.** **`call_graph`** gives who-calls-whom
+- **Map the structure without decompiling everything.** **`re_call_graph`** gives who-calls-whom
   across the whole program (or the neighbourhood around one `function` out to `depth`);
-  **`function_xrefs`** gives BOTH directions (callers + callees) for one function; **`data_xrefs`**
-  finds every reference to a hex address or a symbol/label (run it after `list_strings`/decompile
+  **`re_function_xrefs`** gives BOTH directions (callers + callees) for one function; **`re_data_xrefs`**
+  finds every reference to a hex address or a symbol/label (run it after `re_list_strings`/decompile
   surfaces an interesting datum to see who touches it).
-- **Read the code.** `list_functions`, then **`decompile_function`** the suspicious ones — or
-  **`decompile_at <0x…>`** when you have an address (from xrefs / a string / a crash backtrace)
-  but no name. **`disassemble`** (by name or address) when you need instruction-level detail the
-  decompiler smooths over. **`search_decompiled(query)`** greps across functions you've ALREADY
+- **Read the code.** `re_list_functions`, then **`re_decompile_function`** the suspicious ones — or
+  **`re_decompile_at <0x…>`** when you have an address (from re_xrefs / a string / a crash backtrace)
+  but no name. **`re_disassemble`** (by name or address) when you need instruction-level detail the
+  decompiler smooths over. **`re_search_decompiled(query)`** greps across functions you've ALREADY
   decompiled (mines the Observation store, no re-decompile) — decompile candidates, then grep
   their bodies for a variable/constant/format string. Trace untrusted input → dangerous sink,
   promoting the functions and sinks on the path as you go. (Decompilation uses the
   operator-configured backend automatically — radare2 by default, Ghidra if enabled; you don't
-  pick it. `get_schemas.decompiler.active` shows which is live; want Ghidra and it's off? Ask the
+  pick it. `meta_get_schemas.decompiler.active` shows which is live; want Ghidra and it's off? Ask the
   operator — there's no tool to flip it yourself.)
 - **Recover a value the code COMPUTES instead of storing.** When a constant never appears as a
   literal and the decompilation shows only the arithmetic that builds it (an XOR/license key, a
-  decoded string, a derived magic), **`recover_constant(target_id, function)`** EMULATES that
+  decoded string, a derived magic), **`re_recover_constant(target_id, function)`** EMULATES that
   self-contained routine in Ghidra's P-Code interpreter in the sandbox (a JVM interpreter — never
   native execution, no network) and returns the value, tagging it onto the function node. Needs
   **features.emulation** + Ghidra headless (returns `available=false` if Ghidra is off). Best on a
   SELF-CONTAINED, parameterless routine — one that takes arguments is emulated over uninitialized
   inputs and usually won't reach a clean `ret`, so it returns no recoverable value
   (`reached_ret=false` / an `error`); don't trust a constant from an argument-dependent routine.
-- **When the inventory looks thin, dig deeper — `reanalyze`** re-runs analysis at a HIGHER depth
-  (busting the cached pass) when `list_functions`/`decompile_function` look incomplete (a function
+- **When the inventory looks thin, dig deeper — `re_reanalyze`** re-runs analysis at a HIGHER depth
+  (busting the cached pass) when `re_list_functions`/`re_decompile_function` look incomplete (a function
   you expect is missing, callees come back empty), so the fast first pass's misses get a second
   chance.
-- **Synthesize, then PROVE it.** Go deeper with `run_task` (`static_analysis`,
-  `harness_generation`, `fuzzing`) and **`verify_poc`** to PROVE exploitability (a confirmed PoC
+- **Synthesize, then PROVE it.** Go deeper with `task_run` (`static_analysis`,
+  `harness_generation`, `fuzzing`) and **`finding_verify_poc`** to PROVE exploitability (a confirmed PoC
   is the gold bar). **`static_analysis` is now GROUNDED** — it runs a real P-Code source→sink
   TAINT pass over the binary (recorded as a `taint` Observation) and feeds that dataflow into the
   LLM synthesis, so trust its source→sink reasoning rather than treating it as a guess.
@@ -147,8 +147,8 @@ Observation. Work cheap-to-expensive — orienting facts first, heavy synthesis 
     unique root cause; `dupe_count` = how many inputs collapsed onto it), a **minimized
     reproducer** (`minimized_reproducer_sha`, shrunk with libFuzzer's own -minimize_crash),
     and a `coverage_instrumented` flag. **Trust the flag:** when `coverage_instrumented=false`
-    it was a black-box run — do NOT overstate coverage or completeness. `list_findings` shows
-    a compact `fuzz` summary; `get_finding` returns the full `evidence.extra.fuzz`.
+    it was a black-box run — do NOT overstate coverage or completeness. `finding_list` shows
+    a compact `fuzz` summary; `finding_get` returns the full `evidence.extra.fuzz`.
 
 ## 2a. Browse the firmware filesystem (configs, scripts, keys — not just code)
 A firmware target unpacks into a filesystem, and a large share of real findings live in
@@ -156,50 +156,50 @@ its FILES rather than its code: hardcoded credentials and API keys, private keys
 weak `/etc/passwd`+`/etc/shadow` hashes, init/boot scripts that launch services as root,
 nvram defaults, CGI scripts, and the web root. Skim the tree EARLY on any firmware — it
 shows you the attack surface (what runs, where the secrets are) before you decompile a thing.
-- **`list_filesystem(target_id)`** lists the unpacked tree (paths/sizes, which entries are
+- **`fs_list(target_id)`** lists the unpacked tree (paths/sizes, which entries are
   ELFs, which are already child targets). Start here.
-- **`read_file(target_id, path)`** reads ONE file (config/script/key/web template — bounded,
+- **`fs_read_file(target_id, path)`** reads ONE file (config/script/key/web template — bounded,
   traversal-safe; binary shown as hex; `path` is relative to the extracted root). Pull the
   configs/keys/scripts and turn what you find into findings + nodes: a startup script that
   runs `/sbin/httpd` → record the service + a `socket` node; `/etc/shadow` with a weak hash →
   a hardcoded-credential finding; a baked-in private key → record it. (This is the firmware's
-  OWN unpacked bytes — distinct from `read_source_file`, which reads trusted managed source.)
-- **`add_file_as_target(target_id, path)`** promotes an interesting file (a CGI, a service
+  OWN unpacked bytes — distinct from `src_read_file`, which reads trusted managed source.)
+- **`target_promote_file(target_id, path)`** promotes an interesting file (a CGI, a service
   daemon, a helper binary) that unpack didn't already register into its OWN child target —
-  then `decompile_function`/`list_functions`/`run_task`/fuzz it like any other target. This is
+  then `re_decompile_function`/`re_list_functions`/`task_run`/fuzz it like any other target. This is
   how you go from "I see an interesting binary in the rootfs" to actually analyzing it.
-(For a LIVE device rather than an extracted image, §2c's remote_list_files/remote_read_file
+(For a LIVE device rather than an extracted image, §2c's net_remote_list_files/net_remote_read_file
 are the same idea over SSH/telnet.)
 
 ## 2b. Live web / service surfaces (routers, admin consoles, APIs)
 Many firmware bugs live in a web app, not just the binary. If you're given a base
 URL (or a `web_app` target already exists), assess it dynamically:
 - **Rehosted firmware**: if you have a firmware target and want its *live* web UI,
-  **`rehost(firmware_target_id)`** boots it under emulation (auto-selecting qemu+KVM for a
+  **`target_rehost(firmware_target_id)`** boots it under emulation (auto-selecting qemu+KVM for a
   full-OS disk image, or FirmAE for a vendor firmware blob) and registers its web server as a
   `web_app` surface child — then assess that surface with the tools below. Needs
   features.rehost (to boot) + features.network (to talk to it); best-effort, since not every
-  image boots cleanly. **For a FirmAE/vendor image, if rehost says it couldn't bring up the
-  device network, retry with the vendor brand** — `rehost(fw, brand="linksys")` (or netgear/
+  image boots cleanly. **For a FirmAE/vendor image, if target_rehost says it couldn't bring up the
+  device network, retry with the vendor brand** — `target_rehost(fw, brand="linksys")` (or netgear/
   dlink/tplink/tenda/…): FirmAE's network inference is vendor-keyed. FirmAE MIPS/ARM boots are
-  slow (~9 min) — be patient. rehost returns `ports` (every device port that answered) and, if
+  slow (~9 min) — be patient. target_rehost returns `ports` (every device port that answered) and, if
   the device exposes SSH/telnet, a **`remote_target_id`** — a `remote` target auto-pinned to the
-  emulator so you can enumerate the LIVE device (remote_list_files/remote_run, needs
+  emulator so you can enumerate the LIVE device (net_remote_list_files/net_remote_run, needs
   features.remote), not just the extracted rootfs.
-- **`register_surface(project_id, base_url, endpoints?)`** registers the surface as a
-  `web_app` target (a Channel, no bytes). `run_task(id, "surface_recon")` maps a route spec
+- **`target_register_web_surface(project_id, base_url, endpoints?)`** registers the surface as a
+  `web_app` target (a Channel, no bytes). `task_run(id, "surface_recon")` maps a route spec
   YOU supply into `endpoint`/`param` nodes + `routes_to` edges to the handler function (the
   static↔dynamic bridge). To DISCOVER routes on a live surface you didn't hand-spec (e.g. a
-  freshly rehosted device), `run_task(id, "web_discover")` crawls it (links + forms + common
-  paths, bounded) and materialises what it finds. `run_task(id, "web_recon")` is a bounded
+  freshly rehosted device), `task_run(id, "web_discover")` crawls it (links + forms + common
+  paths, bounded) and materialises what it finds. `task_run(id, "web_recon")` is a bounded
   liveness probe. (web_discover/web_recon need `features.network`.)
-- **`http_request(target_id, method, path, params?, headers?, body?, json_body?)`** is
+- **`net_http_request(target_id, method, path, params?, headers?, body?, json_body?)`** is
   your hands on the live target: send a login, probe an auth check, fire an injection
   payload, and READ the response body. (Bounded, sandboxed, local-only egress, audited.)
   Pass `session="<label>"` to keep a cookie jar across calls, so you can log in once and
   then explore protected routes interactively without re-sending the cookie (the response
   lists the jar in `session_cookies`).
-- Two oracles to PROVE web bugs with **`verify_poc(target_id, {steps, oracle})`** (cookies
+- Two oracles to PROVE web bugs with **`finding_verify_poc(target_id, {steps, oracle})`** (cookies
   carry across `steps`, so login→protected-route works in one shot):
   - **Auth bypass**: log in with the bypass credential, then GET a protected route;
     `oracle:{type:"body_contains","value":"<a secret only an authed user sees>"}` — seeing
@@ -223,37 +223,37 @@ SSH/telnet, you can do VR on whatever you can read from it — the same KINDS of
 do to an extracted/rehosted rootfs, but live:
 - the operator registers it (a `remote` target) and supplies credentials out-of-band; you get
   the target id.
-- **`remote_list_files(target, path)`** enumerates the filesystem, **`remote_read_file(target,
+- **`net_remote_list_files(target, path)`** enumerates the filesystem, **`net_remote_read_file(target,
   path)`** reads a file (configs, scripts, keys, /etc/passwd, /etc/shadow), and
-  **`remote_run(target, tool)`** runs an allowlisted READ-ONLY recon tool
+  **`net_remote_run(target, tool)`** runs an allowlisted READ-ONLY recon tool
   (uname/id/ps/netstat/mount/ifconfig/df/env/passwd/release/ls). These are read-only by
   construction — there is no arbitrary-shell tool. Use them to map the device, pull configs,
   find hardcoded secrets/creds, and feed findings into the graph (e.g. read /etc/shadow → note
   weak hashes; netstat → record listening `socket` nodes). Requires **features.remote**;
   egress is pinned to the one authorized host and audited.
-- **`remote_launch(target, path, args?)`** is the ONE non-read-only remote op: start a service
+- **`net_remote_launch(target, path, args?)`** is the ONE non-read-only remote op: start a service
   that didn't auto-start (so its socket comes up for live testing) by binary path + args
   (shell-quoted, backgrounded — no arbitrary shell). Many rehosted devices don't boot their
-  vulnerable daemon; launch it (e.g. `remote_launch(dev, "/sbin/socket_cmd", ["1337"])`), then
+  vulnerable daemon; launch it (e.g. `net_remote_launch(dev, "/sbin/socket_cmd", ["1337"])`), then
   test the port (below). features.remote.
 
 ## 2d. Non-HTTP live services (raw TCP) — bind shells, vendor protocols, custom daemons
 A device exposes more than web: a bind shell, a binary control protocol, a pwnable daemon on
-some high port. `rehost` returns `ports` (everything that answered); a `socket` node or netstat
+some high port. `target_rehost` returns `ports` (everything that answered); a `socket` node or netstat
 shows what's listening. To assess these LIVE:
-- **`register_socket(project_id, host, port, transport="tcp", proto?, parent_ref?)`** registers
+- **`target_register_service(project_id, host, port, transport="tcp", proto?, parent_ref?)`** registers
   a bare non-HTTP service as a first-class `service` target (a Channel `{kind,host,port}`, no
   bytes, NO credentials). This is the RIGHT way to model a raw-TCP service — do NOT misuse
-  `register_remote(transport="telnet")` for a bare protocol (that carries SSH/telnet SHELL
+  `target_register_remote(transport="telnet")` for a bare protocol (that carries SSH/telnet SHELL
   semantics a protocol endpoint doesn't have). Pass `parent_ref` to make it a child of a
   rehosted firmware (the probe then reaches the device's private IP through the emulator netns).
-  Once registered, `start_fuzz_campaign(target)` infers the `network` surface and fuzzes it
+  Once registered, `fuzz_start(target)` infers the `network` surface and fuzzes it
   directly (boofuzz at host:port), and the probes below work against it.
-- **`tcp_request(target, port, payload?)`** is your hands on a raw socket (the non-HTTP
-  `http_request`): connect to the device's port (through the emulator netns when rehosted),
+- **`net_tcp_request(target, port, payload?)`** is your hands on a raw socket (the non-HTTP
+  `net_http_request`): connect to the device's port (through the emulator netns when rehosted),
   optionally send `payload` bytes, read the bounded response. Omit `payload` to banner-grab and
-  fingerprint the service. (If the service isn't up, `remote_launch` it first.)
-- **Prove it** with `verify_poc(target, {transport:"tcp", port, payload:"…{{NONCE}}…",
+  fingerprint the service. (If the service isn't up, `net_remote_launch` it first.)
+- **Prove it** with `finding_verify_poc(target, {transport:"tcp", port, payload:"…{{NONCE}}…",
   oracle:{type:"response_contains", value:"{{NONCE}}"}})`. For a command-injection daemon,
   inject something the service must COMPUTE/RUN to emit the nonce (e.g. `;echo {{NONCE}}`) —
   the probe strips your sent bytes before matching, so a daemon that merely echoes your payload
@@ -262,9 +262,9 @@ shows what's listening. To assess these LIVE:
 
 ## 2e. Proving BLIND bugs and read/write primitives (oracles beyond reflected output)
 Reflected `body_contains`/`response_contains` only proves a bug that echoes output back. For
-the rest, `verify_poc` has three unforgeable oracles that observe a side effect on a channel
+the rest, `finding_verify_poc` has three unforgeable oracles that observe a side effect on a channel
 INDEPENDENT of your request (so a match can't be reflected/faked) — call
-`get_schemas['verify_poc_oracles']` for the exact spec shape:
+`meta_get_schemas['verify_poc_oracles']` for the exact spec shape:
 - **Blind command-injection / SSRF / blind RCE** (no reflected output) → **`callback`**: put a
   `{{CALLBACK}}` token (host:port + a per-run nonce path) in the injected command or SSRF URL
   (e.g. `; wget http://{{CALLBACK}}`), with `oracle:{type:"callback"}`. HexGraph stands up a
@@ -286,19 +286,19 @@ binary/harness ⇒ `code_present` (lab-confirmed). Record the verified PoC as a 
 A project can hold one or more **source trees**: trusted source we possess (an imported
 library, or HexGraph-authored harnesses/PoCs/scripts). They are SEPARATE from targets (which
 are hostile bytes) — browse them, don't fear them.
-- **`list_source_trees(project_id)`** — what source trees exist (id/name/origin/file_count + the
-  `target_ids` each is `built_from`). **`read_source_file(tree_id)`** lists a tree's files; with
+- **`src_list_trees(project_id)`** — what source trees exist (id/name/origin/file_count + the
+  `target_ids` each is `built_from`). **`src_read_file(tree_id)`** lists a tree's files; with
   `rel` it reads ONE file's text (bounded, traversal-safe). This is trusted source text — distinct
-  from `read_file` (a firmware's hostile unpacked bytes).
+  from `fs_read_file` (a firmware's hostile unpacked bytes).
 - **Harnesses, PoCs, and build/run scripts are now `source_file`s** (role-tagged
   `harness|poc|script|build_recipe|…`) — a `harness_generation` task's harness is promoted to a
   managed `source_file(role=harness)` + a `harness` node that `harnesses`→ the target, instead of
   living only in `evidence.decompiled_snippet` (which still works for back-compat). To bring in
-  your own harness/PoC or a small library's source, **`import_source_tree(project_id, name,
+  your own harness/PoC or a small library's source, **`src_import_tree(project_id, name,
   files=[{rel,content,role?}])`** (trusted text only — never target bytes; those are ingested as
   targets).
 - **Link a finding/node to its source location** so the analyst can jump from the finding to the
-  exact line: **`link_finding_to_source(finding_id, tree_id, rel, line?)`** records a `located_in`
+  exact line: **`finding_link_to_source(finding_id, tree_id, rel, line?)`** records a `located_in`
   edge + `evidence.extra.source_ref` (the UI's "Open in source" button). Do this whenever a vuln
   corresponds to known source — it's the source↔graph link the workbench is built on.
 
@@ -306,7 +306,7 @@ are hostile bytes) — browse them, don't fear them.
 You can turn a managed source tree into an INSTRUMENTED artifact — but you NEVER run a compiler.
 You author/approve a **BuildSpec** (itself recorded source) and REQUEST a build; HexGraph runs the
 recorded recipe in the sandbox. This is the analogue of "you direct, HexGraph runs the probes".
-- **`build_target(project_id, source_tree_id, system?, phases?, instrumentation?, artifacts?, env?,
+- **`src_build(project_id, source_tree_id, system?, phases?, instrumentation?, artifacts?, env?,
   arch?, network?, fetch_phases?, source_revision_id?)`** — the run-tool. `system`
   (make|cmake|autotools|meson|cargo|go|custom — auto-detected if omitted), `phases` (recorded
   verbatim), `instrumentation` ({sanitizers:[address,undefined,…], coverage:[sancov|afl_pcguard],
@@ -326,12 +326,12 @@ recorded recipe in the sandbox. This is the analogue of "you direct, HexGraph ru
   lockfile) REUSES the prior artifact.
 - **Reproducibility is the contract:** `recipe_sha = hash{phases, fetch_phases, env, base_image,
   instrumentation, arch}`; same recipe_sha + source content_hash + toolchain_digest (+ lockfile) ⇒ the
-  same build. **`list_builds(project_id)`** shows the ledger (status, the triple, lockfile/SBOM,
+  same build. **`src_list_builds(project_id)`** shows the ledger (status, the triple, lockfile/SBOM,
   reproducible/cache_hit, artifacts as CAS shas, the instrumented derived_target_id).
-- **When a build FAILS, read the log: `build_log(build_id)`** returns the full compile output
+- **When a build FAILS, read the log: `src_build_log(build_id)`** returns the full compile output
   (every phase's stdout+stderr) — the iteration signal. Use it to see EXACTLY why it broke (a
   missing header, a flag the sanitizer rejected, a cross-compile sysroot miss), then fix
-  `phases`/`env`/`arch` (or `save_source_revision` the harness) and rebuild. Don't guess at a
+  `phases`/`env`/`arch` (or `src_save_revision` the harness) and rebuild. Don't guess at a
   failed build — read its log.
 - **Rebuild-with-instrumentation is the headline move:** if the source tree is linked (`built_from`)
   to a target, the rebuild registers a DERIVED target wired `instrumented_build_of`→ the original —
@@ -340,21 +340,21 @@ recorded recipe in the sandbox. This is the analogue of "you direct, HexGraph ru
 - **The build→fuzz handoff is automatic** — on a successful build, HexGraph records the instrumented
   TARGET sources on the derived target's `metadata_json.fuzz_target_sources` (the lib's `.c`/`.cc`,
   harness EXCLUDED) AND promotes any `role=harness` file in the tree to a `source_file(role=harness)`
-  + a `harnesses`→ edge to the derived target. So a subsequent **`start_fuzz_campaign(derived_id)`
+  + a `harnesses`→ edge to the derived target. So a subsequent **`fuzz_start(derived_id)`
   Just Works**: it infers `source_lib` (coverage-guided), resolves the sources + harness, and runs
   with real coverage — no manual `fuzz_target_sources`/harness wiring. (Author the harness with
-  `import_source_tree(files=[{rel, content, role:"harness"}, …])` or `save_source_revision(...,
+  `src_import_tree(files=[{rel, content, role:"harness"}, …])` or `src_save_revision(...,
   role="harness")`.) A self-including-header lib (`#include "tlv.h"`) compiles — sources mount
   preserving their directory layout + each dir is added to the include path.
-- **Import an OSS-Fuzz `build.sh`:** **`import_oss_fuzz(project_id, source_tree_id, build_sh)`** maps an
+- **Import an OSS-Fuzz `build.sh`:** **`src_import_oss_fuzz(project_id, source_tree_id, build_sh)`** maps an
   OSS-Fuzz project's build.sh onto our env contract and records a build_spec — so an existing OSS-Fuzz
-  target builds with minimal hand-authoring. Then `build_target` (or POST builds with the spec id).
-- **Edit a harness/PoC + rebuild from a revision (the editable IDE):** **`save_source_revision(tree_id,
+  target builds with minimal hand-authoring. Then `src_build` (or POST builds with the spec id).
+- **Edit a harness/PoC + rebuild from a revision (the editable IDE):** **`src_save_revision(tree_id,
   rel, content, role?)`** saves an edit to a HexGraph-authored file as a NEW REVISION (never an
   in-place mutation; refuses an imported/extracted/vendor tree). **Scratch trees** (your authored
   harnesses/PoCs) are editable by default — no flag needed; editing OTHER authored trees needs
   **`features.source.edit`**. Iterate
-  on a harness in place, then `build_target(..., source_revision_id=<rev id>)` to **rebuild from that
+  on a harness in place, then `src_build(..., source_revision_id=<rev id>)` to **rebuild from that
   revision**.
 - Building needs **`features.build`** enabled in Settings (its own gate, separate from executing the
   target — you can build-and-inspect without running the binary).
@@ -363,16 +363,16 @@ recorded recipe in the sandbox. This is the analogue of "you direct, HexGraph ru
 A **campaign** is a long-lived, detached fuzz job — the SOTA upgrade over the single
 `fuzzing` task. You NEVER run a fuzzer; you REQUEST a campaign and HexGraph spawns +
 reaps a hardened sandbox container.
-- **`start_fuzz_campaign(target_id, surface?, engine?, function?, host?, port?, protocol?, proto_spec?, launch?, launch_binary?, launch_command?, seeds?, dictionary?, max_total_time?, max_len?, max_crashes?, instances?, resources?, environment?)`**
+- **`fuzz_start(target_id, surface?, engine?, function?, host?, port?, protocol?, proto_spec?, launch?, launch_binary?, launch_command?, seeds?, dictionary?, max_total_time?, max_len?, max_crashes?, instances?, resources?, environment?)`**
   returns immediately with `{id, status:'running'}`. The `Fuzzer` seam picks the engine by
   attack **surface** (auto-inferred from the target; override `surface`/`engine` if needed):
-  - **source_lib** — a **Phase-2 instrumented derived target** (a `build_target` rebuild, with
+  - **source_lib** — a **Phase-2 instrumented derived target** (a `src_build` rebuild, with
     source) → **AFL++** (`afl-clang-lto`) = real coverage. The high-value loop:
-    `import_source_tree` → `build_target` → `start_fuzz_campaign` on THAT target.
+    `src_import_tree` → `src_build` → `fuzz_start` on THAT target.
   - **binary_only** — a **stripped firmware ELF, NO source** → **AFL++ qemu-mode** (full edge
     coverage via QEMU, no instrumentation needed; **engine='frida'** the alt). A foreign-arch
     MIPS/ARM binary runs under qemu-user with the parent firmware rootfs as the sysroot
-    (auto-resolved). Just `start_fuzz_campaign(target_id)` on a firmware binary target.
+    (auto-resolved). Just `fuzz_start(target_id)` on a firmware binary target.
   - **network** — a **LIVE service** (a rehosted device's port, or a local service) →
     **boofuzz** (generational, over a real socket). Needs **`features.network`** (the bounded
     local-network tier — loopback/private only, every send audited; NO new permission). Pass
@@ -400,26 +400,26 @@ reaps a hardened sandbox container.
   **Check the campaign `status`**: a clean run is `completed`, but a campaign that did 0 work
   (service unreachable / 0 executions) or hit engine instability finalizes as **`degraded`** —
   NOT a silent zero-crash success. The reason rides `warning` / `engine_note` on the status.
-  and **`list_fuzz_artifacts(campaign_id)`** for the deduplicated crashes. Crashes STREAM as they
+  and **`fuzz_list_artifacts(campaign_id)`** for the deduplicated crashes. Crashes STREAM as they
   happen — an early crash in a 6-hour run surfaces in minutes; you don't wait for the budget.
   Each unique crash becomes a **`fuzz_crash` finding** (one representative per normalized
   stack-hash bucket + a `dupe_count`) with a minimized reproducer, a deterministic exploitability
   rating, and the coverage flag — all on `evidence.extra.fuzz`.
-- **`stop_fuzz_campaign(campaign_id)`** preserves the corpus (resumable), and
-  **`resume_fuzz_campaign(campaign_id)`** picks a finished/stopped campaign back up from that
+- **`fuzz_stop(campaign_id)`** preserves the corpus (resumable), and
+  **`fuzz_resume(campaign_id)`** picks a finished/stopped campaign back up from that
   preserved corpus — continue a run that timed out, or resume after a restart, instead of
   starting cold (AFL++ resumes natively). Campaigns are **crash-safe**: they survive a server
   restart (the reaper re-attaches).
-- **A crash is a re-runnable PoC.** **`verify_fuzz_artifact(artifact_id)`** (the first-class verb;
-  `minimize_artifact` is its back-compat alias) replays the crash reproducer BYTE-FAITHFULLY IN THE
+- **A crash is a re-runnable PoC.** **`fuzz_verify_artifact(artifact_id)`** (the first-class verb;
+  `fuzz_minimize_artifact` is its back-compat alias) replays the crash reproducer BYTE-FAITHFULLY IN THE
   SANDBOX and reports `{verified, assurance, output}` — LLM-free, one click. The reproducer is run as
-  a raw-bytes FILE (0x00/0xff preserved exactly — never text-mangled like `verify_poc`'s stdin), so a
+  a raw-bytes FILE (0x00/0xff preserved exactly — never text-mangled like `finding_verify_poc`'s stdin), so a
   binary fuzz reproducer replays faithfully. A binary/harness crash replays against the instrumented
   binary (the unforgeable `crash` oracle, `code_present/dynamic`); a **network** crash re-sends its
   crashing MESSAGE over the live socket + a liveness oracle (`input_reachable/dynamic`). So a
   `fuzz_crash` climbs the assurance ladder the
   same way a hand-written PoC does.
-- **Did a change help? `coverage_diff(campaign_id, other_campaign_id)`** compares two campaigns'
+- **Did a change help? `fuzz_coverage_diff(campaign_id, other_campaign_id)`** compares two campaigns'
   per-line coverage — what NEW lines `other` reached that the base didn't (and which it lost). Use it
   to judge whether a harness/corpus/engine tweak (or a rebuild from an edited harness revision) actually
   expanded reach before spending more budget.
@@ -432,10 +432,10 @@ reaps a hardened sandbox container.
   campaign talks to a service → needs **`features.network`** (bounded + audited) — pick the right
   flag, neither is a NEW permission.
 - **Remote fuzz environments (off by default).** A campaign can run on a user-owned **remote Docker
-  host** (beefier compute) instead of this box: `list_fuzz_environments()` shows the registered
+  host** (beefier compute) instead of this box: `fuzz_list_environments()` shows the registered
   places a container can run (`local` + remote endpoints, with presence-only connection status +
   health), `fuzz_environment_health(id)` checks one, and you pass `environment=<id>` to
-  `start_fuzz_campaign`. **NOTHING about the analysis changes** — building + fuzzing run on the
+  `fuzz_start`. **NOTHING about the analysis changes** — building + fuzzing run on the
   remote behind the Executor seam, crashes/coverage stream back into THIS local graph, and the SAME
   sandbox boundary applies there (`--network none` except the gated net-fuzz tier, cap-drop,
   no-new-privileges, read-only, non-root). The trust model: the control plane stays loopback; the
@@ -458,11 +458,11 @@ agents and is what you come back to confirm. **Do NOT wait until a PoC verifies
 to add the finding** — that hides work in progress and risks losing it. The rhythm
 is **record → explore → verify → update**:
 
-1. **Suspect → record immediately.** When you spot a likely bug, `record_finding`
+1. **Suspect → record immediately.** When you spot a likely bug, `finding_record`
    right away at your current confidence (e.g. "low"/"medium", status `new`), with
-   the function, sink, and reasoning so far. `create_node` the relevant entities and
+   the function, sink, and reasoning so far. `graph_create_node` the relevant entities and
    **populate the attributes the type expects** — read `node_attribute_schemas` in
-   `get_schemas` for each type's `recommended` fields, so two runs of the same analysis
+   `meta_get_schemas` for each type's `recommended` fields, so two runs of the same analysis
    produce the same graph instead of varying:
    - **functions**: pass `address`; `attrs={"summary":"…","params":[{"name","type",
      "note":"attacker-controlled?"}]}`.
@@ -474,39 +474,39 @@ is **record → explore → verify → update**:
      point that isn't already a node (e.g. "the shell string built at 0x401200"), with
      `attrs={"operation","why"}`.
    Always pass `target_id` for target-bound nodes (else they float as orphans).
-   `create_hypothesis` for the open question, then **`link_evidence(hypothesis_id,
+   `graph_create_hypothesis` for the open question, then **`graph_link_evidence(hypothesis_id,
    finding_id, "supports")`** to connect the finding to it (this also drives the
    hypothesis's status — it's how you later confirm it).
 2. **Explore → keep adding.** As you decompile/trace, wire the path with
-   `create_edge`: `calls`, `references`, `reads`/`writes`, and **`taints`** for the
+   `graph_create_edge`: `calls`, `references`, `reads`/`writes`, and **`taints`** for the
    untrusted-input → sink dataflow (input node → parser → sink node). **Edges carry
    attributes** — put `call_sites`/`arg_constraints` on a `calls` edge, an `address`
-   on a `taints`/`bypasses` edge (see get_schemas → edge_attribute_schemas;
-   `create_edge(merge=True)` accumulates list attrs). For network services, model
-   endpoints as **`socket` nodes** (`create_socket(kind, port|name)`) and wire
+   on a `taints`/`bypasses` edge (see meta_get_schemas → edge_attribute_schemas;
+   `graph_create_edge(merge=True)` accumulates list attrs). For network services, model
+   endpoints as **`socket` nodes** (`graph_create_socket(kind, port|name)`) and wire
    `listens_on` (server) / `connects_to` (client) edges with the listen/connect
    `address` — both sides of a firmware that share a port resolve to one socket, so
-   `list_sockets` shows who talks to whom. `xrefs` (no symbol) surfaces the
-   bind/listen/connect sites. `annotate` nodes with what you learn ("reachable pre-auth",
-   a CWE tag). To give a function a CLEARER NAME, `annotate(kind="rename")` — you PROPOSE the
+   `graph_list_sockets` shows who talks to whom. `re_xrefs` (no symbol) surfaces the
+   bind/listen/connect sites. `graph_annotate` nodes with what you learn ("reachable pre-auth",
+   a CWE tag). To give a function a CLEARER NAME, `graph_annotate(kind="rename")` — you PROPOSE the
    rename, the analyst CONFIRMS it, and on confirmation HexGraph round-trips the new name into
    the persistent Ghidra project and re-decompiles, so it sticks for every future decompile.
    **Record the PoC as its own finding BEFORE you run it** (it will be typed
    `poc`), containing the attacker input/spec you intend to try, marked unverified,
-   and `create_edge` it `confirms`→ the vulnerability finding.
-3. **Verify → update in place.** Run `verify_poc(target_id, poc,
+   and `graph_create_edge` it `confirms`→ the vulnerability finding.
+3. **Verify → update in place.** Run `finding_verify_poc(target_id, poc,
    finding_id=<the PoC finding>)` (it attaches the result — and returns the engine-computed
-   **assurance** triple) / or `run_task`. Then update the SAME findings — don't make
-   duplicates: on success `update_finding` the vulnerability to higher confidence/severity
-   and status `confirmed`, and `link_evidence(..., "supports")` so the hypothesis
-   flips to supported/confirmed. On failure, `update_finding` to lower confidence
-   and `link_evidence(..., "refutes")`.
+   **assurance** triple) / or `task_run`. Then update the SAME findings — don't make
+   duplicates: on success `finding_update` the vulnerability to higher confidence/severity
+   and status `confirmed`, and `graph_link_evidence(..., "supports")` so the hypothesis
+   flips to supported/confirmed. On failure, `finding_update` to lower confidence
+   and `graph_link_evidence(..., "refutes")`.
    **Make the PoC spec SELF-CONTAINED.** A verified PoC is one-click **Re-verifiable** by
    the analyst with NO agent in the loop — HexGraph re-runs the stored `poc` spec as-is.
    So the spec must stand alone: complete `steps`/`argv`/`env`/`stdin`, a real `oracle`,
    and `{{NONCE}}` in BOTH the injected payload AND the oracle value (never a hard-coded
    nonce). The re-verify resolves the PoC's OWN target (the `target_id` you passed to
-   `verify_poc`, recorded as `evidence.extra.poc_target_id`) — so the PoC may fire against a
+   `finding_verify_poc`, recorded as `evidence.extra.poc_target_id`) — so the PoC may fire against a
    different target than the finding it documents (e.g. a binary finding whose exploit hits a
    child/live surface). Re-verify NEVER DOWNGRADES the stored assurance: a failed/weaker
    re-run preserves an already-stronger rung; only a genuine same-or-higher confirmation
@@ -520,7 +520,7 @@ is **record → explore → verify → update**:
 
 **Two standards of "verified" — record the floor, AIM for the strictest.** "Confirmed" is not
 one thing; the engine records an **assurance** triple `{standard, method, precondition}` per
-finding (see `get_schemas['assurance']`). Climb this ladder and don't overstate:
+finding (see `meta_get_schemas['assurance']`). Climb this ladder and don't overstate:
 - **code_present / static** — "looks vulnerable" from decompilation only. Every vuln finding is
   auto-floored here, so you ALWAYS document at least this. It may be a false positive.
 - **code_present / dynamic (LAB-CONFIRMED)** — you executed the code in ISOLATION and the bug
@@ -531,7 +531,7 @@ finding (see `get_schemas['assurance']`). Climb this ladder and don't overstate:
   is worth confirming.
 - **input_reachable / dynamic** — you triggered it END-TO-END through the live deployed input
   boundary (a rehosted/remote **web or socket surface**), so it's both reached AND fires. The
-  STRONGEST. Strive for this; declare the access it needed via `verify_poc` `spec.precondition`
+  STRONGEST. Strive for this; declare the access it needed via `finding_verify_poc` `spec.precondition`
   (aim `unauthenticated`; say `requires_credentials:<which>` honestly — cf. the IoTGoat cmdi,
   which was lab-real but only root-reachable).
 
@@ -543,19 +543,19 @@ production input path not yet found").
 
 - **input_reachable / static (ARGUE it when you can't trigger it live)** — if the service won't
   boot (no rehost/remote/exec tier) you can still argue reachability over the graph instead of
-  triggering it. Build the path — `create_node` the untrusted **input**/`param`/`endpoint` source
-  and the **sink**, then `create_edge` the **`taints`** (best) / `calls` / `routes_to` dataflow
-  from source to sink — and call **`reachability(finding_id=…)`**. If a source→sink path exists it
+  triggering it. Build the path — `graph_create_node` the untrusted **input**/`param`/`endpoint` source
+  and the **sink**, then `graph_create_edge` the **`taints`** (best) / `calls` / `routes_to` dataflow
+  from source to sink — and call **`finding_reachability(finding_id=…)`**. If a source→sink path exists it
   UPGRADES `code_present/static` → `input_reachable/static`, records the path, and derives the
   precondition (an auth boundary on the path ⇒ `requires_credentials`; an unauth boundary ⇒
   `unauthenticated`). It is an ARGUMENT, never a demonstration — strictly weaker than a live
   trigger, and it NEVER downgrades a dynamic claim. (This is exactly the DIR-823G situation: a real
   cmdi sink HexGraph couldn't boot goahead to trigger — argue the path, state the precondition.)
 
-**n-day across binaries.** After confirming a bug, run `link_same_code(project_id)`
+**n-day across binaries.** After confirming a bug, run `finding_link_same_code(project_id)`
 — it links functions with identical code across the project's other binaries and
 flags which side already has findings. For each matched binary that's still bare,
-`propagate_finding(finding_id, target_id)` clones the finding onto it (wired
+`finding_propagate(finding_id, target_id)` clones the finding onto it (wired
 `derived_from`→ the source) to triage, then verify a PoC there too. Firmware reuses
 the same routine across components; one bug is usually several.
 
@@ -567,13 +567,13 @@ Leave unfinished threads as hypotheses or unanalyzed nodes so the user (or the
 next agent) can launch follow-up tasks on them.
 
 **Confirm your writes + inspect the graph as you build it.** After writing, read it back so
-you catch a missed attribute or an edge you still owe: `get_node(node_id)` and
-`get_finding(finding_id)` return one entity in full (with the attrs/evidence you set);
-`list_nodes(project_id, target_id?, node_type?)` and `list_edges(project_id, node_id?)` show
-what's already there and where the gaps are. `set_hypothesis_status(hypothesis_id, status,
+you catch a missed attribute or an edge you still owe: `graph_get_node(node_id)` and
+`finding_get(finding_id)` return one entity in full (with the attrs/evidence you set);
+`graph_list_nodes(project_id, target_id?, node_type?)` and `graph_list_edges(project_id, node_id?)` show
+what's already there and where the gaps are. `graph_set_hypothesis_status(hypothesis_id, status,
 rationale?)` pins a verdict (confirmed/rejected/open) directly when you're not driving it
-through `link_evidence`; `update_edge(edge_id, attrs, merge?)` edits an existing edge in
-place. After any live testing, `list_egress(project_id)` is the audit log of every outbound
+through `graph_link_evidence`; `graph_update_edge(edge_id, attrs, merge?)` edits an existing edge in
+place. After any live testing, `net_list_egress(project_id)` is the audit log of every outbound
 network action (allowed/denied) — review it to confirm you stayed in bounds.
 
 **You SURFACE for the analyst to TRIAGE — you do NOT prune the graph.** Your job is to add
@@ -583,12 +583,12 @@ worth surfacing, and `status`/`confidence` are how you flag that for the human (
 confidence `new` finding, not a deletion). The graph is the human's to triage. The ONLY time
 you remove something is to correct YOUR OWN error: an entity you created from bad information,
 an obvious mistake, or a hallucinated finding with no tool output behind it. For that narrow
-case: `update_finding(finding_id, status="dismissed")` sets a finding aside reversibly (keeps
-the row, greyed and restorable — PREFER this); `delete_finding(finding_id)` / `delete_edge(
-edge_id)` hard-delete pure junk YOU created in error; `archive_node` / `archive_target` (with
-`restore_node` / `restore_target`) reversibly hide an entity you added wrongly. Never remove
+case: `finding_update(finding_id, status="dismissed")` sets a finding aside reversibly (keeps
+the row, greyed and restorable — PREFER this); `finding_delete(finding_id)` / `graph_delete_edge(
+edge_id)` hard-delete pure junk YOU created in error; `graph_archive_node` / `target_archive` (with
+`graph_restore_node` / `target_restore`) reversibly hide an entity you added wrongly. Never remove
 the user's or another agent's work, and never remove something merely to declutter. (Duplicate
-function/symbol nodes are folded automatically after tasks; `merge_duplicates(project_id)`
+function/symbol nodes are folded automatically after tasks; `graph_merge_duplicates(project_id)`
 re-runs that fold on demand — it preserves every edge/finding, it does not delete data.)
 
 A finding object looks like:

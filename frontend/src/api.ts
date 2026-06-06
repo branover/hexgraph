@@ -243,7 +243,7 @@ export const api = {
   deleteEdge: (eid: string) => delJSON<{ deleted: boolean; id: string }>(`/api/edges/${eid}`),
   decompile: (tid: string, fn: string) => postJSON<{ available: boolean; detail?: string; focus?: any; functions?: string[] }>(`/api/targets/${tid}/decompile`, { function: fn }),
   filesystem: (tid: string) => getJSON<{ unpacked: boolean; method?: string; files: FsEntry[] }>(`/api/targets/${tid}/filesystem`),
-  addFromFs: (pid: string, fwId: string, rel: string) => postJSON<any>(`/api/projects/${pid}/targets/${fwId}/add-from-fs`, { rel }),
+  promoteFile: (pid: string, fwId: string, rel: string) => postJSON<any>(`/api/projects/${pid}/targets/${fwId}/promote-file`, { rel }),
   // Source trees (Phase 1 — read-only IDE browse)
   sourceTrees: (pid: string) => getJSON<{ source_trees: SourceTreeRow[] }>(`/api/projects/${pid}/source-trees`),
   createSourceTree: (pid: string, body: { name: string; origin?: string; target_id?: string }) => postJSON<{ id: string; name: string; origin: string }>(`/api/projects/${pid}/source-trees`, body),

@@ -169,4 +169,4 @@ def test_capability_and_mcp_gate(hg_home):
     assert "poc" not in capabilities_for("target", "executable")
     _enable()
     assert "poc" in capabilities_for("target", "executable")
-    assert "verify_poc" in {x["name"] for x in mcp_tools.catalog({"run"})}
+    assert "finding_verify_poc" in {x["name"] for x in mcp_tools.catalog({"run"})}

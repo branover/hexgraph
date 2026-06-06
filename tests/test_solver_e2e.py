@@ -101,7 +101,7 @@ def test_solve_verbs_advertised_only_when_enabled(hg_home):
 
     def _mcp_present():
         names = {t["name"] for t in M.catalog({"run"})}
-        return {"solve_reaching_input", "solve_constraint"} <= names
+        return {"re_solve_reaching_input", "re_solve_constraint"} <= names
 
     assert _mcp_present() is False
     with session_scope() as s:

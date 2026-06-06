@@ -379,7 +379,7 @@ export default function Settings() {
               </label>
             </div>
             <p className="hint">
-              ⚠ Like fuzzing, this relaxes the static-only policy: a <b>poc</b> task / the <code>verify_poc</code>
+              ⚠ Like fuzzing, this relaxes the static-only policy: a <b>poc</b> task / the <code>finding_verify_poc</code>
               tool <b>executes the target</b> with an attacker-style input inside the sandbox
               (<code>--network none</code>, capped, timed, disposable) and confirms it via an unforgeable
               nonce oracle. A verified PoC is marked <b>✓ verified</b> on the finding.

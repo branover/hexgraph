@@ -27,28 +27,38 @@ prints a "ready" line to stderr and then blocks, which is correct; confirm it wi
 WAL-mode SQLite database, so an agent's findings show up in the UI on reload, and yours show up for the
 agent the same way.
 
-The tools are grouped into **read**, **write**, and **run**, and each group is gated by
+Every tool is named `<domain>_<verb>`, so an agent can route to the right one from the name alone
+without fetching its schema. The domains are `proj` (projects), `target` (the target lifecycle and
+every tool that creates a target, including rehosting), `re` (static reverse engineering), `fs` (a
+target's unpacked filesystem), `obs` (the Observation store), `graph` (the curated node/edge/hypothesis
+graph), `finding` (findings, n-day, and proving), `src` (source trees and builds), `fuzz` (campaigns),
+`net` (live network interaction and the egress log), `task` (the task runner), and `meta` (schemas and
+health). Closed value sets — node and edge types, finding severities, task types, the remote recon
+allowlist, and so on — are real schema `enum`s generated from the codebase's own definitions, so an
+agent can't pass a value the engine doesn't understand.
+
+The tools are also grouped into **read**, **write**, and **run**, and each group is gated by
 `features.mcp.{read,write,run}` (in Settings → Coding-agent tools, or via `--tools`), which keeps the
 agent's context small:
 
-- **read** covers the `list_*` family, `get_node`, `get_finding`, `xrefs`, `list_sockets`,
-  `list_filesystem`/`read_file`, `list_source_trees`/`read_source_file`, `fuzz_status`,
-  `list_builds`/`build_log`/`coverage_diff`, and the observation read verbs
-  `list_observations`/`get_observation`/`search_observations` (see the next section).
-- **write** covers `create_project` (start an empty, source-first project), `record_finding`,
-  `update_finding`, `create_node`, `create_edge`, `create_socket`,
-  `create_hypothesis`, `link_same_code`, `propagate_finding`, `import_source_tree`,
-  `link_finding_to_source`, `save_source_revision`, `import_oss_fuzz`, and more. It also
-  holds the graph-removal tools — the reversible `archive_node`/`restore_node`/`archive_target`/`restore_target`
-  and the hard `delete_edge` — plus `delete_finding` for clearing a junk finding outright
+- **read** covers the listing and inspection verbs across the domains, `graph_get_node`, `finding_get`, `re_xrefs`, `graph_list_sockets`,
+  `fs_list`/`fs_read_file`, `src_list_trees`/`src_read_file`, `fuzz_status`,
+  `src_list_builds`/`src_build_log`/`fuzz_coverage_diff`, and the observation read verbs
+  `obs_list`/`obs_get`/`obs_search` (see the next section).
+- **write** covers `proj_create` (start an empty, source-first project), `finding_record`,
+  `finding_update`, `graph_create_node`, `graph_create_edge`, `graph_create_socket`,
+  `graph_create_hypothesis`, `finding_link_same_code`, `finding_propagate`, `src_import_tree`,
+  `finding_link_to_source`, `src_save_revision`, `src_import_oss_fuzz`, and more. It also
+  holds the graph-removal tools — the reversible `graph_archive_node`/`graph_restore_node`/`target_archive`/`target_restore`
+  and the hard `graph_delete_edge` — plus `finding_delete` for clearing a junk finding outright
   (a hard, irreversible delete that also removes the edges and annotations touching it, and
   detaches any task or fuzz artifact that referenced it); to set a finding aside reversibly
-  instead, call `update_finding(status='dismissed')`.
-- **run** covers `ingest`, `add_file_as_target` (promote a file from an unpacked firmware into
-  its own target), `run_task`, `verify_poc`, `verify_fuzz_artifact`,
-  `start_fuzz_campaign`/`resume_fuzz_campaign`, `build_target`, and more.
+  instead, call `finding_update(status='dismissed')`.
+- **run** covers `target_ingest`, `target_promote_file` (promote a file from an unpacked firmware into
+  its own target), `task_run`, `finding_verify_poc`, `fuzz_verify_artifact`,
+  `fuzz_start`/`fuzz_resume`, `src_build`, and more.
 
-Call **`get_schemas` first.** It advertises the Finding shape, the node and edge vocabulary, the
+Call **`meta_get_schemas` first.** It advertises the Finding shape, the node and edge vocabulary, the
 per-type node-attribute schemas (including the sink-versus-symbol rule), the edge-attribute schemas,
 the socket kinds, and the active decompiler.
 
@@ -70,9 +80,9 @@ dump the whole program into the graph, because that is the explosion the curatio
 prevent.
 
 What that means for an agent driving HexGraph over MCP comes down to a few rules the tool descriptions
-already state, and `get_schemas` spells out in its `substrate_vs_graph` and `observations` sections:
+already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and `observations` sections:
 
-- **Query verbs add nothing to the graph.** `list_functions`, `xrefs`, `disassemble`, `list_strings`
+- **Query verbs add nothing to the graph.** `re_list_functions`, `re_xrefs`, `re_disassemble`, `re_list_strings`
   and the rest return their results as tool output and quietly record an Observation. They create no
   nodes and no edges. An enumeration is an answer, not a pile of graph objects.
 - **Enrichment of existing objects is automatic and free.** When a call recovers something unambiguous
@@ -80,18 +90,18 @@ already state, and `get_schemas` spells out in its `substrate_vs_graph` and `obs
   tag on a dangerous import, the call sites on an existing `calls` edge, HexGraph attaches it in place
   with no further action from you. It only ever deepens nodes that already exist, and it never makes a
   judgment call (no severity, no "this is a vulnerability", no new node).
-- **Promotion is deliberate.** A new node enters the graph only by an explicit act: `decompile_function`
-  promotes the one function you asked about, `create_node`/`create_edge`/`record_finding` add the
+- **Promotion is deliberate.** A new node enters the graph only by an explicit act: `re_decompile_function`
+  promotes the one function you asked about, `graph_create_node`/`graph_create_edge`/`finding_record` add the
   results you decide are worth keeping. Decompiling a function lists its callees in the result and draws
   `calls` edges only to callees already in the graph; it does not spawn a node per callee. A single call
   is also capped by a per-call promotion budget, and if a promotion would exceed it the overflow comes
   back as promotable results with an explicit "capped" note rather than being silently dropped.
-- **Check before you re-run.** Because results persist, call `list_observations(target_id)` before
-  paying to re-run an expensive analysis, and pull a prior payload back with `get_observation(id)`
+- **Check before you re-run.** Because results persist, call `obs_list(target_id)` before
+  paying to re-run an expensive analysis, and pull a prior payload back with `obs_get(id)`
   rather than recomputing it. An identical call against identical bytes is served from the existing
-  Observation and flagged `cached`. The three read verbs are `list_observations(target_id, tool?,
-  kind?, limit?)` for the newest-first index of metadata, `get_observation(id)` for one Observation in
-  full including its complete payload from content-addressed storage, and `search_observations(query)`
+  Observation and flagged `cached`. The three read verbs are `obs_list(target_id, tool?,
+  kind?, limit?)` for the newest-first index of metadata, `obs_get(id)` for one Observation in
+  full including its complete payload from content-addressed storage, and `obs_search(query)`
   for a substring search over tool, summary, and result kind across a project or a single target. Every
   tool result also carries a one-line reuse hint pointing you at them.
 
@@ -99,7 +109,7 @@ The fuller, user-facing tour of all this lives in [observations.md](observations
 
 ### Annotations are proposals; a rename is confirmed by a human
 
-`annotate` lets a driving agent attach a note, a tag, a type declaration, or a function
+`graph_annotate` lets a driving agent attach a note, a tag, a type declaration, or a function
 **rename** to a graph entity, and an agent's annotation lands as a *proposal*. It is recorded
 against the node, but on its own it changes nothing else. The rename is where that distinction
 matters most. When you confirm a proposed rename in the web UI, the graph takes the new name;

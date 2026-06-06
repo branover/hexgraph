@@ -124,12 +124,12 @@ def test_verbs_not_advertised_when_off_but_appear_when_on(hg_home):
     def _present(group, name):
         return any(t["name"] == name for t in M.catalog({group}))
 
-    assert _present("read", "yara_scan") is False
-    assert _present("write", "yara_sweep") is False
+    assert _present("read", "re_yara_scan") is False
+    assert _present("write", "re_yara_sweep") is False
     _enable(hg_home)
-    assert _present("read", "yara_scan") is True
-    assert _present("write", "yara_sweep") is True
-    spec = next(t for t in M.catalog({"read"}) if t["name"] == "yara_scan")
+    assert _present("read", "re_yara_scan") is True
+    assert _present("write", "re_yara_sweep") is True
+    spec = next(t for t in M.catalog({"read"}) if t["name"] == "re_yara_scan")
     assert callable(spec["fn"])
     assert spec["schema"]["properties"].keys() >= {"target_id", "ruleset"}
 

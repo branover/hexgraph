@@ -118,53 +118,53 @@ baseline, then exercise the *live* actions (run a task, start a campaign, verify
 ### A1 — Ingest a standalone binary + run recon  → S3, S16
 - The showcase already ingests a standalone daemon with real bytes. To exercise a *live* recon
   (the "Run → recon executes for real" interaction), run a recon task on it:
-  MCP `run_task(target_id=<daemon>, type="recon")` or `hexgraph run <daemon> --type recon`.
+  MCP `task_run(target_id=<daemon>, type="recon")` or `hexgraph run <daemon> --type recon`.
   (Needs Docker; if absent, the seeded recon facts already populate the inspector — note the gap.)
   Unlocks: TGT-02/05, GRAPH-07/10, TASK-01/02.
 
 ### A2 — Confirm the firmware + its unpacked filesystem  → S4, S27
 - The showcase firmware has a browsable unpacked FS + path-named children (httpd, libupnp.so),
   giving the folder tree, the rollup badges, and cross-target edges. Verify it loaded
-  (MCP `list_filesystem` / the Targets pane). For the curatable-targets folder grouping at depth,
+  (MCP `fs_list` / the Targets pane). For the curatable-targets folder grouping at depth,
   the REAL tier (A0) has the ~250-child firmware.
   Unlocks: TGT-03/04/09/10, GRAPH-01/26, GRAPH-27/28.
 
 ### A3 — Register a web_app surface  → S5
 - The showcase registers the router admin UI web_app. To add one explicitly:
-  MCP `register_surface(kind="web_app", base_url=…, routes=…)`, then `run_task(surface_recon)`.
+  MCP `target_register_web_surface(kind="web_app", base_url=…, routes=…)`, then `task_run(surface_recon)`.
   Unlocks: TGT-06 (surface kinds), GRAPH-27, VIEW-* with a surface.
 
 ### A4 — Register a service (raw-TCP socket) surface  → S6
-- The showcase registers a UPnP/telnet-ish service. Explicitly: MCP `register_socket(kind="tcp",
-  host=…, port=…)` (or `POST /api/projects/{id}/targets/socket`).
+- The showcase registers a UPnP/telnet-ish service. Explicitly: MCP `target_register_service(kind="tcp",
+  host=…, port=…)` (or `POST /api/projects/{id}/targets/service`).
   Unlocks: TGT-06, GRAPH-27, FUZZ-01 (network surface fields).
 
 ### A5 — Static analysis producing findings across types & severities  → S7, S8, S9, S10, S11, S15
 - The showcase persists findings spanning vulnerability / recon / info-leak / auth-bypass /
   fuzz_crash / poc and the full assurance ladder (static code_present, argued input_reachable,
   lab-confirmed, and a verified PoC). To produce a *live* finding too, run a static-analysis task:
-  MCP `run_task(target_id=<httpd>, type="static_analysis", objective=…)` or
+  MCP `task_run(target_id=<httpd>, type="static_analysis", objective=…)` or
   `hexgraph run <httpd> --type static_analysis` (mock backend → deterministic findings).
   Ensure at least one extra LOW finding exists as a disposable delete target (S15).
   Unlocks: FIND-01/02/03/04/10/12/13/14/15, GRAPH-18/20, TOOL-06.
 
 ### A6 — Author nodes, edges, a hypothesis, annotations  → S12, S13, S23
-- MCP write tools (or the UI Node/Edge modals): `create_node` (a function + a sink + a socket),
-  `create_edge` (e.g. a `taints` source→sink), `create_hypothesis` + `link_evidence` from a
-  finding, and `create_annotation` (a note + a tag; a function rename). Leave at least one
+- MCP write tools (or the UI Node/Edge modals): `graph_create_node` (a function + a sink + a socket),
+  `graph_create_edge` (e.g. a `taints` source→sink), `graph_create_hypothesis` + `graph_link_evidence` from a
+  finding, and `graph_annotate` (a note + a tag; a function rename). Leave at least one
   annotation in the `proposed` state (an analysis task proposes renames) so FIND-17's confirm/reject
   is testable.
   Unlocks: TOOL-01/02, EDGE-DEL, GRAPH-12/14/37, FIND-16/17.
 
 ### A7 — Leave findings in varied states  → S14
-- Confirm a couple of findings (`update_finding(status="confirmed")` / the Confirm button),
+- Confirm a couple of findings (`finding_update(status="confirmed")` / the Confirm button),
   dismiss one (`status="dismissed"`), and leave several `new`. So the status filter, the lifecycle
   pills, and the dismissed-vs-deleted distinction all have real examples.
   Unlocks: FIND-01/02/05/06.
 
 ### A8 — Verify a PoC  → S8 (the verified rung)
 - The showcase ships a verified command-injection PoC. To exercise the live verify path, with
-  `features.poc` on call MCP `verify_poc(finding_id=<the cmd-injection finding>)` (or the Inspector
+  `features.poc` on call MCP `finding_verify_poc(finding_id=<the cmd-injection finding>)` (or the Inspector
   **Verify PoC** button). This proves the green "✓ verified" + assurance line are real.
   Unlocks: FIND-04, FIND-12.
 
@@ -185,7 +185,7 @@ baseline, then exercise the *live* actions (run a task, start a campaign, verify
 ### A10 — Run a fuzz campaign to completion (crashes + coverage)  → S20
 - The showcase runs a finished mock fuzz campaign → crash artifacts (dedup group + exploitability +
   minimized reproducer) + a per-line coverage map + a fuzz_crash finding. To run one live: open the
-  Fuzz modal on the instrumented target and **Start campaign** (or MCP `start_fuzz_campaign`), let it
+  Fuzz modal on the instrumented target and **Start campaign** (or MCP `fuzz_start`), let it
   finish. This makes FUZZ-05–10 + FUZZ-12/13 real.
   Unlocks: FUZZ-03/05/06/07/08/09/10/12/13.
 
@@ -208,13 +208,13 @@ baseline, then exercise the *live* actions (run a task, start a campaign, verify
   Unlocks: TOOL-04, TOOL-05, GRAPH-27/28, VIEW-04/05.
 
 ### A12 — Re-run a task over a target  → S25
-- Re-run an analysis over httpd (TaskDetail **Re-run**, or `run_task` again) so a target has ≥2 runs
+- Re-run an analysis over httpd (TaskDetail **Re-run**, or `task_run` again) so a target has ≥2 runs
   for Compare and the re-run path.
   Unlocks: TOOL-03, TASK-02 (re-run).
 
 ### A13 — Generate egress events (allowed + denied)  → S26
 - The showcase records a few EgressEvents (allowed + one denied). To make them live, with
-  `features.network` on run a `web_recon` / `http_request` against the loopback web_app (allowed) and
+  `features.network` on run a `web_recon` / `net_http_request` against the loopback web_app (allowed) and
   attempt a public-host destination (denied → audited). So the Egress audit table has both verdicts.
   Unlocks: TOOL-08.
 

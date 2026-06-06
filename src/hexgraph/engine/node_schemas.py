@@ -2,9 +2,9 @@
 attributes the researcher expects to see populated on it.
 
 The companion to `edge_schemas.py`. Nodes are typed (`node.node_type`) with a free-form
-`attrs_json`; this registry is the *contract* an agent reads (via `get_schemas`) so the
+`attrs_json`; this registry is the *contract* an agent reads (via `meta_get_schemas`) so the
 same analysis run twice converges on the same graph instead of varying. It is **guidance,
-not a hard schema** — unknown attrs are kept — but every create_node call should populate
+not a hard schema** — unknown attrs are kept — but every graph_create_node call should populate
 the `recommended` attributes for the type, and `use_when` keeps the type taxonomy crisp
 (notably: do NOT mint a standalone `sink` node for a dangerous library call that is already
 a `symbol`/`function` node — see below).
@@ -24,7 +24,7 @@ NODE_ATTRIBUTE_SCHEMAS: dict[str, dict[str, Any]] = {
     "function": {
         "description": "A function/subroutine in a binary.",
         "identity": "(target, normalized name) — recon pre-materializes these with address=null; "
-                    "create_node MERGES into the existing one (fills address, unions attrs).",
+                    "graph_create_node MERGES into the existing one (fills address, unions attrs).",
         "use_when": "Any routine you analyze. Always bind it to its target_id and give its address.",
         "attributes": {
             "summary": _a("one-line description of what the function does", recommended=True),
@@ -102,7 +102,7 @@ NODE_ATTRIBUTE_SCHEMAS: dict[str, dict[str, Any]] = {
         "description": "A network/IPC endpoint SHARED across binaries (a server listens_on it, a "
                        "client connects_to it — both resolve to one node).",
         "identity": "(project, kind, port|name) — target_id is null (cross-binary). Make it with "
-                    "create_socket, not create_node.",
+                    "graph_create_socket, not graph_create_node.",
         "use_when": "Modeling the network map: a listening port or an IPC channel.",
         "attributes": {"kind": _a("tcp|udp|unix|io|netlink|raw|other", recommended=True),
                        "port": _a("port number", type="int"), "name": _a("path/name for unix/io"),
@@ -129,7 +129,7 @@ NODE_ATTRIBUTE_SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "hypothesis": {
         "description": "A research question/claim, evidenced by findings.",
-        "identity": "a hypothesis node; prefer create_hypothesis + link_evidence over raw create_node.",
+        "identity": "a hypothesis node; prefer graph_create_hypothesis + graph_link_evidence over raw graph_create_node.",
         "use_when": "Tracking a line of inquiry ('auth can be bypassed via short token').",
         "attributes": {"statement": _a("the claim", recommended=True), "rationale": _a("why you think so")},
     },
@@ -157,7 +157,7 @@ NODE_ATTRIBUTE_SCHEMAS: dict[str, dict[str, Any]] = {
                        "scripts are role-tagged source_files.",
         "identity": "(project, fq_name=`<tree_id>:<rel>`) — one node per file path in a tree.",
         "use_when": "Don't hand-create these — they're materialized when you link a finding to "
-                    "source (link_finding_to_source) or import a tree. Browse with read_source_file.",
+                    "source (finding_link_to_source) or import a tree. Browse with src_read_file.",
         "attributes": {
             "tree_id": _a("the source_tree this file belongs to", recommended=True),
             "rel": _a("path relative to the tree root", recommended=True),

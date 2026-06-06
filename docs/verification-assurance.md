@@ -25,7 +25,7 @@ The rationale and the full oracle taxonomy are in
 
 ## PoC verification (`features.poc`)
 
-With PoC verification enabled, the `poc` task and the `verify_poc` MCP tool execute the target in the
+With PoC verification enabled, the `poc` task and the `finding_verify_poc` MCP tool execute the target in the
 sandbox against an attacker input and confirm exploitation through an unforgeable `{{NONCE}}` oracle.
 HexGraph substitutes a fresh random token, runs the PoC, and "verified" means the injected behavior
 really happened: the nonce showed up in output the target itself had to produce. A confirmed PoC is
@@ -34,15 +34,15 @@ surfaced as a `verified` finding.
 ```bash
 hexgraph config set features.poc.enabled true     # flips the policy to allow sandboxed execution
 # then launch a `poc` task from the UI Run menu, or over MCP:
-#   verify_poc(target_id, poc, finding_id=...)  with a spec like
+#   finding_verify_poc(target_id, poc, finding_id=...)  with a spec like
 #   {"stdin": "...{{NONCE}}...", "oracle": {"type": "output_contains", "value": "{{NONCE}}"}}
 ```
 
 Foreign-arch targets run under qemu-user automatically. `poc_probe` picks `qemu-<arch>` from the ELF
-header, and `verify_poc` mounts the parent firmware's extracted rootfs as the qemu sysroot (`-L`), so
+header, and `finding_verify_poc` mounts the parent firmware's extracted rootfs as the qemu sysroot (`-L`), so
 a dynamically-linked MIPS or ARM binary can find its libraries. This has been verified end to end on
 real MIPS firmware. Beyond command injection, the oracle set includes `callback`, `canary_read`,
-`oob_write`, and a DoS `liveness`/`unavailable` oracle, plus a web-flavored `verify_poc` with
+`oob_write`, and a DoS `liveness`/`unavailable` oracle, plus a web-flavored `finding_verify_poc` with
 `body_contains` and `status` checks.
 
 ## The graduated, opt-in policy model

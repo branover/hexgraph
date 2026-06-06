@@ -73,7 +73,7 @@ sink. For each crash you can:
 
 - **Reproduce** or **Minimize**, which re-run the stored reproducer byte-for-byte against the
   instrumented harness binary. This is LLM-free, using the unforgeable `crash` oracle (the MCP verb is
-  `verify_fuzz_artifact`).
+  `fuzz_verify_artifact`).
 - **Promote** it to a tracked finding, or **Promote → PoC**, which seeds a reproducer-backed PoC that
   the one-click **Re-verify** path can re-prove on demand.
 
@@ -101,7 +101,7 @@ sees it. When a harness you expect to crash stays stubbornly clean, suspect elis
 observable use of the vulnerable result.
 
 When you're iterating like this on a harness HexGraph authored, note that editing it in place and
-rebuilding from the new revision (`save_source_revision`) is gated behind `features.source.edit`,
+rebuilding from the new revision (`src_save_revision`) is gated behind `features.source.edit`,
 which is off by default. With it off, the way to iterate is to re-import a fresh source tree each
 round rather than editing the managed one. See [build-from-source.md](build-from-source.md) for the
 editable-IDE workflow.
@@ -171,5 +171,5 @@ docker_host = "ssh://you@beefybox"
 
 A one-click **Health-check** confirms the endpoint is reachable and authorized and has the
 `hexgraph-fuzz` image present. After that, pick the environment in the Fuzz modal (it defaults to
-`local`), or pass `environment` to `start_fuzz_campaign` over MCP or to the campaign API. Each
+`local`), or pass `environment` to `fuzz_start` over MCP or to the campaign API. Each
 environment carries its own `ResourceSpec` ceiling, which the campaign inherits.
