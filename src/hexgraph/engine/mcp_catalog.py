@@ -135,6 +135,14 @@ _CATALOG = [
      {"type": "object", "properties": {"target_id": {"type": "string"}, "pattern": {"type": "string", "description": "optional substring filter"}}, "required": ["target_id"]}),
     ("read", "re_floss_strings", _t.floss_strings, "Recover OBFUSCATED strings a plain re_list_strings pass MISSES — STACK strings (built byte-by-byte on the stack at runtime), TIGHT strings, and DECODED strings (produced by a decode routine FLOSS lightly EMULATES in the sandbox) — via FLARE FLOSS. On firmware/malware these hidden strings (URLs, command templates, keys, format strings) are often the lead. QUERY: records a floss_strings Observation; adds NO graph nodes — PROMOTE an interesting recovered string to a string node deliberately (graph_create_node node_type=string). FLOSS is slow, so check obs_list(target_id) first to reuse a prior pass. NOTE: stack/decoded recovery supports x86/amd64 PE targets; on an ELF/foreign-arch artifact it degrades to a static-strings-only pass with a note. Gated: features.floss (default off; advertised only when enabled — it relaxes no policy boundary, FLOSS emulates decode routines in-process and never executes the target, but is slower than re_list_strings).",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "min_length": {"type": "integer", "description": "min string length (default 4, clamped 4–64)"}}, "required": ["target_id"]}),
+    ("read", "re_yara_scan", _t.yara_scan, "Match ONE target's bytes against YARA rules (the bundled high-signal set — embedded creds, known-bad library banners, weak-crypto constants, packer signatures — plus any .yar the user dropped in the HEXGRAPH_HOME rules dir), run in the sandbox. PROMOTE: each matched rule becomes a project-level `pattern` node + a `matches_rule` edge from this target, carrying the rule's DECLARED severity/cve (the matcher never fabricates a severity or auto-mints a finding — promote a match to a finding deliberately). Records a yara_matches Observation; check obs_list(target_id, kind='yara_matches') first to reuse a prior pass. `ruleset` (a bundled ruleset id, or 'all', default 'all') is the only knob — never a yara command line. The pattern complement to the exact-hash n-day link finding_link_same_code. For the WHOLE project (every target + extracted firmware file) use re_yara_sweep. Gated: features.yara (a static MATCH — reads bytes, never executes — so it relaxes no policy boundary; opt-in because rule management is a surface).",
+     {"type": "object", "properties": {"target_id": {"type": "string"}, "ruleset": {"type": "string", "description": "bundled ruleset id, or 'all' (default)"}}, "required": ["target_id"]}),
+    ("write", "re_yara_sweep", _t.yara_sweep, "Project-wide YARA sweep — the PATTERN n-day complement to finding_link_same_code (exact hash): match every non-archived byte target AND every extracted firmware file against the bundled high-signal rules (+ any user .yar in the HEXGRAPH_HOME rules dir), recording a yara_matches Observation per artifact and promoting matched rules to shared project-level `pattern` nodes via `matches_rule` edges (so the graph shows which targets/files a rule matched). One analyst's rule → a corpus-wide hunt. `ruleset` is a bundled ruleset id (or 'all', default). The matcher carries each rule's DECLARED severity/cve onto the pattern node but never fabricates a severity or auto-mints a finding — promote a hit to a finding deliberately. Returns a roll-up of scanned/match/promotion counts + hits. Gated: features.yara (a static MATCH; relaxes no policy boundary).",
+     {"type": "object", "properties": {"project_id": {"type": "string"}, "ruleset": {"type": "string", "description": "bundled ruleset id, or 'all' (default)"}}, "required": ["project_id"]}),
+    ("run", "re_solve_reaching_input", _t.solve_reaching_input, "SOLVE for a concrete input that DRIVES execution to a sink (e.g. system/execve/strcpy) via angr SYMBOLIC EXECUTION in the dedicated angr sandbox image — the strongest STATIC claim short of a live PoC, because it produces a concrete REACHING INPUT (often raw non-ASCII bytes a guess can't hit). You REQUEST it with a sink selector — you never write an angr script; HexGraph runs the bounded, deterministic solve (DFS + wall-clock/step/state caps). PROMOTE: on success it promotes the grounded path (the sink as an is_sink node + the enclosing function + a `calls` edge) and emits a high-confidence `vulnerability` finding whose evidence.reproducer is the solved input (hex), assurance input_reachable/static; records a `solver` Observation either way. `sink_func` (the dangerous callee to reach, e.g. 'system') is the main knob; optionally `function` (the enclosing routine) and `budget`. angr is HEAVY + slow — check obs_list(target_id, kind='solver') first to reuse a prior solve. Returns cleanly unsolved when no reaching input exists within the budget (nothing fabricated). Gated: features.angr (symbolic execution; relaxes no sandbox/exec/egress boundary — it explores bytes, never runs the target — but heavy, so policy-gated like emulation).",
+     {"type": "object", "properties": {"target_id": {"type": "string"}, "sink_func": {"type": "string", "description": "the dangerous callee to reach, e.g. 'system'"}, "function": {"type": "string", "description": "optional enclosing routine"}, "budget": {"type": "string", "enum": ["quick", "default", "deep"]}}, "required": ["target_id", "sink_func"]}),
+    ("run", "re_solve_constraint", _t.solve_constraint, "Recover the VALUE/input that SATISFIES a single check (the secret a strcmp compares against, the serial a license gate validates) via angr — the symbolic-execution analogue of re_recover_constant (which emulates a self-contained routine). You give a check selector; HexGraph runs the bounded solve in the angr image. ENRICH: on success annotates the function node with the recovered value (attrs.recovered_value / satisfying_input_hex) and records a `solver` Observation; adds no new graph nodes. Single-check solving ONLY — NOT whole-program exploration. `function` names the routine; optionally `check_addr` pins the pass/success block, or `sink_func` when the check gates a sink and you don't know the pass block; `budget` is quick|default|deep. Gated: features.angr (heavy, policy-gated like emulation; relaxes no boundary).",
+     {"type": "object", "properties": {"target_id": {"type": "string"}, "function": {"type": "string"}, "check_addr": {"type": "string"}, "sink_func": {"type": "string"}, "budget": {"type": "string", "enum": ["quick", "default", "deep"]}}, "required": ["target_id"]}),
     ("read", "re_xrefs", _t.xrefs, "Cross-references: which functions CALL a symbol/sink and where (omit `symbol` to map dangerous sinks, format-string sinks, AND network/socket surface bind/listen/connect/recv). Trace a sink back to its caller, or find listen/connect sites to model as socket nodes. QUERY: records an Observation and tags is_sink on any dangerous-import symbol ALREADY in the graph; adds no new graph nodes.",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "symbol": {"type": "string", "description": "sink/symbol name; omit to map ALL dangerous + format + network sinks"}}, "required": ["target_id"]}),
     ("read", "re_call_graph", _t.call_graph, "The target's CALL GRAPH (who-calls-whom across the program), or — with a `function` — the neighbourhood rooted at it out to `depth` (default 2). Returns the whole-program graph, falling back to the recon-computed graph in the Observation store when the probe path comes up empty (so you see the structure without promoting functions one by one). QUERY: records a call_graph Observation that also SELF-WIRES `calls` edges among functions ALREADY in the graph (promote functions to curate the wired graph); creates no new nodes. Use to see the program's structure / a function's reachable callees without decompiling each.",
@@ -299,7 +307,33 @@ def _floss_advertised() -> bool:
         return False
 
 
-_FEATURE_GATED_TOOLS = {"re_floss_strings": _floss_advertised}
+def _yara_advertised() -> bool:
+    try:
+        from hexgraph.engine.yara import yara_enabled
+
+        return yara_enabled()
+    except Exception:  # noqa: BLE001 — never advertise a tool whose gate can't be read
+        return False
+
+
+def _solver_advertised() -> bool:
+    # angr IS a policy gate (policy.assert_allows_solver) but, like emulation, it raises no tier,
+    # so the advertisement reads the plain feature flag (same shape as floss/yara).
+    try:
+        from hexgraph.engine.solver import solver_enabled
+
+        return solver_enabled()
+    except Exception:  # noqa: BLE001 — never advertise a tool whose gate can't be read
+        return False
+
+
+_FEATURE_GATED_TOOLS = {
+    "re_floss_strings": _floss_advertised,
+    "re_yara_scan": _yara_advertised,
+    "re_yara_sweep": _yara_advertised,
+    "re_solve_reaching_input": _solver_advertised,
+    "re_solve_constraint": _solver_advertised,
+}
 
 
 def catalog(enabled_groups: set[str] | None = None) -> list[dict]:
