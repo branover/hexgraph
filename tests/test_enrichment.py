@@ -355,3 +355,25 @@ def test_conflicting_facts_most_recent_wins(hg_home):
         assert s.query(EnrichmentFact).filter(
             EnrichmentFact.subject_kind == "name", EnrichmentFact.subject_key == "f",
             EnrichmentFact.fact_kind == "attrs").count() == 1
+
+
+def test_extract_structs_filters_noise_by_name_not_just_flag():
+    """The struct filter is name-based, not flag-based (finding NG). Ghidra's `builtin`
+    flag is unreliable — it marks the bundled Elf64_*/_IO_*/evp_* types builtin:false (so
+    the flag alone leaks them into the graph) while flagging std::*. Program-defined
+    structs are kept, even small/empty ones; only compiler/library/ELF noise is dropped."""
+    payload = {"structs": [
+        # Bundled noise Ghidra reports as builtin:false — must still be dropped (by name).
+        {"name": "Elf64_Shdr", "size": 64, "builtin": False,
+         "fields": [{"name": "sh_name", "type": "dword", "offset": 0}]},
+        {"name": "_IO_FILE", "size": 216, "builtin": False, "fields": []},
+        {"name": "evp_pkey_ctx_st", "size": 80, "builtin": False, "fields": []},
+        # Correctly-flagged C++ runtime noise — dropped by the flag.
+        {"name": "std::vector", "size": 24, "builtin": True, "fields": []},
+        # Real program structs — kept (Circle is empty/size-1 but not noise).
+        {"name": "Circle", "size": 1, "builtin": False, "fields": []},
+        {"name": "config_t", "size": 16, "builtin": False,
+         "fields": [{"name": "port", "type": "int", "offset": 0}]},
+    ]}
+    kept = {f.subject_key for f in E._extract_structs(payload)}
+    assert kept == {"Circle", "config_t"}, kept

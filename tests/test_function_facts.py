@@ -10,6 +10,10 @@ set enriches a node through record_observation → join-at-create (no Docker, no
 """
 
 import json
+import shutil
+import subprocess
+
+import pytest
 
 from hexgraph.db.session import session_scope
 from hexgraph.engine import observations as O
@@ -17,7 +21,7 @@ from hexgraph.engine.ingest import create_project, ingest_file
 from hexgraph.engine.nodes import get_or_create_node
 from hexgraph.sandbox.probes import decompile_probe as DP
 
-from conftest import fixture_path
+from conftest import SANDBOX_READY, fixture_path
 
 
 class _FakeR2:
@@ -123,3 +127,49 @@ def test_rich_focus_facts_enrich_promoted_function(hg_home):
         assert a.get("param_count") == 1 and a.get("local_count") == 1
         assert a.get("params") == [{"name": "buf", "type": "char *"}]
         assert a.get("locals") == [{"name": "i", "type": "int"}]
+
+
+# ── Docker + Ghidra: the focus facts come from the DECOMPILER, not the listing DB ──────
+
+def _ghidra_in_image() -> bool:
+    if not SANDBOX_READY:
+        return False
+    try:
+        from hexgraph.sandbox.runner import SandboxRunner
+
+        chk = SandboxRunner().run_json_probe(
+            "ghidra_probe.py", fixture_path("vuln_httpd"), extra_args=["--check"])
+        return bool(chk.get("present"))
+    except Exception:
+        return False
+
+
+GHIDRA_READY = _ghidra_in_image()
+
+
+@pytest.mark.skipif(not GHIDRA_READY, reason="requires Docker + a WITH_GHIDRA=1 sandbox image")
+def test_ghidra_focus_facts_are_decompiler_refined_not_listing_db(hg_home, tmp_path):
+    """Finding NF: the Ghidra focus prototype/locals came from the pre-decompile listing DB
+    (`undefined check_password(void)`, `undefinedN` locals). With no debug info the listing
+    DB has no signature, so the focus must now carry the DECOMPILER-recovered shape — a
+    pointer parameter and typed locals — proving df.getSignature()/HighFunction are used."""
+    if shutil.which("gcc") is None:
+        pytest.skip("gcc unavailable to compile the authcheck fixture")
+    src = fixture_path("challenges/authcheck.c")
+    binpath = str(tmp_path / "authcheck")  # tmp_path auto-cleans, no leaked temp binary
+    # NO -g: the listing DB knows the name but not the signature, so a refined prototype can
+    # only come from the decompiler.
+    if subprocess.run(["gcc", "-O0", "-o", binpath, src], capture_output=True).returncode != 0:
+        pytest.skip("could not compile authcheck")
+
+    from hexgraph.sandbox.decompiler import GhidraDecompiler
+
+    out = GhidraDecompiler().decompile(binpath, function="check_password")
+    focus = out.get("focus") or {}
+    assert focus.get("name") == "check_password", out
+    proto = focus.get("prototype") or ""
+    # The decompiler recovered a parameter (a pointer) — NOT the bare `...(void)` the listing
+    # DB would give an un-prototyped, stripped-of-debug function.
+    assert "void)" not in proto and "(" in proto, proto
+    assert focus.get("param_count", 0) >= 1, focus
+    assert any("*" in (p.get("type") or "") for p in focus.get("params") or []), focus
