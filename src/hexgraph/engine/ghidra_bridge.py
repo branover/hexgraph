@@ -21,7 +21,12 @@ from hexgraph.sandbox.decompiler import Decompiler
 # A symbol name we're willing to interpolate into a remote_eval string. Mirrors
 # decompile_probe._SAFE_NAME: only the characters that occur in real symbol names,
 # so a caller-supplied function name can never carry Python/string-breakout syntax.
+# (Notably excludes quotes and backslashes, so inlining a validated name as a "..."
+# literal in the eval string can't break out of the string.)
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9_.@$:]+$")
+# A focus given as a strict hex address resolves to the function CONTAINING it
+# (analyze-at-address), mirroring the headless probe; otherwise the focus is a name.
+_ADDR = re.compile(r"^0x[0-9a-fA-F]+$")
 
 
 class BridgeUnavailable(RuntimeError):
@@ -40,13 +45,23 @@ class _RemoteOps:
     def __init__(self, bridge) -> None:
         self.b = bridge
 
+    # Project one program tuple — (name, path, language, function_count) — for the row shape.
+    _PROG_TUPLE = ("(p.getName(), p.getExecutablePath(), p.getLanguageID().getIdAsString(), "
+                   "p.getFunctionManager().getFunctionCount())")
+
     def list_programs(self) -> list[dict]:
-        rows = self.b.remote_eval(
-            "[(p.getName(), p.getExecutablePath(), "
-            "p.getLanguageID().getIdAsString(), p.getFunctionManager().getFunctionCount()) "
-            "for p in state.getTool().getService("
-            "ghidra.app.services.ProgramManager).getAllOpenPrograms()]"
-        )
+        # The GUI path enumerates every open program via the ProgramManager service — but that
+        # service exists only when Ghidra is open in the GUI. Under a HEADLESS bridge server
+        # (analyzeHeadless -postScript ghidra_bridge_server.py) state.getTool()/the service is
+        # absent and this raises remotely, so fall back to the single active currentProgram (the
+        # one the headless server loaded), which is also what decompile() operates on.
+        try:
+            rows = self.b.remote_eval(
+                "[%s for p in state.getTool().getService("
+                "ghidra.app.services.ProgramManager).getAllOpenPrograms()]" % self._PROG_TUPLE
+            )
+        except Exception:  # noqa: BLE001 — GUI-only service missing under a headless bridge server
+            rows = self.b.remote_eval("[%s for p in [currentProgram]]" % self._PROG_TUPLE)
         return [{"name": n, "path": pth, "language": lang, "functions": fc} for (n, pth, lang, fc) in rows]
 
     def executable_path(self, program: str) -> str | None:
@@ -62,23 +77,39 @@ class _RemoteOps:
         )
         focus = None
         if function:
-            pseudo = self._decompile_one(function)
-            focus = {"name": function, "resolved": function, "pseudocode": pseudo, "disasm": "", "callees": []}
+            resolved, pseudo = self._decompile_one(function)
+            focus = {"name": resolved, "resolved": resolved, "pseudocode": pseudo,
+                     "disasm": "", "callees": []}
         return {"functions": names[:400], "focus": focus, "tool": "ghidra_bridge"}
 
-    def _decompile_one(self, function: str) -> str:
-        # Never build eval'd code by interpolating a caller-supplied name. Validate it
-        # against the strict symbol-name allowlist, then pass it as a BOUND variable
-        # (`fn` in the bridge eval namespace) so it's data, not code.
-        if not _SAFE_NAME.match(function or ""):
-            raise BridgeUnavailable(f"unsafe Ghidra function name: {function!r}")
+    def _decompile_one(self, focus: str) -> tuple[str, str]:
+        """Decompile the function identified by `focus` over the bridge — an exact NAME, or a
+        hex ADDRESS resolved to the function CONTAINING it (analyze-at-address, mirroring the
+        headless probe). Returns (resolved_name, pseudocode).
+
+        Two scoping rules drive the shape of this eval, both learned the hard way:
+        - The validated focus token is INLINED as a "..." string literal (`_SAFE_NAME`/`_ADDR`
+          exclude quotes and backslashes, so it can't break out of the literal).
+        - The resolved function is computed at the eval's TOP LEVEL and passed into the worker
+          as a bound lambda PARAMETER (`fn`). A bound `remote_eval` KWARG does NOT work: jfx_bridge
+          injects kwargs into the eval's LOCALS, which a nested lambda/comprehension can't close
+          over (free vars resolve via globals), so the old `fn=` kwarg raised NameError every call.
+        """
+        if _ADDR.match(focus or ""):
+            target_expr = ("currentProgram.getFunctionManager().getFunctionContaining("
+                           'currentProgram.getAddressFactory().getAddress("%s"))' % focus)
+        elif _SAFE_NAME.match(focus or ""):
+            target_expr = ("[f for f in currentProgram.getFunctionManager().getFunctions(True) "
+                           'if f.getName()=="%s"][0]' % focus)
+        else:
+            raise BridgeUnavailable(f"unsafe Ghidra focus: {focus!r}")
         return self.b.remote_eval(
-            "(lambda di: (di.openProgram(currentProgram), "
-            "di.decompileFunction([f for f in currentProgram.getFunctionManager().getFunctions(True) "
-            "if f.getName()==fn][0], 60, __import__('ghidra.util.task', fromlist=['ConsoleTaskMonitor'])"
-            ".ConsoleTaskMonitor()).getDecompiledFunction().getC())[1])("
-            "__import__('ghidra.app.decompiler', fromlist=['DecompInterface']).DecompInterface())",
-            fn=function,
+            "(lambda di, fn: (di.openProgram(currentProgram), "
+            "(fn.getName(), di.decompileFunction(fn, 60, "
+            "__import__('ghidra.util.task', fromlist=['ConsoleTaskMonitor']).ConsoleTaskMonitor())"
+            ".getDecompiledFunction().getC()))[1])("
+            "__import__('ghidra.app.decompiler', fromlist=['DecompInterface']).DecompInterface(), "
+            + target_expr + ")"
         )
 
 
