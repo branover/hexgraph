@@ -98,6 +98,20 @@ DEFAULTS: dict[str, Any] = {
             # be heavier than a single probe. Needs yara + yara-python in the sandbox image.
             "enabled": False,
         },
+        "angr": {
+            # OFF by default. angr symbolic execution behind get_solver() (Phase 5C, the
+            # flagship): given a sink, solve for an input that REACHES it; given a check,
+            # recover the value that SATISFIES it. It symbolically executes — it NEVER runs
+            # the target natively, opens NO socket, touches NO network — so like emulation it
+            # relaxes NO sandbox/exec/egress boundary and raises NO policy tier. Unlike the
+            # ungated floss/yara passes, though, it IS a policy gate
+            # (policy.assert_allows_solver()) because symbolic execution is the one tool here
+            # that can genuinely exhaust memory/time: the gate makes it opt-in and bounds it
+            # with the existing ResourceSpec + a step/time cap in the probe. Needs the angr pip
+            # stack in the sandbox image (lands in Phase 5C-B; the seam degrades to NullSolver
+            # until then).
+            "enabled": False,
+        },
         "fuzzing": {
             # OFF by default: enabling this flips the analysis policy to allow
             # execution (still --network none, capped, timed, disposable). The
@@ -283,6 +297,7 @@ ALLOWED: dict[str, tuple[Any, set | None]] = {
     "features.emulation.enabled": (bool, None),
     "features.floss.enabled": (bool, None),
     "features.yara.enabled": (bool, None),
+    "features.angr.enabled": (bool, None),
     "features.fuzzing.enabled": (bool, None),
     "features.fuzzing.max_total_time": (int, None),
     "features.fuzzing.max_len": (int, None),

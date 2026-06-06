@@ -199,6 +199,29 @@ FEATURES: tuple[Feature, ...] = (
                       "ship in-package; add your own under <HEXGRAPH_HOME>/yara_rules/.",
     ),
     Feature(
+        key="features.angr.enabled",
+        label="angr symbolic execution (solver)",
+        unlocks="Behind the `get_solver()` seam: given a sink, solve for an input that REACHES "
+                "it; given a check, recover the value that SATISFIES it — the strongest static "
+                "claim short of a live PoC, because it can produce a concrete reaching input.",
+        # angr is policy-GATED (policy.assert_allows_solver) but, like emulation, it relaxes NO
+        # boundary: symbolic execution explores the artifact and asks a constraint solver for a
+        # satisfying input — it never runs the target natively, opens no socket, touches no
+        # network. So it is NOT policy_changing (raises no tier, needs no exec/egress confirm).
+        # The non-empty implication is an HONEST resource caveat, not a boundary relaxation.
+        security="Symbolic execution — HEAVY on CPU/memory (the one tool here that can genuinely "
+                 "exhaust them), so it is opt-in and bounded by the sandbox ResourceSpec + a "
+                 "step/time cap. It NEVER executes the target natively, opens no socket, and "
+                 "touches no network — it relaxes no sandbox/exec/egress boundary and raises no "
+                 "policy tier.",
+        policy_changing=False,  # gated like emulation; relaxes no tier — heavy-analysis opt-in only
+        tier=None,
+        builds=("sandbox",),  # needs the angr pip stack in the sandbox image (lands in 5C-B)
+        requires_note="needs the angr pip stack in the sandbox image (a rebuild, added in Phase "
+                      "5C-B); until then the solver seam degrades to NullSolver (nothing solved, "
+                      "nothing fabricated).",
+    ),
+    Feature(
         key="features.poc.enabled",
         label="PoC verification (execute the target)",
         unlocks="The `poc` task + `verify_poc` tool run an attacker-style input against "

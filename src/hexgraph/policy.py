@@ -340,6 +340,25 @@ def assert_allows_emulation(policy: AnalysisPolicy | None = None) -> None:
             "constant/key by emulating a routine in the sandbox)")
 
 
+def assert_allows_solver(policy: AnalysisPolicy | None = None) -> None:
+    """Gate angr symbolic execution behind `get_solver()` (Phase 5C). Opt-in via
+    `features.angr`. Modeled EXACTLY on `assert_allows_emulation()`: like emulation it relaxes
+    NO sandbox boundary — angr symbolically executes (it explores the artifact and asks a
+    constraint solver for a satisfying input/value), it never runs the target natively, opens
+    no socket, and touches no network — so it is a standalone HEAVY-analysis opt-in that does
+    NOT move the policy tier (it is intentionally absent from `AnalysisPolicy`/`current_policy`/
+    the startup ceiling). The gate exists only to make symbolic execution opt-in and bound it
+    with `ResourceSpec` + the probe's step/time cap, because it is the one tool here that can
+    genuinely exhaust memory/time. `policy` is accepted for signature parity; the gate reads
+    the feature flag directly."""
+    from hexgraph import settings as _settings
+
+    if not bool(_settings.get("features.angr.enabled")):
+        raise PolicyViolation(
+            "angr symbolic execution is not enabled (set features.angr.enabled to solve for an "
+            "input that reaches a sink, or recover a value satisfying a check, in the sandbox)")
+
+
 def assert_allows_fuzz_remote(policy: AnalysisPolicy | None = None) -> None:
     """Gate running a fuzz campaign on a user-owned REMOTE Docker host (the
     `RemoteDockerExecutor`, design §5.8b). Opt-in via features.fuzz_remote — a remote
