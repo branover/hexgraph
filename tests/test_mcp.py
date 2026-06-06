@@ -379,6 +379,87 @@ def test_check_decompiler_ghidra_broken(hg_home, monkeypatch):
     assert sch["decompiler"]["working"] is False
 
 
+# ---- meta_check_features: the optional-feature preflight tri-state ----------------------
+
+def test_check_features_in_catalog():
+    names = {t["name"] for t in mcp_tools.catalog()}
+    assert "meta_check_features" in names
+
+
+def test_check_features_all_disabled_by_default(hg_home):
+    """No optional feature enabled (the shipped default) → every row is `disabled`, nothing probed."""
+    out = mcp_tools.check_features()
+    states = {r["feature"]: r["state"] for r in out["features"]}
+    # the features the tool covers, all gated off out of the box
+    assert {"floss", "yara", "angr", "ghidra", "emulation"} <= set(states)
+    assert all(v == "disabled" for v in states.values())
+    # a disabled row carries no remediation (nothing to fix)
+    assert all("remediation" not in r for r in out["features"])
+    assert "no optional features enabled" in out["summary"]
+
+
+def test_check_features_enabled_and_available(hg_home, monkeypatch):
+    """Enabled AND its in-image dep present → `available`, no remediation."""
+    from hexgraph import settings as st
+
+    st.update_settings({"features.floss.enabled": True})
+    # fake the lightweight in-image dep probe as PRESENT (no Docker needed)
+    monkeypatch.setattr("hexgraph.engine.mcp_tools._image_smoke",
+                        lambda image, argv, timeout=30: (True, "3.1.1"))
+    out = mcp_tools.check_features()
+    floss = next(r for r in out["features"] if r["feature"] == "floss")
+    assert floss["enabled"] is True
+    assert floss["state"] == "available"
+    assert "remediation" not in floss
+    assert "FLOSS" in floss["detail"]
+
+
+def test_check_features_enabled_but_broken_has_remediation(hg_home, monkeypatch):
+    """The stale-image trap: enabled but the dep/image is MISSING → `broken` + an actionable hint."""
+    from hexgraph import settings as st
+
+    st.update_settings({"features.yara.enabled": True})
+    # fake the in-image dep probe as MISSING (the stale-sandbox-image case)
+    monkeypatch.setattr("hexgraph.engine.mcp_tools._image_smoke",
+                        lambda image, argv, timeout=30: (False, "the image 'hexgraph-sandbox:latest' is not built"))
+    out = mcp_tools.check_features()
+    yara = next(r for r in out["features"] if r["feature"] == "yara")
+    assert yara["enabled"] is True
+    assert yara["state"] == "broken"
+    assert yara["remediation"] and "just sandbox-build" in yara["remediation"]
+    assert "BROKEN" in out["summary"] and "yara" in out["summary"]
+
+
+def test_check_features_angr_uses_the_angr_image(hg_home, monkeypatch):
+    """angr's broken-state remediation points at the DEDICATED angr image, not the sandbox."""
+    from hexgraph import settings as st
+
+    st.update_settings({"features.angr.enabled": True})
+    monkeypatch.setattr("hexgraph.engine.mcp_tools._image_smoke",
+                        lambda image, argv, timeout=30: (False, "not built"))
+    out = mcp_tools.check_features()
+    angr = next(r for r in out["features"] if r["feature"] == "angr")
+    assert angr["state"] == "broken"
+    assert "just angr-build" in angr["remediation"]
+
+
+def test_check_features_ghidra_defers_to_check_ghidra(hg_home, monkeypatch):
+    """Ghidra/emulation borrow the existing check_ghidra verdict (shared with-Ghidra image)."""
+    from hexgraph import settings as st
+
+    st.update_settings({"features.ghidra.enabled": True, "features.ghidra.mode": "headless"})
+    monkeypatch.setattr(
+        "hexgraph.engine.ghidra.check_ghidra",
+        lambda: {"enabled": True, "mode": "headless", "ok": False,
+                 "detail": "Ghidra not found in sandbox image (build with WITH_GHIDRA=1)."},
+    )
+    out = mcp_tools.check_features()
+    ghidra = next(r for r in out["features"] if r["feature"] == "ghidra")
+    assert ghidra["state"] == "broken"
+    assert "WITH_GHIDRA" in ghidra["detail"]
+    assert "with_ghidra=1" in ghidra["remediation"]
+
+
 def test_create_node_address_and_input_sink(hg_home):
     from hexgraph.engine import mcp_tools
     with session_scope() as s:

@@ -102,6 +102,10 @@ Observation. Work cheap-to-expensive — orienting facts first, heavy synthesis 
   decoded recovery is PE/x86-amd64, and on an ELF it degrades to a static-strings pass.) If a
   decompile ever fails or before you lean on Ghidra, **`meta_check_decompiler`** confirms the backend
   actually WORKS (active vs. merely configured) so you don't burn turns against a broken decompiler.
+  Likewise, before you reach for any opt-in feature (FLOSS, YARA, a solver), **`meta_check_features`**
+  preflights them: it tells gated-off (`disabled`) apart from configured-but-broken (`broken` — the
+  stale-sandbox-image trap where the gate is on but the dependency is missing) and gives the exact
+  rebuild command, so you don't discover a broken feature only by failing mid-analysis.
 - **Map the attack surface — `re_xrefs` with NO symbol** maps every dangerous sink
   (system/popen/exec/strcpy/sprintf/memcpy/…), the format-string sinks, AND the network bind/
   listen/connect/recv sites, with who reaches each — start here. `re_xrefs <sink>` lists exactly

@@ -123,6 +123,12 @@ _STATIC_SPECS = [
              "WITH_GHIDRA=1 (headless) or a reachable bridge. Run it if a decompile fails so you don't "
              "keep retrying a broken backend — the result's detail says what to fix.",
              {"type": "object", "properties": {}}),
+    ToolSpec("check_features", "Preflight the OPTIONAL features whose runtime dep can diverge from their "
+             "gate (floss, yara, angr, ghidra/emulation): each reports disabled (gated off), available "
+             "(enabled AND its dep/image present), or BROKEN (enabled but the dep/image is missing — the "
+             "stale-image trap) with a remediation hint. Lightweight + read-only. Run it before reaching "
+             "for floss_strings / a yara / a solver tool so you don't burn turns against a broken feature.",
+             {"type": "object", "properties": {}}),
     ToolSpec("list_observations", "Prior deterministic analysis recorded on THIS target — the "
              "OBSERVATION STORE (the substrate, NOT the curated graph): decompilations, function "
              "lists, xrefs, strings, structs, taint, each saved once as a reusable Observation. "
@@ -552,6 +558,16 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
             mode = f" ({d['mode']})" if d.get("mode") else ""
             status = "WORKING" if d["working"] else "NOT WORKING"
             return _clip(f"decompiler: {d['active']}{ver}{mode} — {status}\n{d['detail']}")
+        if name == "check_features":
+            from hexgraph.engine.mcp_tools import check_features
+            d = check_features()
+            lines = [d["summary"]]
+            for r in d["features"]:
+                line = f"  {r['feature']}: {r['state'].upper()} — {r['detail']}"
+                if r.get("remediation"):
+                    line += f"  [fix: {r['remediation']}]"
+                lines.append(line)
+            return _clip("\n".join(lines))
         if name in ("list_observations", "get_observation", "search_observations"):
             return _observations(ctx, name, args)
         if name == "xrefs":

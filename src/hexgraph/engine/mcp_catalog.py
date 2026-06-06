@@ -291,6 +291,8 @@ _CATALOG = [
      {"type": "object", "properties": {}}),
     ("read", "meta_check_decompiler", _t.check_decompiler, "Verify the decompiler re_decompile_function/re_disassemble use ACTUALLY works (not merely the configured name) — radare2 needs the sandbox image up; Ghidra (headless) needs WITH_GHIDRA=1 in the image, Ghidra (bridge) needs a reachable server. Returns {active, working, mode, version, detail} with an ACTIONABLE detail when broken. Run this if a re_decompile_function fails or before relying on Ghidra, so you don't burn turns against a broken backend.",
      {"type": "object", "properties": {}}),
+    ("read", "meta_check_features", _t.check_features, "Preflight the OPTIONAL features whose RUNTIME dependency can diverge from their gate (floss, yara, angr, ghidra/emulation) — so you can tell 'gated off' from 'configured but BROKEN' BEFORE spending a run. Each feature returns a tri-state `state`: `disabled` (its features.X gate is off), `available` (enabled AND its dep/image is actually present), or `broken` (enabled but the dep/image is MISSING — the stale-sandbox-image trap) with an ACTIONABLE `remediation` (e.g. `just sandbox-build`, `just angr-build`). The check is LIGHTWEIGHT (a tiny in-image dep probe, --network none, no analysis) and read-only. Run this in your orient step, alongside meta_check_decompiler, before reaching for an opt-in tool (re_floss_strings / re_yara_sweep / re_solve_reaching_input) so you don't burn turns against a feature that's on-but-broken.",
+     {"type": "object", "properties": {}}),
 ]
 
 
