@@ -124,6 +124,14 @@ def test_get_solver_degrades_to_null_on_settings_hiccup(hg_home, monkeypatch):
     assert isinstance(get_solver(), NullSolver)
 
 
+def test_bogus_solver_env_degrades_to_null(hg_home, monkeypatch):
+    # 5C-A nit #1: a BOGUS HEXGRAPH_SOLVER value must fail CLOSED to NullSolver (the env override
+    # fails soft), not raise — only an explicit bad get_solver(name=…) arg is a hard error.
+    monkeypatch.setenv("HEXGRAPH_SOLVER", "ida-magic")
+    st.update_settings({"features.angr.enabled": True})  # even with the gate on, a bogus env → null
+    assert isinstance(get_solver(), NullSolver)
+
+
 # ── NullSolver fabricates nothing (the graceful-degrade contract) ───────────────────────
 
 def test_null_solver_fabricates_nothing():
@@ -139,19 +147,21 @@ def test_null_solver_fabricates_nothing():
     assert s.solve_constraint("/sandbox/target", check, project=object(), budget="deep") is None
 
 
-# ── AngrSolver is a NOT-YET-WIRED skeleton (solving logic lands in 5C-B) ─────────────────
+# ── AngrSolver is WIRED in 5C-B, but the policy gate is enforced at the probe boundary ──────
 
-def test_angr_solver_methods_are_not_yet_wired():
+def test_angr_solver_consults_gate_at_probe_boundary(hg_home):
+    # 5C-A nit #2 / 5C-B: AngrSolver now runs the probe, but it asserts the policy gate FIRST —
+    # so even a directly-constructed AngrSolver (env override / get_solver("angr")) cannot spawn
+    # the angr container while features.angr is off. With the gate off it raises PolicyViolation
+    # BEFORE any executor/Docker call, so this is fully offline (no angr image needed).
     s = AngrSolver()
     assert isinstance(s, Solver)
-    sink = SinkRef(func="strcpy", category="buffer_overflow", call_addr="0x401500")
-    check = ConstraintRef(function="auth", description="strcmp against the embedded secret")
-    with pytest.raises(NotImplementedError) as ei:
+    sink = SinkRef(func="system", category="command_exec", call_addr="0x401500")
+    check = ConstraintRef(function="check_serial", check_addr="0x401234")
+    with pytest.raises(PolicyViolation):
         s.solve_reaching_input("/sandbox/target", sink)
-    assert "5C-B" in str(ei.value)
-    with pytest.raises(NotImplementedError) as ei2:
+    with pytest.raises(PolicyViolation):
         s.solve_constraint("/sandbox/target", check)
-    assert "5C-B" in str(ei2.value)
 
 
 # ── the SolverResult/ref dataclasses are the stable surface 5C-B implements against ──────

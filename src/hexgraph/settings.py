@@ -107,10 +107,13 @@ DEFAULTS: dict[str, Any] = {
             # ungated floss/yara passes, though, it IS a policy gate
             # (policy.assert_allows_solver()) because symbolic execution is the one tool here
             # that can genuinely exhaust memory/time: the gate makes it opt-in and bounds it
-            # with the existing ResourceSpec + a step/time cap in the probe. Needs the angr pip
-            # stack in the sandbox image (lands in Phase 5C-B; the seam degrades to NullSolver
-            # until then).
+            # with the existing ResourceSpec + a step/time cap in the probe.
             "enabled": False,
+            # The DEDICATED angr image (the heavy angr + z3 + claripy/pyvex/cle stack, D10).
+            # NEVER the shared sandbox image — it ships as its own optional sibling image
+            # (docker/angr.Dockerfile, `just angr-build`) so the base sandbox stays lean. Set
+            # HEXGRAPH_ANGR_IMAGE to override (worktree: a private tag).
+            "image": "hexgraph-angr:latest",
         },
         "fuzzing": {
             # OFF by default: enabling this flips the analysis policy to allow

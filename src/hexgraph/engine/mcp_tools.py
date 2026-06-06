@@ -2041,6 +2041,49 @@ def recover_constant(target_id: str, function: str) -> dict:
             return {"error": f"emulation failed: {exc}"}
 
 
+def solve_reaching_input(target_id: str, sink_func: str, function: str | None = None,
+                         budget: str | None = None) -> dict:
+    """SOLVE for a concrete input that DRIVES execution to a sink (e.g. system) via angr symbolic
+    execution in the dedicated angr sandbox image — the strongest STATIC claim short of a live
+    PoC, because it produces a concrete reaching input (often non-ASCII bytes). You give the sink
+    selector; HexGraph runs the bounded, deterministic solve (DFS + wall-clock/step/state caps) —
+    you never write an angr script.
+
+    PROMOTE: on success it promotes the grounded path (the sink + the enclosing function + a `calls`
+    edge) and emits a high-confidence `vulnerability` finding whose evidence.reproducer is the solved
+    input (hex), assurance input_reachable/static; records a `solver` Observation either way. Opt-in
+    (features.angr — heavy, policy-gated like emulation; relaxes no boundary). `budget` is
+    quick|default|deep. Returns {solved, observation_id, finding_id, concrete_input, ...} or
+    {solved:false, reason} / {error}."""
+    from hexgraph.engine.solving import solve_reaching_input as _solve
+
+    with session_scope() as s:
+        t = s.get(Target, target_id)
+        if t is None:
+            return {"error": "target not found"}
+        return _solve(s, s.get(Project, t.project_id), t, sink_func=sink_func,
+                      function=function, budget=budget, source="agent")
+
+
+def solve_constraint(target_id: str, function: str | None = None, check_addr: str | None = None,
+                     sink_func: str | None = None, budget: str | None = None) -> dict:
+    """Recover the VALUE/input that SATISFIES a single check (a secret a strcmp compares against,
+    a serial a gate validates) via angr — the symbolic-execution analogue of recover_constant.
+    ENRICH: on success annotates the function node with the recovered value (attrs.recovered_value
+    / satisfying_input_hex) and records a `solver` Observation; adds no new graph nodes. Single-
+    check solving ONLY. `function` names the routine; optionally `check_addr` pins the pass block,
+    or `sink_func` when the check gates a sink. Opt-in (features.angr). `budget` is
+    quick|default|deep. Returns {solved, observation_id, recovered_value, ...} / {error}."""
+    from hexgraph.engine.solving import solve_constraint as _solve
+
+    with session_scope() as s:
+        t = s.get(Target, target_id)
+        if t is None:
+            return {"error": "target not found"}
+        return _solve(s, s.get(Project, t.project_id), t, function=function,
+                      check_addr=check_addr, sink_func=sink_func, budget=budget, source="agent")
+
+
 def reachability(finding_id: str | None = None, sink_node_id: str | None = None,
                  max_depth: int = 12) -> dict:
     """Argue STATIC input-reachability (Standard B, static) — search the typed graph for a

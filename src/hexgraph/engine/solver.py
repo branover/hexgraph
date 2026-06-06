@@ -9,13 +9,15 @@ input reach this sink, and under what constraints), so it earns a real seam, and
 **mirrors `engine/taint.py` precisely**: an ABC, a concrete backend, and a `Null*` that
 degrades gracefully and *fabricates nothing*.
 
-**Phase 5C-A (this PR) ships the seam and its Null path only.** The angr dependency, the
-`angr_probe`, the sandbox-image rebuild, and the input→sink/constraint solving logic land in
-**Phase 5C-B**. So `AngrSolver` is a typed SKELETON whose methods raise a clear
-`NotImplementedError("… lands in Phase 5C-B")`; `NullSolver` (the default, gate-off path) is
-fully functional today and returns `None` from every method. **angr is never imported at
-module load** — it is not installed yet, and even in 5C-B it stays inside the sandbox/probe,
-never the host process — so this module imports cleanly offline.
+**Phase 5C-A shipped the seam + the Null path; Phase 5C-B (this PR) wires angr end to end.**
+`AngrSolver.solve_reaching_input` / `solve_constraint` now run `sandbox/probes/angr_probe.py`
+inside the DEDICATED, optional `hexgraph-angr` image (D10 — the heavy angr/z3 stack ships in its
+own sibling image, never the base sandbox) and map the probe's JSON to a `SolverResult` (or
+`None` when nothing was solved). `NullSolver` (the default, gate-off path) still returns `None`
+from every method, fabricating nothing. **angr is never imported in this module** — it lives only
+inside the probe, behind the sandbox boundary, so the host process never depends on it and this
+module imports cleanly offline (a contract test enforces it). The engine layer that turns a
+`SolverResult` into Observations/findings/annotations is `engine/solving.py`.
 
 **Gate (mirrors emulation, NOT the exec tier).** angr is policy-gated via
 `policy.assert_allows_solver()` (`features.angr`), but it is a *heavy-analysis opt-in modeled
@@ -149,29 +151,163 @@ class NullSolver(Solver):
         return None
 
 
-class AngrSolver(Solver):
-    """angr-backed symbolic execution (the first concrete behind this seam). SKELETON only in
-    Phase 5C-A: the class and its method shapes are fixed here so callers (and 5C-B) can build
-    against a stable surface, but the solving logic — the angr probe, the sandbox-image
-    dependency, and the step/time-bounded exploration — lands in **Phase 5C-B**. Its methods
-    therefore raise a clear `NotImplementedError` for now.
+# ── The dedicated angr image (D10 — a separate optional image, NOT the base sandbox) ──────
+# angr's pip stack is the heaviest dependency in Phase 5 and it is opt-in, so it ships in its
+# OWN sibling image (docker/angr.Dockerfile), built by `just angr-build`. The selector honours
+# the worktree discipline: set HEXGRAPH_ANGR_IMAGE to a private tag for testing; NEVER clobber
+# the shared tag.
+DEFAULT_ANGR_IMAGE = "hexgraph-angr:latest"
 
-    angr is **never imported at module load** (it is not installed yet, and even in 5C-B it
-    runs inside the sandbox/probe, not the host). Any future host-side angr import must be
-    deferred into the method body so this module always imports cleanly offline."""
+
+def angr_image() -> str:
+    """The dedicated angr (solver) image tag. `HEXGRAPH_ANGR_IMAGE` (a worktree's private tag)
+    overrides the Settings value, which overrides the default — mirrors `fuzz_image()`."""
+    img = os.environ.get("HEXGRAPH_ANGR_IMAGE")
+    if img:
+        return img
+    try:
+        from hexgraph import settings
+
+        return settings.get("features.angr.image", DEFAULT_ANGR_IMAGE) or DEFAULT_ANGR_IMAGE
+    except Exception:  # noqa: BLE001 — a settings hiccup must never break image selection
+        return DEFAULT_ANGR_IMAGE
+
+
+def solver_enabled() -> bool:
+    """True iff `features.angr` is on (so the solver seam selects `AngrSolver`). angr IS a
+    policy gate (`policy.assert_allows_solver`) — unlike floss/yara — but, like emulation, it
+    raises no tier, so this is a plain opt-in read. Fail-closed: any settings hiccup ⇒ off."""
+    try:
+        from hexgraph import settings
+
+        return bool(settings.get("features.angr.enabled"))
+    except Exception:  # noqa: BLE001 — a settings problem must never silently enable it
+        return False
+
+
+# Coarse, HexGraph-set resource/budget tiers (the agent picks a tier name, never raw caps —
+# design §2.8). Each maps onto the angr_probe's bounding flags: an INNER wall-clock deadline
+# (kept below the container's own timeout so we get a clean "unsolved" instead of a SIGKILL),
+# a step cap, an active-state ceiling, and the symbolic input length.
+_BUDGETS = {
+    "quick":   {"timeout": 45,  "max_steps": 1500, "max_active": 32, "max_input_len": 32},
+    "default": {"timeout": 120, "max_steps": 4000, "max_active": 64, "max_input_len": 64},
+    "deep":    {"timeout": 240, "max_steps": 12000, "max_active": 128, "max_input_len": 96},
+}
+_DEFAULT_BUDGET = "default"
+
+
+def _budget_args(budget: Any) -> list[str]:
+    """Map a coarse budget tier (a name, or None) to the probe's bounding flags."""
+    tier = budget if isinstance(budget, str) and budget in _BUDGETS else _DEFAULT_BUDGET
+    b = _BUDGETS[tier]
+    return ["--timeout", str(b["timeout"]), "--max-steps", str(b["max_steps"]),
+            "--max-active", str(b["max_active"]), "--max-input-len", str(b["max_input_len"])]
+
+
+class AngrSolver(Solver):
+    """angr-backed symbolic execution (the first concrete behind this seam), wired in Phase 5C-B.
+
+    `solve_reaching_input` / `solve_constraint` run `angr_probe.py` inside the DEDICATED angr
+    image (D10), over the read-only artifact, and map its JSON to a `SolverResult` (or `None`
+    when nothing was solved). The probe is hard-bounded (wall-clock + step + state caps, DFS for
+    deterministic order + bounded memory) so symbolic execution — the one tool here that can
+    genuinely exhaust memory/time — stays in its box.
+
+    angr is **never imported in this module** — it lives only inside the probe, behind the
+    sandbox boundary, so the host process never depends on it (the module imports cleanly
+    offline). The policy gate (`policy.assert_allows_solver`) is consulted HERE, at the probe
+    boundary, so even a directly-constructed `AngrSolver` (env override / `get_solver("angr")`)
+    can't run the probe unless `features.angr` is on (defence-in-depth on top of `get_solver`'s
+    selection-time gate)."""
 
     name = "angr"
     available = True
 
-    _NOT_WIRED = "angr solving lands in Phase 5C-B (the angr probe + sandbox-image dependency)"
-
     def solve_reaching_input(self, artifact: str, sink: SinkRef, *,
                              project: Any = None, budget: Any = None) -> SolverResult | None:
-        raise NotImplementedError(self._NOT_WIRED)
+        extra = ["--mode", "reaching-input"]
+        if sink.func:
+            extra += ["--sink-func", sink.func]
+        if sink.call_addr:
+            extra += ["--sink-addr", str(sink.call_addr)]
+        if sink.function:
+            extra += ["--function", sink.function]
+        if sink.function_addr:
+            extra += ["--function-addr", str(sink.function_addr)]
+        if sink.arg_index is not None:
+            extra += ["--arg-index", str(sink.arg_index)]
+        payload = self._run_probe(artifact, extra, budget)
+        return self._to_result(payload, kind="reaching_input")
 
     def solve_constraint(self, artifact: str, check: ConstraintRef, *,
                          project: Any = None, budget: Any = None) -> SolverResult | None:
-        raise NotImplementedError(self._NOT_WIRED)
+        extra = ["--mode", "constraint"]
+        if check.function:
+            extra += ["--function", check.function]
+        if check.function_addr:
+            extra += ["--function-addr", str(check.function_addr)]
+        if check.check_addr:
+            extra += ["--check-addr", str(check.check_addr)]
+        payload = self._run_probe(artifact, extra, budget)
+        return self._to_result(payload, kind="constraint_value")
+
+    # ── the probe boundary ────────────────────────────────────────────────────────────────
+    def _run_probe(self, artifact: str, extra_args: list[str], budget: Any) -> dict:
+        """Run the angr probe in the dedicated angr image and return its parsed JSON payload.
+        Consults the policy gate HERE (the probe boundary) before any container is spawned."""
+        from hexgraph import policy
+
+        policy.assert_allows_solver()  # opt-in gate (raises PolicyViolation if features.angr off)
+
+        from hexgraph.sandbox.executor import get_executor
+        from hexgraph.sandbox.resources import resource_spec_for
+        from hexgraph.sandbox.runner import SandboxError
+
+        runner = get_executor()
+        args = list(extra_args) + _budget_args(budget)
+        try:
+            result = runner.run_probe(
+                "angr_probe.py", artifact, extra_args=args, image=angr_image(),
+                resources=resource_spec_for("sandbox"),
+            )
+        except SandboxError as exc:
+            # A real container/launch failure → an honest error payload (NOT a fabricated solve).
+            return {"solved": False, "reason": "error", "error": str(exc)}
+        import json
+
+        try:
+            return json.loads(result.stdout)
+        except (ValueError, TypeError) as exc:
+            return {"solved": False, "reason": "error",
+                    "error": f"angr probe did not emit valid JSON: {exc}"}
+
+    @staticmethod
+    def _to_result(payload: dict, *, kind: str) -> SolverResult | None:
+        """Map the probe JSON to a `SolverResult`, or `None` when nothing was solved (the
+        caller treats None as 'no solution' and fabricates nothing — the seam contract)."""
+        if not isinstance(payload, dict) or not payload.get("solved"):
+            return None
+        prov = {
+            "backend": "angr",
+            "angr_version": payload.get("angr_version"),
+            "reason": payload.get("reason"),
+            "steps": payload.get("steps"),
+            "active_peak": payload.get("active_peak"),
+            "elapsed": payload.get("elapsed"),
+            "input_model": payload.get("input_model"),
+            "targets": payload.get("targets"),
+            "reached_addr": payload.get("reached_addr"),
+            "input_repr": payload.get("concrete_input_repr"),
+        }
+        return SolverResult(
+            kind=kind,
+            concrete_input=payload.get("concrete_input"),
+            recovered_value=payload.get("recovered_value"),
+            recovered_value_hex=payload.get("recovered_value_hex"),
+            path_addrs=list(payload.get("path_addrs") or []),
+            provenance={k: v for k, v in prov.items() if v is not None},
+        )
 
 
 def _resolve_name(explicit: str | None) -> str:
@@ -181,15 +317,23 @@ def _resolve_name(explicit: str | None) -> str:
 
     The env override (``HEXGRAPH_SOLVER=null|angr``) lets a test or operator pin the backend
     regardless of the gate — but selecting ``angr`` this way does NOT bypass the policy gate:
-    `get_solver()` still consults `policy.assert_allows_solver()` for the gated default path,
-    and the angr backend itself is inert (raises `NotImplementedError`) until 5C-B. A config
-    hiccup must never crash selection — it fails closed to ``none`` (the safe, fabricates-nothing
-    backend)."""
+    `get_solver()` and `AngrSolver` both still consult `policy.assert_allows_solver()` (the latter
+    at the probe boundary), so a directly-pinned angr backend is inert until `features.angr` is on.
+    A config hiccup must never crash selection — it fails closed to ``none`` (the safe,
+    fabricates-nothing backend). A BOGUS ``HEXGRAPH_SOLVER`` (an unrecognised value) therefore
+    DEGRADES to ``none`` rather than raising — only an explicit, unrecognised `get_solver(name=…)`
+    argument is a hard error (a programmer mistake), exactly as the env override should fail soft."""
     if explicit:
         return explicit.lower()
     env = os.environ.get("HEXGRAPH_SOLVER")
     if env:
-        return env.lower()
+        e = env.strip().lower()
+        if e in ("none", "null", "angr"):
+            return e
+        # Fail closed: an unrecognised env value degrades to NullSolver (never crashes selection,
+        # never widens the seam) — the env override fails soft, unlike an explicit bad arg.
+        log.warning("ignoring unknown HEXGRAPH_SOLVER=%r; using NullSolver", env)
+        return "none"
     try:
         from hexgraph import policy
 

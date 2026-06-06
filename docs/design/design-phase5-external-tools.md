@@ -320,10 +320,10 @@ Adopted tools only. A dropped session reads this to see what is done versus next
 - [ ] 5B-2 bundled rule set + user-rules dir + Settings/UX-contract surface
 
 **Phase 5C — angr flagship**
-- [ ] 5C-1 `get_solver()` seam (`Solver`/`AngrSolver`/`NullSolver`) + Null-path unit tests
-- [ ] 5C-2 angr probe + sandbox image dep + `features.angr` heavy-analysis gate (no tier) + `ResourceSpec`/step caps + CI (dep-present + smoke)
-- [ ] 5C-3 input→sink solving → `solver` Observation + grounded `vulnerability` finding with concrete input + reachability/fuzzing composition
-- [ ] 5C-4 single-check constraint solving → function-node annotation (no whole-program exploration)
+- [x] 5C-1 `get_solver()` seam (`Solver`/`AngrSolver`/`NullSolver`) + Null-path unit tests
+- [x] 5C-2 angr probe + a DEDICATED optional `hexgraph-angr` image (D10 — the heavy angr/z3 stack does NOT bloat the base sandbox; `docker/angr.Dockerfile`, `just angr-build`) + `features.angr` heavy-analysis gate (no tier) asserted at the probe boundary + `ResourceSpec`/step/time/state caps + a CI angr lane (dep-present assertion + the licensegate solve)
+- [x] 5C-3 input→sink solving (`AngrSolver` + `engine/solving.py`) → `solver` Observation + grounded `vulnerability` finding with the concrete reaching input in the envelope; verified end to end on the `licensegate` fixture
+- [x] 5C-4 single-check constraint solving → function-node annotation (no whole-program exploration)
 
 **Deferred (not started; unblock first):** ROPgadget (needs an exploit-primitive consumer) · BSim (needs a corpus + a similarity datastore decision).
 

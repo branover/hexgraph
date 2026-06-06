@@ -28,6 +28,7 @@ app_image      := env_var_or_default("HEXGRAPH_APP_IMAGE", "hexgraph-app:latest"
 sandbox_image  := "hexgraph-sandbox:latest"   # analysis sandbox image tag
 build_image    := env_var_or_default("HEXGRAPH_BUILD_IMAGE", "hexgraph-build:latest")  # build-from-source image tag
 fuzz_image     := env_var_or_default("HEXGRAPH_FUZZ_IMAGE", "hexgraph-fuzz:latest")    # coverage-guided fuzz image tag
+angr_image     := env_var_or_default("HEXGRAPH_ANGR_IMAGE", "hexgraph-angr:latest")    # angr symbolic-execution (solver) image tag
 firmae_image   := "hexgraph-firmae:latest"    # FirmAE rehosting image tag
 qemu_image     := "hexgraph-qemu:latest"      # qemu+KVM rehosting image tag
 iotgoat_url    := "https://github.com/OWASP/IoTGoat/releases/download/v1.0/IoTGoat-x86.img.gz"
@@ -147,6 +148,18 @@ build-image with_cross="0":
 [group('build')]
 fuzz-build:
     docker build -f docker/fuzz.Dockerfile -t {{fuzz_image}} .
+
+# OPT-IN, gated by features.angr. REBUILD WHEN you change docker/angr.Dockerfile or the angr
+# version — NOT when you edit angr_probe.py (probes are mounted from the install at runtime).
+# This DEDICATED image (the heavy angr + z3 + claripy/pyvex/cle stack) is what the get_solver()
+# seam runs symbolic execution in; it is NOT the shared sandbox image, so the base sandbox stays
+# lean (design D10 — the one Phase-5 dependency heavy enough to earn its own optional image).
+# WORKTREE DISCIPLINE: build a PRIVATE tag and point HEXGRAPH_ANGR_IMAGE at it — never clobber
+# a shared tag:  `HEXGRAPH_ANGR_IMAGE=hexgraph-angr:wt-<topic> just angr-build`.
+# Build the angr symbolic-execution (solver) image (needs Docker; angr + z3 + claripy/pyvex/cle).
+[group('build')]
+angr-build:
+    docker build -f docker/angr.Dockerfile -t {{angr_image}} .
 
 # The host pip install (`just setup`) remains the primary/dev path; this is for running the
 # whole thing in a container. Multi-stage: Node builds the SPA, Python installs the package with

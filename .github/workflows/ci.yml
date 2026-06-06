@@ -190,3 +190,48 @@ jobs:
         # Fails the job if Ghidra returns an error, pseudo-asm, or nothing. Runs the probe
         # through SandboxRunner.run_probe — the exact call GhidraDecompiler makes.
         run: python3 scripts/ci_ghidra_decompile_check.py hexgraph-sandbox:ci-ghidra
+
+  angr:
+    name: angr solver gate (dedicated angr image + licensegate solve)
+    runs-on: ubuntu-latest
+    # Separate lane so the heavy angr pip stack (angr + z3 + the claripy/pyvex/cle chain) doesn't
+    # block the offline matrix. angr ships in its OWN optional image (docker/angr.Dockerfile, D10),
+    # NOT the base sandbox, so this is the ONLY lane that exercises the get_solver() → angr probe
+    # path end to end. The build is large (~several minutes / hundreds of MB of wheels) but the
+    # GHA layer cache keeps the angr pip layer warm across runs.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the dedicated angr image (layer-cached)
+        # Cache is keyed separately from the sandbox lanes (a different Dockerfile). Loaded as the
+        # tag the test gate (`_angr_ready` / `angr_image()`) looks for so the e2e actually RUNS.
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/angr.Dockerfile
+          tags: hexgraph-angr:latest
+          load: true
+          cache-from: type=gha,scope=angr
+          cache-to: type=gha,mode=max,scope=angr
+      - name: Assert the angr stack is present in the image
+        # The angr_probe imports angr/claripy/z3. Fail the build loudly if a version bump or image
+        # change ever drops them, so the opt-in features.angr solver path can't silently break
+        # (design §2.7) — this image-building job is what exercises the heavy new dependency.
+        run: |
+          docker run --rm --entrypoint python3 hexgraph-angr:latest -c '
+          import angr, claripy, z3
+          print("angr", angr.__version__, "| z3", z3.get_version_string())'
+      - name: Install hexgraph (+ dev for pytest)
+        run: python -m pip install -e ".[dev]"
+      - name: Solve the licensegate fixture end to end (real angr, in the image)
+        # The proof: angr recovers a constraint-satisfying serial reaching system("/bin/grant_admin")
+        # and the vulnerability finding carries it. Runs the probe through the production
+        # get_solver() → AngrSolver → SandboxRunner.run_probe path. -rs surfaces a skip so a
+        # mis-tagged image can't make this lane silently pass without solving.
+        run: python -m pytest tests/test_solver_e2e.py -q -rs
