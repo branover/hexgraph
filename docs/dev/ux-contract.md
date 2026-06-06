@@ -1214,8 +1214,9 @@ later PR).
 - Prereq: none.
 
 **SET-03 — Toggle each optional feature (the gates)**
-- Steps: toggle each feature switch: Ghidra, Fuzzing, Source & Build (+ build_fetch, source.edit), PoC
-  verification, Network egress, Remote fuzz environments, MCP read/write/run groups, Delegate-to-agent.
+- Steps: toggle each feature switch: Ghidra, FLOSS / YARA / angr (the deeper-static group — see SET-03c),
+  Fuzzing, Source & Build (+ build_fetch, source.edit), PoC verification, Network egress, Remote fuzz
+  environments, MCP read/write/run groups, Delegate-to-agent.
 - Functional: each toggle persists; the dependent sub-controls show/hide; the workspace reflects it (e.g.
   enabling Fuzzing surfaces the Campaigns tab + Fuzz rows; enabling Build surfaces the Build button).
 - 🔌 Backend: each is a `PATCH /api/settings`; verify each in `GET` and that the gate actually changes behavior.
@@ -1250,6 +1251,24 @@ later PR).
 - Principle: enabling a policy gate is the one direction deferred to a restart; disabling is always live. The
   ceiling is the deterministic guard that an agent/host-local writer can't self-escalate a running session.
 - Prereq: a running server (not the CLI, which re-reads live each invocation — it never snapshots a ceiling).
+
+**SET-03c — Deeper-static analyses (FLOSS / YARA / angr)**
+- Steps: toggle FLOSS string deobfuscation, YARA pattern sweep, and angr symbolic execution; with angr on,
+  edit its image tag; read the YARA "Your rules" path.
+- Functional: each toggle persists (`features.{floss,yara,angr}.enabled`); the angr image field shows/persists
+  only when angr is on (`features.angr.image`); the YARA card always shows the resolved user-rules directory.
+- 🔌 Backend: each is a `PATCH /api/settings`; verify each in `GET`. The `paths.yara_rules_dir` field of
+  `read_settings()` is the resolved drop-in dir (`config.yara_rules_dir()`).
+- Qualitative: these three are NOT policy gates — none relaxes a sandbox/exec/egress boundary (no native target
+  execution, no network), and each card says so honestly rather than carrying a false ⚠ execution warning. They
+  carry a heavy-compute / opt-in note instead: FLOSS is slower than `strings`; YARA's rule management is a
+  surface; angr's symbolic execution is genuinely CPU/memory heavy (the one that can exhaust them) and ships in
+  its own dedicated image. The YARA path tells the operator exactly where to drop custom `.yar` files, and notes
+  that rule updates are a manual act (the no-network invariant). Wording is sourced from `setup_catalog.py` so
+  the UI matches the setup wizard.
+- Principle: opt-in deeper static analysis, each with its honest implication — heavy-compute, not a boundary
+  relaxation; no `restart to apply` chip applies (they're not policy gates).
+- Prereq: none.
 
 **SET-04 — Ghidra modes + test connection**
 - Steps: enable Ghidra → pick headless/bridge → (headless: timeout; bridge: host/port) → **Test connection**.

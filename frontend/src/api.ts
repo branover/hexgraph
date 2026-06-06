@@ -53,6 +53,11 @@ export interface SettingsView {
     resources: ResourcesView;
     features: {
       ghidra: { enabled: boolean; mode: string; enrich_recon: boolean; timeout: number; bridge: { host: string; port: number } };
+      // Phase 5 deeper-static analyses — opt-in, heavier than `strings`/a single probe,
+      // but none relaxes a sandbox/exec/egress boundary (no native execution, no network).
+      floss?: { enabled: boolean };
+      yara?: { enabled: boolean };
+      angr?: { enabled: boolean; image?: string };
       fuzzing: { enabled: boolean; max_total_time: number; max_len: number; max_crashes: number; timeout: number; image?: string };
       build: { enabled: boolean; image?: string; timeout?: number };
       poc: { enabled: boolean; timeout: number };
@@ -65,7 +70,7 @@ export interface SettingsView {
   secrets: Record<string, SecretStatus>;
   availability: { docker: boolean; ghidra: { enabled: boolean; mode: string; bridge_client_installed: boolean } };
   policy: PolicyView;
-  paths: { config_toml: string; settings_json: string };
+  paths: { config_toml: string; settings_json: string; yara_rules_dir?: string };
 }
 // Per policy gate: what's saved in settings.json vs. what the RUNNING server enforces.
 // `pending_restart` is true when a gate is configured-on but the server's startup

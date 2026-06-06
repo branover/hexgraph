@@ -301,6 +301,9 @@ ALLOWED: dict[str, tuple[Any, set | None]] = {
     "features.floss.enabled": (bool, None),
     "features.yara.enabled": (bool, None),
     "features.angr.enabled": (bool, None),
+    # The DEDICATED angr image tag (its own optional sibling image, never the base
+    # sandbox) — same writable-image pattern as features.fuzzing/build.image.
+    "features.angr.image": (str, None),
     "features.fuzzing.enabled": (bool, None),
     "features.fuzzing.max_total_time": (int, None),
     "features.fuzzing.max_len": (int, None),
@@ -558,5 +561,12 @@ def read_settings() -> dict:
         # configured-vs-effective per policy gate, so the UI can flag a saved-but-not-yet-
         # active toggle ("takes effect on next restart") instead of implying it's live.
         "policy": policy.policy_feature_states(),
-        "paths": {"config_toml": str(_cfg.config_path()), "settings_json": str(settings_path())},
+        # The YARA user-rules dir is surfaced so the Settings UI can tell the operator
+        # where to drop their own `.yar` files (rule updates are a manual act — the
+        # no-network invariant means HexGraph never fetches rules for them).
+        "paths": {
+            "config_toml": str(_cfg.config_path()),
+            "settings_json": str(settings_path()),
+            "yara_rules_dir": str(_cfg.yara_rules_dir()),
+        },
     }

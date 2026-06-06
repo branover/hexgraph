@@ -229,6 +229,91 @@ export default function Settings() {
             )}
           </section>
 
+          {/* FLOSS — deeper string deobfuscation (deeper-static, relaxes no boundary) */}
+          <section className="card2">
+            <div className="h3row">
+              <h3><Icon name="spark" size={15} /> FLOSS string deobfuscation <span className="muted">· optional · deeper static</span></h3>
+              <label className="switch">
+                <input type="checkbox" checked={Boolean(v.settings.features.floss?.enabled)}
+                       onChange={(e) => patch({ "features.floss.enabled": e.target.checked })} />
+                <span>{v.settings.features.floss?.enabled ? "enabled" : "disabled"}</span>
+              </label>
+            </div>
+            <p className="hint">
+              Recovers the stack / tight / decoded strings a plain <code>strings</code> pass misses — strings
+              built on the stack at runtime or produced by a decode routine — by lightly <b>emulating</b> the
+              constructing functions (FLARE FLOSS). On firmware and malware those hidden strings (URLs, command
+              templates, keys) are often the lead. The emulation runs <b>in-process</b> in the sandbox (vivisect):
+              it never executes the target natively and opens no network, so it <b>relaxes no policy gate</b>. It is
+              opt-in only because the deobfuscation pass is slower than <code>strings</code>. Needs <code>flare-floss</code>
+              in the sandbox image (a rebuild). Obfuscated-string recovery applies to x86/amd64 PE targets; on
+              ELF / foreign-arch it degrades to a static-strings-only pass.
+            </p>
+          </section>
+
+          {/* YARA — project-wide pattern sweep (static match, relaxes no boundary) */}
+          <section className="card2">
+            <div className="h3row">
+              <h3><Icon name="shield" size={15} /> YARA pattern sweep <span className="muted">· optional · deeper static</span></h3>
+              <label className="switch">
+                <input type="checkbox" checked={Boolean(v.settings.features.yara?.enabled)}
+                       onChange={(e) => patch({ "features.yara.enabled": e.target.checked })} />
+                <span>{v.settings.features.yara?.enabled ? "enabled" : "disabled"}</span>
+              </label>
+            </div>
+            <p className="hint">
+              Sweeps the project's targets and extracted firmware files against YARA rules — a bundled high-signal
+              set plus any <code>.yar</code> you drop in the rules dir — for embedded credentials, known-bad library
+              banners, weak-crypto constants and packer signatures. It's the fuzzy, structural complement to the
+              exact-hash n-day link. A static <b>match</b>: it reads bytes, never executes the target and opens no
+              socket, so it <b>relaxes no policy gate</b>. Opt-in only because rule management is a surface and a sweep
+              can be heavier than a single probe. Needs <code>yara</code> + <code>yara-python</code> in the sandbox
+              image (a rebuild).
+            </p>
+            <div className="row" style={{ marginTop: 4 }}>
+              <label>Your rules</label>
+              <code style={{ fontSize: 11.5, wordBreak: "break-all" }}>{v.paths.yara_rules_dir || "—"}</code>
+            </div>
+            <p className="hint" style={{ marginTop: 4 }}>
+              Drop your own <code>.yar</code> files here to fold them into every sweep. Bundled rules ship in-package.
+              Rule updates are a manual act — the no-network invariant means HexGraph never fetches rules for you.
+            </p>
+          </section>
+
+          {/* angr — symbolic execution (solver). Policy-GATED but relaxes no boundary;
+              the honest note is the genuine CPU/memory cost. */}
+          <section className="card2">
+            <div className="h3row">
+              <h3><Icon name="sliders" size={15} /> angr symbolic execution <span className="muted">· optional · solver · heavy compute</span></h3>
+              <label className="switch">
+                <input type="checkbox" checked={Boolean(v.settings.features.angr?.enabled)}
+                       onChange={(e) => patch({ "features.angr.enabled": e.target.checked })} />
+                <span>{v.settings.features.angr?.enabled ? "enabled" : "disabled"}</span>
+              </label>
+            </div>
+            <p className="hint">
+              Behind the <code>get_solver()</code> seam: given a sink, solve for an input that <b>reaches</b> it; given
+              a check, recover the value that <b>satisfies</b> it — the strongest static claim short of a live PoC,
+              because it can produce a concrete reaching input. It explores the artifact symbolically and asks a
+              constraint solver for a satisfying input: it <b>never executes the target natively</b>, opens no socket
+              and touches no network, so it relaxes no sandbox / exec / egress boundary and raises no policy tier.
+            </p>
+            <p className="hint" style={{ marginTop: 4 }}>
+              ⚠ Symbolic execution is <b>heavy on CPU and memory</b> — the one analysis here that can genuinely exhaust
+              them — so it is opt-in and bounded by the sandbox resource ceilings plus a step / time cap in the probe.
+              It runs in a <b>dedicated</b> angr image (<code>just angr-build</code>, the heaviest Phase-5 dependency),
+              kept separate so the base sandbox stays lean. With the gate off or the image absent, the solver seam
+              degrades to a null solver: nothing solved, nothing fabricated.
+            </p>
+            {v.settings.features.angr?.enabled && (
+              <div className="row" style={{ marginTop: 4 }}>
+                <label>angr image</label>
+                <input className="inp" defaultValue={v.settings.features.angr?.image ?? "hexgraph-angr:latest"}
+                       onBlur={(e) => patch({ "features.angr.image": e.target.value.trim() || "hexgraph-angr:latest" })} />
+              </div>
+            )}
+          </section>
+
           {/* Fuzzing */}
           <section className="card2">
             <div className="h3row">
