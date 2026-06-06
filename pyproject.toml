@@ -46,6 +46,13 @@ byok = [
 mcp = [
     "mcp>=1.2",
 ]
+# Ghidra bridge (optional): connect over loopback to a Ghidra you already have open
+# and pull decompilation from your live analysis (features.ghidra.mode = "bridge").
+# `ghidra_bridge` pulls in `jfx_bridge`. Deliberately NOT in `dev` — CI exercises the
+# bridge-client-absent path, and the live remote calls need a running Ghidra.
+bridge = [
+    "ghidra_bridge>=1.0",
+]
 dev = [
     "pytest>=8.0",
     "httpx>=0.27",
