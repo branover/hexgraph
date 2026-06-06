@@ -34,3 +34,4 @@ src/hexgraph/_build_info.py
 !.claude/
 .claude/*
 !.claude/skills/
+!.claude/agents/
