@@ -123,8 +123,8 @@ def _cmd_rehost(args: argparse.Namespace) -> int:
         ch = (surface.metadata_json or {}).get("channel", {})
         print(f"rehosted → surface {surface.id} at {ch.get('base_url')} "
               f"(container {ch.get('rehost', {}).get('container')})")
-        print("assess it: enable features.network, then run_task(surface, 'surface_recon'/'web_recon') "
-              "or http_request / verify_poc")
+        print("assess it: enable features.network, then task_run(surface, 'surface_recon'/'web_recon') "
+              "or net_http_request / finding_verify_poc")
     return 0
 
 

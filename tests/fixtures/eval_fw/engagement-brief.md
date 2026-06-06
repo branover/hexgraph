@@ -32,21 +32,21 @@ task is done only when `finding_verify_poc` returns `verified: true` for your Po
 
 ## What to do
 
-0. **Confirm the starting state.** Call `list_projects`. The firmware has **not**
+0. **Confirm the starting state.** Call `proj_list`. The firmware has **not**
    been loaded for you — there should be no project for it yet. Bringing it in is
    your job.
 1. **Ingest the firmware yourself.** Call `target_ingest(path="<the path above>")`. It
    unpacks the image into child targets and runs recon in the sandbox. Note the
-   `project_id` and child target ids it returns, then `list_targets(project_id)`
+   `project_id` and child target ids it returns, then `target_list(project_id)`
    to see what came out. (If `target_ingest` reports the file isn't found, the path is
    relative to the MCP server's working directory — ask the operator for the
    absolute path and use that.)
 2. **Map the attack surface.** For each child binary, read its recon facts
-   (`target_facts`, `read_imports`) and `list_functions`. Decide what is
+   (`target_facts`, `re_imports`) and `re_list_functions`. Decide what is
    reachable from untrusted input (network / HTTP / CGI).
 3. **Investigate.** `re_decompile_function` the suspicious functions and follow the
-   data flow from the untrusted input to any dangerous sink. Use `disassemble`
-   or `list_strings` if pseudo-C is unclear. Distinguish a *real, exploitable*
+   data flow from the untrusted input to any dangerous sink. Use `re_disassemble`
+   or `re_list_strings` if pseudo-C is unclear. Distinguish a *real, exploitable*
    bug from a benign pattern — be precise about why it is or isn't reachable and
    controllable.
 4. **Prove it — build and verify a PoC.** Craft an attacker input that triggers
@@ -57,7 +57,7 @@ task is done only when `finding_verify_poc` returns `verified: true` for your Po
    so `verified: true` means your injected command really executed. Iterate until
    it verifies. (If `finding_verify_poc` says execution isn't permitted, the operator must
    enable **Settings → PoC verification**.)
-5. **Record what you find** with `record_finding(project_id, target_id, finding)`
+5. **Record what you find** with `finding_record(project_id, target_id, finding)`
    — one finding per real issue. Include the function, the dangerous sink, a
    decompiled snippet, a clear **exploitability** argument (pre-auth? trigger?
    impact?), the **verified PoC** (put the spec + that it verified in the

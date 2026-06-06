@@ -968,8 +968,8 @@ def record_finding(project_id: str, target_id: str, finding: dict, task_id: str 
     try:
         model = FModel.model_validate(finding)
     except Exception as exc:  # noqa: BLE001
-        return {"error": f"finding does not match the schema: {exc} — call get_schemas; note "
-                         "finding_type is a separate record_finding arg, not a finding field."}
+        return {"error": f"finding does not match the schema: {exc} — call meta_get_schemas; note "
+                         "finding_type is a separate finding_record arg, not a finding field."}
     with session_scope() as s:
         project = s.get(Project, project_id)
         target = s.get(Target, target_id)
@@ -1403,7 +1403,7 @@ def check_decompiler() -> dict:
 
 def get_schemas() -> dict:
     """The write-API contract: allowed enums + the Finding shape. Read this before
-    record_finding / create_node / create_edge / annotate to avoid guessing."""
+    finding_record / graph_create_node / graph_create_edge / graph_annotate to avoid guessing."""
     import typing
 
     from hexgraph.db.models import EdgeType, FindingStatus, NodeType
@@ -1431,17 +1431,17 @@ def get_schemas() -> dict:
         "finding_type": {
             "values": list(FINDING_TYPES),
             "note": "NOT a field of the finding object — pass it as the separate `finding_type` "
-                    "argument to record_finding (and read it back via list_findings). Defaults to "
+                    "argument to finding_record (and read it back via finding_list). Defaults to "
                     "'vulnerability' / is auto-classified from the producing task.",
         },
-        "record_finding_signature": "record_finding(project_id, target_id, finding, task_id=None, "
+        "record_finding_signature": "finding_record(project_id, target_id, finding, task_id=None, "
                                     "finding_type=None) — project_id is FIRST, then target_id. Prefer "
                                     "keyword args. For 'the same bug in another binary' use "
-                                    "propagate_finding(finding_id, target_id) instead of re-typing it.",
+                                    "finding_propagate(finding_id, target_id) instead of re-typing it.",
         "node_types": [t.value for t in NodeType if t != NodeType.task],
         "node_attribute_schemas": describe_nodes(),
         "node_attributes_note": "Per node type: what it IS, `use_when` (when to create it vs an "
-                                "alternative), and the `recommended` attrs to populate on create_node "
+                                "alternative), and the `recommended` attrs to populate on graph_create_node "
                                 "for a complete, consistent graph. KEY RULE: a dangerous library call "
                                 "(system/exec/strcpy/sprintf) is a `symbol`/`function` node with "
                                 "is_sink=true — do NOT also create a separate `sink` node for it; reserve "
@@ -1450,25 +1450,25 @@ def get_schemas() -> dict:
         "edge_types": [t.value for t in EdgeType],
         "edge_endpoint_kinds": ["target", "node", "finding", "task"],
         "edge_note": "A hypothesis IS a node (node_type='hypothesis'); link a finding to it with "
-                     "dst_kind='node' + its id, or better use link_evidence(hypothesis_id, finding_id, "
+                     "dst_kind='node' + its id, or better use graph_link_evidence(hypothesis_id, finding_id, "
                      "relation) which also updates the hypothesis status.",
         "edge_attribute_schemas": describe_edges(),
         "edge_attributes_note": "Edges carry attributes (edge.attrs) — the schema above lists what's "
                                 "meaningful per type (e.g. a calls edge's call_sites + arg_constraints, a "
-                                "listens_on edge's address). Pass them via create_edge(attrs=…); use "
-                                "create_edge(merge=True) or update_edge to ACCUMULATE list attrs.",
+                                "listens_on edge's address). Pass them via graph_create_edge(attrs=…); use "
+                                "graph_create_edge(merge=True) or graph_update_edge to ACCUMULATE list attrs.",
         "socket": {
             "kinds": list(SOCKET_KINDS),
             "note": "A `socket` node is a network/IPC endpoint SHARED across binaries. Make it with "
-                    "create_socket(kind, port|name); a server `listens_on` it and a client "
-                    "`connects_to` it (both resolve to the one node). list_sockets shows the map.",
+                    "graph_create_socket(kind, port|name); a server `listens_on` it and a client "
+                    "`connects_to` it (both resolve to the one node). graph_list_sockets shows the map.",
         },
         "link_evidence_relations": ["supports", "refutes", "confirms", "contradicts"],
         "link_evidence_note": "relation is supports|refutes (confirms→supports, contradicts→refutes are "
                               "accepted aliases). The hypothesis status is then recomputed from its "
-                              "evidence; pin a hard verdict with set_hypothesis_status(id,'confirmed').",
+                              "evidence; pin a hard verdict with graph_set_hypothesis_status(id,'confirmed').",
         "create_node_note": "Function/symbol/struct identity is (target, normalized name) — recon "
-                            "pre-materializes function nodes (address=null). create_node on an existing "
+                            "pre-materializes function nodes (address=null). graph_create_node on an existing "
                             "one MERGES: it fills a missing address and unions attrs (it won't overwrite "
                             "a known address). The returned address/attrs show what actually landed.",
         "decompiler": _decompiler_info(),
@@ -1500,7 +1500,7 @@ def get_schemas() -> dict:
         "annotation_node_kinds": sorted(ANN_NODE_KINDS),
         "annotation_note": "Annotations from an agent land status='proposed' (pending analyst approval).",
         "verify_poc_oracles": {
-            "note": "verify_poc's oracle vocabulary. The classic in-band oracles prove a "
+            "note": "finding_verify_poc's oracle vocabulary. The classic in-band oracles prove a "
                     "REFLECTED side effect (best for reflected cmdi / auth-bypass); the extended "
                     "oracles below prove BROADER vuln classes by observing a side effect on a "
                     "channel INDEPENDENT of the exploit's request, so the model can't forge them "
@@ -1557,18 +1557,18 @@ def get_schemas() -> dict:
                     "input_reachable (it's triggerable via user input in normal operation), each by "
                     "method static (argued) or dynamic (a live trigger fired an unforgeable oracle), "
                     "under a precondition (unauthenticated / requires_credentials / unspecified). The "
-                    "engine records this per finding in evidence.extra.assurance: a verified verify_poc "
+                    "engine records this per finding in evidence.extra.assurance: a verified finding_verify_poc "
                     "→ input_reachable/dynamic (the strongest claims are engine-set and can't be faked); "
                     "any other vuln finding defaults to the FLOOR code_present/static. AIM FOR THE "
-                    "STRICTEST: don't stop at code_present — craft a verify_poc to demonstrate "
+                    "STRICTEST: don't stop at code_present — craft a finding_verify_poc to demonstrate "
                     "input_reachable/dynamic, and prefer an unauthenticated precondition (pass "
-                    "spec.precondition to verify_poc, or evidence.extra.assurance to record_finding, to "
+                    "spec.precondition to finding_verify_poc, or evidence.extra.assurance to finding_record, to "
                     "declare the precondition / an argued input_reachable-static — but state "
                     "requires_credentials honestly; never claim unauth you didn't achieve).",
             "static_reachability": "When you CAN'T trigger it live (the service won't boot, no "
                     "exec tier), ARGUE reachability instead: build the input→sink path in the graph "
-                    "(create_node the input/param/endpoint/sink, create_edge the taints/calls/"
-                    "routes_to path), then call reachability(finding_id=…). If a source→sink path "
+                    "(graph_create_node the input/param/endpoint/sink, graph_create_edge the taints/calls/"
+                    "routes_to path), then call finding_reachability(finding_id=…). If a source→sink path "
                     "exists it UPGRADES code_present/static → input_reachable/static and records the "
                     "path + derived precondition (auth boundary on the path ⇒ requires_credentials; "
                     "an unauth boundary ⇒ unauthenticated). It NEVER downgrades a dynamic claim — a "

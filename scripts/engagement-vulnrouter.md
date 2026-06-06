@@ -24,9 +24,9 @@ in its sandbox and confirm exploitation. The task is done when `finding_verify_p
 - Judge from evidence: read actual responses before you conclude.
 
 ## What to do
-0. **Orient.** `list_projects`; the operator has created a project and registered
-   the surface for you (a `web_app` target). `list_targets(project_id)` to find its
-   id. `get_schemas` once for the write-API contract.
+0. **Orient.** `proj_list`; the operator has created a project and registered
+   the surface for you (a `web_app` target). `target_list(project_id)` to find its
+   id. `meta_get_schemas` once for the write-API contract.
 1. **Map the surface.** `task_run(target_id, "surface_recon")` (materializes the
    route/param graph) and `task_run(target_id, "web_recon")` (liveness). Then probe
    with **`net_http_request`** — e.g. `GET /`, `GET /admin/flag` (note the
@@ -47,7 +47,7 @@ in its sandbox and confirm exploitation. The task is done when `finding_verify_p
    **Settings → Network egress**.)
 4. **Make the graph tell the story.** A confirmed vulnerability finding MUST have a
    verified `poc` finding linked to it (`confirms`→). Populate node attributes per
-   `get_schemas` so the graph is complete: the endpoint (method/path/auth), the
+   `meta_get_schemas` so the graph is complete: the endpoint (method/path/auth), the
    injectable param, the input→sink `taints` path, and `bypasses` for the auth flaw.
 
 ## Deliverable
@@ -56,4 +56,4 @@ impact), the **verified PoC** for each (the steps + that `finding_verify_poc` re
 `verified: true`), the one-line fix, and the `project_id` so everything is in HexGraph.
 
 Begin by listing the `hexgraph` tools available to you, then orient with
-`list_projects` / `list_targets`.
+`proj_list` / `target_list`.

@@ -123,7 +123,7 @@ docker run -d --name hg-ghidra-bridge --network host \
 
 Finally point HexGraph at it — `features.ghidra = {enabled: true, mode: "bridge", bridge: {host:
 "127.0.0.1", port: 4768}}` (read live, no restart; `127.0.0.1:4768` are the defaults). The Settings
-"Test" button (and the `check_decompiler` tool) confirms it by running a one-function smoke decompile,
+"Test" button (and the `meta_check_decompiler` tool) confirms it by running a one-function smoke decompile,
 so a green result means decompilation actually works, not merely that the socket is open.
 
 ## Configuration

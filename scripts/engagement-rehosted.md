@@ -16,7 +16,7 @@ reproduce them from the graph.
 
 ## Rules of engagement
 - Work **only** through the HexGraph `hexgraph` MCP tools. Never run your own
-  shell/curl/browser/qemu against the target — booting goes through `rehost`, and all HTTP
+  shell/curl/browser/qemu against the target — booting goes through `target_rehost`, and all HTTP
   goes through `net_http_request` / `finding_verify_poc`, which run in a bounded, audited, local-only
   sandbox that reaches the emulated device over its private IP. (Your `hexgraph-vr` skill
   §2b covers the rehost + web flow.)
@@ -24,10 +24,10 @@ reproduce them from the graph.
   features.network to assess).
 
 ## What to do
-0. **Orient.** `list_projects` / `list_targets(project_id)` — find the **firmware target**
+0. **Orient.** `proj_list` / `target_list(project_id)` — find the **firmware target**
    (the byte image; its static graph of functions/imports already exists, so your dynamic
-   findings can link back to it). `get_schemas` for the write-API contract.
-1. **Rehost it yourself.** Call **`rehost(firmware_target_id)`** — HexGraph boots the image
+   findings can link back to it). `meta_get_schemas` for the write-API contract.
+1. **Rehost it yourself.** Call **`target_rehost(firmware_target_id)`** — HexGraph boots the image
    under emulation (auto-selecting qemu+KVM for a full-OS disk image, FirmAE for a vendor
    blob) and returns a `web_app` **surface** (`surface_id` + `base_url`) registered as a child
    of the firmware. That surface is your live target. (Rehosting is heavy — it can take a
@@ -43,7 +43,7 @@ reproduce them from the graph.
    without valid creds), **command injection / RCE** (a parameter reaching a shell — common
    in diagnostic/ping/network-config handlers), path traversal, info leaks. Record each lead
    immediately as a finding + `endpoint`/`param`/`input` nodes + a `taints` edge to the sink,
-   at low/medium confidence; populate node attrs per `get_schemas`.
+   at low/medium confidence; populate node attrs per `meta_get_schemas`.
 4. **Prove it** with `finding_verify_poc(surface_id, {steps, oracle}, finding_id=…)`:
    - **RCE**: inject `; echo {{NONCE}}` (or the platform equivalent) → `oracle:
      {type:"body_contains","value":"{{NONCE}}"}`. The echoed nonce proves execution.
@@ -58,4 +58,4 @@ A short report: each vulnerability (route, parameter, trigger, pre-auth?, impact
 **verified PoC** (steps + `finding_verify_poc` returned `verified: true`), the one-line fix, and the
 `project_id` so everything is in HexGraph.
 
-Begin by listing the `hexgraph` tools, then orient with `list_projects` / `list_targets`.
+Begin by listing the `hexgraph` tools, then orient with `proj_list` / `target_list`.
