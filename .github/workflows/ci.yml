@@ -122,6 +122,17 @@ jobs:
               command -v "$t" >/dev/null || { echo "MISSING binutils tool: $t"; exit 1; }
             done
             echo "binutils quick-facts tools present: nm objdump readelf strings"'
+      - name: Assert FLOSS is present in the image
+        # The floss_probe (Phase 5A PR 5A-2) shells out to the FLARE `floss` CLI, added as
+        # the flare-floss pip dependency in sandbox.Dockerfile. Fail the build loudly if an
+        # image change ever drops it, so the opt-in features.floss path can't silently break
+        # (design §2.7) — this is the image-building job that exercises the new dependency.
+        run: |
+          docker run --rm hexgraph-sandbox:latest sh -c '
+            set -e
+            command -v floss >/dev/null || { echo "MISSING tool: floss"; exit 1; }
+            python3 -c "import floss.main" || { echo "floss not importable"; exit 1; }
+            echo "FLOSS present: $(floss --version 2>&1 | head -1)"'
       - name: Install into .venv
         # `just test-ci` / `just demo` run `.venv/bin/python` (the justfile's `py` var),
         # so install into a venv the way `just install` does — not the system interpreter.

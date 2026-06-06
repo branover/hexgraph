@@ -162,6 +162,24 @@ FEATURES: tuple[Feature, ...] = (
         requires_note="needs Ghidra (features.ghidra) enabled + the with_ghidra sandbox image.",
     ),
     Feature(
+        key="features.floss.enabled",
+        label="FLOSS string deobfuscation",
+        unlocks="Recover the stack/tight/decoded strings a plain `strings` pass misses — "
+                "strings built on the stack at runtime or produced by a decode routine — by "
+                "lightly emulating the constructing functions (FLARE FLOSS). On firmware/"
+                "malware these hidden strings (URLs, command templates, keys) are often the lead.",
+        # FLOSS emulates the decode routines IN-PROCESS in the sandbox (vivisect) — NO native
+        # execution of the target and NO network — so it relaxes no policy gate/tier. A
+        # heavy-analysis opt-in only (it is slower than `strings`).
+        security="",
+        policy_changing=False,
+        tier=None,
+        builds=("sandbox",),  # needs flare-floss in the sandbox image (rebuild required)
+        requires_note="needs the flare-floss dependency in the sandbox image (a rebuild). "
+                      "Obfuscated-string recovery applies to x86/amd64 PE targets; on ELF/"
+                      "foreign-arch it degrades to a static-strings-only pass.",
+    ),
+    Feature(
         key="features.poc.enabled",
         label="PoC verification (execute the target)",
         unlocks="The `poc` task + `verify_poc` tool run an attacker-style input against "

@@ -44,6 +44,8 @@ _CATALOG = [
      {"type": "object", "properties": {"target_id": {"type": "string"}}, "required": ["target_id"]}),
     ("read", "binutils_facts", _t.binutils_facts, "Authoritative low-level ELF facts via GNU binutils (nm/objdump/readelf/strings) run in the sandbox: the symbol table, dynamic imports/exports, relocations (incl. PLT jump-slot imports), sections, ELF/program headers, and the security mitigations (NX, RELRO, PIE, stack canary, FORTIFY) — the fast first-minute facts pass, sharper than target_facts/read_imports (recon caps imports/strings). QUERY: records a binutils_facts Observation and tags is_sink on any dangerous import ALREADY in the graph + folds the mitigation flags onto the target; adds NO new graph nodes — promote what matters. Check list_observations(target_id) first to reuse a prior pass.",
      {"type": "object", "properties": {"target_id": {"type": "string"}}, "required": ["target_id"]}),
+    ("read", "floss_strings", _t.floss_strings, "Recover OBFUSCATED strings a plain strings/list_strings pass MISSES — STACK strings (built byte-by-byte on the stack at runtime), TIGHT strings, and DECODED strings (produced by a decode routine FLOSS lightly EMULATES in the sandbox) — via FLARE FLOSS. On firmware/malware these hidden strings (URLs, command templates, keys, format strings) are often the lead. QUERY: records a floss_strings Observation; adds NO graph nodes — PROMOTE an interesting recovered string to a string node deliberately (create_node node_type=string). FLOSS is slow, so check list_observations(target_id) first to reuse a prior pass. `min_length` (default 4, clamped 4–64) is the only knob. NOTE: stack/decoded recovery supports x86/amd64 PE targets; on an ELF/foreign-arch artifact it degrades to a static-strings-only pass with a note. OPT-IN: advertised only when features.floss is enabled (it relaxes no policy boundary — FLOSS emulates decode routines in-process, never executes the target — but is slower than strings).",
+     {"type": "object", "properties": {"target_id": {"type": "string"}, "min_length": {"type": "integer"}}, "required": ["target_id"]}),
     ("read", "list_strings", _t.list_strings, "Notable strings in a target (optional substring filter). QUERY: records an Observation; adds no graph nodes.",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "pattern": {"type": "string"}}, "required": ["target_id"]}),
     ("read", "xrefs", _t.xrefs, "Cross-references: which functions CALL a symbol/sink and where (omit `symbol` to map dangerous sinks, format-string sinks, AND network/socket surface bind/listen/connect/recv). Trace a sink back to its caller, or find listen/connect sites to model as socket nodes. QUERY: records an Observation and tags is_sink on any dangerous-import symbol ALREADY in the graph; adds no new graph nodes.",
@@ -197,12 +199,33 @@ _CATALOG = [
 ]
 
 
+# Tools advertised ONLY when their opt-in feature is enabled (vs. the always-on verbs
+# that simply return an "enable X" message when used while off). Keeping these OUT of the
+# tool list until the user opts in keeps the agent's context lean — the analogue of the
+# capability table folding fuzzing in only when enabled. Each entry maps a tool name to a
+# predicate read at catalog-build time. FLOSS is feature-gated (slower than strings); it
+# relaxes NO policy boundary, so this reads the live setting, not policy.effective_gates().
+def _floss_advertised() -> bool:
+    try:
+        from hexgraph.engine.floss import floss_enabled
+
+        return floss_enabled()
+    except Exception:  # noqa: BLE001 — never advertise a tool whose gate can't be read
+        return False
+
+
+_FEATURE_GATED_TOOLS = {"floss_strings": _floss_advertised}
+
+
 def catalog(enabled_groups: set[str] | None = None) -> list[dict]:
-    """Tool specs for the MCP server, filtered to the enabled groups (default: all).
-    Trimming groups keeps the agent's tool list small when only part of HexGraph
-    is wanted (e.g. write-only, to populate the graph from a UI-driven session)."""
+    """Tool specs for the MCP server, filtered to the enabled groups (default: all) and to
+    the opt-in feature gates (a feature-gated tool like floss_strings is advertised only
+    when its feature is enabled). Trimming groups keeps the agent's tool list small when
+    only part of HexGraph is wanted (e.g. write-only, to populate the graph from a
+    UI-driven session)."""
     groups = set(GROUPS) if enabled_groups is None else enabled_groups
     return [
         {"group": g, "name": n, "fn": fn, "description": d, "schema": sch}
-        for (g, n, fn, d, sch) in _CATALOG if g in groups
+        for (g, n, fn, d, sch) in _CATALOG
+        if g in groups and _FEATURE_GATED_TOOLS.get(n, lambda: True)()
     ]

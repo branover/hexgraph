@@ -75,6 +75,17 @@ DEFAULTS: dict[str, Any] = {
             # the execution/egress tier. Requires Ghidra (features.ghidra) to be enabled.
             "enabled": False,
         },
+        "floss": {
+            # OFF by default. FLOSS string deobfuscation (Phase 5A): recovers the stack/tight/
+            # decoded strings a plain `strings` pass misses, by lightly EMULATING the decode
+            # routines IN-PROCESS in the sandbox (vivisect — never native target execution, no
+            # network). Like emulation, it relaxes NO sandbox/exec/egress boundary and raises NO
+            # policy tier, so it is NOT a policy gate (no policy.py entry); it is opt-in only
+            # because the deobfuscation pass is slower than `strings`. NOTE: the obfuscated-string
+            # recovery applies to x86/amd64 PE targets; on ELF/foreign-arch it degrades to a
+            # static-strings-only pass. Needs the flare-floss dependency in the sandbox image.
+            "enabled": False,
+        },
         "fuzzing": {
             # OFF by default: enabling this flips the analysis policy to allow
             # execution (still --network none, capped, timed, disposable). The
@@ -258,6 +269,7 @@ ALLOWED: dict[str, tuple[Any, set | None]] = {
     "features.ghidra.bridge.host": (str, None),
     "features.ghidra.bridge.port": (int, None),
     "features.emulation.enabled": (bool, None),
+    "features.floss.enabled": (bool, None),
     "features.fuzzing.enabled": (bool, None),
     "features.fuzzing.max_total_time": (int, None),
     "features.fuzzing.max_len": (int, None),
