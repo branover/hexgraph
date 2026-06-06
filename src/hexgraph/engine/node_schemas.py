@@ -2,7 +2,7 @@
 attributes the researcher expects to see populated on it.
 
 The companion to `edge_schemas.py`. Nodes are typed (`node.node_type`) with a free-form
-`attrs_json`; this registry is the *contract* an agent reads (via `get_schemas`) so the
+`attrs_json`; this registry is the *contract* an agent reads (via `meta_get_schemas`) so the
 same analysis run twice converges on the same graph instead of varying. It is **guidance,
 not a hard schema** — unknown attrs are kept — but every graph_create_node call should populate
 the `recommended` attributes for the type, and `use_when` keeps the type taxonomy crisp
@@ -157,7 +157,7 @@ NODE_ATTRIBUTE_SCHEMAS: dict[str, dict[str, Any]] = {
                        "scripts are role-tagged source_files.",
         "identity": "(project, fq_name=`<tree_id>:<rel>`) — one node per file path in a tree.",
         "use_when": "Don't hand-create these — they're materialized when you link a finding to "
-                    "source (link_finding_to_source) or import a tree. Browse with read_source_file.",
+                    "source (finding_link_to_source) or import a tree. Browse with src_read_file.",
         "attributes": {
             "tree_id": _a("the source_tree this file belongs to", recommended=True),
             "rel": _a("path relative to the tree root", recommended=True),

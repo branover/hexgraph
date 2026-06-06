@@ -2171,7 +2171,7 @@ def link_same_code(project_id: str) -> dict:
             matches.append({"function": a.name, "a": side(a), "b": side(b)})
         return {"edges_created": created, "matches": matches,
                 "hint": "If one side has_findings and the other doesn't, the bug likely "
-                        "propagates — use propagate_finding(finding_id, target_id) on the bare side."}
+                        "propagates — use finding_propagate(finding_id, target_id) on the bare side."}
 
 
 def run_task(target_id: str, type: str, objective: str | None = None, params: dict | None = None) -> dict:
