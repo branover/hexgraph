@@ -1,5 +1,5 @@
-"""Firmware filesystem manifest + add-from-FS (browse the unpacked tree, add any
-file as a child target). The unpack itself is sandbox-gated; here we seed a
+"""Firmware filesystem manifest + promote-file (browse the unpacked tree, promote any
+file to a child target). The unpack itself is sandbox-gated; here we seed a
 manifest + on-disk files and exercise list/add."""
 
 import os

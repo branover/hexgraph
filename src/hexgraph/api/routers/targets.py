@@ -66,7 +66,7 @@ def api_add_target(
 
 class SocketCreate(BaseModel):
     """Register a bare non-HTTP network service (raw TCP/UDP) as a first-class `service`
-    target — no bytes, no credentials. Mirrors the register_service MCP tool."""
+    target — no bytes, no credentials. Mirrors the target_register_service MCP tool."""
     host: str
     port: int
     name: str | None = None
