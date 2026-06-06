@@ -98,28 +98,45 @@ def available_rulesets() -> list[str]:
     return [RULESET_ALL, *stems]
 
 
-def _resolve_rule_mounts(ruleset: str | None) -> tuple[list[tuple[str, str]], list[str], str]:
+def _validate_ruleset(ruleset: str | None) -> str:
+    """Validate + normalize the ruleset id (the agent knob); raise ValueError on an unknown
+    id. No staging/mounting, so the project sweep can validate once up front cheaply."""
+    eff = (ruleset or RULESET_ALL).strip() or RULESET_ALL
+    valid = set(available_rulesets())
+    if eff not in valid:
+        raise ValueError(f"unknown ruleset {eff!r}; choose one of {sorted(valid)} (or 'all')")
+    return eff
+
+
+def _cleanup_dirs(dirs: list[Path]) -> None:
+    """Remove staged temp rule dirs after a scan (best-effort; nothing to do on the 'all' path)."""
+    import shutil
+
+    for d in dirs:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def _resolve_rule_mounts(
+    ruleset: str | None,
+) -> tuple[list[tuple[str, str]], list[str], str, list[Path]]:
     """Resolve the (host, container) read-only mounts and the probe's --rules-dir args for
     a chosen ruleset.
 
-    Returns `(mounts, rules_dir_args, effective_ruleset)`. The bundled set is mounted at a
-    container dir holding only the selected file(s); the user rules dir (if it exists and
-    has rules) is ALWAYS mounted too. Raises ValueError on an unknown ruleset id."""
+    Returns `(mounts, rules_dir_args, effective_ruleset, cleanup_dirs)` — the caller MUST
+    remove `cleanup_dirs` after the run. The bundled set is mounted at a container dir holding
+    only the selected file(s); the user rules dir (if it exists and has rules) is ALWAYS
+    mounted too. Raises ValueError on an unknown ruleset id."""
     import tempfile
 
     from hexgraph import config
     from hexgraph.paths import bundled_yara_rules_dir
 
     bundled = bundled_yara_rules_dir()
-    eff = (ruleset or RULESET_ALL).strip() or RULESET_ALL
-    valid = set(available_rulesets())
-    if eff not in valid:
-        raise ValueError(
-            f"unknown ruleset {eff!r}; choose one of {sorted(valid)} (or 'all')"
-        )
+    eff = _validate_ruleset(ruleset)
 
     mounts: list[tuple[str, str]] = []
     rules_dir_args: list[str] = []
+    cleanup: list[Path] = []
 
     if eff == RULESET_ALL:
         if bundled.is_dir():
@@ -136,8 +153,15 @@ def _resolve_rule_mounts(ruleset: str | None) -> tuple[list[tuple[str, str]], li
                 src = cand
                 break
         if src is not None:
+            # The sandbox runs as a NON-ROOT user (uid 1000); mkdtemp is 0700, so the staged
+            # dir + file must be made world-readable or the container can't read the mounted
+            # rules (the in-sandbox PermissionError CI caught). Hand the dir back for cleanup.
             staged = Path(tempfile.mkdtemp(prefix="hg-yara-rules-"))
-            (staged / src.name).write_bytes(src.read_bytes())
+            dst = staged / src.name
+            dst.write_bytes(src.read_bytes())
+            staged.chmod(0o755)
+            dst.chmod(0o644)
+            cleanup.append(staged)
             mounts.append((str(staged), _BUNDLED_MOUNT))
             rules_dir_args += ["--rules-dir", _BUNDLED_MOUNT]
 
@@ -148,7 +172,7 @@ def _resolve_rule_mounts(ruleset: str | None) -> tuple[list[tuple[str, str]], li
         mounts.append((str(user_dir), _USER_MOUNT))
         rules_dir_args += ["--rules-dir", _USER_MOUNT]
 
-    return mounts, rules_dir_args, eff
+    return mounts, rules_dir_args, eff, cleanup
 
 
 def _summary(facts: dict, ruleset: str) -> str:
@@ -261,10 +285,11 @@ def scan_target(
                          "has no file); YARA scans bytes."}
 
     try:
-        mounts, rules_dir_args, eff_ruleset = _resolve_rule_mounts(ruleset)
+        mounts, rules_dir_args, eff_ruleset, cleanup = _resolve_rule_mounts(ruleset)
     except ValueError as exc:
         return {"error": str(exc)}
     if not rules_dir_args:
+        _cleanup_dirs(cleanup)
         return {"error": "no YARA rules available to scan with (bundled rules missing and no "
                          "user rules in the HEXGRAPH_HOME rules dir)"}
 
@@ -276,6 +301,8 @@ def scan_target(
         return {"error": f"YARA scan failed: {exc}"}
     except Exception as exc:  # noqa: BLE001
         return {"error": f"YARA scan failed: {exc}"}
+    finally:
+        _cleanup_dirs(cleanup)
 
     if isinstance(facts, dict) and facts.get("error"):
         return {"error": f"YARA scan failed: {facts['error']}"}
@@ -354,7 +381,7 @@ def sweep_project(
 
     # Validate the ruleset once up front (so a bad id fails the whole sweep cleanly).
     try:
-        _resolve_rule_mounts(ruleset)
+        _validate_ruleset(ruleset)
     except ValueError as exc:
         return {"error": str(exc)}
 

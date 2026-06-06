@@ -378,7 +378,7 @@ def test_user_rule_dir_is_picked_up(hg_home):
     (user_dir / "my.yar").write_text(
         'rule my_user_rule { strings: $a = "PWNED" condition: $a }\n'
     )
-    mounts, rules_dir_args, _ = _resolve_rule_mounts("all")
+    mounts, rules_dir_args, _eff, _cleanup = _resolve_rule_mounts("all")
     # the user dir is mounted at the fixed user mount point and passed as a rules dir
     assert any(host == str(user_dir) and cont == _USER_MOUNT for host, cont in mounts)
     assert _USER_MOUNT in rules_dir_args
