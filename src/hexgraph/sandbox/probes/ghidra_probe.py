@@ -321,12 +321,23 @@ try:
 
     # Library calls whose RETURN value is attacker-influenced (a taint source).
     SOURCE_RET = set(["getenv", "getchar", "fgetc"])
+    # Library calls that FILL a destination buffer (passed by pointer) with untrusted input:
+    # name -> the 0-based C-arg index of that dest buffer. The bytes land in the buffer, never
+    # in the return value, so we taint the dest stack SLOT (the same domain COPY_TO_DEST uses).
+    # This is what lets a self-contained function be caught: fgets(buf,..,stdin) -> ... ->
+    # system(buf) (the inlined-main / firmware-handler shape) crosses no function parameter, so
+    # the parameter-only source set (Sources A) misses it entirely. (C-arg i is op input i+1.)
+    SOURCE_BUF = {"fgets": 0, "gets": 0, "fread": 0,
+                  "read": 1, "recv": 1, "recvfrom": 1, "pread": 1}
     # Calls that COPY a (possibly tainted) source arg into a dest pointer = input[1]; any
     # tainted later arg taints the dest buffer (models string/mem propagation across the call).
     COPY_TO_DEST = set(["strcpy", "strncpy", "strcat", "strncat", "memcpy", "memmove",
                         "stpcpy", "sprintf", "snprintf", "vsprintf", "vsnprintf"])
-    # Calls whose RETURN is tainted iff a source arg is tainted (duplicators).
-    COPY_TO_RET = set(["strdup", "strndup"])
+    # Calls whose RETURN is tainted iff a source arg is tainted (duplicators). The string
+    # locators/tokenizers return a pointer INTO their (tainted) input buffer, so taint must ride
+    # through them — e.g. strtok(fgets_buf) -> sprintf(cmd,..,tok) -> system(cmd).
+    COPY_TO_RET = set(["strdup", "strndup", "strtok", "strtok_r", "strsep",
+                       "strchr", "strrchr", "strstr", "strpbrk"])
     # Dangerous sinks. command_exec: a tainted command/path => injection. buffer_overflow: a
     # tainted source into an unbounded copy => memory corruption.
     SINK_EXEC = set(["system", "popen", "execl", "execlp", "execle",
@@ -479,12 +490,23 @@ try:
             pass
 
         ops = list(hf.getPcodeOps())
-        # Sources B: returns of source-producing library calls (getenv, ...).
+        # Sources B/C: library-call sources, in ONE pass over the CALL ops. B = a
+        # source-producing call's RETURN value (getenv, ...). C = a buffer-filling input call
+        # (fgets/read/recv/...) -> the untrusted bytes land in the DEST BUFFER, not the return,
+        # so taint that buffer's stack SLOT (the same domain COPY_TO_DEST uses); C-arg i is op
+        # input i+1. SOURCE_RET and SOURCE_BUF are disjoint, so the elif is exact.
         for op in ops:
-            if op.getOpcode() == PcodeOp.CALL and op.getOutput() is not None:
-                cn = callee_name(op)
-                if cn in SOURCE_RET:
-                    vmark(op.getOutput(), {"kind": "call_return", "detail": cn})
+            if op.getOpcode() != PcodeOp.CALL:
+                continue
+            cn = callee_name(op)
+            if cn in SOURCE_RET and op.getOutput() is not None:
+                vmark(op.getOutput(), {"kind": "call_return", "detail": cn})
+            elif cn in SOURCE_BUF:
+                di = SOURCE_BUF[cn] + 1
+                if op.getNumInputs() > di:
+                    k = slot_key(op.getInput(di))
+                    if k is not None and k not in tainted_slot:
+                        tainted_slot[k] = {"kind": "libc_input", "detail": cn}
 
         # Forward propagation to a fixpoint over BOTH domains.
         changed = True

@@ -178,3 +178,36 @@ def test_ghidra_taint_finds_command_injection_on_netcfgd(hg_home):
         sinks = s.query(Node).filter_by(project_id=p.id, node_type="sink").all()
         assert any(n.attrs_json.get("sink_func") == "popen" for n in sinks)
         assert s.query(Edge).filter(Edge.project_id == p.id, Edge.type == "taints").count() >= 1
+
+
+@pytest.mark.skipif(not GHIDRA_READY,
+                    reason="requires Docker + a WITH_GHIDRA=1 sandbox image")
+def test_ghidra_taint_finds_libc_input_command_injection(hg_home):
+    """A self-contained handler (pingd): untrusted input enters via fgets() into a LOCAL buffer
+    and reaches system() WITHIN main — no parameter crossing, the inlined-handler shape the
+    parameter-only source set missed. The libc-input source set (Sources C) is what catches it,
+    and the taint must ride the strtok() hop (a pointer back into the tainted buffer)."""
+    if shutil.which("gcc") is None:
+        pytest.skip("gcc unavailable to compile the pingd fixture")
+    src = fixture_path("challenges/pingd.c")
+    binpath = tempfile.mktemp(prefix="pingd-")
+    rc = subprocess.run(["gcc", "-O0", "-g", "-o", binpath, src], capture_output=True)
+    if rc.returncode != 0:
+        pytest.skip("could not compile pingd: %s" % rc.stderr.decode()[:200])
+
+    st.update_settings({"features.ghidra.enabled": True, "features.ghidra.mode": "headless"})
+    with session_scope() as s:
+        p = create_project(s, name="pd")
+        t = ingest_file(s, p, binpath, name="pingd")
+        out = T.analyze_taint(s, p, t, analyzer=T.GhidraTaintAnalyzer())
+
+        assert out["available"] is True, out
+        cmd_flows = [f for f in out["flows"]
+                     if (f.get("sink") or {}).get("category") == "command_exec"]
+        assert cmd_flows, "no command-exec taint flow found: %s" % out["flows"]
+        f = cmd_flows[0]
+        assert f["sink"]["func"] == "system"
+        # The grounded source is a buffer-filling libc input call, NOT a function parameter —
+        # this is the flow the prior parameter-only model could not see.
+        assert (f.get("source") or {}).get("kind") == "libc_input", f
+        assert (f.get("source") or {}).get("detail") == "fgets", f
