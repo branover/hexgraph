@@ -62,8 +62,8 @@ _MAX_CALLERS = 30  # bound per-sink caller lists so a noisy printf doesn't flood
 
 def _candidates(sym: str) -> list[str]:
     sym = sym.lstrip(".")
-    # Imports are usually flagged sym.imp.<name>; local defs sym.<name>.
-    return [f"sym.imp.{sym}", f"sym.{sym}", f"fcn.{sym}", sym]
+    # Imports are usually flagged sym.imp.<name>; local defs sym.<name>; data objects obj.<name>.
+    return [f"sym.imp.{sym}", f"sym.{sym}", f"obj.{sym}", f"fcn.{sym}", sym]
 
 
 def _xrefs_to(r2, sym: str, flagset: set[str]) -> list[dict]:
@@ -104,6 +104,28 @@ def _resolve_seek(subject: str, flagset: set[str]) -> str | None:
     if flag:
         return flag
     return subject if _SAFE_NAME.match(subject) else None
+
+
+def _symbol_addr(r2, name: str) -> str | None:
+    """Resolve a symbol/label NAME to its hex address via r2's symbol table (`isj`), so a data
+    xref BY NAME works for a local/static data symbol whose bare name isn't a seekable flag
+    (e.g. a non-stripped binary's `KEY_ENC`). Returns a validated hex address (the caller seeks
+    THAT, never the raw name, so it stays injection-safe), or None. Matches the symbol's full
+    name or its trailing component (after any radare `sym.`/`obj.` prefixing)."""
+    if not _SAFE_NAME.match(name):
+        return None
+    try:
+        syms = json.loads(r2.cmd("isj") or "[]")
+    except json.JSONDecodeError:
+        return None
+    want = name.lstrip(".")
+    for s in syms:
+        nm = s.get("name") or s.get("realname") or s.get("flagname") or ""
+        if nm == name or nm == want or nm.split(".")[-1] == want:
+            va = s.get("vaddr")
+            if isinstance(va, int) and va:
+                return hex(va)
+    return None
 
 
 def _calls_from(r2, seek: str) -> list[dict]:
@@ -216,6 +238,14 @@ def main() -> int:
                               "total_callers": len(callers), "total_callees": len(callees)}))
         elif mode == "data":
             seek = _resolve_seek(subject, flagset) if subject else None
+            # A local/static data symbol given by NAME may not be a seekable flag — fall back to
+            # the symbol table to resolve it to its address (the seek becomes a validated hex
+            # address, so this stays injection-safe). Only when _resolve_seek didn't already
+            # land a hex address or a known flag.
+            if subject and (seek is None or (not _ADDR.match(seek) and seek not in flagset)):
+                sym_addr = _symbol_addr(r2, subject)
+                if sym_addr:
+                    seek = sym_addr
             if not seek:
                 print(json.dumps({"tool": "xrefs_probe", "mode": "data", "subject": subject,
                                   "data_refs": [], "error": "address not resolvable"}))
