@@ -121,8 +121,10 @@ Observation. Work cheap-to-expensive — orienting facts first, heavy synthesis 
   decoded string, a derived magic), **`recover_constant(target_id, function)`** EMULATES that
   self-contained routine in Ghidra's P-Code interpreter in the sandbox (a JVM interpreter — never
   native execution, no network) and returns the value, tagging it onto the function node. Needs
-  **features.emulation** + Ghidra headless (returns `available=false` if Ghidra is off, an error
-  if the routine takes arguments).
+  **features.emulation** + Ghidra headless (returns `available=false` if Ghidra is off). Best on a
+  SELF-CONTAINED, parameterless routine — one that takes arguments is emulated over uninitialized
+  inputs and usually won't reach a clean `ret`, so it returns no recoverable value
+  (`reached_ret=false` / an `error`); don't trust a constant from an argument-dependent routine.
 - **When the inventory looks thin, dig deeper — `reanalyze`** re-runs analysis at a HIGHER depth
   (busting the cached pass) when `list_functions`/`decompile_function` look incomplete (a function
   you expect is missing, callees come back empty), so the fast first pass's misses get a second
