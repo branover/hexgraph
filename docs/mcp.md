@@ -54,7 +54,7 @@ agent's context small:
   (a hard, irreversible delete that also removes the edges and annotations touching it, and
   detaches any task or fuzz artifact that referenced it); to set a finding aside reversibly
   instead, call `finding_update(status='dismissed')`.
-- **run** covers `target_ingest`, `target_ingest_file` (promote a file from an unpacked firmware into
+- **run** covers `target_ingest`, `target_promote_file` (promote a file from an unpacked firmware into
   its own target), `task_run`, `finding_verify_poc`, `fuzz_verify_artifact`,
   `fuzz_start`/`fuzz_resume`, `src_build`, and more.
 

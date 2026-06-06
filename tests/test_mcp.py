@@ -494,13 +494,13 @@ def test_graph_read_tools(hg_home):
 #    firmware file to a target, resume a campaign) + their catalog membership / skill docs. ──
 
 def test_new_tools_in_catalog_groups():
-    """build_log is read-only; add_file_as_target + resume_fuzz_campaign execute in the
+    """build_log is read-only; promote_file + resume_fuzz_campaign execute in the
     sandbox, so they live in `run`. A drop would otherwise go unnoticed."""
     read_names = {t["name"] for t in mcp_tools.catalog({"read"})}
     run_names = {t["name"] for t in mcp_tools.catalog({"run"})}
     assert "src_build_log" in read_names
-    assert {"target_ingest_file", "fuzz_resume"} <= run_names
-    for name in ("src_build_log", "target_ingest_file", "fuzz_resume"):
+    assert {"target_promote_file", "fuzz_resume"} <= run_names
+    for name in ("src_build_log", "target_promote_file", "fuzz_resume"):
         t = next(x for x in mcp_tools.catalog() if x["name"] == name)
         assert callable(t["fn"]) and t["schema"]["type"] == "object"
 
@@ -539,13 +539,13 @@ def test_add_file_as_target_tool(hg_home, monkeypatch):
         p, fw = _firmware_with_fs(s)
         fwid = fw.id
 
-    out = mcp_tools.add_file_as_target(fwid, "usr/sbin/httpd")
+    out = mcp_tools.promote_file(fwid, "usr/sbin/httpd")
     assert out.get("id") and out["name"] == "usr/sbin/httpd" and out["parent_id"] == fwid
     assert isinstance(out["kind"], str) and out["kind"]
-    again = mcp_tools.add_file_as_target(fwid, "usr/sbin/httpd")   # idempotent per path
+    again = mcp_tools.promote_file(fwid, "usr/sbin/httpd")   # idempotent per path
     assert again["id"] == out["id"]
-    assert mcp_tools.add_file_as_target(fwid, "no/such/file").get("error")
-    assert mcp_tools.add_file_as_target("nope", "x").get("error") == "target not found"
+    assert mcp_tools.promote_file(fwid, "no/such/file").get("error")
+    assert mcp_tools.promote_file("nope", "x").get("error") == "target not found"
 
 
 def test_resume_fuzz_campaign_guards(hg_home):
@@ -568,7 +568,7 @@ def test_skill_documents_fs_browsing_and_new_tools():
     """The agent only knows what the SKILL tells it: the firmware-FS workflow, the new tools,
     and the strict 'surface, don't prune' stance must all be present."""
     from hexgraph.agent_setup import SKILL
-    for token in ("fs_list", "target_ingest_file", "src_build_log",
+    for token in ("fs_list", "target_promote_file", "src_build_log",
                   "fuzz_resume", "proj_list",
                   "You SURFACE for the analyst to TRIAGE"):
         assert token in SKILL, token

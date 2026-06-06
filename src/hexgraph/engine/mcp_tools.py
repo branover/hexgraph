@@ -83,7 +83,7 @@ def read_file(target_id: str, path: str) -> dict:
             return {"error": str(exc)}
 
 
-def add_file_as_target(target_id: str, path: str) -> dict:
+def promote_file(target_id: str, path: str) -> dict:
     """Promote ONE file from a firmware target's unpacked filesystem into its OWN child
     target so you can analyze it directly (decompile/list_functions/run_task/fuzz) — the
     bridge from browsing the rootfs to analyzing a binary in it. `path` is relative to the
@@ -92,7 +92,7 @@ def add_file_as_target(target_id: str, path: str) -> dict:
     is up. Idempotent per path (returns the existing child if already promoted). Use it when
     list_filesystem surfaces an interesting binary (a CGI, a service daemon, a helper) that
     unpack didn't already register. Returns {id, name, kind, parent_id, arch}."""
-    from hexgraph.engine.filesystem import FilesystemError, add_file_as_target as _add
+    from hexgraph.engine.filesystem import FilesystemError, promote_file as _add
 
     with session_scope() as s:
         t = s.get(Target, target_id)
@@ -1663,21 +1663,21 @@ def ingest(path: str, name: str | None = None, project_id: str | None = None) ->
                 "children": summary.get("children", [])}
 
 
-def register_surface(project_id: str, base_url: str, name: str | None = None,
+def register_web_surface(project_id: str, base_url: str, name: str | None = None,
                      endpoints: list | None = None) -> dict:
     """Register a WEB attack surface (a `web_app` target reached via an HTTP Channel —
     no bytes). Optionally pass an offline route spec `endpoints`:
     [{"method","path","params"?,"handler"?,"auth"?}]. Then run_task(target_id,
     "surface_recon") materialises endpoint/param nodes and `routes_to` edges linking
     each route to its handler function in the firmware. Phase 1 is offline (no egress)."""
-    from hexgraph.engine.surfaces import register_web_surface
+    from hexgraph.engine.surfaces import register_web_surface as _register_web_surface
 
     with session_scope() as s:
         project = s.get(Project, project_id)
         if project is None:
             return {"error": "project not found"}
         try:
-            t = register_web_surface(s, project, base_url, name=name, endpoints=endpoints)
+            t = _register_web_surface(s, project, base_url, name=name, endpoints=endpoints)
         except ValueError as exc:
             return {"error": str(exc)}
         return {"id": t.id, "name": t.name, "kind": t.kind.value,
@@ -1724,7 +1724,7 @@ def rehost(target_id: str, brand: str | None = None) -> dict:
                 "ports": rehost_info.get("ports", [])}
 
 
-def register_socket(project_id: str, host: str, port: int, name: str | None = None,
+def register_service(project_id: str, host: str, port: int, name: str | None = None,
                     transport: str = "tcp", proto: str | None = None,
                     parent_ref: str | None = None) -> dict:
     """Register a bare NON-HTTP network service (a raw TCP/UDP listener) as a `service`
@@ -1739,7 +1739,7 @@ def register_socket(project_id: str, host: str, port: int, name: str | None = No
     network tier: loopback/private host only (refused otherwise), features.network-gated,
     every send audited. `parent_ref` makes it a child of e.g. a rehosted firmware (the probe
     then reaches the device on its private IP through the emulator netns)."""
-    from hexgraph.engine.surfaces import register_socket_target
+    from hexgraph.engine.surfaces import register_service_target
 
     with session_scope() as s:
         project = s.get(Project, project_id)
@@ -1756,7 +1756,7 @@ def register_socket(project_id: str, host: str, port: int, name: str | None = No
             net_container = (((parent.metadata_json or {}).get("channel") or {})
                              .get("rehost") or {}).get("container")
         try:
-            t = register_socket_target(s, project, host, port, transport=transport,
+            t = register_service_target(s, project, host, port, transport=transport,
                                        proto=proto, name=name, parent=parent,
                                        net_container=net_container)
         except ValueError as exc:
@@ -1909,7 +1909,7 @@ def verify_poc(target_id: str, poc: dict, finding_id: str | None = None) -> dict
     - **binary target** → executes it IN THE SANDBOX. Spec: {argv?, env?, stdin?, timeout?,
       oracle:{type:"output_contains|exit_code|exit_nonzero|crash", value}}. Requires
       features.poc enabled.
-    - **web surface** (a web_app registered with register_surface) → sends HTTP step(s).
+    - **web surface** (a web_app registered with register_web_surface) → sends HTTP step(s).
       Spec: {steps:[{method,path,params?,headers?,body?,json?}, ...],
       oracle:{type:"body_contains|status_is|status_differs", value}}. Cookies carry across
       steps, so an auth flow works (e.g. step 1 POST /api/login with the bypass cred → step

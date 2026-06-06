@@ -37,8 +37,8 @@ program model. On a target, first read the existing graph AND the Observation in
 - **Query freely.** Tool results (re_binutils_facts / re_list_functions / re_decompile_function /
   re_decompile_at / re_disassemble / re_reanalyze / re_xrefs / re_function_xrefs / re_data_xrefs / re_call_graph /
   re_list_strings / re_search_decompiled / re_recover_constant) persist as durable Observations on the
-  target (result_kinds: decompilation / function_list / re_call_graph / re_xrefs / taint /
-  re_binutils_facts / emulation / strings / structs / …) — check `obs_list` before
+  target (result_kinds: decompilation / function_list / call_graph / xrefs / taint /
+  binutils_facts / emulation / strings / structs / …) — check `obs_list` before
   re-running a heavy analysis, `obs_get(id)` to reuse a prior payload,
   `obs_search(q)` to find one, and `re_search_decompiled(query)` to grep across decompiled
   bodies (analyze once, reuse forever). A query adds NO graph nodes (re_call_graph only wires
@@ -164,7 +164,7 @@ shows you the attack surface (what runs, where the secrets are) before you decom
   runs `/sbin/httpd` → record the service + a `socket` node; `/etc/shadow` with a weak hash →
   a hardcoded-credential finding; a baked-in private key → record it. (This is the firmware's
   OWN unpacked bytes — distinct from `src_read_file`, which reads trusted managed source.)
-- **`target_ingest_file(target_id, path)`** promotes an interesting file (a CGI, a service
+- **`target_promote_file(target_id, path)`** promotes an interesting file (a CGI, a service
   daemon, a helper binary) that unpack didn't already register into its OWN child target —
   then `re_decompile_function`/`re_list_functions`/`task_run`/fuzz it like any other target. This is
   how you go from "I see an interesting binary in the rootfs" to actually analyzing it.

@@ -7,7 +7,7 @@ import os
 from hexgraph.db.models import Edge, EdgeType, Target
 from hexgraph.db.session import session_scope
 from hexgraph.engine.filesystem import (
-    FilesystemError, add_file_as_target, list_filesystem, persistent_base, record_manifest,
+    FilesystemError, promote_file, list_filesystem, persistent_base, record_manifest,
 )
 from hexgraph.engine.ingest import create_project, ingest_file
 
@@ -46,7 +46,7 @@ def test_add_file_as_target(hg_home, monkeypatch):
     monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: False)  # skip recon
     with session_scope() as s:
         p, fw = _firmware_with_fs(s)
-        child = add_file_as_target(s, p, fw, "usr/sbin/httpd")
+        child = promote_file(s, p, fw, "usr/sbin/httpd")
         assert child.name == "usr/sbin/httpd" and child.parent_id == fw.id
         # contains edge firmware → child
         e = s.query(Edge).filter(Edge.type == EdgeType.contains.value, Edge.src_id == fw.id,
@@ -54,7 +54,7 @@ def test_add_file_as_target(hg_home, monkeypatch):
         assert len(e) == 1
         # manifest now marks it added; idempotent
         assert list_filesystem(p, fw)["files"][0]["added"] is True
-        again = add_file_as_target(s, p, fw, "usr/sbin/httpd")
+        again = promote_file(s, p, fw, "usr/sbin/httpd")
         assert again.id == child.id
 
 
@@ -62,7 +62,7 @@ def test_add_unknown_rel_rejected(hg_home):
     with session_scope() as s:
         p, fw = _firmware_with_fs(s)
         try:
-            add_file_as_target(s, p, fw, "nope/missing")
+            promote_file(s, p, fw, "nope/missing")
             assert False
         except FilesystemError:
             pass

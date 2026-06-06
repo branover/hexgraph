@@ -131,11 +131,11 @@ baseline, then exercise the *live* actions (run a task, start a campaign, verify
 
 ### A3 — Register a web_app surface  → S5
 - The showcase registers the router admin UI web_app. To add one explicitly:
-  MCP `register_surface(kind="web_app", base_url=…, routes=…)`, then `run_task(surface_recon)`.
+  MCP `target_register_web_surface(kind="web_app", base_url=…, routes=…)`, then `run_task(surface_recon)`.
   Unlocks: TGT-06 (surface kinds), GRAPH-27, VIEW-* with a surface.
 
 ### A4 — Register a service (raw-TCP socket) surface  → S6
-- The showcase registers a UPnP/telnet-ish service. Explicitly: MCP `register_socket(kind="tcp",
+- The showcase registers a UPnP/telnet-ish service. Explicitly: MCP `target_register_service(kind="tcp",
   host=…, port=…)` (or `POST /api/projects/{id}/targets/socket`).
   Unlocks: TGT-06, GRAPH-27, FUZZ-01 (network surface fields).
 

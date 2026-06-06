@@ -109,7 +109,7 @@ def read_file(project: Project, firmware: Target, rel: str, *, max_bytes: int = 
             "content": raw.hex(), "truncated": truncated}
 
 
-def add_file_as_target(session: Session, project: Project, firmware: Target, rel: str, runner=None):
+def promote_file(session: Session, project: Project, firmware: Target, rel: str, runner=None):
     """Ingest a file from the firmware's unpacked tree as a child target (real
     bytes → recon if Docker is up). Idempotent per `rel` (returns the existing
     child if already added)."""
@@ -138,12 +138,12 @@ def add_file_as_target(session: Session, project: Project, firmware: Target, rel
     child = ingest_file(session, project, host_path, name=rel, parent=firmware)
     add_edge(session, project_id=project.id, src=("target", firmware.id), dst=("target", child.id),
              type=EdgeType.contains, origin="human", confidence=1.0,
-             created_by_tool="add-from-fs", attrs={"path": rel})
+             created_by_tool="promote-file", attrs={"path": rel})
     if (runner or (get_executor() if docker_available() else None)):
         analyze_target(session, project, child, runner or get_executor())
         build_links_against(session, project)
 
-    # Mark the manifest entry as added so the UI shows it AND add-from-fs is idempotent
+    # Mark the manifest entry as added so the UI shows it AND promote-file is idempotent
     # across sessions (an agent's repeat call must return this child, not make a dupe).
     # Rebuild with fresh dicts + flag_modified: a shallow copy that mutates the shared
     # nested entries leaves the JSON column unchanged-by-identity, so it never persists.
