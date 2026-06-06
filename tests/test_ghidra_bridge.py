@@ -113,6 +113,19 @@ def test_remote_decompile_one_address_resolves_containing_function():
     assert name == "cmd_exec"
 
 
+def test_remote_decompile_focus_none_when_not_found():
+    """A focus the live program doesn't have (the eval returns the ('', '') sentinel) yields no
+    focus rather than a crash — mirrors the headless probe's not-found behavior."""
+    from hexgraph.engine.ghidra_bridge import _RemoteOps
+
+    def responder(expr, _kw):
+        return ("", "") if "lambda di, fn" in expr else ["main", "helper"]
+
+    out = _RemoteOps(_FakeBridge(responder)).decompile(None, "ghost")
+    assert out["focus"] is None
+    assert out["functions"] == ["main", "helper"] and out["tool"] == "ghidra_bridge"
+
+
 def test_remote_decompile_one_rejects_unsafe_focus():
     from hexgraph.engine.ghidra_bridge import BridgeUnavailable, _RemoteOps
 

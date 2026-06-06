@@ -62,7 +62,10 @@ class _RemoteOps:
             )
         except Exception:  # noqa: BLE001 — GUI-only service missing under a headless bridge server
             rows = self.b.remote_eval("[%s for p in [currentProgram]]" % self._PROG_TUPLE)
-        return [{"name": n, "path": pth, "language": lang, "functions": fc} for (n, pth, lang, fc) in rows]
+        # Defensive: index rather than destructure, skipping any row that isn't the 4-tuple shape,
+        # so an unexpected remote shape can't raise an opaque ValueError.
+        return [{"name": r[0], "path": r[1], "language": r[2], "functions": r[3]}
+                for r in rows if len(r) == 4]
 
     def executable_path(self, program: str) -> str | None:
         for p in self.list_programs():
@@ -78,8 +81,11 @@ class _RemoteOps:
         focus = None
         if function:
             resolved, pseudo = self._decompile_one(function)
-            focus = {"name": resolved, "resolved": resolved, "pseudocode": pseudo,
-                     "disasm": "", "callees": []}
+            # Empty resolved name = the focus wasn't found in the live program (a missing name or
+            # an address not inside a function) -> no focus, mirroring the headless probe.
+            if resolved:
+                focus = {"name": resolved, "resolved": resolved, "pseudocode": pseudo,
+                         "disasm": "", "callees": []}
         return {"functions": names[:400], "focus": focus, "tool": "ghidra_bridge"}
 
     def _decompile_one(self, focus: str) -> tuple[str, str]:
@@ -96,18 +102,27 @@ class _RemoteOps:
           over (free vars resolve via globals), so the old `fn=` kwarg raised NameError every call.
         """
         if _ADDR.match(focus or ""):
+            # getFunctionContaining returns None when the address isn't inside any function.
             target_expr = ("currentProgram.getFunctionManager().getFunctionContaining("
                            'currentProgram.getAddressFactory().getAddress("%s"))' % focus)
         elif _SAFE_NAME.match(focus or ""):
-            target_expr = ("[f for f in currentProgram.getFunctionManager().getFunctions(True) "
-                           'if f.getName()=="%s"][0]' % focus)
+            # `or [None]` so an unknown name yields None, not an IndexError on the [0].
+            target_expr = ("([f for f in currentProgram.getFunctionManager().getFunctions(True) "
+                           'if f.getName()=="%s"] or [None])[0]' % focus)
         else:
             raise BridgeUnavailable(f"unsafe Ghidra focus: {focus!r}")
+        # Guard every step the headless probe guards, so a not-found name / not-in-a-function
+        # address / failed-or-timed-out decompile returns a clean sentinel instead of a raw
+        # remote exception: fn is None -> ('', ''); a function that doesn't decompile ->
+        # (name, ''); otherwise (name, C). The resolved function rides in as a bound lambda PARAM.
         return self.b.remote_eval(
-            "(lambda di, fn: (di.openProgram(currentProgram), "
-            "(fn.getName(), di.decompileFunction(fn, 60, "
-            "__import__('ghidra.util.task', fromlist=['ConsoleTaskMonitor']).ConsoleTaskMonitor())"
-            ".getDecompiledFunction().getC()))[1])("
+            "(lambda di, fn: ('', '') if fn is None else "
+            "(lambda res: (fn.getName(), res.getDecompiledFunction().getC()) "
+            "if (res is not None and res.decompileCompleted() "
+            "and res.getDecompiledFunction() is not None) else (fn.getName(), ''))"
+            "((di.openProgram(currentProgram), di.decompileFunction(fn, 60, "
+            "__import__('ghidra.util.task', fromlist=['ConsoleTaskMonitor']).ConsoleTaskMonitor()))[1])"
+            ")("
             "__import__('ghidra.app.decompiler', fromlist=['DecompInterface']).DecompInterface(), "
             + target_expr + ")"
         )
