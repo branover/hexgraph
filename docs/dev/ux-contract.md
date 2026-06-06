@@ -269,18 +269,23 @@ loud only where you are looking; every node/edge/color kept, mute never deletes.
 - Prereq: projects across tiers (incl. a REAL firmware-scale one).
 
 **GRAPH-02 — Right-click a NODE → app verb menu**
-- Steps: right-click a content node (function/finding/socket/…).
+- Steps: right-click a content node (function/finding/socket/…) — try clicking the node's edge, not just
+  its center.
 - Functional: the app's verb menu appears (Focus neighborhood · Expand one hop · Reveal in panel · Hide this
-  node). The **native browser menu must NOT appear**.
-- Qualitative: the menu is compact, sized to fit, not clipped (Aesthetics); native-menu suppression is
-  absolute anywhere on the canvas (Consistency, Forgiveness).
-- Principle: HexGraph owns the right-click everywhere on the canvas.
+  node). The **native browser menu must NOT appear**. The menu is anchored at the **cursor**, not the node's
+  center — its top-left corner sits where you clicked (`evt.renderedPosition`), nudged inward only if it would
+  spill off the canvas edge.
+- Qualitative: the menu is compact, sized to fit, not clipped (Aesthetics); it lands under the pointer so the
+  first verb is a tiny travel away (Direct manipulation); native-menu suppression is absolute anywhere on the
+  canvas (Consistency, Forgiveness).
+- Principle: HexGraph owns the right-click everywhere on the canvas; a context menu opens at the cursor.
 - Prereq: a graph with content nodes.
 
 **GRAPH-03 — Right-click a ROOM → room verb menu**
-- Steps: right-click a compound room (target island).
-- Functional: a room-specific menu (Expand/Collapse room · Reveal in panel). No native menu.
-- Principle: verbs are element-type-aware.
+- Steps: right-click a compound room (target island), off its center.
+- Functional: a room-specific menu (Expand/Collapse room · Reveal in panel), anchored at the cursor (not the
+  room's center). No native menu.
+- Principle: verbs are element-type-aware; the menu opens where you click.
 - Prereq: a compound (grouped) graph.
 
 **GRAPH-04 — Right-click empty canvas → no native menu**
@@ -326,14 +331,18 @@ loud only where you are looking; every node/edge/color kept, mute never deletes.
 - Prereq: a node with neighbors.
 
 **GRAPH-09 — Double-click a room → expand/collapse (or drill in Map)**
-- Steps: double-click a compound room.
+- Steps: double-click a compound room; then expand a SECOND sibling room next to it.
 - Functional (Graph view): toggles the room open/closed; expanding glides the camera to the room and the
   interior fades+scales in (no teleport); collapsing glides back to the skeleton. In skeleton mode, expanding
   fetches the interior on demand. (Map view: double-tap DRILLS into the scoped Graph for that binary instead.)
+  An expanded room is placed so it **does not overlap any already-expanded sibling** — a post-layout
+  separation pass pushes sibling-room bounding boxes apart (the per-room dagre interior re-flow grows a room
+  past the footprint fcose reserved, so without it a freshly-expanded room lands on top of its neighbor).
 - 🔌 Backend: skeleton-mode expand → `GET /graph/{id}/room/{targetId}` merges the interior.
 - Qualitative: the open animation lets you *watch* the room open (Feedback, Aesthetics) — issue-3 teleport
-  is the failure to catch.
-- Principle: navigation acts auto-frame; expansion is staged, never a yank.
+  is the failure to catch. Two or more open rooms read as distinct, gutter-separated islands, never a single
+  overlapping smear (Aesthetics, Legibility).
+- Principle: navigation acts auto-frame; expansion is staged, never a yank; open rooms never overlap.
 - Prereq: a grouped graph (LARGE+ for skeleton).
 
 **GRAPH-10 — Drag a node**
