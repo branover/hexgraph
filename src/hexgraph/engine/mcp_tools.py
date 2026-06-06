@@ -1584,7 +1584,7 @@ def get_schemas() -> dict:
         },
         "yara": {
             "rulesets": _yara_rulesets_for_schema(),
-            "note": "The ruleset ids yara_scan / yara_sweep accept (a bundled rule-file id, or "
+            "note": "The ruleset ids re_yara_scan / re_yara_sweep accept (a bundled rule-file id, or "
                     "'all'). The agent picks WHICH ruleset by id — never a yara command line; the "
                     "rule files + match flags are fixed. User .yar files dropped in the "
                     "<HEXGRAPH_HOME>/yara_rules dir are ALWAYS included. A match promotes to a "
