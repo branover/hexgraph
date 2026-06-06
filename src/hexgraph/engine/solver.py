@@ -196,12 +196,26 @@ _BUDGETS = {
 }
 _DEFAULT_BUDGET = "default"
 
+# How far below the container's wall-clock cap the probe's INNER deadline must stay. The probe
+# checks its deadline cooperatively (between steps) and may run one last z3 query (capped at the
+# probe's per-query ceiling, 30s) plus teardown/JSON-flush after the deadline trips, so the
+# inner deadline + that tail must finish before the container SIGKILLs. This headroom covers it.
+_INNER_DEADLINE_HEADROOM = 45
+_MIN_INNER_DEADLINE = 15  # never clamp the inner deadline below this, however small the cap
 
-def _budget_args(budget: Any) -> list[str]:
-    """Map a coarse budget tier (a name, or None) to the probe's bounding flags."""
+
+def _budget_args(budget: Any, *, container_timeout: int | None = None) -> list[str]:
+    """Map a coarse budget tier (a name, or None) to the probe's bounding flags. The INNER
+    wall-clock deadline is clamped to stay safely below `container_timeout` (the resolved
+    `ResourceSpec.timeout`) so a user-lowered sandbox timeout can't invert the ordering — the
+    probe always degrades to a clean 'unsolved' before the container SIGKILLs it."""
     tier = budget if isinstance(budget, str) and budget in _BUDGETS else _DEFAULT_BUDGET
     b = _BUDGETS[tier]
-    return ["--timeout", str(b["timeout"]), "--max-steps", str(b["max_steps"]),
+    timeout = int(b["timeout"])
+    if container_timeout is not None:
+        ceiling = max(_MIN_INNER_DEADLINE, int(container_timeout) - _INNER_DEADLINE_HEADROOM)
+        timeout = min(timeout, ceiling)
+    return ["--timeout", str(timeout), "--max-steps", str(b["max_steps"]),
             "--max-active", str(b["max_active"]), "--max-input-len", str(b["max_input_len"])]
 
 
@@ -235,8 +249,6 @@ class AngrSolver(Solver):
             extra += ["--function", sink.function]
         if sink.function_addr:
             extra += ["--function-addr", str(sink.function_addr)]
-        if sink.arg_index is not None:
-            extra += ["--arg-index", str(sink.arg_index)]
         payload = self._run_probe(artifact, extra, budget)
         return self._to_result(payload, kind="reaching_input")
 
@@ -265,11 +277,14 @@ class AngrSolver(Solver):
         from hexgraph.sandbox.runner import SandboxError
 
         runner = get_executor()
-        args = list(extra_args) + _budget_args(budget)
+        spec = resource_spec_for("sandbox")
+        # Clamp the inner deadline below THIS container's resolved wall-clock cap (a user may
+        # have lowered resources.sandbox.timeout below the deep tier's 240s).
+        args = list(extra_args) + _budget_args(budget, container_timeout=spec.timeout)
         try:
             result = runner.run_probe(
                 "angr_probe.py", artifact, extra_args=args, image=angr_image(),
-                resources=resource_spec_for("sandbox"),
+                resources=spec,
             )
         except SandboxError as exc:
             # A real container/launch failure → an honest error payload (NOT a fabricated solve).
@@ -298,6 +313,7 @@ class AngrSolver(Solver):
             "input_model": payload.get("input_model"),
             "targets": payload.get("targets"),
             "reached_addr": payload.get("reached_addr"),
+            "function_addr": payload.get("function_addr"),
             "input_repr": payload.get("concrete_input_repr"),
         }
         return SolverResult(

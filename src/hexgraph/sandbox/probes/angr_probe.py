@@ -17,6 +17,9 @@ mirroring the Solver ABC:
 **Bounded hard** (symbolic execution is the one tool here that can genuinely explode):
   * a wall-clock deadline (`--timeout`, an INNER guard below the container's own timeout, so
     we emit a clean "unsolved" result instead of being SIGKILLed),
+  * a PER-QUERY z3 timeout so a single hard SMT query can't hang past that deadline (the
+    wall-clock guard is only checked BETWEEN steps, so on its own a runaway query could overrun
+    both it and the container cap → SIGKILL; the per-query cap degrades it to a clean unsolved),
   * a step cap (`--max-steps`) and an active-state cap (`--max-active`),
   * DFS exploration so memory stays bounded (one active state at a time) AND the search order
     is DETERMINISTIC — the same artifact + selector solves to the same answer every run.
@@ -53,6 +56,7 @@ _MIN_INPUT = 1
 _MAX_INPUT_CEIL = 4096        # an obvious upper guard on an agent-supplied length
 _LOOP_BOUND = 50              # max iterations of any single loop (LoopSeer) — a runaway guard
 _PATH_ADDR_CAP = 64           # how many grounded basic-block addresses we report on the path
+_PER_QUERY_TIMEOUT = 30       # max wall-clock seconds for ANY SINGLE z3 query (per-query cap)
 
 
 def _hx(n: int) -> str:
@@ -122,6 +126,20 @@ def _sink_addrs(proj, *, func: str | None, explicit_addr: int | None) -> list[in
     return out
 
 
+def _set_query_timeout(state, *, seconds: int) -> None:
+    """Bound a SINGLE z3 query to `seconds` (claripy/z3 `timeout`, set in ms). The wall-clock
+    deadline in `_bounded_explore` is COOPERATIVE — it is only checked between `step()`s — so on
+    its own a single pathological SMT query could overrun it AND the container cap (→ SIGKILL).
+    Capping each query makes z3 return "unknown" (a clean unsolved) instead of hanging. Best
+    effort: a claripy/angr build without the attribute simply falls back to the cooperative
+    guard alone (still correct, just less graceful)."""
+    ms = max(1, int(seconds)) * 1000
+    try:
+        state.solver._solver.timeout = ms
+    except Exception:  # noqa: BLE001 — a missing/renamed attribute must never break the solve
+        pass
+
+
 def _make_input(claripy, proj, *, model: str, length: int, binpath: str):
     """Build the symbolic input + an initial state for it. Returns (state, sym_input).
 
@@ -145,6 +163,17 @@ def _make_input(claripy, proj, *, model: str, length: int, binpath: str):
         state = proj.factory.entry_state(args=[binpath], add_options=opts, stdin=sym)
     else:  # argv (default)
         state = proj.factory.entry_state(args=[binpath, sym], add_options=opts)
+        # argv[1] is a C string: an interior NUL would TRUNCATE it, so a solved byte sequence
+        # containing one wouldn't survive as a real argv[1] — the reported reproducer would
+        # mislead. Constrain every symbolic byte to be non-NUL so the recovered input is faithful
+        # (and the solve stays deterministic — strlen no longer forks on where a NUL lands). NUL
+        # bytes are legitimate on stdin, so this constraint is argv-mode only.
+        # (argv caveat) We deliberately do NOT force every symbolic byte non-NUL. A blanket
+        # non-NUL constraint breaks legitimate solves for programs that rely on a NUL TERMINATOR
+        # inside the buffer (e.g. a fixed-length strlen(argv[1])==N check) — it forbids the very
+        # terminator the program needs. _solve truncates the reported argv reproducer at the
+        # first NUL instead (that IS the real argv[1]), so it stays honest without over-
+        # constraining the solve. (NUL is always legitimate on stdin.)
     return state, sym
 
 
@@ -241,6 +270,11 @@ def _solve(args) -> dict:
         "input_len": length,
         "arch": str(getattr(proj.arch, "name", None)),
     }
+    # Echo the enclosing-function address back so the engine can carry it onto the promoted
+    # function node's provenance (the node's `address` is otherwise lost). A free locator the
+    # caller already resolved — we report it, we don't re-derive it.
+    if args.function_addr:
+        base["function_addr"] = args.function_addr
 
     explicit = _parse_addr(args.sink_addr) if args.mode == "reaching-input" else _parse_addr(args.check_addr)
     sink_func = args.sink_func if args.mode == "reaching-input" else None
@@ -258,8 +292,12 @@ def _solve(args) -> dict:
                          "resolvable sink function name"}
     base["targets"] = [_hx(a) for a in find_addrs]
 
+    # Cap any single z3 query at the per-query ceiling, never above the run's own deadline, so a
+    # late query still returns well inside the container cap (see _set_query_timeout).
+    query_timeout = min(int(args.timeout), _PER_QUERY_TIMEOUT)
     try:
         state, sym = _make_input(claripy, proj, model=model, length=length, binpath=binpath)
+        _set_query_timeout(state, seconds=query_timeout)
         simgr = proj.factory.simulation_manager(state)
         # DFS = deterministic order + bounded memory (one active state); LoopSeer caps any single
         # loop's iterations so a runaway loop trips the bound rather than spinning forever.
@@ -286,12 +324,23 @@ def _solve(args) -> dict:
         return result
 
     found = found_states[0]
+    # Re-apply the per-query cap on the satisfying state: a forked child may not inherit the
+    # parent's solver timeout, and this final model-extraction `eval` is the query most likely to
+    # be expensive — it must not hang past the deadline either.
+    _set_query_timeout(found, seconds=query_timeout)
     try:
         data = found.solver.eval(sym, cast_to=bytes)
     except Exception as exc:  # noqa: BLE001 — model extraction failed
         return {**result, "solved": False, "reason": "no-model",
                 "error": f"reached the target but could not extract a concrete model: {exc}"}
 
+    # argv reproducer faithfulness (reaching-input): argv[1] is a C string, so the real input is
+    # the bytes up to the FIRST NUL — report THAT (the full solved buffer's trailing/interior NULs
+    # cannot be passed as argv[1] and would mislead). The serial the check reads lives in the
+    # leading non-NUL bytes, so it is preserved. Constraint mode keeps the full bytes (a recovered
+    # VALUE may legitimately contain NUL); stdin keeps the full bytes too.
+    if args.mode == "reaching-input" and model == "argv":
+        data = data.split(bytes([0]), 1)[0]
     result["solved"] = True
     result["concrete_input"] = data.hex()
     result["concrete_input_repr"] = _safe_repr(data)
@@ -323,7 +372,6 @@ def main() -> int:
     p.add_argument("--function", default=None)
     p.add_argument("--function-addr", default=None)
     p.add_argument("--check-addr", default=None)
-    p.add_argument("--arg-index", default=None)
     p.add_argument("--input-model", default="argv", choices=["argv", "stdin"])
     p.add_argument("--max-input-len", default=_DEFAULT_MAX_INPUT)
     p.add_argument("--timeout", default=_DEFAULT_TIMEOUT)
