@@ -113,11 +113,20 @@ def test_closed_value_set_params_carry_a_schema_enum():
     for tool, param in must_enum:
         prop = by_name[tool].get(param, {})
         assert prop.get("enum"), f"{tool}.{param} should carry a schema enum"
-    # the enums must be sourced from the engine's vocab, not hand-typed (no drift)
+    # the enums must equal the engine's own vocab, not a hand-typed subset (no drift) — these
+    # are the exact authorities the engine validates against, so an enum that omits a value
+    # would make a legitimate, engine-accepted call fail a strict client.
     from hexgraph.db.models import EdgeType, NodeType
+    from hexgraph.engine.hypotheses import RELATIONS, STATUSES
     assert set(by_name["graph_create_node"]["node_type"]["enum"]) == {
         t.value for t in NodeType if t != NodeType.task}
     assert set(by_name["graph_create_edge"]["type"]["enum"]) == {t.value for t in EdgeType}
+    assert set(by_name["graph_link_evidence"]["relation"]["enum"]) == set(RELATIONS)
+    assert set(by_name["graph_set_hypothesis_status"]["status"]["enum"]) == set(STATUSES)
+    # remote_run's allowlist = remote_probe.TOOLS keys + the `ls` op (the probe isn't host-
+    # importable, so pin the two the original list dropped/wronged as a regression lock).
+    remote_tools = set(by_name["net_remote_run"]["tool"]["enum"])
+    assert {"processes_full", "ls"} <= remote_tools and len(remote_tools) == 12
 
 
 def test_gated_tools_name_their_feature_in_the_description():

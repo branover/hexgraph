@@ -36,6 +36,7 @@ from hexgraph.engine import mcp_tools as _t
 from hexgraph.engine.annotations import KINDS as _ANN_KINDS, NODE_KINDS as _ANN_NODE_KINDS
 from hexgraph.engine.edge_schemas import SOCKET_KINDS as _SOCKET_KINDS
 from hexgraph.engine.findings import FINDING_TYPES as _FINDING_TYPES
+from hexgraph.engine.hypotheses import RELATIONS as _RELATIONS, STATUSES as _HYP_STATUSES
 from hexgraph.engine.llm_tasks import LLM_TASK_TYPES as _LLM_TASK_TYPES
 from hexgraph.models.finding import Finding as _Finding
 
@@ -62,7 +63,8 @@ TASK_TYPES = sorted(
 # Closed sets whose authority is not a single importable constant — listed here next to
 # a pointer to the code that enforces them, so the schema documents the real allowlist.
 REMOTE_TOOLS = ["uname", "id", "ps", "netstat", "mount", "ifconfig", "df", "env",
-                "passwd", "release", "ls"]  # sandbox/probes/remote_probe.py:TOOLS (a hard allowlist)
+                "passwd", "release", "processes_full",  # = sandbox/probes/remote_probe.py:TOOLS keys
+                "ls"]  # + the `ls` op (mcp_tools.remote_run maps tool='ls' → the read-only ls op)
 REHOST_BRANDS = ["linksys", "netgear", "dlink", "tplink", "tenda", "trendnet", "zyxel",
                  "belkin", "asus", "mikrotik", "ubiquiti", "openwrt", "ddwrt", "buffalo",
                  "actiontec"]  # engine/rehost.py:_VENDOR_BRANDS (FirmAE vendor profiles)
@@ -71,8 +73,8 @@ SOURCE_ROLES = ["code", "harness", "poc", "script", "build_recipe"]
 BUILD_SYSTEMS = ["make", "cmake", "autotools", "meson", "cargo", "go", "custom"]
 FUZZ_SURFACES = ["source_lib", "binary_only", "network", "file_format"]
 FUZZ_ENGINES = ["afl", "qemu", "frida", "boofuzz", "desock", "libfuzzer"]
-EVIDENCE_RELATIONS = ["supports", "refutes"]
-HYPOTHESIS_STATUSES = ["confirmed", "rejected", "open", "supported", "refuted"]
+EVIDENCE_RELATIONS = sorted(_RELATIONS)  # engine.hypotheses.RELATIONS: supports/refutes + confirms/contradicts aliases
+HYPOTHESIS_STATUSES = list(_HYP_STATUSES)  # engine.hypotheses.STATUSES: derived (open/supported/refuted/contested) + verdicts
 
 # Tool groups let a user expose only what they need so an agent's context isn't
 # polluted with tools they won't use:
