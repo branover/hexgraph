@@ -31,6 +31,7 @@ a new hash and the stale facts simply never match the new node — there is no e
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Callable
 
 from sqlalchemy.orm import Session
@@ -61,6 +62,29 @@ _RELATIONSHIP_WHITELIST: dict[str, str] = {
     # fact_kind -> edge type
     "calls": "calls",
 }
+
+# Compiler / C-runtime / ELF / bundled-library struct names that are NOT a program's
+# recovered layout. The `builtin` flag Ghidra emits is unreliable here — it marks the
+# bundled Elf64_*/Note*/evp_* types as builtin:false (so they leak into the graph) while
+# flagging std::* — so we back the flag with a NAME heuristic. These carry none of the
+# analyst's reasoning; dropping them keeps the graph a curated result set. They still live
+# in the Observation substrate (the full struct catalog is queryable there) — this only
+# gates what becomes an auto-applied graph fact. Extend the pattern as new noise appears.
+_NOISE_STRUCT_RE = re.compile(
+    r"^(?:"
+    r"Elf(?:32|64|_)|ELF|Note|GnuBuildId|Gnu[._]|Dwarf"        # ELF / DWARF metadata
+    r"|_IO_|__|_chunk|_?malloc_"                                 # libc stdio / allocator internals
+    r"|std::|__cxxabiv|_Rb_tree|__gnu_cxx|type_info|_Unwind"     # C++ runtime
+    r"|evp_|EVP_|asn1_|ossl_|x509_|bio_st|engine_st"            # bundled OpenSSL types
+    r")"
+)
+
+
+def _is_noise_struct(name: str | None) -> bool:
+    """A compiler/library/ELF struct name (not a program-recovered layout) — see
+    `_NOISE_STRUCT_RE`. Name-based so it catches the bundled types Ghidra's `builtin`
+    flag misses."""
+    return bool(name) and bool(_NOISE_STRUCT_RE.match(name.strip()))
 
 # Imports we are willing to auto-tag `is_sink` (the unambiguous dangerous calls).
 # Mirrors the dataflow-sink vocabulary; conservative on purpose — auto-enrichment
@@ -243,13 +267,17 @@ def _extract_xrefs(payload: Any) -> list[Fact]:
 
 def _extract_structs(payload: Any) -> list[Fact]:
     """structs → recovered layout for program-defined structs. Accepts a list of
-    struct records or {"structs": [...]}; skips built-ins flagged `builtin`."""
+    struct records or {"structs": [...]}; drops compiler/library/ELF noise by the
+    `builtin` flag OR a name heuristic (`_is_noise_struct`) — the flag alone misses the
+    bundled Elf64_*/_IO_*/evp_* types whose `builtin` Ghidra reports as false."""
     facts: list[Fact] = []
     items = payload.get("structs") if isinstance(payload, dict) else payload
     if not isinstance(items, list):
         return facts
     for item in items:
         if not isinstance(item, dict) or item.get("builtin"):
+            continue
+        if _is_noise_struct(item.get("name")):
             continue
         nkey = name_key(item.get("name"))
         if not nkey:

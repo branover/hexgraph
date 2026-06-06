@@ -230,10 +230,13 @@ try:
             deci.openProgram(currentProgram)
             res = deci.decompileFunction(target, 60, monitor)
             pseudo = ""
+            hf = None
+            df = None
             if res is not None and res.decompileCompleted():
                 df = res.getDecompiledFunction()
                 if df is not None:
                     pseudo = df.getC()
+                hf = res.getHighFunction()
             callees = []
             try:
                 callees = [c.getName() for c in target.getCalledFunctions(monitor)]
@@ -243,35 +246,68 @@ try:
                 addr = "0x" + target.getEntryPoint().toString()
             except:
                 addr = None
-            # Rich, always-welcome facts recovered for the function being promoted: the C
-            # prototype, calling convention, and parameter/local variables. Each guarded so a
-            # single failing Jython API call drops only that fact, never the whole focus.
+            # Rich, always-welcome facts for the function being promoted. PREFER the
+            # decompiler-RECOVERED facts (the refined signature + typed locals, e.g.
+            # `bool check_password(char *param_1)`) from the HighFunction/DecompiledFunction
+            # over the pre-decompile listing-DB guess (`undefined check_password(void)`); fall
+            # back to the listing only when the decompile result is unavailable. Each fact is
+            # guarded so a single failing Jython call drops only that fact, never the focus.
             prototype = None
             try:
-                prototype = target.getSignature().getPrototypeString()
+                if df is not None:
+                    prototype = df.getSignature()  # the decompiler's refined C signature
             except:
                 pass
+            if not prototype:
+                try:
+                    prototype = target.getSignature().getPrototypeString()
+                except:
+                    pass
             calling_convention = None
             try:
                 calling_convention = target.getCallingConventionName()
             except:
                 pass
+            # Params (in order) + locals from the decompiler's HighFunction — the types it
+            # recovered, not the listing DB's `undefinedN`. Fall back to the listing variables
+            # if the HighFunction is unavailable.
             params = []
-            try:
-                params = [{"name": p.getName(), "type": str(p.getDataType())}
-                          for p in target.getParameters()]
-            except:
-                pass
             local_vars = []
-            try:
-                param_names = set(p["name"] for p in params)
-                # getLocalVariables() excludes parameters by definition; still, drop any name
-                # that surfaced as a parameter so a spilled-param slot can't double-count.
-                local_vars = [{"name": v.getName(), "type": str(v.getDataType())}
-                              for v in target.getLocalVariables()
-                              if v.getName() not in param_names]
-            except:
-                pass
+            from_hf = False
+            if hf is not None:
+                try:
+                    proto = hf.getFunctionPrototype()
+                    if proto is not None:
+                        for i in range(proto.getNumParams()):
+                            ps = proto.getParam(i)
+                            params.append({"name": ps.getName(), "type": str(ps.getDataType())})
+                    pnames = set(p["name"] for p in params)
+                    it = hf.getLocalSymbolMap().getSymbols()
+                    while it.hasNext():
+                        sym = it.next()
+                        if not sym.isParameter() and sym.getName() not in pnames:
+                            local_vars.append({"name": sym.getName(),
+                                               "type": str(sym.getDataType())})
+                    from_hf = True
+                except:
+                    params = []
+                    local_vars = []
+                    from_hf = False
+            if not from_hf:
+                try:
+                    params = [{"name": p.getName(), "type": str(p.getDataType())}
+                              for p in target.getParameters()]
+                except:
+                    params = []
+                try:
+                    param_names = set(p["name"] for p in params)
+                    # getLocalVariables() excludes parameters; still drop any name that
+                    # surfaced as a parameter so a spilled-param slot can't double-count.
+                    local_vars = [{"name": v.getName(), "type": str(v.getDataType())}
+                                  for v in target.getLocalVariables()
+                                  if v.getName() not in param_names]
+                except:
+                    local_vars = []
             focus_out = {"name": target.getName(), "resolved": target.getName(),
                          "address": addr, "pseudocode": pseudo, "disasm": "", "callees": callees}
             if prototype:
