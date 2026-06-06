@@ -38,7 +38,7 @@ program model. On a target, first read the existing graph AND the Observation in
   re_decompile_at / re_disassemble / re_reanalyze / re_xrefs / re_function_xrefs / re_data_xrefs / re_call_graph /
   re_list_strings / re_search_decompiled / re_recover_constant) persist as durable Observations on the
   target (result_kinds: decompilation / function_list / call_graph / xrefs / taint /
-  binutils_facts / emulation / strings / structs / …) — check `obs_list` before
+  binutils_facts / emulation / strings / structs / floss_strings / yara_matches / solver / …) — check `obs_list` before
   re-running a heavy analysis, `obs_get(id)` to reuse a prior payload,
   `obs_search(q)` to find one, and `re_search_decompiled(query)` to grep across decompiled
   bodies (analyze once, reuse forever). A query adds NO graph nodes (re_call_graph only wires
@@ -93,14 +93,28 @@ Observation. Work cheap-to-expensive — orienting facts first, heavy synthesis 
   **`re_binutils_facts`** pulls the symbol table, dynamic imports/exports, relocations (PLT
   jump-slots), sections, and the security mitigations (NX, RELRO, PIE, canary, FORTIFY) straight
   from GNU binutils — sharper than `target_facts`/`re_imports`, which recon caps. Pair it with
-  `re_list_strings` (hardcoded creds, URLs, format strings, command fragments). If a decompile ever
-  fails or before you lean on Ghidra, **`meta_check_decompiler`** confirms the backend actually WORKS
-  (active vs. merely configured) so you don't burn turns against a broken decompiler.
+  `re_list_strings` (hardcoded creds, URLs, format strings, command fragments). When the lead is
+  likely HIDDEN — a packed or malware-adjacent target that builds its C2 URLs, keys, creds, or
+  command templates byte-by-byte on the stack or behind a decode routine — **`re_floss_strings`**
+  recovers the obfuscated strings a plain `re_list_strings` MISSES, having FLARE FLOSS emulate the
+  constructing functions in the sandbox; it records a `floss_strings` Observation, and you promote an
+  interesting recovered string to a `string` node deliberately. (Opt-in `features.floss`; stack/
+  decoded recovery is PE/x86-amd64, and on an ELF it degrades to a static-strings pass.) If a
+  decompile ever fails or before you lean on Ghidra, **`meta_check_decompiler`** confirms the backend
+  actually WORKS (active vs. merely configured) so you don't burn turns against a broken decompiler.
 - **Map the attack surface — `re_xrefs` with NO symbol** maps every dangerous sink
   (system/popen/exec/strcpy/sprintf/memcpy/…), the format-string sinks, AND the network bind/
   listen/connect/recv sites, with who reaches each — start here. `re_xrefs <sink>` lists exactly
   which functions call a given sink and where. (For firmware, skim the filesystem in parallel —
   §2a — many bugs live in configs/scripts, not code.)
+- **Triage for KNOWN-BAD patterns — `re_yara_scan`** (one target) or **`re_yara_sweep`** (the WHOLE
+  project — every target AND every extracted firmware file) match the bundled + user YARA rules to
+  flag embedded/default creds, weak or deprecated crypto, known-bad library banners, and packers. This
+  is the fuzzy/structural n-day complement to the exact-hash `finding_link_same_code`: a hit promotes
+  a project-level `pattern` node + a `matches_rule` edge carrying the rule's DECLARED severity/cve (the
+  matcher never invents a severity or auto-mints a finding — promote a hit to a finding deliberately).
+  `ruleset` (a bundled id, or `all`) is the only knob. Opt-in `features.yara`; one analyst's rule
+  becomes a corpus-wide hunt.
 - **Map the structure without decompiling everything.** **`re_call_graph`** gives who-calls-whom
   across the whole program (or the neighbourhood around one `function` out to `depth`);
   **`re_function_xrefs`** gives BOTH directions (callers + callees) for one function; **`re_data_xrefs`**
@@ -149,6 +163,16 @@ Observation. Work cheap-to-expensive — orienting facts first, heavy synthesis 
     and a `coverage_instrumented` flag. **Trust the flag:** when `coverage_instrumented=false`
     it was a black-box run — do NOT overstate coverage or completeness. `finding_list` shows
     a compact `fuzz` summary; `finding_get` returns the full `evidence.extra.fuzz`.
+- **Solve for the COMPUTED input — `re_solve_reaching_input` / `re_solve_constraint`** (opt-in
+  `features.angr`): when the triggering input is COMPUTED, not stored — a magic value, a serial, a
+  password-check the binary derives — so `re_list_strings`/`re_floss_strings` reveal nothing, only
+  symbolic execution recovers it. `re_solve_reaching_input(target, sink_func=…, function=…)` solves
+  for the concrete input that DRIVES execution to a sink and emits a high-confidence `vulnerability`
+  finding carrying that input as the reproducer; `re_solve_constraint` recovers a value that SATISFIES
+  a check. It composes with the grounded taint pass — taint argues a path EXISTS, angr produces the
+  concrete input that takes it, the strongest static claim short of a live `finding_verify_poc`. It is
+  heavy but bounded (it runs in the dedicated angr image), so check `obs_list(target, kind='solver')`
+  before re-running.
 
 ## 2a. Browse the firmware filesystem (configs, scripts, keys — not just code)
 A firmware target unpacks into a filesystem, and a large share of real findings live in
