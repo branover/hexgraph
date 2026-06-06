@@ -11,7 +11,7 @@ from conftest import fixture_path
 
 def test_catalog_exposes_core_tools():
     names = {t["name"] for t in mcp_tools.catalog()}
-    assert {"list_targets", "decompile_function", "record_finding", "run_task", "search"} <= names
+    assert {"target_list", "re_decompile_function", "finding_record", "task_run", "graph_search"} <= names
     # every tool is callable and schema-typed
     for t in mcp_tools.catalog():
         assert callable(t["fn"]) and t["schema"]["type"] == "object"
@@ -26,7 +26,7 @@ def test_start_fuzz_campaign_schema_declares_network_and_seed_params():
 
     from hexgraph.engine.mcp_tools import start_fuzz_campaign
 
-    tool = next(t for t in mcp_tools.catalog() if t["name"] == "start_fuzz_campaign")
+    tool = next(t for t in mcp_tools.catalog() if t["name"] == "fuzz_start")
     props = tool["schema"]["properties"]
     for p in ("host", "port", "protocol", "proto_spec", "seeds", "dictionary",
               "max_len", "max_total_time", "max_crashes", "instances", "engine",
@@ -137,17 +137,17 @@ def test_write_tools_populate_graph(hg_home):
 
 def test_catalog_group_filtering():
     read_only = {t["name"] for t in mcp_tools.catalog({"read"})}
-    assert "decompile_function" in read_only
-    assert "record_finding" not in read_only and "create_node" not in read_only and "run_task" not in read_only
+    assert "re_decompile_function" in read_only
+    assert "finding_record" not in read_only and "graph_create_node" not in read_only and "task_run" not in read_only
     write_only = {t["name"] for t in mcp_tools.catalog({"write"})}
-    assert {"record_finding", "create_node", "create_edge"} <= write_only
-    assert "decompile_function" not in write_only
+    assert {"finding_record", "graph_create_node", "graph_create_edge"} <= write_only
+    assert "re_decompile_function" not in write_only
     # the RUN group must advertise every live/network/exec run-tool (review #8) — these were
     # added without a catalog-membership assertion, so a drop would go unnoticed.
     run_only = {t["name"] for t in mcp_tools.catalog({"run"})}
-    assert {"tcp_request", "remote_launch", "register_remote", "rehost",
-            "http_request", "verify_poc"} <= run_only
-    assert "decompile_function" not in run_only
+    assert {"net_tcp_request", "net_remote_launch", "target_register_remote", "target_rehost",
+            "net_http_request", "finding_verify_poc"} <= run_only
+    assert "re_decompile_function" not in run_only
     # every catalog entry is tagged with a known group
     assert all(t["group"] in mcp_tools.GROUPS for t in mcp_tools.catalog())
 
@@ -284,7 +284,7 @@ def test_ingest_tool_offline(hg_home, monkeypatch):
     monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: False)
     r = mcp_tools.ingest(fixture_path("vuln_httpd"), name="x")
     assert r.get("project_id") and r.get("recon") is False
-    assert "ingest" in {t["name"] for t in mcp_tools.catalog({"run"})}
+    assert "target_ingest" in {t["name"] for t in mcp_tools.catalog({"run"})}
 
 
 def test_skill_markdown_is_a_claude_skill():
@@ -326,7 +326,7 @@ def test_get_schemas_contract():
 
 def test_check_decompiler_in_catalog():
     names = {t["name"] for t in mcp_tools.catalog()}
-    assert "check_decompiler" in names
+    assert "meta_check_decompiler" in names
 
 
 def test_check_decompiler_radare2_working(hg_home, monkeypatch):
@@ -498,9 +498,9 @@ def test_new_tools_in_catalog_groups():
     sandbox, so they live in `run`. A drop would otherwise go unnoticed."""
     read_names = {t["name"] for t in mcp_tools.catalog({"read"})}
     run_names = {t["name"] for t in mcp_tools.catalog({"run"})}
-    assert "build_log" in read_names
-    assert {"add_file_as_target", "resume_fuzz_campaign"} <= run_names
-    for name in ("build_log", "add_file_as_target", "resume_fuzz_campaign"):
+    assert "src_build_log" in read_names
+    assert {"target_ingest_file", "fuzz_resume"} <= run_names
+    for name in ("src_build_log", "target_ingest_file", "fuzz_resume"):
         t = next(x for x in mcp_tools.catalog() if x["name"] == name)
         assert callable(t["fn"]) and t["schema"]["type"] == "object"
 
@@ -568,7 +568,7 @@ def test_skill_documents_fs_browsing_and_new_tools():
     """The agent only knows what the SKILL tells it: the firmware-FS workflow, the new tools,
     and the strict 'surface, don't prune' stance must all be present."""
     from hexgraph.agent_setup import SKILL
-    for token in ("list_filesystem", "add_file_as_target", "build_log",
-                  "resume_fuzz_campaign", "list_projects",
+    for token in ("fs_list", "target_ingest_file", "src_build_log",
+                  "fuzz_resume", "proj_list",
                   "You SURFACE for the analyst to TRIAGE"):
         assert token in SKILL, token

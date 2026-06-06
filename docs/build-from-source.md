@@ -34,8 +34,8 @@ symbolized stack frame jumps the same way.
   read-only, since editing it would break the reproducible build's content hash. Firmware-*extracted*
   files are marked `extracted` and treated as untrusted: displayed, but never run or parsed outside
   the sandbox.
-- Over **MCP**, the reads are `list_source_trees` and `read_source_file`, and the writes are
-  `import_source_tree`, `link_finding_to_source`, and `save_source_revision`.
+- Over **MCP**, the reads are `src_list_trees` and `src_read_file`, and the writes are
+  `src_import_tree`, `finding_link_to_source`, and `src_save_revision`.
 
 ## Build-as-API (`features.build`)
 
@@ -55,8 +55,8 @@ In the UI, a capability-gated **Build modal** on the Source tab shows a read-onl
 preview (there is no free-text command box) with instrumentation toggles, an arch selector for
 cross-compiling, a dependency posture (vendored or fetch), and the injected env plus the `recipe_sha`.
 The Builds list shows reproducible, cached, locked, and instrumented badges. Over MCP, the relevant
-verbs are `build_target`, `import_oss_fuzz`, `save_source_revision`, `list_builds`, and
-`coverage_diff`.
+verbs are `src_build`, `src_import_oss_fuzz`, `src_save_revision`, `src_list_builds`, and
+`fuzz_coverage_diff`.
 
 ## The build-to-fuzz handoff is automatic
 
@@ -64,7 +64,7 @@ If a tree is `built_from` a target, rebuilding it registers an instrumented deri
 as `instrumented_build_of` the original), which is the fuzzable twin. The build records the
 instrumented target's sources on the derived target (in `metadata_json.fuzz_target_sources`, with the
 harness excluded) and promotes any `role=harness` file to a `harnesses` edge, so a later
-`start_fuzz_campaign` on the derived target infers `source_lib` and runs coverage-guided with no manual
+`fuzz_start` on the derived target infers `source_lib` and runs coverage-guided with no manual
 wiring.
 
 ## Reproducibility & the network posture
@@ -94,11 +94,11 @@ ccache make rebuilds both deterministic and incremental).
   the device userland and runs under qemu-user. If a cross-build fails, it degrades gracefully to
   qemu-mode binary-only fuzzing.
 - **Importing an OSS-Fuzz `build.sh`** is supported too. Paste an OSS-Fuzz-style `build.sh` (via `POST
-  .../builds/import-oss-fuzz` or the `import_oss_fuzz` MCP tool); it is stored as a `role=script`
+  .../builds/import-oss-fuzz` or the `src_import_oss_fuzz` MCP tool); it is stored as a `role=script`
   source file, mapped onto HexGraph's `$CC`/`$CXX`/`$CFLAGS`/`$LIB_FUZZING_ENGINE`/`$SRC`/`$OUT`
   contract, and run essentially unchanged through a single shell phase.
 
-A **run-to-run coverage diff** (the `coverage_diff` MCP tool, or
+A **run-to-run coverage diff** (the `fuzz_coverage_diff` MCP tool, or
 `/api/campaigns/{id}/coverage-diff`) compares two campaigns' per-line coverage and answers the
 practical question: what new edges did this run reach? That is how you judge whether a change to a
 harness, corpus, or engine actually improved reach.

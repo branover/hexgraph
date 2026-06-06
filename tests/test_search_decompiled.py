@@ -84,7 +84,7 @@ def test_search_decompiled_helper_dedups_by_function(hg_home):
 
 def test_catalog_and_schema_advertise_search_decompiled(hg_home):
     names = {sp["name"] for sp in M.catalog()}
-    assert "search_decompiled" in names
+    assert "re_search_decompiled" in names
     gs = M.get_schemas()
     # the observations block names the new grep-the-bodies verb
     assert "search_decompiled" in gs["observations"]["what"]

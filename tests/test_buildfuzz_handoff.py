@@ -200,7 +200,7 @@ def test_verify_fuzz_artifact_tool_registered_and_byte_faithful():
     from hexgraph.engine import mcp_catalog, mcp_tools
 
     names = {t[1] for t in mcp_catalog._CATALOG}
-    assert "verify_fuzz_artifact" in names, "verify_fuzz_artifact not in the MCP catalog"
+    assert "fuzz_verify_artifact" in names, "fuzz_verify_artifact not in the MCP catalog"
     assert hasattr(mcp_tools, "verify_fuzz_artifact")
     # The byte-faithful path: verify_reproducer builds a spec with stdin_b64 (raw bytes),
     # NEVER the text `stdin` (which the subprocess UTF-8-re-encodes, corrupting 0x00/0xff).

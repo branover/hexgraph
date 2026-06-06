@@ -73,15 +73,15 @@ flush.
 Tool Results are only useful if you can find them, so HexGraph surfaces them in a few ways.
 
 When a task runs, the context it assembles includes a compact index of prior analysis on the target,
-something like "12 decompilations, a call graph, xrefs, a strings pass", so an agent learns what already
+something like "12 decompilations, a call graph, re_xrefs, a strings pass", so an agent learns what already
 exists without having to guess. Every tool result also comes back with the id of the Tool Result it was
 recorded as and a one-line nudge to check the store before re-running.
 
 If you are driving HexGraph through its MCP tools, three read verbs let you mine the store directly.
-`list_observations` gives you the newest-first index of prior results on a target, optionally filtered
-by tool or by kind, returning the metadata for each. `get_observation` loads one result in full,
+`obs_list` gives you the newest-first index of prior results on a target, optionally filtered
+by tool or by kind, returning the metadata for each. `obs_get` loads one result in full,
 including its complete payload pulled back from storage, which is how you reuse a prior decompilation or
-xref instead of paying to run it again. `search_observations` does a substring search across the tool
+xref instead of paying to run it again. `obs_search` does a substring search across the tool
 name, summary, and kind, over a whole project or a single target. The pattern these encourage is the
 same one HexGraph follows internally: look before you compute, reuse the result if it is there, and
 promote into the graph only the few results that carry your reasoning.

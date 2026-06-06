@@ -71,7 +71,7 @@ def test_recover_constant_advertised_in_catalog():
     """The verb is reachable by a coding agent — advertised in the read group, callable, typed."""
     from hexgraph.engine import mcp_tools as M
 
-    spec = next((t for t in M.catalog({"read"}) if t["name"] == "recover_constant"), None)
+    spec = next((t for t in M.catalog({"read"}) if t["name"] == "re_recover_constant"), None)
     assert spec is not None and callable(spec["fn"])
     assert spec["schema"]["properties"].keys() >= {"target_id", "function"}
 

@@ -69,12 +69,64 @@ def test_catalog_tools_are_documented():
 def test_authoring_tools_state_expectations():
     by_name = {s["name"]: s["description"] for s in M.catalog()}
     # create_node must point at the per-type contract and the sink rule
-    assert "get_schemas" in by_name["create_node"] and "is_sink" in by_name["create_node"].lower() \
-        or "is_sink" in by_name["create_node"]
-    assert "target_id" in by_name["create_node"]
+    assert "get_schemas" in by_name["graph_create_node"] and "is_sink" in by_name["graph_create_node"].lower() \
+        or "is_sink" in by_name["graph_create_node"]
+    assert "target_id" in by_name["graph_create_node"]
     # create_edge must point at the per-type edge attrs
-    assert "get_schemas" in by_name["create_edge"]
+    assert "get_schemas" in by_name["graph_create_edge"]
     # verify_poc must document both flavours + the nonce
-    assert "{{NONCE}}" in by_name["verify_poc"] and "features.network" in by_name["verify_poc"]
+    assert "{{NONCE}}" in by_name["finding_verify_poc"] and "features.network" in by_name["finding_verify_poc"]
     # http_request must exist and require network
-    assert "features.network" in by_name["http_request"]
+    assert "features.network" in by_name["net_http_request"]
+
+
+# --- discoverability guards (the tool surface stays routable + safe-by-name) ---------
+
+_DOMAINS = {"proj", "target", "re", "fs", "obs", "graph", "finding", "src", "fuzz",
+            "net", "task", "meta"}
+
+
+def test_every_tool_name_is_domain_namespaced():
+    # An agent routes from the NAME alone (no schema fetch under deferred loading), so every
+    # name must be `<domain>_<verb>` with a known domain prefix and lowercase snake_case.
+    import re
+    for spec in M.catalog():
+        name = spec["name"]
+        assert re.fullmatch(r"[a-z]+(_[a-z0-9]+)+", name), f"{name} is not lowercase domain_verb"
+        assert name.split("_")[0] in _DOMAINS, f"{name} has an unknown domain prefix"
+
+
+def test_closed_value_set_params_carry_a_schema_enum():
+    # A param with a semantically closed value set must be a real `enum` (sourced from the
+    # codebase), so an agent can't pass a node/edge/finding/task type the engine rejects.
+    by_name = {s["name"]: s["schema"]["properties"] for s in M.catalog()}
+    must_enum = {
+        ("graph_create_node", "node_type"), ("graph_create_edge", "type"),
+        ("graph_annotate", "kind"), ("graph_create_socket", "kind"),
+        ("graph_link_evidence", "relation"), ("graph_set_hypothesis_status", "status"),
+        ("finding_record", "finding_type"), ("finding_update", "severity"),
+        ("finding_update", "confidence"), ("finding_update", "status"),
+        ("task_run", "type"), ("net_remote_run", "tool"), ("target_rehost", "brand"),
+        ("target_register_service", "transport"), ("src_build", "system"),
+        ("fuzz_start", "surface"), ("proj_create", "backend"),
+    }
+    for tool, param in must_enum:
+        prop = by_name[tool].get(param, {})
+        assert prop.get("enum"), f"{tool}.{param} should carry a schema enum"
+    # the enums must be sourced from the engine's vocab, not hand-typed (no drift)
+    from hexgraph.db.models import EdgeType, NodeType
+    assert set(by_name["graph_create_node"]["node_type"]["enum"]) == {
+        t.value for t in NodeType if t != NodeType.task}
+    assert set(by_name["graph_create_edge"]["type"]["enum"]) == {t.value for t in EdgeType}
+
+
+def test_gated_tools_name_their_feature_in_the_description():
+    # No agent should learn a capability tier exists only by being refused: every tool that
+    # touches the network / executes / boots an image / edits source declares its features.* gate.
+    by_name = {s["name"]: s["description"] for s in M.catalog()}
+    gated = ["target_register_service", "target_register_remote", "target_rehost",
+             "re_recover_constant", "finding_verify_poc", "net_http_request", "net_tcp_request",
+             "net_remote_list_files", "net_remote_read_file", "net_remote_run", "net_remote_launch",
+             "src_build", "src_save_revision", "fuzz_start", "fuzz_list_environments"]
+    for name in gated:
+        assert "features." in by_name[name], f"{name} doesn't name its features.* gate"

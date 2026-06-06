@@ -216,7 +216,7 @@ def test_mcp_verbs_registered_and_callable(hg_home):
     from hexgraph.engine import mcp_tools
 
     names = {t["name"] for t in mcp_tools.catalog()}
-    assert {"list_observations", "get_observation", "search_observations"} <= names
+    assert {"obs_list", "obs_get", "obs_search"} <= names
 
     pid, tid = _seed()
     with session_scope() as s:

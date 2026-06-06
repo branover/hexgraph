@@ -203,4 +203,4 @@ def test_mcp_register_socket_in_catalog():
     from hexgraph.engine.mcp_catalog import _CATALOG
 
     names = {name for _grp, name, *_ in _CATALOG}
-    assert "register_socket" in names
+    assert "target_register_service" in names
