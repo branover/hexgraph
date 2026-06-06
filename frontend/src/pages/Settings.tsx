@@ -229,49 +229,25 @@ export default function Settings() {
             )}
           </section>
 
-          {/* FLOSS — deeper string deobfuscation (deeper-static, relaxes no boundary) */}
+          {/* FLOSS + YARA — always-on static tools (no toggle). They relax no boundary, so
+              they ride the static surface ungated like recon and binutils; this card is
+              operator INFO only, plus where to drop your own YARA rules. */}
           <section className="card2">
             <div className="h3row">
-              <h3><Icon name="spark" size={15} /> FLOSS string deobfuscation <span className="muted">· optional · deeper static</span></h3>
-              <label className="switch">
-                <input type="checkbox" checked={Boolean(v.settings.features.floss?.enabled)}
-                       onChange={(e) => patch({ "features.floss.enabled": e.target.checked })} />
-                <span>{v.settings.features.floss?.enabled ? "enabled" : "disabled"}</span>
-              </label>
+              <h3><Icon name="spark" size={15} /> Always-on static tools <span className="muted">· FLOSS · YARA · no setup</span></h3>
+              <span className="muted" style={{ fontSize: 12 }}>always available</span>
             </div>
             <p className="hint">
-              Recovers the stack / tight / decoded strings a plain <code>strings</code> pass misses — strings
-              built on the stack at runtime or produced by a decode routine — by lightly <b>emulating</b> the
-              constructing functions (FLARE FLOSS). On firmware and malware those hidden strings (URLs, command
-              templates, keys) are often the lead. The emulation runs <b>in-process</b> in the sandbox (vivisect):
-              it never executes the target natively and opens no network, so it <b>relaxes no policy gate</b>. It is
-              opt-in only because the deobfuscation pass is slower than <code>strings</code>. Needs <code>flare-floss</code>
-              in the sandbox image (a rebuild). Obfuscated-string recovery applies to x86/amd64 PE targets; on
-              ELF / foreign-arch it degrades to a static-strings-only pass.
-            </p>
-          </section>
-
-          {/* YARA — project-wide pattern sweep (static match, relaxes no boundary) */}
-          <section className="card2">
-            <div className="h3row">
-              <h3><Icon name="shield" size={15} /> YARA pattern sweep <span className="muted">· optional · deeper static</span></h3>
-              <label className="switch">
-                <input type="checkbox" checked={Boolean(v.settings.features.yara?.enabled)}
-                       onChange={(e) => patch({ "features.yara.enabled": e.target.checked })} />
-                <span>{v.settings.features.yara?.enabled ? "enabled" : "disabled"}</span>
-              </label>
-            </div>
-            <p className="hint">
-              Sweeps the project's targets and extracted firmware files against YARA rules — a bundled high-signal
-              set plus any <code>.yar</code> you drop in the rules dir — for embedded credentials, known-bad library
-              banners, weak-crypto constants and packer signatures. It's the fuzzy, structural complement to the
-              exact-hash n-day link. A static <b>match</b>: it reads bytes, never executes the target and opens no
-              socket, so it <b>relaxes no policy gate</b>. Opt-in only because rule management is a surface and a sweep
-              can be heavier than a single probe. Needs <code>yara</code> + <code>yara-python</code> in the sandbox
-              image (a rebuild).
+              <b>FLOSS</b> recovers the stack / tight / decoded strings a plain <code>strings</code> pass misses by
+              lightly emulating the constructing functions in the sandbox (it never executes the target natively).
+              <b> YARA</b> sweeps your targets and extracted firmware files against a bundled high-signal rule set —
+              embedded credentials, known-bad library banners, weak-crypto constants, packer signatures — the fuzzy,
+              structural complement to the exact-hash n-day link. Both are pure static analysis: they read bytes,
+              never run the target, and open no network, so they relax no policy boundary. They're always on (no
+              toggle), available wherever the sandbox image is built — just like recon and binutils.
             </p>
             <div className="row" style={{ marginTop: 4 }}>
-              <label>Your rules</label>
+              <label>Your YARA rules</label>
               <code style={{ fontSize: 11.5, wordBreak: "break-all" }}>{v.paths.yara_rules_dir || "—"}</code>
             </div>
             <p className="hint" style={{ marginTop: 4 }}>

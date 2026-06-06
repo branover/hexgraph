@@ -63,14 +63,15 @@ Call **`meta_get_schemas` first.** It advertises the Finding shape, the node and
 per-type node-attribute schemas (including the sink-versus-symbol rule), the edge-attribute schemas,
 the socket kinds, and the active decompiler.
 
-When you plan to use an opt-in feature, run **`meta_check_features`** during your orient step. It
-preflights the optional features whose runtime dependency can drift from their setting (FLOSS, YARA,
-angr, and Ghidra/emulation) and reports each as `disabled` (the gate is off), `available` (on and its
-dependency is actually present), or `broken` (on but the dependency or image is missing). That last
-state is the one worth catching early: an enabled feature whose sandbox image is stale reads as on in
-Settings yet errors the first time you call it, and the check hands you the exact rebuild command
-(`just sandbox-build`, `just angr-build`) instead of letting you find out mid-analysis. The companion
-**`meta_check_decompiler`** does the same honest verification for whichever decompiler is configured.
+Before you lean on a tool whose dependency can drift, run **`meta_check_features`** during your orient
+step. It preflights the features whose runtime dependency can diverge from what's configured (FLOSS,
+YARA, angr, and Ghidra/emulation). FLOSS and YARA are always-on static tools, so they report
+availability only, `available` when their dependency is present or `broken` when it isn't; the gated
+features (angr, Ghidra/emulation) add a `disabled` state when their gate is off. That `broken` state is
+the one worth catching early: a tool whose sandbox image is stale reads as fine in Settings yet errors
+the first time you call it, and the check hands you the exact rebuild command (`just sandbox-build`,
+`just angr-build`) instead of letting you find out mid-analysis. The companion **`meta_check_decompiler`**
+does the same honest verification for whichever decompiler is configured.
 
 ```bash
 hexgraph mcp install [--agent claude|codex|gemini]   # print registration steps

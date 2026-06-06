@@ -123,11 +123,13 @@ _STATIC_SPECS = [
              "WITH_GHIDRA=1 (headless) or a reachable bridge. Run it if a decompile fails so you don't "
              "keep retrying a broken backend — the result's detail says what to fix.",
              {"type": "object", "properties": {}}),
-    ToolSpec("check_features", "Preflight the OPTIONAL features whose runtime dep can diverge from their "
-             "gate (floss, yara, angr, ghidra/emulation): each reports disabled (gated off), available "
-             "(enabled AND its dep/image present), or BROKEN (enabled but the dep/image is missing — the "
-             "stale-image trap) with a remediation hint. Lightweight + read-only. Run it before reaching "
-             "for floss_strings / a yara / a solver tool so you don't burn turns against a broken feature.",
+    ToolSpec("check_features", "Preflight the features whose runtime dep can diverge from what's "
+             "configured (floss, yara, angr, ghidra/emulation): each reports available (its dep/image is "
+             "present), BROKEN (the dep/image is missing — the stale-image trap, e.g. floss/yara need a "
+             "sandbox rebuild), or disabled (only the gated ones — angr, ghidra — when their gate is off) "
+             "with a remediation hint. floss + yara are always-on, so they report availability only. "
+             "Lightweight + read-only. Run it before reaching for floss_strings / a yara / a solver tool "
+             "so you don't burn turns against a broken feature.",
              {"type": "object", "properties": {}}),
     ToolSpec("list_observations", "Prior deterministic analysis recorded on THIS target — the "
              "OBSERVATION STORE (the substrate, NOT the curated graph): decompilations, function "
@@ -150,9 +152,10 @@ _FUZZ_SPEC = ToolSpec(
     {"type": "object", "properties": {"max_total_time": {"type": "integer"}}},
 )
 
-# FLOSS is advertised ONLY when features.floss is enabled (unlike the always-on binutils
-# verb): it is opt-in and slower than strings, so it stays out of the model's tool list
-# until the user turns it on (mirroring fuzz_function's enable-gated advertising).
+# FLOSS is ALWAYS advertised, like the binutils verb: it relaxes no boundary (it emulates
+# decode routines in-process, never executes the target), so it rides the static surface
+# ungated. It is slower than a plain strings pass, so the description tells the model to
+# check prior Observations first.
 _FLOSS_SPEC = ToolSpec(
     "floss_strings", "Recover OBFUSCATED strings a plain strings/list_strings pass MISSES — STACK "
     "strings (built byte-by-byte on the stack at runtime), TIGHT strings, and DECODED strings "
@@ -166,9 +169,10 @@ _FLOSS_SPEC = ToolSpec(
      "description": "minimum recovered string length (default 4, clamped 4–64)"}}},
 )
 
-# YARA is advertised ONLY when features.yara is enabled (like floss_strings): it is opt-in
-# (rule management is a surface) and a sweep can be heavier than a single probe, so it stays
-# out of the model's tool list until the user turns it on.
+# YARA is ALWAYS advertised, like the binutils verb: a static MATCH reads bytes and never
+# executes the target, so it relaxes no boundary and rides the static surface ungated. Rule
+# management is still an operator surface (drop your own .yar files in the rules dir), but
+# that no longer gates whether the matcher is offered.
 _YARA_SPEC = ToolSpec(
     "yara_scan", "Match THIS target's bytes against YARA rules (the bundled high-signal set + any "
     "user .yar rules) — embedded credentials, known-bad library banners, weak-crypto constants, "
@@ -219,29 +223,15 @@ _SOLVE_CONSTRAINT_SPEC = ToolSpec(
 
 
 def available_tools(ctx: ToolContext) -> list[ToolSpec]:
-    """Tool specs for this target. fuzz_function only when the policy permits execution
-    (fuzzing enabled in Settings); floss_strings only when features.floss is enabled;
-    yara_scan only when features.yara is enabled; the solve_* verbs only when features.angr is."""
-    specs = list(_STATIC_SPECS)
+    """Tool specs for this target. FLOSS + YARA are ALWAYS offered (always-on static tools,
+    like binutils — they relax no boundary); fuzz_function only when the policy permits
+    execution (fuzzing enabled in Settings); the solve_* verbs only when features.angr is."""
+    specs = [*_STATIC_SPECS, _FLOSS_SPEC, _YARA_SPEC]
     try:
         from hexgraph.policy import current_policy
 
         if current_policy().allow_execution:
             specs.append(_FUZZ_SPEC)
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        from hexgraph.engine.floss import floss_enabled
-
-        if floss_enabled():
-            specs.append(_FLOSS_SPEC)
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        from hexgraph.engine.yara import yara_enabled
-
-        if yara_enabled():
-            specs.append(_YARA_SPEC)
     except Exception:  # noqa: BLE001
         pass
     try:
@@ -662,8 +652,8 @@ def _binutils(ctx: ToolContext) -> str:
 def _floss(ctx: ToolContext, args: dict) -> str:
     """Run the FLOSS deobfuscation probe (the engine helper records the Observation) and
     render the recovered hidden strings as text. QUERY: mutates no graph — the agent
-    promotes interesting strings deliberately. Opt-in: refuses cleanly if features.floss
-    is off (the helper returns the enable message)."""
+    promotes interesting strings deliberately. Always-on static tool; returns a clean
+    error only when the sandbox is down or the artifact isn't analyzable."""
     raw_len = args.get("min_length")
     min_length = None
     if raw_len is not None:
@@ -712,8 +702,8 @@ def _floss(ctx: ToolContext, args: dict) -> str:
 def _yara(ctx: ToolContext, args: dict) -> str:
     """Run the YARA matcher over THIS target (the engine helper records the Observation and
     promotes matched rules to pattern nodes + matches_rule edges) and render the matches as
-    text. Opt-in: refuses cleanly if features.yara is off (the helper returns the enable
-    message)."""
+    text. Always-on static tool; returns a clean error only when the sandbox is down, the
+    artifact isn't readable, or the ruleset id is unknown."""
     ruleset = args.get("ruleset")
     if ruleset is not None and not isinstance(ruleset, str):
         return "error: 'ruleset' must be a string (a bundled ruleset id, or 'all')"

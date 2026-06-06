@@ -55,13 +55,14 @@ A run records a `floss_strings` Observation; it does not promote anything on its
 string is a genuine lead, you promote it to a `string` node deliberately, the same as you would with
 any other result you want in the graph.
 
-FLOSS is opt-in behind `features.floss`, off by default. It is gated not because it relaxes the
-sandbox (it emulates the decode routines in-process and never executes the target) but because the
-deobfuscation pass is meaningfully slower than `strings` and you don't always want to pay for it.
-Turning it on needs the `flare-floss` dependency in the sandbox image, so enable it and rebuild:
+FLOSS is always on. It relaxes nothing (it emulates the decode routines in-process and never executes
+the target), so like binutils it rides the static surface with no feature flag to enable. The one thing
+to keep in mind is that the deobfuscation pass is meaningfully slower than `strings`, so don't reach for
+it reflexively on every binary, and check `obs_list` before re-running it. It needs the `flare-floss`
+dependency in the sandbox image, which the default image already includes; if a run reports the tool as
+missing you have a stale image, and `meta_check_features` will tell you so along with the fix:
 
 ```bash
-hexgraph config set features.floss.enabled true
 just sandbox-build
 ```
 
@@ -86,14 +87,15 @@ declares. The matcher never invents a severity and never mints a finding by itse
 lead you triage, and you promote the ones that matter into findings yourself. The only knob is
 `ruleset`, which selects a bundled rule set by id or sweeps them `all`.
 
-YARA is opt-in behind `features.yara`, off by default. The matching itself is cheap and reads bytes
-without executing anything, so the gate exists mainly because rules are a surface you manage, and a
-full-project sweep is heavier than a single probe. Because HexGraph never reaches out to the network on
-its own, updating or adding rules is always a deliberate, manual act: drop your `.yar` files into
-`<HEXGRAPH_HOME>/yara_rules/`. Enabling it needs `yara` and `yara-python` in the sandbox image:
+YARA is always on. A match reads bytes and runs nothing, so it relaxes no boundary and needs no feature
+flag, the same as binutils and recon. Rules are still a surface you manage, but managing them is separate
+from whether the matcher runs: because HexGraph never reaches out to the network on its own, updating or
+adding rules is a deliberate, manual act, so drop your `.yar` files into `<HEXGRAPH_HOME>/yara_rules/` and
+they fold into every sweep. The matcher needs `yara` and `yara-python` in the sandbox image, which the
+default image already includes; if a run reports the tool missing you have a stale image, and
+`meta_check_features` will say so along with the fix:
 
 ```bash
-hexgraph config set features.yara.enabled true
 just sandbox-build
 ```
 

@@ -1,10 +1,11 @@
 """Phase 5A PR 5A-2 — the FLOSS string-deobfuscation probe (design §3.2).
 
-Three layers, matching the Phase O curation contract:
+FLOSS is now an ALWAYS-ON static tool (it relaxes no boundary — it emulates decode routines
+in-process and never executes the target), so there is no `features.floss` gate. Two layers,
+matching the Phase O curation contract:
 
-- the gate contract: with features.floss OFF (the default) the engine helper refuses with
-  a clear enable-message (no run, no Observation) and the MCP/agent verb is NOT advertised;
-  with it ON, the verb appears and the helper runs;
+- the always-on contract: the MCP/agent verb is ALWAYS advertised (no toggle) and the helper
+  always runs;
 - the engine-helper contract with a FAKED executor (offline, no Docker): records a single
   `floss_strings` Observation scoped by content_hash, mints ZERO graph nodes, dedups on a
   repeat call (and a different min_length is a DISTINCT pass), and errors cleanly when
@@ -18,9 +19,8 @@ import pytest
 
 from hexgraph.db.models import Edge, Node, Observation
 from hexgraph.db.session import session_scope
-from hexgraph.engine.floss import collect_floss_strings, floss_enabled
+from hexgraph.engine.floss import collect_floss_strings
 from hexgraph.engine.ingest import create_project, ingest_file
-from hexgraph import settings as st
 
 from conftest import fixture_path
 
@@ -75,69 +75,42 @@ def _seed(s, name="fl"):
     return p, t
 
 
-def _enable(hg_home):
-    st.update_settings({"features.floss.enabled": True})
+# --- always-on: the verb is ALWAYS advertised (no gate) ----------------------
+
+def test_no_floss_gate_in_settings(hg_home):
+    """FLOSS is always-on: there is NO features.floss settings key (it was removed when the
+    tool went ungated). Attempting to write it is rejected by the settings schema."""
+    from hexgraph import settings as st
+
+    with pytest.raises(st.SettingsError):
+        st.update_settings({"features.floss.enabled": True})
 
 
-# --- the opt-in gate: off by default, advertised + runs only when enabled ----
-
-def test_floss_off_by_default(hg_home):
-    assert floss_enabled() is False
-
-
-def test_floss_enabled_after_opt_in(hg_home):
-    _enable(hg_home)
-    assert floss_enabled() is True
-
-
-def test_helper_refuses_when_feature_off(hg_home, monkeypatch):
-    """Feature OFF (default): the helper returns the enable-message WITHOUT running the probe
-    and records NO Observation."""
-    fake = _wire(monkeypatch)
-    with session_scope() as s:
-        p, t = _seed(s)
-        out = collect_floss_strings(s, p, t, source="agent")
-        assert "error" in out and "features.floss" in out["error"]
-        assert fake.calls == []  # never ran
-        assert s.query(Observation).filter(
-            Observation.result_kind == "floss_strings").count() == 0
-
-
-def test_verb_not_advertised_when_off_but_appears_when_on(hg_home):
-    """The MCP read verb is feature-gated: absent from the catalog when off, present when on
-    (and typed) — the conditional-advertising contract."""
+def test_verb_always_advertised(hg_home):
+    """The MCP read verb is ALWAYS in the catalog (no gate), typed — always-on contract."""
     from hexgraph.engine import mcp_tools as M
 
-    def _present():
-        return any(t["name"] == "re_floss_strings" for t in M.catalog({"read"}))
-
-    assert _present() is False
-    _enable(hg_home)
-    assert _present() is True
-    spec = next(t for t in M.catalog({"read"}) if t["name"] == "re_floss_strings")
+    specs = [t for t in M.catalog({"read"}) if t["name"] == "re_floss_strings"]
+    assert len(specs) == 1
+    spec = specs[0]
     assert callable(spec["fn"])
     assert spec["schema"]["properties"].keys() >= {"target_id", "min_length"}
 
 
-def test_agent_tool_advertised_only_when_enabled(hg_home):
-    """The in-process agent loop advertises floss_strings only when the feature is on
-    (mirrors fuzz_function's enable-gated advertising)."""
+def test_agent_tool_always_advertised(hg_home):
+    """The in-process agent loop ALWAYS advertises floss_strings (always-on static tool)."""
     from hexgraph.engine.agent_tools import ToolContext, available_tools
 
     with session_scope() as s:
         p, t = _seed(s)
         ctx = ToolContext(session=s, project=p, target=t)
-        names_off = {spec.name for spec in available_tools(ctx)}
-        assert "floss_strings" not in names_off
-        _enable(hg_home)
-        names_on = {spec.name for spec in available_tools(ctx)}
-        assert "floss_strings" in names_on
+        names = {spec.name for spec in available_tools(ctx)}
+        assert "floss_strings" in names
 
 
 # --- engine helper: one Observation, zero nodes, dedup (offline) -------------
 
 def test_collect_records_one_observation_and_mints_no_nodes(hg_home, monkeypatch):
-    _enable(hg_home)
     fake = _wire(monkeypatch)
     with session_scope() as s:
         p, t = _seed(s)
@@ -159,7 +132,6 @@ def test_collect_records_one_observation_and_mints_no_nodes(hg_home, monkeypatch
 
 
 def test_collect_dedups_on_repeat_call(hg_home, monkeypatch):
-    _enable(hg_home)
     _wire(monkeypatch)
     with session_scope() as s:
         p, t = _seed(s)
@@ -176,7 +148,6 @@ def test_collect_dedups_on_repeat_call(hg_home, monkeypatch):
 def test_min_length_is_a_distinct_pass(hg_home, monkeypatch):
     """A different min_length is a legitimately distinct pass — it must NOT collide with the
     default-pass Observation (and the knob is forwarded to the probe)."""
-    _enable(hg_home)
     fake = _wire(monkeypatch)
     with session_scope() as s:
         p, t = _seed(s)
@@ -191,7 +162,6 @@ def test_min_length_is_a_distinct_pass(hg_home, monkeypatch):
 
 
 def test_collect_reports_error_without_docker(hg_home, monkeypatch):
-    _enable(hg_home)
     monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: False)
     with session_scope() as s:
         p, t = _seed(s)
@@ -204,7 +174,6 @@ def test_collect_reports_error_without_docker(hg_home, monkeypatch):
 def test_collect_surfaces_probe_error_json(hg_home, monkeypatch):
     """A probe that returns an error JSON (a non-analyzable artifact) surfaces as an error,
     not a recorded Observation."""
-    _enable(hg_home)
     _wire(monkeypatch, result={"error": "floss could not analyze this artifact"})
     with session_scope() as s:
         p, t = _seed(s)
@@ -217,7 +186,6 @@ def test_collect_surfaces_probe_error_json(hg_home, monkeypatch):
 # --- the agent tool renders the recovered strings ----------------------------
 
 def test_agent_tool_renders_floss_strings(hg_home, monkeypatch):
-    _enable(hg_home)
     _wire(monkeypatch)
     from hexgraph.engine.agent_tools import ToolContext, run_tool
 
@@ -275,7 +243,6 @@ def test_floss_probe_on_real_pe(hg_home, floss_sandbox, monkeypatch):
     KNOWN hidden strings — the stack string STACKSTRING and the decoded string DECODEDSECRET,
     neither of which a plain strings pass finds — plus the expected Observation shape (skips
     without the FLOSS-enabled sandbox image)."""
-    _enable(hg_home)
     with session_scope() as s:
         p = create_project(s, name="fl-real")
         t = ingest_file(s, p, fixture_path("floss_fixture.exe"), name="floss_fixture")
@@ -299,7 +266,6 @@ def test_floss_probe_on_real_pe(hg_home, floss_sandbox, monkeypatch):
 def test_floss_probe_degrades_on_elf(hg_home, floss_sandbox):
     """A non-PE ELF artifact degrades to a static-strings-only pass with a clear note,
     never crashing — the arch/format graceful-degradation the design requires."""
-    _enable(hg_home)
     with session_scope() as s:
         p = create_project(s, name="fl-elf")
         t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")

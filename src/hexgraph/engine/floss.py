@@ -8,9 +8,9 @@ set as a single `floss_strings` Observation, scoped to the analyzed bytes.
 There is NO new seam (FLOSS is singular — nothing else deobfuscates strings) and NO
 policy gate: FLOSS emulates the decode routines IN-PROCESS inside the sandbox (vivisect,
 never native target execution, no network), the same posture as `assert_allows_emulation`.
-It raises NO policy tier, so `policy.py` is untouched. It IS behind an opt-in
-`features.floss` settings toggle, default OFF — purely because the deobfuscation pass is
-slower than `strings` and you don't always want it, not because it relaxes any boundary.
+It raises NO policy tier, so `policy.py` is untouched. FLOSS rides the static surface
+UNGATED, like recon and binutils — it relaxes no sandbox/exec/egress boundary, so there
+is no `features.floss` toggle; it is always available wherever the sandbox is up.
 
 Unlike binutils, FLOSS recovers *results*, not always-welcome facts about objects that
 already exist, so it registers NO enrichment extractor and mints ZERO nodes. The
@@ -49,31 +49,12 @@ def effective_min_length(min_length: int | None) -> int:
         return _DEFAULT_MIN_LEN
 
 
-_DISABLED_MSG = (
-    "FLOSS string deobfuscation is not enabled (set features.floss.enabled in Settings "
-    "to recover stack/decoded strings a plain strings pass misses). It is opt-in only "
-    "because the deobfuscation pass is slower than strings; it relaxes no sandbox boundary."
-)
-
 _REUSE_HINT = (
     "FLOSS results persist as a floss_strings Observation on this target; they do NOT add "
     "graph nodes. Check list_observations(target_id) before re-running (FLOSS is slow), and "
     "get_observation(id) for the full payload (stack/tight/decoded/static strings). Promote "
     "the interesting recovered strings to string nodes deliberately."
 )
-
-
-def floss_enabled() -> bool:
-    """True iff `features.floss` is on. FLOSS is NOT a policy gate (it relaxes no
-    sandbox/exec/egress boundary — it emulates decode routines in-process, like
-    `features.emulation`), so this reads the live setting directly rather than going
-    through `policy.effective_gates()`. Fail-closed: any settings hiccup ⇒ off."""
-    try:
-        from hexgraph import settings
-
-        return bool(settings.get("features.floss.enabled"))
-    except Exception:  # noqa: BLE001 — a settings problem must never silently enable it
-        return False
 
 
 def _summary(facts: dict) -> str:
@@ -97,17 +78,14 @@ def collect_floss_strings(
 
     Returns a dict with the raw `facts`, the recorded `observation_id`, a `cached` flag
     (the call dedups by content_hash + min_length, so a repeat returns the prior row), and
-    the standing reuse hint — or `{"error": ...}` when the feature is off, the sandbox is
-    down, or the artifact isn't analyzable. Creates ZERO graph nodes and registers NO
-    enrichment extractor (FLOSS recovers results, not always-welcome facts).
+    the standing reuse hint — or `{"error": ...}` when the sandbox is down or the artifact
+    isn't analyzable. Creates ZERO graph nodes and registers NO enrichment extractor (FLOSS
+    recovers results, not always-welcome facts).
 
     `min_length` is the single optional, validated agent knob (design §2.8) — FLOSS's
     minimum string length, clamped in the probe; everything else about the invocation is
     fixed by HexGraph.
     """
-    if not floss_enabled():
-        return {"error": _DISABLED_MSG}
-
     from hexgraph.sandbox.executor import get_executor
     from hexgraph.sandbox.runner import SandboxError, docker_available
 

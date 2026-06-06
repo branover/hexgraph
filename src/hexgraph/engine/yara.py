@@ -10,9 +10,10 @@ pattern matches an analyst can author.
 There is NO new seam (YARA is a matcher, not a swappable analysis backend) and NO policy
 gate: matching is static — it reads bytes, never executes the target, opens no socket, so
 it relaxes no sandbox/exec/egress boundary and touches NO policy tier (`policy.py` is
-untouched). It IS behind an opt-in `features.yara` settings toggle, default OFF — purely
-because rule management is a surface and the sweep can be heavier than a single probe, not
-because it relaxes any boundary.
+untouched). YARA rides the static surface UNGATED, like recon and binutils — it relaxes no
+boundary, so there is no `features.yara` toggle; it is always available wherever the
+sandbox is up. Rule management is still an operator surface (drop your own `.yar` files in
+the HEXGRAPH_HOME rules dir), but that no longer gates whether the matcher runs.
 
 Curation (design §2.5, §3.3). Every scan records a `yara_matches` Observation on the
 scanned target, scoped to the analyzed bytes. A match PROMOTES to a project-level
@@ -51,15 +52,6 @@ _USER_MOUNT = "/rules/user"
 RULESET_ALL = "all"
 
 
-def _disabled_msg() -> str:
-    return (
-        "YARA pattern matching is not enabled (set features.yara.enabled in Settings to "
-        "sweep targets/firmware files for rule matches — embedded creds, known-bad library "
-        "banners, weak-crypto constants, packer signatures). It is opt-in only because rule "
-        "management is a surface; it relaxes no sandbox boundary (static match, no execution)."
-    )
-
-
 _REUSE_HINT = (
     "YARA matches persist as a yara_matches Observation on the scanned target and promote to "
     "project-level `pattern` nodes via `matches_rule` edges (one pattern per matched rule, "
@@ -67,19 +59,6 @@ _REUSE_HINT = (
     "match carries the rule's declared severity/cve in the pattern's attrs — promote a match "
     "to a finding deliberately (the sweep never fabricates a severity or auto-mints a finding)."
 )
-
-
-def yara_enabled() -> bool:
-    """True iff `features.yara` is on. YARA is NOT a policy gate (it relaxes no
-    sandbox/exec/egress boundary — a static match reads bytes, never executes), so this
-    reads the live setting directly rather than through `policy.effective_gates()`.
-    Fail-closed: any settings hiccup => off."""
-    try:
-        from hexgraph import settings
-
-        return bool(settings.get("features.yara.enabled"))
-    except Exception:  # noqa: BLE001 — a settings problem must never silently enable it
-        return False
 
 
 def available_rulesets() -> list[str]:
@@ -262,15 +241,12 @@ def scan_target(
     `path` overrides the artifact scanned (used by the project sweep to scan an extracted
     firmware file that isn't its own target); it defaults to `target.path`. Returns a dict
     with the raw `facts`, `observation_id`, `cached`, the `promoted` pattern list, and the
-    reuse hint — or `{"error": ...}` when the feature is off, Docker is down, the artifact
-    isn't readable, or the ruleset id is unknown.
+    reuse hint — or `{"error": ...}` when Docker is down, the artifact isn't readable, or
+    the ruleset id is unknown.
 
     `ruleset` is the single validated agent knob (design §2.8) — which bundled ruleset (or
     'all') to sweep; the rule files and match flags are fixed by HexGraph.
     """
-    if not yara_enabled():
-        return {"error": _disabled_msg()}
-
     from hexgraph.sandbox.executor import get_executor
     from hexgraph.sandbox.runner import SandboxError, docker_available
 
@@ -368,9 +344,6 @@ def sweep_project(
     project-level `pattern` nodes, so the graph shows which targets/files a rule matched.
     Returns a roll-up: per-target results + the aggregate match/promotion counts.
     """
-    if not yara_enabled():
-        return {"error": _disabled_msg()}
-
     from hexgraph.sandbox.executor import get_executor
     from hexgraph.sandbox.runner import docker_available
 

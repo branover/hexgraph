@@ -169,9 +169,9 @@ def test_check_decompiler_tool_offline(hg_home, monkeypatch):
 
 
 def test_check_features_tool_offline(hg_home, monkeypatch):
-    """The in-loop agent tool: disabled features render plainly; an enabled-but-broken one
-    surfaces BROKEN + its remediation so the model can plan instead of failing blind."""
-    st.update_settings({"features.floss.enabled": True})
+    """The in-loop agent tool: the always-on static tools (floss/yara) render BROKEN + their
+    remediation when the dep is missing (never DISABLED); a gated-off feature (angr) renders
+    DISABLED — so the model can plan instead of failing blind."""
     monkeypatch.setattr("hexgraph.engine.mcp_tools._image_smoke",
                         lambda image, argv, timeout=30: (False, "image not built"))
     with session_scope() as s:
@@ -180,10 +180,12 @@ def test_check_features_tool_offline(hg_home, monkeypatch):
         ctx = ToolContext(session=s, project=p, target=t)
         assert "check_features" in {sp.name for sp in available_tools(ctx)}
         out = run_tool(ctx, "check_features", {})
+        # always-on tools: BROKEN (dep missing), never DISABLED
         assert "floss: BROKEN" in out
+        assert "yara: BROKEN" in out
         assert "just sandbox-build" in out
         # a gated-off feature still appears, as DISABLED
-        assert "yara: DISABLED" in out
+        assert "angr: DISABLED" in out
 
 
 def test_fuzz_tool_only_when_enabled(hg_home):

@@ -168,43 +168,11 @@ FEATURES: tuple[Feature, ...] = (
         builds=("sandbox_ghidra",),  # needs the with_ghidra sandbox image
         requires_note="needs Ghidra (features.ghidra) enabled + the with_ghidra sandbox image.",
     ),
-    Feature(
-        key="features.floss.enabled",
-        label="FLOSS string deobfuscation",
-        unlocks="Recover the stack/tight/decoded strings a plain `strings` pass misses — "
-                "strings built on the stack at runtime or produced by a decode routine — by "
-                "lightly emulating the constructing functions (FLARE FLOSS). On firmware/"
-                "malware these hidden strings (URLs, command templates, keys) are often the lead.",
-        # FLOSS emulates the decode routines IN-PROCESS in the sandbox (vivisect) — NO native
-        # execution of the target and NO network — so it relaxes no policy gate/tier. A
-        # heavy-analysis opt-in only (it is slower than `strings`).
-        security="",
-        policy_changing=False,
-        tier=None,
-        builds=("sandbox",),  # needs flare-floss in the sandbox image (rebuild required)
-        requires_note="needs the flare-floss dependency in the sandbox image (a rebuild). "
-                      "Obfuscated-string recovery applies to x86/amd64 PE targets; on ELF/"
-                      "foreign-arch it degrades to a static-strings-only pass.",
-    ),
-    Feature(
-        key="features.yara.enabled",
-        label="YARA pattern sweep",
-        unlocks="Sweep the project's targets and extracted firmware files against YARA rules "
-                "(a bundled high-signal set plus any `.yar` you drop in the rules dir) for "
-                "embedded credentials, known-bad library banners, weak-crypto constants, and "
-                "packer signatures — the fuzzy/structural complement to the exact-hash n-day link. "
-                "Drop your own rules in <HEXGRAPH_HOME>/yara_rules/; rule updates are a manual act "
-                "(the no-network invariant means HexGraph never fetches rules for you).",
-        # YARA is a static MATCH — it reads bytes, never executes the target, opens no socket —
-        # so it relaxes no policy gate/tier. Opt-in only because rule management is a surface and
-        # a sweep can be heavier than a single probe.
-        security="",
-        policy_changing=False,
-        tier=None,
-        builds=("sandbox",),  # needs yara + yara-python in the sandbox image (rebuild required)
-        requires_note="needs yara + yara-python in the sandbox image (a rebuild). Bundled rules "
-                      "ship in-package; add your own under <HEXGRAPH_HOME>/yara_rules/.",
-    ),
+    # FLOSS string deobfuscation (Phase 5A) and the YARA pattern sweep (Phase 5B) used to be
+    # opt-in features here, but they relax NO boundary (both are static — they read bytes, never
+    # execute the target, open no socket; FLOSS only emulates decode routines in-process). Like
+    # recon and binutils they now ride the static surface ALWAYS-ON, so the wizard no longer
+    # offers a toggle for them — they are simply available wherever the sandbox image is built.
     Feature(
         key="features.angr.enabled",
         label="angr symbolic execution (solver)",
