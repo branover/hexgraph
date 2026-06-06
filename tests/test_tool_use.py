@@ -168,6 +168,24 @@ def test_check_decompiler_tool_offline(hg_home, monkeypatch):
         assert "radare2" in out and "WORKING" in out
 
 
+def test_check_features_tool_offline(hg_home, monkeypatch):
+    """The in-loop agent tool: disabled features render plainly; an enabled-but-broken one
+    surfaces BROKEN + its remediation so the model can plan instead of failing blind."""
+    st.update_settings({"features.floss.enabled": True})
+    monkeypatch.setattr("hexgraph.engine.mcp_tools._image_smoke",
+                        lambda image, argv, timeout=30: (False, "image not built"))
+    with session_scope() as s:
+        p = create_project(s, name="t")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        ctx = ToolContext(session=s, project=p, target=t)
+        assert "check_features" in {sp.name for sp in available_tools(ctx)}
+        out = run_tool(ctx, "check_features", {})
+        assert "floss: BROKEN" in out
+        assert "just sandbox-build" in out
+        # a gated-off feature still appears, as DISABLED
+        assert "yara: DISABLED" in out
+
+
 def test_fuzz_tool_only_when_enabled(hg_home):
     with session_scope() as s:
         p = create_project(s, name="t2")

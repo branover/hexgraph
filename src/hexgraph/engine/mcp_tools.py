@@ -1401,6 +1401,135 @@ def check_decompiler() -> dict:
     }
 
 
+def _image_smoke(image: str, argv: list[str], *, timeout: int = 30) -> tuple[bool, str]:
+    """Run a TINY, side-effect-free command in `image` and report (ok, detail). No target
+    is mounted, `--network none`, auto-removed — this is a dependency presence check, not an
+    analysis run. Returns (False, reason) when Docker is down, the image is unbuilt, or the
+    command exits non-zero (the missing-dep / stale-image case). Never raises."""
+    import shutil
+    import subprocess
+
+    if not shutil.which("docker"):
+        return False, "the docker CLI is not on PATH"
+    if not _sandbox_image_built(image):
+        return False, f"the image '{image}' is not built"
+    try:
+        proc = subprocess.run(
+            ["docker", "run", "--rm", "--network", "none", "--entrypoint", "", image, *argv],
+            capture_output=True, timeout=timeout, text=True)
+    except subprocess.TimeoutExpired:
+        return False, f"the dependency check timed out after {timeout}s"
+    except Exception as exc:  # noqa: BLE001 — a smoke failure is a reportable fact, not a crash
+        return False, f"could not run the dependency check: {exc}"
+    if proc.returncode == 0:
+        return True, (proc.stdout or "").strip()
+    reason = (proc.stderr or proc.stdout or "non-zero exit").strip().splitlines()
+    return False, (reason[-1] if reason else f"exit {proc.returncode}")[:200]
+
+
+# Optional features whose RUNTIME availability can diverge from their `features.X.enabled`
+# gate — an enabled feature whose dependency/image is missing (the stale-image trap) reads
+# "available" in Settings yet errors on first use. Each entry pairs the dotted enabled-gate
+# path with a callable -> (ok, detail) that LIGHTLY checks the runtime dep (no analysis run)
+# and a remediation hint shown when enabled-but-broken. The gate→image/build mapping mirrors
+# setup_catalog (the single source of truth for which feature needs which image); we assert
+# that alignment in the guard test rather than re-deriving it here.
+def _feature_health_specs() -> list[dict]:
+    """The optional features to health-check, with their lightweight runtime probe. Built
+    lazily (it imports the sandbox/solver image selectors) so importing this module stays
+    cheap and a missing optional dep never breaks the catalog. Ghidra and P-Code emulation
+    share the with-Ghidra sandbox image and both defer to check_ghidra for their verdict."""
+    from hexgraph.engine.solver import angr_image
+    from hexgraph.sandbox.runner import sandbox_image
+
+    sbx = sandbox_image()
+
+    def _floss() -> tuple[bool, str]:
+        ok, detail = _image_smoke(sbx, ["floss", "--version"])
+        return ok, (f"FLOSS (flare-floss) is present in the sandbox image '{sbx}': {detail}"
+                    if ok else f"the `floss` CLI is missing from the sandbox image '{sbx}' ({detail})")
+
+    def _yara() -> tuple[bool, str]:
+        ok, detail = _image_smoke(sbx, ["python3", "-c", "import yara; print(yara.__version__)"])
+        return ok, (f"yara-python is importable in the sandbox image '{sbx}' (v{detail})"
+                    if ok else f"yara-python won't import in the sandbox image '{sbx}' ({detail})")
+
+    def _angr() -> tuple[bool, str]:
+        img = angr_image()
+        ok, detail = _image_smoke(img, ["python3", "-c", "import angr; print(angr.__version__)"])
+        return ok, (f"angr is importable in the angr image '{img}' (v{detail})"
+                    if ok else f"angr won't import in the angr image '{img}' ({detail})")
+
+    def _ghidra() -> tuple[bool, str]:
+        from hexgraph.engine.ghidra import check_ghidra
+
+        g = check_ghidra()
+        return bool(g.get("ok")), g.get("detail") or "Ghidra status could not be confirmed."
+
+    return [
+        {"feature": "floss", "gate": "features.floss.enabled", "check": _floss,
+         "remediation": "rebuild the sandbox image: `just sandbox-build`."},
+        {"feature": "yara", "gate": "features.yara.enabled", "check": _yara,
+         "remediation": "rebuild the sandbox image: `just sandbox-build`."},
+        {"feature": "angr", "gate": "features.angr.enabled", "check": _angr,
+         "remediation": "build the angr image: `just angr-build`."},
+        {"feature": "ghidra", "gate": "features.ghidra.enabled", "check": _ghidra,
+         "remediation": "rebuild the sandbox image with Ghidra: `just sandbox-build with_ghidra=1` "
+                        "(or, in bridge mode, start the Ghidra bridge server)."},
+        {"feature": "emulation", "gate": "features.emulation.enabled", "check": _ghidra,
+         "remediation": "needs Ghidra: enable features.ghidra and rebuild the sandbox image with "
+                        "`just sandbox-build with_ghidra=1`."},
+    ]
+
+
+def check_features() -> dict:
+    """Preflight the OPTIONAL features whose runtime dependency can diverge from their gate —
+    so you can tell 'gated off' from 'configured but broken' BEFORE spending a run. Each feature
+    reports a tri-state `state`: `disabled` (its features.X.enabled gate is off — nothing to
+    check), `available` (enabled AND its runtime dep/image is actually present), or `broken`
+    (enabled but the dep/image is MISSING — the stale-sandbox-image trap that silently errored
+    YARA/FLOSS in an eval) with an ACTIONABLE `remediation` hint. Covers floss, yara, angr, and
+    ghidra/emulation. The check is LIGHTWEIGHT (a tiny in-image dep probe, --network none, no
+    target, no analysis) and read-only. Returns {features: [{feature, gate, enabled, state,
+    detail, remediation?}], summary}. Run this in your orient step before reaching for an opt-in
+    tool (re_floss_strings / re_yara_sweep / re_solve_*) so you don't burn turns against a feature
+    that's configured but broken."""
+    from hexgraph import settings
+
+    rows: list[dict] = []
+    for spec in _feature_health_specs():
+        gate = spec["gate"]
+        try:
+            enabled = bool(settings.get(gate))
+        except Exception:  # noqa: BLE001 — a settings hiccup reads as "off", never crashes the check
+            enabled = False
+        if not enabled:
+            rows.append({"feature": spec["feature"], "gate": gate, "enabled": False,
+                         "state": "disabled",
+                         "detail": f"{spec['feature']} is gated off ({gate}=false); nothing to check."})
+            continue
+        try:
+            ok, detail = spec["check"]()
+        except Exception as exc:  # noqa: BLE001 — a broken dep is a reportable state, not a crash
+            ok, detail = False, f"the dependency check failed: {exc}"
+        row = {"feature": spec["feature"], "gate": gate, "enabled": True,
+               "state": "available" if ok else "broken", "detail": detail}
+        if not ok:
+            row["remediation"] = spec["remediation"]
+        rows.append(row)
+
+    broken = [r["feature"] for r in rows if r["state"] == "broken"]
+    available = [r["feature"] for r in rows if r["state"] == "available"]
+    if broken:
+        summary = (f"{len(broken)} enabled feature(s) BROKEN (dep/image missing): "
+                   f"{', '.join(broken)} — see each row's remediation.")
+    elif available:
+        summary = f"all enabled features available: {', '.join(available)}."
+    else:
+        summary = "no optional features enabled."
+    return {"features": rows, "summary": summary}
+
+
 def get_schemas() -> dict:
     """The write-API contract: allowed enums + the Finding shape. Read this before
     finding_record / graph_create_node / graph_create_edge / graph_annotate to avoid guessing."""

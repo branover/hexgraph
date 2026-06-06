@@ -43,8 +43,9 @@ agent's context small:
 
 - **read** covers the listing and inspection verbs across the domains, `graph_get_node`, `finding_get`, `re_xrefs`, `graph_list_sockets`,
   `fs_list`/`fs_read_file`, `src_list_trees`/`src_read_file`, `fuzz_status`,
-  `src_list_builds`/`src_build_log`/`fuzz_coverage_diff`, and the observation read verbs
-  `obs_list`/`obs_get`/`obs_search` (see the next section).
+  `src_list_builds`/`src_build_log`/`fuzz_coverage_diff`, the observation read verbs
+  `obs_list`/`obs_get`/`obs_search` (see the next section), and the `meta` health checks
+  `meta_check_decompiler` and `meta_check_features` (preflight the optional features before you lean on one).
 - **write** covers `proj_create` (start an empty, source-first project), `finding_record`,
   `finding_update`, `graph_create_node`, `graph_create_edge`, `graph_create_socket`,
   `graph_create_hypothesis`, `finding_link_same_code`, `finding_propagate`, `src_import_tree`,
@@ -61,6 +62,15 @@ agent's context small:
 Call **`meta_get_schemas` first.** It advertises the Finding shape, the node and edge vocabulary, the
 per-type node-attribute schemas (including the sink-versus-symbol rule), the edge-attribute schemas,
 the socket kinds, and the active decompiler.
+
+When you plan to use an opt-in feature, run **`meta_check_features`** during your orient step. It
+preflights the optional features whose runtime dependency can drift from their setting (FLOSS, YARA,
+angr, and Ghidra/emulation) and reports each as `disabled` (the gate is off), `available` (on and its
+dependency is actually present), or `broken` (on but the dependency or image is missing). That last
+state is the one worth catching early: an enabled feature whose sandbox image is stale reads as on in
+Settings yet errors the first time you call it, and the check hands you the exact rebuild command
+(`just sandbox-build`, `just angr-build`) instead of letting you find out mid-analysis. The companion
+**`meta_check_decompiler`** does the same honest verification for whichever decompiler is configured.
 
 ```bash
 hexgraph mcp install [--agent claude|codex|gemini]   # print registration steps
