@@ -83,9 +83,12 @@ _STATIC_SPECS = [
              "in the graph; adds no new graph nodes.",
              {"type": "object", "properties": {"symbol": {"type": "string"}}}),
     ToolSpec("call_graph", "The target's call graph — who-calls-whom across the program, or (with a "
-             "`function`) the neighbourhood rooted at it out to `depth` (default 2). QUERY: records a "
-             "call_graph Observation and SELF-WIRES `calls` edges among functions ALREADY in the graph "
-             "(creates no new nodes — promote functions first to grow the wired graph).",
+             "`function`) the neighbourhood rooted at it out to `depth` (default 2). Returns the "
+             "whole-program graph, falling back to the recon-computed graph in the Observation store "
+             "when the probe path comes up empty (so you see the structure without promoting functions "
+             "one by one). QUERY: records a call_graph Observation and also SELF-WIRES `calls` edges "
+             "among functions ALREADY in the graph (creates no new nodes; promote functions to curate "
+             "the wired graph).",
              {"type": "object", "properties": {"function": {"type": "string"},
                                                "depth": {"type": "integer"}}}),
     ToolSpec("function_xrefs", "Both directions for ONE function: its CALLERS (who calls it) and its "
@@ -704,17 +707,49 @@ def _bfs_subgraph(edges: list, root: str, depth: int) -> list[tuple[str, str]]:
     return out
 
 
+def _recon_call_graph_edges(ctx: ToolContext) -> list:
+    """The program call graph recon already computed, read back from the Observation
+    substrate. Ghidra's `enrich_recon` records the whole-program graph as a `call_graph`
+    Observation (`{"functions": [{"name", "callees": [...]}]}`); the radare2 xrefs probe used
+    by the QUERY path can come up empty on a binary recon already mapped richly, so this is the
+    fallback so the breadth-first 'see the structure' use case isn't blank. Returns `[caller,
+    callee]` pairs (read-only; promotes nothing)."""
+    from hexgraph.engine import observations as O
+
+    rows = O.list_observations(ctx.session, ctx.target.id, tool="enrich_recon", kind="call_graph")
+    if not rows:
+        return []
+    full = O.get_observation(ctx.session, rows[0]["id"]) or {}
+    edges = []
+    for rec in (full.get("payload") or {}).get("functions", []) or []:
+        caller = rec.get("name")
+        for callee in rec.get("callees", []) or []:
+            if caller and callee:
+                edges.append([caller, callee])
+    return edges
+
+
 def _call_graph_tool(ctx: ToolContext, function: str | None, depth) -> str:
     """The whole-program call graph (or the neighbourhood rooted at `function`). QUERY: records
     a call_graph Observation whose facts SELF-WIRE `calls` edges among already-curated functions
-    (both-endpoints-safe); creates no new nodes."""
+    (both-endpoints-safe); creates no new nodes. Falls back to the recon-computed graph in the
+    Observation substrate when the probe path comes up empty."""
     key = f"callgraph:{function or '*'}:{depth or ''}"
     if key in ctx.cache:
         return ctx.cache[key]
     out, err = _run_xrefs_probe(ctx, None, "callgraph")
-    if err:
-        return err
-    edges = out.get("calls") or []
+    edges = (out.get("calls") or []) if not err else []
+    source_note = ""
+    if not edges:
+        # The probe found nothing (radare2 missed the graph, or Docker is down). Surface the
+        # program graph recon already computed into the substrate, so breadth-first structure
+        # exploration isn't blank until functions are promoted one by one.
+        recon_edges = _recon_call_graph_edges(ctx)
+        if recon_edges:
+            edges = recon_edges
+            source_note = " (from recon substrate — promote functions to curate the wired graph)"
+        elif err:
+            return err
     # Record as a call_graph Observation in the per-caller shape the extractor reads, so the
     # `A calls B` facts wire edges among functions ALREADY promoted (no new nodes). The payload
     # is the whole-program graph regardless of `function` (the root only shapes the returned
@@ -730,13 +765,13 @@ def _call_graph_tool(ctx: ToolContext, function: str | None, depth) -> str:
         if not sub:
             ctx.cache[key] = f"{function!r} not found in the call graph (or it calls nothing)"
             return ctx.cache[key]
-        text = f"call graph from {function} (depth {d}, {len(sub)} edges):\n" + \
+        text = f"call graph from {function} (depth {d}, {len(sub)} edges){source_note}:\n" + \
                "\n".join(f"- {a} → {b}" for a, b in sub)
         ctx.cache[key] = _clip(text)
         return ctx.cache[key]
     shown = edges[:200]
     note = f"\n  … and {len(edges) - len(shown)} more edges" if len(edges) > len(shown) else ""
-    text = f"call graph ({len(edges)} edges):\n" + \
+    text = f"call graph ({len(edges)} edges){source_note}:\n" + \
            "\n".join(f"- {p[0]} → {p[1]}" for p in shown if len(p) == 2) + note
     ctx.cache[key] = _clip(text)
     return ctx.cache[key]

@@ -140,6 +140,49 @@ def test_call_graph_rooted_renders_subgraph(hg_home, monkeypatch):
         assert fake.calls[-1] == ("xrefs_probe.py", ["--mode", "callgraph"])
 
 
+def _seed_recon_call_graph(s, p, t):
+    """Seed the whole-program graph recon's Ghidra enrich pass records into the substrate."""
+    from hexgraph.engine import observations as O
+
+    O.record_observation(
+        s, project_id=p.id, target_id=t.id, source="ghidra-enrich", tool="enrich_recon",
+        args={}, result_kind="call_graph",
+        payload={"functions": [{"name": "main", "callees": ["parse", "dispatch"]},
+                               {"name": "parse", "callees": ["helper"]}]},
+        summary="3 call edges", content_hash="abc123")
+
+
+def test_call_graph_falls_back_to_recon_substrate_when_probe_empty(hg_home, monkeypatch):
+    """Finding NC: the probe path (radare2 xrefs) can come up empty on a binary recon already
+    mapped with Ghidra. The verb then surfaces the program graph recon recorded into the
+    Observation substrate, instead of returning nothing — read-only, no graph mutation."""
+    _wire(monkeypatch, {"tool": "xrefs_probe", "mode": "callgraph", "calls": [], "total": 0})
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        _seed_recon_call_graph(s, p, t)
+        nb = s.query(Node).count()
+        out = run_tool(ctx, "call_graph", {})
+        assert "main → parse" in out and "main → dispatch" in out and "parse → helper" in out
+        assert "recon substrate" in out  # the source is labelled honestly
+        assert s.query(Node).count() == nb  # QUERY: no new nodes
+        # Rooted view over the substrate edges respects depth.
+        rooted = run_tool(ctx, "call_graph", {"function": "main", "depth": 1})
+        assert "main → parse" in rooted and "main → dispatch" in rooted
+        assert "parse → helper" not in rooted
+
+
+def test_call_graph_prefers_probe_edges_over_recon_substrate(hg_home, monkeypatch):
+    """When the probe DOES return edges, they win — the recon substrate is only a fallback."""
+    _wire(monkeypatch, {"tool": "xrefs_probe", "mode": "callgraph",
+                        "calls": [["a", "b"]], "total": 1})
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        _seed_recon_call_graph(s, p, t)
+        out = run_tool(ctx, "call_graph", {})
+        assert "a → b" in out
+        assert "recon substrate" not in out and "main → parse" not in out
+
+
 # --- pure helpers (no sandbox) -----------------------------------------------
 
 def test_bfs_subgraph_is_depth_bounded_and_normalized():
