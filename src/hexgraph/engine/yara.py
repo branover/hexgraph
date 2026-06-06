@@ -391,7 +391,8 @@ def sweep_project(
         .all()
     )
 
-    scanned = 0
+    scanned = 0  # artifacts ATTEMPTED (ok + errored) — kept for backward compat
+    scanned_ok = 0  # artifacts the probe actually scanned cleanly
     errors: list[dict] = []
     total_matches = 0
     total_promoted = 0
@@ -405,6 +406,7 @@ def sweep_project(
             if res.get("error"):
                 errors.append({"target_id": t.id, "name": t.name, "error": res["error"]})
             else:
+                scanned_ok += 1
                 mc = res.get("facts", {}).get("match_count", 0)
                 pc = len(res.get("promoted") or [])
                 total_matches += mc
@@ -422,6 +424,7 @@ def sweep_project(
                 errors.append({"target_id": t.id, "name": t.name, "file": rel,
                                "error": res["error"]})
                 continue
+            scanned_ok += 1
             mc = res.get("facts", {}).get("match_count", 0)
             pc = len(res.get("promoted") or [])
             total_matches += mc
@@ -430,15 +433,83 @@ def sweep_project(
                 per_target.append({"target_id": t.id, "name": t.name, "file": rel,
                                    "match_count": mc, "promoted": res.get("promoted")})
 
-    return {
+    return _assemble_sweep_result(
+        scanned=scanned,
+        scanned_ok=scanned_ok,
+        targets=len(targets),
+        total_matches=total_matches,
+        total_promoted=total_promoted,
+        per_target=per_target,
+        errors=errors,
+    )
+
+
+def _assemble_sweep_result(
+    *,
+    scanned: int,
+    scanned_ok: int,
+    targets: int,
+    total_matches: int,
+    total_promoted: int,
+    per_target: list[dict],
+    errors: list[dict],
+) -> dict:
+    """Assemble the sweep roll-up so the OUTCOME is honest — a clean scan and a scan where
+    every artifact errored must NEVER look the same.
+
+    The bug this guards against: a sweep whose every artifact failed (e.g. the runtime YARA
+    dep was missing, so each probe raised) would still return `match_count: 0, hits: []` with
+    the failures buried only in `errors[]` — indistinguishable from a genuinely clean sweep, a
+    dangerous false all-clear. So we surface `scanned_ok` vs `errored`, mark an all-errored
+    sweep as a `status: "error"` outcome (with a top-level `error` reason bubbled up from a
+    representative per-file failure), and a partial as `status: "partial"` (some scanned, some
+    errored), reserving the bare `match_count: 0` shape for a real clean scan.
+    """
+    errored = len(errors)
+    result: dict = {
         "scanned": scanned,
-        "targets": len(targets),
+        "scanned_ok": scanned_ok,
+        "errored": errored,
+        "targets": targets,
         "match_count": total_matches,
         "promoted_count": total_promoted,
         "hits": per_target,
         "errors": errors,
         "reuse_hint": _REUSE_HINT,
     }
+
+    if scanned == 0:
+        # Nothing to scan (no byte targets / all archived) — not an error, but not "clean"
+        # in any meaningful sense either; say so plainly.
+        result["status"] = "empty"
+        return result
+
+    if scanned_ok == 0:
+        # EVERY artifact errored — this is NOT a clean 0-match scan. Make it an explicit error
+        # outcome and bubble a representative reason into the summary so the agent/UI can't
+        # mistake it for "clean" (the reason was previously only in errors[]).
+        reason = errors[0].get("error") if errors else "all scanned artifacts errored"
+        result["status"] = "error"
+        result["error"] = (
+            f"YARA sweep produced NO usable result: all {errored} scanned artifact(s) errored "
+            f"(e.g. {reason}). This is NOT a clean scan — fix the underlying error and re-run."
+        )
+        return result
+
+    if errored:
+        # Partial: report both so "0 matches in the N we COULD scan, but M errored" is
+        # distinguishable from a fully clean sweep.
+        reason = errors[0].get("error")
+        result["status"] = "partial"
+        result["partial_note"] = (
+            f"{scanned_ok} artifact(s) scanned cleanly, {errored} errored "
+            f"(e.g. {reason}) — the match counts cover only the {scanned_ok} scanned, "
+            f"not the {errored} that failed."
+        )
+        return result
+
+    result["status"] = "ok"
+    return result
 
 
 # --- extracted-firmware-file enumeration --------------------------------------

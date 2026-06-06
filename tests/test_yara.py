@@ -334,6 +334,75 @@ def test_sweep_skips_archived_targets(hg_home, monkeypatch):
         s.flush()
         res = sweep_project(s, p)
         assert res.get("error") is None and res["scanned"] == 0 and res["targets"] == 0
+        # nothing scannable is not a clean scan either — say so plainly, never as match_count 0 clean
+        assert res["status"] == "empty"
+        assert res["scanned_ok"] == 0 and res["errored"] == 0
+
+
+def test_sweep_all_errored_does_not_look_clean(hg_home, monkeypatch):
+    """The honesty fix: when EVERY scanned artifact errored (e.g. the runtime YARA dep was
+    missing so each probe raised ModuleNotFoundError), the sweep must NOT present as a clean
+    match_count 0 scan — it must be an explicit error outcome with the reason bubbled up, not
+    buried only in errors[]."""
+    _enable(hg_home)
+    # the probe payload is a per-file error every time (the all-errored case)
+    _wire(monkeypatch, result={"error": "ModuleNotFoundError: No module named 'yara'"})
+    with session_scope() as s:
+        p, t = _seed(s, name="ya-all-err")
+        t2 = ingest_file(s, p, fixture_path("libupnp.so"), name="libupnp")
+        t2.metadata_json = {**(t2.metadata_json or {}), "sha256": "cafef00d"}
+        s.flush()
+        res = sweep_project(s, p)
+        s.flush()
+        # match_count 0 alone would be a dangerous false all-clear — it must carry an error
+        assert res["match_count"] == 0
+        assert res["status"] == "error"
+        assert "error" in res and res["error"]
+        # the representative per-file reason is surfaced in the summary, not only in errors[]
+        assert "ModuleNotFoundError" in res["error"]
+        # counts make the outcome legible: nothing scanned cleanly, everything errored
+        assert res["scanned_ok"] == 0
+        assert res["errored"] == res["scanned"] == 2
+        # the underlying per-file errors are still listed
+        assert len(res["errors"]) == 2
+        # nothing was promoted (no fabricated clean result)
+        assert s.query(Node).filter(Node.node_type == NodeType.pattern.value).count() == 0
+
+
+def test_sweep_partial_reports_both_ok_and_errored(hg_home, monkeypatch):
+    """A partial outcome (some artifacts scanned cleanly, some errored) reports both, so
+    '0 found in the N we COULD scan, but M errored' is distinguishable from a clean sweep."""
+    _enable(hg_home)
+
+    class _FlakyExec:
+        """Errors on the first artifact, scans clean (0 matches) on the rest."""
+
+        def __init__(self):
+            self.calls = []
+
+        def run_json_probe(self, probe, path, **kw):
+            self.calls.append(path)
+            if len(self.calls) == 1:
+                return {"error": "boom on the first artifact"}
+            return _NO_MATCH
+
+    flaky = _FlakyExec()
+    monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
+    monkeypatch.setattr("hexgraph.sandbox.executor.get_executor", lambda *a, **k: flaky)
+    with session_scope() as s:
+        p, t = _seed(s, name="ya-partial")
+        t2 = ingest_file(s, p, fixture_path("libupnp.so"), name="libupnp")
+        t2.metadata_json = {**(t2.metadata_json or {}), "sha256": "cafef00d"}
+        s.flush()
+        res = sweep_project(s, p)
+        s.flush()
+        assert res["scanned"] == 2
+        assert res["scanned_ok"] == 1 and res["errored"] == 1
+        assert res["status"] == "partial"
+        assert res["match_count"] == 0  # the one clean scan found nothing
+        # a partial is NOT a flat error, but it MUST advertise the errored count up top
+        assert res.get("error") is None
+        assert "partial_note" in res and "1 errored" in res["partial_note"]
 
 
 # --- the rules story: bundled rules load + a user .yar is picked up ----------

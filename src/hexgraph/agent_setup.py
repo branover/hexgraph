@@ -502,8 +502,10 @@ is **record → explore → verify → update**:
    finding_id, "supports")`** to connect the finding to it (this also drives the
    hypothesis's status — it's how you later confirm it).
 2. **Explore → keep adding.** As you decompile/trace, wire the path with
-   `graph_create_edge`: `calls`, `references`, `reads`/`writes`, and **`taints`** for the
-   untrusted-input → sink dataflow (input node → parser → sink node). **Edges carry
+   `graph_create_edge` (the relationship goes in the required **`type`** param — e.g.
+   `type="calls"`, not `edge_type=`): `calls`, `references`, `reads`/`writes`, and
+   **`taints`** for the untrusted-input → sink dataflow (input node → parser → sink
+   node). **Edges carry
    attributes** — put `call_sites`/`arg_constraints` on a `calls` edge, an `address`
    on a `taints`/`bypasses` edge (see meta_get_schemas → edge_attribute_schemas;
    `graph_create_edge(merge=True)` accumulates list attrs). For network services, model
