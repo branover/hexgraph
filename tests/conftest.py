@@ -101,6 +101,39 @@ def _yara_ready() -> bool:
 YARA_READY = _yara_ready()
 
 
+def _angr_ready() -> bool:
+    """True if Docker is up AND the DEDICATED angr image is present and actually carries angr.
+
+    angr ships in its OWN optional image (docker/angr.Dockerfile, `just angr-build`), NOT the base
+    sandbox (D10), so the Docker-gated solver e2e must skip cleanly when that image is absent (a
+    stock checkout, or a worktree that hasn't built it). HEXGRAPH_ANGR_IMAGE overrides the tag for
+    worktrees. We probe the image for the `angr` Python module so a half-built image also skips."""
+    from hexgraph.sandbox.runner import docker_available
+
+    if not docker_available():
+        return False
+    image = os.environ.get("HEXGRAPH_ANGR_IMAGE", "hexgraph-angr:latest")
+    if subprocess.run(["docker", "image", "inspect", image], capture_output=True).returncode != 0:
+        return False
+    r = subprocess.run(
+        ["docker", "run", "--rm", "--entrypoint", "python3", image, "-c", "import angr"],
+        capture_output=True,
+    )
+    return r.returncode == 0
+
+
+ANGR_READY = _angr_ready()
+
+
+@pytest.fixture
+def angr_image():
+    """Skips unless the dedicated angr image is present and carries angr — the Docker-gated
+    solver e2e gate (like floss/yara/fuzz image fixtures). Returns the image tag."""
+    if not ANGR_READY:
+        pytest.skip("requires the dedicated angr image (`just angr-build`, docker/angr.Dockerfile)")
+    return os.environ.get("HEXGRAPH_ANGR_IMAGE", "hexgraph-angr:latest")
+
+
 @pytest.fixture(autouse=True)
 def _restore_socket_guard():
     """The egress probes' `_egress.install_socket_guard` monkeypatches global stdlib socket

@@ -90,6 +90,13 @@ BUILD_STEPS: dict[str, BuildStep] = {
                  "--build-arg", "WITH_CROSS=0", "-t", "hexgraph-build:latest", "."],
         cost="large, several minutes",
     ),
+    "angr": BuildStep(
+        key="angr",
+        label="angr symbolic-execution (solver) image (angr + z3 + claripy/pyvex/cle)",
+        recipe="angr-build",
+        command=["docker", "build", "-f", "docker/angr.Dockerfile", "-t", "hexgraph-angr:latest", "."],
+        cost="large (the heaviest Phase-5 dependency), several minutes",
+    ),
     "firmae": BuildStep(
         key="firmae",
         label="FirmAE rehosting image (vendor firmware blobs; privileged)",
@@ -216,10 +223,12 @@ FEATURES: tuple[Feature, ...] = (
                  "policy tier.",
         policy_changing=False,  # gated like emulation; relaxes no tier — heavy-analysis opt-in only
         tier=None,
-        builds=("sandbox",),  # needs the angr pip stack in the sandbox image (lands in 5C-B)
-        requires_note="needs the angr pip stack in the sandbox image (a rebuild, added in Phase "
-                      "5C-B); until then the solver seam degrades to NullSolver (nothing solved, "
-                      "nothing fabricated).",
+        builds=("angr",),  # the DEDICATED, optional angr image (D10) — NOT the base sandbox
+        requires_note="needs the dedicated angr image (`just angr-build`, docker/angr.Dockerfile) "
+                      "— the heaviest Phase-5 dependency, so it ships as its own optional image "
+                      "rather than bloating the base sandbox. With the gate off (or the image "
+                      "absent) the solver seam degrades to NullSolver (nothing solved, nothing "
+                      "fabricated).",
     ),
     Feature(
         key="features.poc.enabled",

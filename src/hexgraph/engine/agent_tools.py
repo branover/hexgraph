@@ -177,10 +177,45 @@ _YARA_SPEC = ToolSpec(
 )
 
 
+# angr solving is advertised ONLY when features.angr is enabled (like floss/yara): it is opt-in
+# heavy compute (symbolic execution), so it stays out of the model's tool list until enabled.
+_SOLVE_INPUT_SPEC = ToolSpec(
+    "solve_reaching_input", "SOLVE for a concrete input that DRIVES execution to a sink (e.g. "
+    "system/execve), via angr symbolic execution in the sandbox — the strongest STATIC claim "
+    "short of a live PoC, because it produces a concrete reaching input. PROMOTE: on success this "
+    "promotes the grounded path (the sink + the enclosing function + a `calls` edge) and emits a "
+    "high-confidence `vulnerability` finding whose evidence.reproducer is the solved input (hex), "
+    "assurance input_reachable/static. `sink_func` (the dangerous callee to reach, e.g. 'system') "
+    "is the main knob; optionally `function` (the enclosing routine) and `budget` (quick|default|"
+    "deep). angr is HEAVY + slow and the input is SOLVED (often non-ASCII bytes a guess can't hit) "
+    "— check list_observations(target_id, kind='solver') first to reuse a prior solve. Returns "
+    "None/unsolved cleanly when no reaching input exists within the budget (nothing fabricated).",
+    {"type": "object", "properties": {
+        "sink_func": {"type": "string", "description": "the dangerous callee to reach (e.g. 'system')"},
+        "function": {"type": "string", "description": "the enclosing function to explore from (optional)"},
+        "budget": {"type": "string", "description": "coarse resource tier: quick|default|deep"}},
+     "required": ["sink_func"]},
+)
+_SOLVE_CONSTRAINT_SPEC = ToolSpec(
+    "solve_constraint", "Recover a VALUE/input that SATISFIES a single check (e.g. the secret a "
+    "strcmp compares against, or a serial a gate validates) via angr — the symbolic analogue of "
+    "recover_constant. ENRICH: on success annotates the function node with the recovered value "
+    "(attrs.recovered_value / satisfying_input_hex) and records a `solver` Observation; adds no new "
+    "graph nodes. Single-check solving ONLY (not whole-program exploration). `function` names the "
+    "routine; optionally `check_addr` pins the pass block, or `sink_func` when the check gates a "
+    "sink; `budget` is quick|default|deep. Opt-in (features.angr); slow — check list_observations first.",
+    {"type": "object", "properties": {
+        "function": {"type": "string", "description": "the routine containing the check"},
+        "check_addr": {"type": "string", "description": "hex address of the pass/success block (optional)"},
+        "sink_func": {"type": "string", "description": "a sink the check gates, if the pass block is unknown (optional)"},
+        "budget": {"type": "string", "description": "coarse resource tier: quick|default|deep"}}},
+)
+
+
 def available_tools(ctx: ToolContext) -> list[ToolSpec]:
     """Tool specs for this target. fuzz_function only when the policy permits execution
     (fuzzing enabled in Settings); floss_strings only when features.floss is enabled;
-    yara_scan only when features.yara is enabled."""
+    yara_scan only when features.yara is enabled; the solve_* verbs only when features.angr is."""
     specs = list(_STATIC_SPECS)
     try:
         from hexgraph.policy import current_policy
@@ -201,6 +236,14 @@ def available_tools(ctx: ToolContext) -> list[ToolSpec]:
 
         if yara_enabled():
             specs.append(_YARA_SPEC)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from hexgraph.engine.solver import solver_enabled
+
+        if solver_enabled():
+            specs.append(_SOLVE_INPUT_SPEC)
+            specs.append(_SOLVE_CONSTRAINT_SPEC)
     except Exception:  # noqa: BLE001
         pass
     return specs
@@ -429,6 +472,10 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
             return _floss(ctx, args)
         if name == "yara_scan":
             return _yara(ctx, args)
+        if name == "solve_reaching_input":
+            return _solve_input(ctx, args)
+        if name == "solve_constraint":
+            return _solve_constraint(ctx, args)
         if name == "list_functions":
             out = _decomp(ctx, None)
             if out.get("error"):
@@ -684,6 +731,67 @@ def _yara(ctx: ToolContext, args: dict) -> str:
         lines.append("(no rule matched; see the yara_matches Observation for the rule files swept)")
     ctx.cache[key] = _clip("\n".join(lines))
     return ctx.cache[key]
+
+
+def _solve_input(ctx: ToolContext, args: dict) -> str:
+    """angr-solve for an input reaching a sink (the engine records the Observation, promotes the
+    grounded path, and emits the vulnerability finding) and render it as text. Opt-in: refuses
+    cleanly if features.angr is off."""
+    sink_func = args.get("sink_func")
+    if not sink_func or not isinstance(sink_func, str):
+        return "error: 'sink_func' (the dangerous callee to reach, e.g. 'system') is required"
+    function = args.get("function") if isinstance(args.get("function"), str) else None
+    budget = args.get("budget") if isinstance(args.get("budget"), str) else None
+    from hexgraph.engine.solving import solve_reaching_input
+
+    out = solve_reaching_input(ctx.session, ctx.project, ctx.target,
+                               sink_func=sink_func, function=function, budget=budget,
+                               source="agent")
+    if out.get("error"):
+        return out["error"]
+    if not out.get("solved"):
+        return (f"// angr: no input reaching {sink_func!r} on {ctx.target.name} within the budget "
+                f"(unreachable/unsatisfiable, or a step/time/state cap was hit). "
+                f"{out.get('reason', '')}")
+    return _clip("\n".join([
+        f"// angr solved a reaching input for {sink_func!r} on {ctx.target.name}"
+        + (" (cached)" if out.get("cached") else ""),
+        f"reaching input (hex): {out.get('concrete_input')}",
+        f"reaching input (repr): {out.get('concrete_input_repr')}",
+        f"emitted vulnerability finding: {out.get('finding_id')} "
+        f"(assurance input_reachable/static; the input is the reproducer).",
+        f"path basic blocks: {', '.join((out.get('path_addrs') or [])[:12])}",
+    ]))
+
+
+def _solve_constraint(ctx: ToolContext, args: dict) -> str:
+    """angr-solve for a value satisfying a check (annotates the function node) and render it as
+    text. Opt-in: refuses cleanly if features.angr is off."""
+    function = args.get("function") if isinstance(args.get("function"), str) else None
+    check_addr = args.get("check_addr") if isinstance(args.get("check_addr"), str) else None
+    sink_func = args.get("sink_func") if isinstance(args.get("sink_func"), str) else None
+    budget = args.get("budget") if isinstance(args.get("budget"), str) else None
+    if not (function or check_addr or sink_func):
+        return "error: a check selector is required ('function', 'check_addr', or 'sink_func')"
+    from hexgraph.engine.solving import solve_constraint
+
+    out = solve_constraint(ctx.session, ctx.project, ctx.target, function=function,
+                           check_addr=check_addr, sink_func=sink_func, budget=budget, source="agent")
+    if out.get("error"):
+        return out["error"]
+    if not out.get("solved"):
+        return (f"// angr: no satisfying value for {function or check_addr or sink_func} within "
+                f"the budget. {out.get('reason', '')}")
+    lines = [f"// angr recovered a satisfying value/input on {ctx.target.name}"
+             + (" (cached)" if out.get("cached") else "")]
+    if out.get("recovered_value") is not None:
+        lines.append(f"recovered value: {out.get('recovered_value')} ({out.get('recovered_value_hex')})")
+    if out.get("satisfying_input"):
+        lines.append(f"satisfying input (hex): {out.get('satisfying_input')}")
+    if function:
+        lines.append(f"annotated function node {out.get('function_node_id')} "
+                     f"(attrs.recovered_value / satisfying_input_hex).")
+    return _clip("\n".join(lines))
 
 
 def _xrefs(ctx: ToolContext, symbol: str | None) -> str:
