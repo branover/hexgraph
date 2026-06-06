@@ -102,9 +102,11 @@ The fuller, user-facing tour of all this lives in [observations.md](observations
 `annotate` lets a driving agent attach a note, a tag, a type declaration, or a function
 **rename** to a graph entity, and an agent's annotation lands as a *proposal*. It is recorded
 against the node, but on its own it changes nothing else. The rename is where that distinction
-matters most. When you confirm a proposed rename in the web UI, HexGraph writes it into the
-persistent Ghidra project and re-decompiles, so the new name sticks for every later decompile
-and the graph reflects the fresh result. That approval is deliberately a person's call rather
+matters most. When you confirm a proposed rename in the web UI, the graph takes the new name;
+and when headless Ghidra is the active backend, HexGraph also writes the rename back into the
+persistent Ghidra project and re-decompiles, so the name sticks for every later decompile and
+the graph reflects the fresh result (with the radare2 backend there is no project to update, so
+the rename lands on the graph alone). That approval is deliberately a person's call rather
 than the agent's: there is no MCP verb for an agent to confirm its own rename. So the loop is
 simply the agent proposes, you confirm, and the round-trip completes — the agent is never left
 guessing whether its rename took, and a human stays in the loop on the names that become the
