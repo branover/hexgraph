@@ -109,12 +109,12 @@ def test_verb_not_advertised_when_off_but_appears_when_on(hg_home):
     from hexgraph.engine import mcp_tools as M
 
     def _present():
-        return any(t["name"] == "floss_strings" for t in M.catalog({"read"}))
+        return any(t["name"] == "re_floss_strings" for t in M.catalog({"read"}))
 
     assert _present() is False
     _enable(hg_home)
     assert _present() is True
-    spec = next(t for t in M.catalog({"read"}) if t["name"] == "floss_strings")
+    spec = next(t for t in M.catalog({"read"}) if t["name"] == "re_floss_strings")
     assert callable(spec["fn"])
     assert spec["schema"]["properties"].keys() >= {"target_id", "min_length"}
 
