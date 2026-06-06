@@ -143,5 +143,6 @@ None of these tools writes findings on its own. Each records its work as an Obse
 analyzed, which means a repeat call is deduplicated rather than re-run, and you can always check
 `obs_list` before paying for a heavy pass again. What lands in the curated graph is what you promote: a
 recovered string worth tracking, a YARA match worth investigating, a solved input that proves a
-reachable bug. angr is the one exception that promotes a grounded path and a finding when it succeeds,
-because at that point the evidence is concrete. The rest stay leads until you decide they are more.
+reachable bug. angr's reaching-input solve is the one exception: when it succeeds it promotes a grounded
+path and a finding, because at that point the evidence is concrete (its constraint solve only
+annotates the function with the value it recovered). The rest stay leads until you decide they are more.
