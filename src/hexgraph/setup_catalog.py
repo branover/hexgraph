@@ -233,7 +233,7 @@ FEATURES: tuple[Feature, ...] = (
     Feature(
         key="features.poc.enabled",
         label="PoC verification (execute the target)",
-        unlocks="The `poc` task + `verify_poc` tool run an attacker-style input against "
+        unlocks="The `poc` task + `finding_verify_poc` tool run an attacker-style input against "
                 "the target and confirm exploitation via an unforgeable nonce oracle.",
         security="RELAXES THE STATIC-ONLY DEFAULT: this flips the analysis policy to permit "
                  "EXECUTING the target inside the sandbox (raises the sandboxed-execution "
