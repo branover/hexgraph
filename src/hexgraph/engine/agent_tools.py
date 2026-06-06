@@ -582,10 +582,11 @@ def _floss(ctx: ToolContext, args: dict) -> str:
             min_length = int(raw_len)
         except (TypeError, ValueError):
             return "error: 'min_length' must be an integer"
-    key = f"floss:{min_length if min_length is not None else '*'}"
+    from hexgraph.engine.floss import collect_floss_strings, effective_min_length
+
+    key = f"floss:{effective_min_length(min_length)}"
     if key in ctx.cache:
         return ctx.cache[key]
-    from hexgraph.engine.floss import collect_floss_strings
 
     out = collect_floss_strings(ctx.session, ctx.project, ctx.target,
                                 min_length=min_length, source="agent")

@@ -197,8 +197,9 @@ def collect(path: str, *, min_length: int) -> dict:
             return _assemble(json.loads(out), degraded=False, note=None, min_length=min_length)
         # A PE that FLOSS still couldn't fully analyze (a corrupt/foreign-machine PE):
         # fall back to a static-only pass rather than failing outright.
-        note = ("FLOSS full analysis failed; recovered static strings only "
-                f"({(err or 'unknown error').strip().splitlines()[-1][:200]})")
+        _err_lines = (err or "").strip().splitlines()
+        _detail = _err_lines[-1][:200] if _err_lines else "unknown error"
+        note = f"FLOSS full analysis failed; recovered static strings only ({_detail})"
         rc2, out2, err2 = _run_floss(path, min_length=min_length, only=["static"])
         if rc2 == 0 and out2.strip():
             return _assemble(json.loads(out2), degraded=True, note=note, min_length=min_length)

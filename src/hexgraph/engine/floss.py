@@ -28,6 +28,27 @@ from hexgraph.engine import observations as O
 
 RESULT_KIND = "floss_strings"
 
+# FLOSS's minimum-string-length knob (the one agent-influenced parameter, design §2.8).
+# Mirror the probe's clamp HERE too, so the Observation dedup key is the EFFECTIVE value:
+# raw inputs that clamp to the same floor (or None vs the explicit default) are the SAME
+# slow pass and must not record duplicate Observations / re-run FLOSS.
+_MIN_LEN_FLOOR = 4
+_MIN_LEN_CEIL = 64
+_DEFAULT_MIN_LEN = 4
+
+
+def effective_min_length(min_length: int | None) -> int:
+    """The min_length actually used: None -> default, else clamped to [floor, ceil]
+    (matching floss_probe). Used for both the probe arg and the dedup/cache key, so
+    equivalent requests resolve to one slow pass."""
+    if min_length is None:
+        return _DEFAULT_MIN_LEN
+    try:
+        return max(_MIN_LEN_FLOOR, min(_MIN_LEN_CEIL, int(min_length)))
+    except (TypeError, ValueError):
+        return _DEFAULT_MIN_LEN
+
+
 _DISABLED_MSG = (
     "FLOSS string deobfuscation is not enabled (set features.floss.enabled in Settings "
     "to recover stack/decoded strings a plain strings pass misses). It is opt-in only "
@@ -97,9 +118,8 @@ def collect_floss_strings(
     if not str(target.path or "").strip():
         return {"error": "this target has no byte artifact (a Channel-reached surface has no file to inspect)"}
 
-    extra_args = None
-    if min_length is not None:
-        extra_args = ["--min-length", str(int(min_length))]
+    eff_min_length = effective_min_length(min_length)
+    extra_args = ["--min-length", str(eff_min_length)]
     try:
         facts = runner.run_json_probe("floss_probe.py", target.path, extra_args=extra_args)
     except SandboxError as exc:
@@ -112,9 +132,10 @@ def collect_floss_strings(
     if isinstance(facts, dict) and facts.get("error"):
         return {"error": f"FLOSS failed: {facts['error']}"}
 
-    # Dedup key: the analyzed bytes AND the min_length knob (a different floor is a
-    # different, legitimately distinct pass — it must not collide with the default one).
-    args = {"min_length": int(min_length)} if min_length is not None else {}
+    # Dedup key: the analyzed bytes AND the EFFECTIVE min_length (clamped above) — so a
+    # different floor is a distinct pass, but raw values that clamp to the same floor (and
+    # None vs the explicit default) dedup to ONE slow pass instead of re-running FLOSS.
+    args = {"min_length": eff_min_length}
     obs, cached = O.record_observation(
         session,
         project_id=project.id,
