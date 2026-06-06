@@ -46,6 +46,8 @@ _CATALOG = [
      {"type": "object", "properties": {"target_id": {"type": "string"}}, "required": ["target_id"]}),
     ("read", "floss_strings", _t.floss_strings, "Recover OBFUSCATED strings a plain strings/list_strings pass MISSES — STACK strings (built byte-by-byte on the stack at runtime), TIGHT strings, and DECODED strings (produced by a decode routine FLOSS lightly EMULATES in the sandbox) — via FLARE FLOSS. On firmware/malware these hidden strings (URLs, command templates, keys, format strings) are often the lead. QUERY: records a floss_strings Observation; adds NO graph nodes — PROMOTE an interesting recovered string to a string node deliberately (create_node node_type=string). FLOSS is slow, so check list_observations(target_id) first to reuse a prior pass. `min_length` (default 4, clamped 4–64) is the only knob. NOTE: stack/decoded recovery supports x86/amd64 PE targets; on an ELF/foreign-arch artifact it degrades to a static-strings-only pass with a note. OPT-IN: advertised only when features.floss is enabled (it relaxes no policy boundary — FLOSS emulates decode routines in-process, never executes the target — but is slower than strings).",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "min_length": {"type": "integer"}}, "required": ["target_id"]}),
+    ("read", "yara_scan", _t.yara_scan, "Match ONE target's bytes against YARA rules (the bundled high-signal set — embedded creds, known-bad library banners, weak-crypto constants, packer signatures — plus any .yar the user dropped in the HEXGRAPH_HOME rules dir), run in the sandbox. PROMOTE: each matched rule becomes a project-level `pattern` node + a `matches_rule` edge from this target, carrying the rule's DECLARED severity/cve (the matcher never fabricates a severity or auto-mints a finding — promote a match to a finding deliberately). Records a yara_matches Observation; check list_observations(target_id, kind='yara_matches') first to reuse a prior pass. `ruleset` (a bundled ruleset id, or 'all', default 'all') is the only knob — never a yara command line. The pattern complement to the exact-hash n-day link link_same_code. For the WHOLE project (every target + extracted firmware file) use yara_sweep. OPT-IN: advertised only when features.yara is enabled (a static MATCH — reads bytes, never executes — so it relaxes no policy boundary; opt-in because rule management is a surface).",
+     {"type": "object", "properties": {"target_id": {"type": "string"}, "ruleset": {"type": "string"}}, "required": ["target_id"]}),
     ("read", "list_strings", _t.list_strings, "Notable strings in a target (optional substring filter). QUERY: records an Observation; adds no graph nodes.",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "pattern": {"type": "string"}}, "required": ["target_id"]}),
     ("read", "xrefs", _t.xrefs, "Cross-references: which functions CALL a symbol/sink and where (omit `symbol` to map dangerous sinks, format-string sinks, AND network/socket surface bind/listen/connect/recv). Trace a sink back to its caller, or find listen/connect sites to model as socket nodes. QUERY: records an Observation and tags is_sink on any dangerous-import symbol ALREADY in the graph; adds no new graph nodes.",
@@ -152,6 +154,8 @@ _CATALOG = [
      {"type": "object", "properties": {"project_id": {"type": "string"}, "target_id": {"type": "string"}}, "required": ["project_id", "target_id"]}),
     ("write", "link_same_code", _t.link_same_code, "Cross-target n-day primitive: link functions with identical code (same content_hash) across DIFFERENT binaries via similar_to edges, and return the matches (each side flags has_findings). Run after confirming a bug to find the same routine reused elsewhere.",
      {"type": "object", "properties": {"project_id": {"type": "string"}}, "required": ["project_id"]}),
+    ("write", "yara_sweep", _t.yara_sweep, "Project-wide YARA sweep — the PATTERN n-day complement to link_same_code (exact hash): match every non-archived byte target AND every extracted firmware file against the bundled high-signal rules (+ any user .yar in the HEXGRAPH_HOME rules dir), recording a yara_matches Observation per artifact and promoting matched rules to shared project-level `pattern` nodes via `matches_rule` edges (so the graph shows which targets/files a rule matched). One analyst's rule → a corpus-wide hunt. `ruleset` is a bundled ruleset id (or 'all', default). The matcher carries each rule's DECLARED severity/cve onto the pattern node but never fabricates a severity or auto-mints a finding — promote a hit to a finding deliberately. Returns a roll-up of scanned/match/promotion counts + hits. OPT-IN: advertised only when features.yara is enabled (a static MATCH; relaxes no policy boundary).",
+     {"type": "object", "properties": {"project_id": {"type": "string"}, "ruleset": {"type": "string"}}, "required": ["project_id"]}),
     ("write", "propagate_finding", _t.propagate_finding, "N-day: clone an existing finding onto another binary that shares the same code (per link_same_code) as a fresh finding to triage, wired derived_from→ the source. Avoids re-typing the whole finding for 'same bug, other binary'.",
      {"type": "object", "properties": {"finding_id": {"type": "string"}, "target_id": {"type": "string"}, "function": {"type": "string"}, "notes": {"type": "string"}}, "required": ["finding_id", "target_id"]}),
     ("run", "reachability", _t.reachability, "Argue STATIC input-reachability (Standard B, static): search the typed graph for a directed source→sink path so a finding can claim input_reachable/static even when you CAN'T trigger it live (a real sink, but the service won't boot — the DIR-823G case). Pass finding_id (resolves the sink it cites, RECORDS the path + upgraded assurance on the finding) and/or sink_node_id (reports a path to that sink). Sources = input/param/endpoint/socket nodes (or a function/symbol you marked attrs.entry); follows taints/calls/routes_to/reads/writes/references FORWARD (taints is the strongest signal), depth-bounded + cycle-safe. Precondition is derived from the path (crosses an auth boundary / a `bypasses` edge => requires_credentials; starts at an unauth boundary => unauthenticated; else unspecified). An ARGUMENT, not a trigger — it only UPGRADES a code_present/static floor and NEVER downgrades a dynamic claim. Build the input/sink nodes + taints/calls edges first.",
@@ -214,7 +218,20 @@ def _floss_advertised() -> bool:
         return False
 
 
-_FEATURE_GATED_TOOLS = {"floss_strings": _floss_advertised}
+def _yara_advertised() -> bool:
+    try:
+        from hexgraph.engine.yara import yara_enabled
+
+        return yara_enabled()
+    except Exception:  # noqa: BLE001 — never advertise a tool whose gate can't be read
+        return False
+
+
+_FEATURE_GATED_TOOLS = {
+    "floss_strings": _floss_advertised,
+    "yara_scan": _yara_advertised,
+    "yara_sweep": _yara_advertised,
+}
 
 
 def catalog(enabled_groups: set[str] | None = None) -> list[dict]:

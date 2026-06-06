@@ -35,6 +35,16 @@ def db_path() -> Path:
     return hexgraph_home() / "hexgraph.db"
 
 
+def yara_rules_dir() -> Path:
+    """User YARA rules directory under HEXGRAPH_HOME (Phase 5B).
+
+    The drop-in directory the operator adds their own `.yar` files to; HexGraph's
+    bundled rules ship in-package (`paths.bundled_yara_rules_dir`). Both are mounted
+    read-only into the sandbox at match time. Rule updates are a manual user act — the
+    no-network invariant means HexGraph never fetches rules for you."""
+    return hexgraph_home() / "yara_rules"
+
+
 @dataclass
 class Config:
     llm_backend: str = "mock"

@@ -90,6 +90,7 @@ class EdgeType(str, enum.Enum):
     writes = "writes"
     instance_of_pattern = "instance_of_pattern"
     similar_to = "similar_to"
+    matches_rule = "matches_rule"  # a target/node matched a `pattern` node (a YARA rule hit) — Phase 5B
     duplicate_of = "duplicate_of"
     derived_from = "derived_from"
     produced_by = "produced_by"

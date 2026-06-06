@@ -133,6 +133,17 @@ jobs:
             command -v floss >/dev/null || { echo "MISSING tool: floss"; exit 1; }
             python3 -c "import floss.main" || { echo "floss not importable"; exit 1; }
             echo "FLOSS present: $(floss --version 2>&1 | head -1)"'
+      - name: Assert YARA is present in the image
+        # The yara_probe (Phase 5B) imports `yara` (yara-python, added in sandbox.Dockerfile).
+        # Fail the build loudly if an image change ever drops it, so the opt-in features.yara
+        # pattern sweep can't silently break (design §2.7) — this image-building job exercises
+        # the new dependency.
+        run: |
+          docker run --rm hexgraph-sandbox:latest sh -c '
+            set -e
+            python3 -c "import yara; print(\"yara-python\", yara.__version__)" \
+              || { echo "yara-python not importable"; exit 1; }
+            echo "YARA present"'
       - name: Install into .venv
         # `just test-ci` / `just demo` run `.venv/bin/python` (the justfile's `py` var),
         # so install into a venv the way `just install` does — not the system interpreter.

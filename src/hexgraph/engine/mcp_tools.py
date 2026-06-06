@@ -733,6 +733,29 @@ def floss_strings(target_id: str, min_length: int | None = None) -> str:
                  {"min_length": min_length} if min_length is not None else {})
 
 
+def yara_scan(target_id: str, ruleset: str | None = None) -> str:
+    """Match ONE target's bytes against YARA rules (bundled + user) in the sandbox,
+    promoting matched rules to pattern nodes + matches_rule edges. Opt-in (features.yara);
+    advertised only when enabled. Use yara_sweep for the whole project."""
+    return _tool(target_id, "yara_scan", {"ruleset": ruleset} if ruleset else {})
+
+
+def yara_sweep(project_id: str, ruleset: str | None = None) -> dict:
+    """Project-wide YARA sweep: match every non-archived byte target AND every extracted
+    firmware file against the chosen rules, recording a yara_matches Observation per
+    artifact and promoting matches to shared project-level `pattern` nodes via `matches_rule`
+    edges. The cross-target n-day complement to link_same_code (exact hash): one rule, swept
+    corpus-wide. `ruleset` is a bundled ruleset id (or 'all', default). Opt-in (features.yara);
+    advertised only when enabled. Returns a roll-up of scanned/match/promotion counts + hits."""
+    from hexgraph.engine.yara import sweep_project
+
+    with session_scope() as s:
+        p = s.get(Project, project_id)
+        if p is None:
+            return {"error": "project not found"}
+        return sweep_project(s, p, ruleset=ruleset, source="agent")
+
+
 def list_strings(target_id: str, pattern: str | None = None) -> str:
     return _tool(target_id, "list_strings", {"pattern": pattern} if pattern else {})
 
@@ -1559,7 +1582,28 @@ def get_schemas() -> dict:
                     "finding) and put a short how-it-works in summary/reasoning so it's actionable "
                     "without your trace.",
         },
+        "yara": {
+            "rulesets": _yara_rulesets_for_schema(),
+            "note": "The ruleset ids yara_scan / yara_sweep accept (a bundled rule-file id, or "
+                    "'all'). The agent picks WHICH ruleset by id — never a yara command line; the "
+                    "rule files + match flags are fixed. User .yar files dropped in the "
+                    "<HEXGRAPH_HOME>/yara_rules dir are ALWAYS included. A match promotes to a "
+                    "`pattern` node + a `matches_rule` edge carrying the rule's declared severity/"
+                    "cve; the matcher never fabricates a severity or auto-mints a finding — promote "
+                    "a hit to a finding deliberately. Empty unless features.yara is enabled.",
+        },
     }
+
+
+def _yara_rulesets_for_schema() -> list[str]:
+    """The bundled YARA ruleset ids for get_schemas — only when the feature is on, so a
+    disabled tool isn't advertised through the schema either."""
+    try:
+        from hexgraph.engine.yara import available_rulesets, yara_enabled
+
+        return available_rulesets() if yara_enabled() else []
+    except Exception:  # noqa: BLE001
+        return []
 
 
 def create_hypothesis(project_id: str, statement: str, rationale: str | None = None,

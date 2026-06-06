@@ -160,10 +160,27 @@ _FLOSS_SPEC = ToolSpec(
      "description": "minimum recovered string length (default 4, clamped 4–64)"}}},
 )
 
+# YARA is advertised ONLY when features.yara is enabled (like floss_strings): it is opt-in
+# (rule management is a surface) and a sweep can be heavier than a single probe, so it stays
+# out of the model's tool list until the user turns it on.
+_YARA_SPEC = ToolSpec(
+    "yara_scan", "Match THIS target's bytes against YARA rules (the bundled high-signal set + any "
+    "user .yar rules) — embedded credentials, known-bad library banners, weak-crypto constants, "
+    "packer signatures. The fuzzy/structural complement to the exact-hash n-day link. PROMOTE: "
+    "each matched rule becomes a project-level `pattern` node + a `matches_rule` edge from this "
+    "target, carrying the rule's DECLARED severity/cve (never a fabricated guess). Records a "
+    "yara_matches Observation; check list_observations(target_id) first. `ruleset` (a bundled "
+    "ruleset id, or 'all', default 'all') is the only knob — never a yara command line. To sweep "
+    "the WHOLE project (every target + extracted firmware file), use the yara_sweep MCP verb.",
+    {"type": "object", "properties": {"ruleset": {"type": "string",
+     "description": "which bundled ruleset to sweep (a rule-file id, or 'all'; default 'all')"}}},
+)
+
 
 def available_tools(ctx: ToolContext) -> list[ToolSpec]:
     """Tool specs for this target. fuzz_function only when the policy permits execution
-    (fuzzing enabled in Settings); floss_strings only when features.floss is enabled."""
+    (fuzzing enabled in Settings); floss_strings only when features.floss is enabled;
+    yara_scan only when features.yara is enabled."""
     specs = list(_STATIC_SPECS)
     try:
         from hexgraph.policy import current_policy
@@ -177,6 +194,13 @@ def available_tools(ctx: ToolContext) -> list[ToolSpec]:
 
         if floss_enabled():
             specs.append(_FLOSS_SPEC)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from hexgraph.engine.yara import yara_enabled
+
+        if yara_enabled():
+            specs.append(_YARA_SPEC)
     except Exception:  # noqa: BLE001
         pass
     return specs
@@ -403,6 +427,8 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
             return _binutils(ctx)
         if name == "floss_strings":
             return _floss(ctx, args)
+        if name == "yara_scan":
+            return _yara(ctx, args)
         if name == "list_functions":
             out = _decomp(ctx, None)
             if out.get("error"):
@@ -616,6 +642,46 @@ def _floss(ctx: ToolContext, args: dict) -> str:
         lines.append("decoded strings: " + ", ".join(repr(s) for s in decoded))
     if not (stack or tight or decoded):
         lines.append("(no obfuscated strings recovered; see static_strings in the Observation)")
+    ctx.cache[key] = _clip("\n".join(lines))
+    return ctx.cache[key]
+
+
+def _yara(ctx: ToolContext, args: dict) -> str:
+    """Run the YARA matcher over THIS target (the engine helper records the Observation and
+    promotes matched rules to pattern nodes + matches_rule edges) and render the matches as
+    text. Opt-in: refuses cleanly if features.yara is off (the helper returns the enable
+    message)."""
+    ruleset = args.get("ruleset")
+    if ruleset is not None and not isinstance(ruleset, str):
+        return "error: 'ruleset' must be a string (a bundled ruleset id, or 'all')"
+    from hexgraph.engine.yara import scan_target
+
+    key = f"yara:{ruleset or 'all'}"
+    if key in ctx.cache:
+        return ctx.cache[key]
+
+    out = scan_target(ctx.session, ctx.project, ctx.target, ruleset=ruleset, source="agent")
+    if out.get("error"):
+        return out["error"]
+    f = out.get("facts", {}) or {}
+    matches = f.get("matches") or []
+    promoted = out.get("promoted") or []
+    lines = [
+        f"// YARA matches for {ctx.target.name} [ruleset={out.get('ruleset')}]"
+        + (" (cached)" if out.get("cached") else ""),
+        f"{len(matches)} rule match(es) over {f.get('rule_file_count', 0)} rule file(s); "
+        f"promoted {len(promoted)} pattern node(s) (matches_rule edges).",
+    ]
+    for m in matches[:40]:
+        meta = m.get("meta") or {}
+        sev = meta.get("severity")
+        cve = meta.get("cve")
+        tag = f" [severity={sev}]" if sev else ""
+        tag += f" [{cve}]" if cve else ""
+        desc = meta.get("description")
+        lines.append(f"- {m.get('rule')}{tag}" + (f": {desc}" if desc else ""))
+    if not matches:
+        lines.append("(no rule matched; see the yara_matches Observation for the rule files swept)")
     ctx.cache[key] = _clip("\n".join(lines))
     return ctx.cache[key]
 

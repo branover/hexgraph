@@ -81,6 +81,8 @@ hexgraph = [
     "schemas/*.json",
     "llm/fixtures/mock_llm/*.yaml",
     "llm/fixtures/mock_llm/**/*.json",
+    # Bundled YARA rules (Phase 5B) ship in-package, resolved by paths.bundled_yara_rules_dir.
+    "rules/yara/*.yar",
 ]
 
 [tool.pytest.ini_options]
