@@ -1958,6 +1958,36 @@ def verify_poc(target_id: str, poc: dict, finding_id: str | None = None) -> dict
                 "attached_to": finding_id if finding_id else None}
 
 
+def recover_constant(target_id: str, function: str) -> dict:
+    """Recover the CONSTANT/key a self-contained routine derives at runtime — a license code,
+    an XOR key, a decoded string — by emulating it in Ghidra's P-Code interpreter IN THE
+    SANDBOX (the JVM interpreter; NEVER native execution, no network). Use when a value never
+    appears as a literal and decompile_function shows only the arithmetic that computes it.
+
+    ENRICH: on success, tags the recovered value onto the function node
+    (attrs.recovered_constant / _hex) and records an `emulation` Observation — it adds no new
+    graph nodes (review it, then promote/record what matters).
+
+    Opt-in: requires features.emulation (a heavy-analysis gate that relaxes NO sandbox
+    boundary). Returns available=false when the Ghidra headless decompiler isn't active, and an
+    `error` when the routine takes arguments or doesn't return a recoverable constant. Returns
+    {available, function, value, value_hex, reached_ret, steps, observation_id, error}."""
+    from hexgraph.engine.emulation import emulate_constant
+    from hexgraph.policy import PolicyViolation
+
+    with session_scope() as s:
+        t = s.get(Target, target_id)
+        if t is None:
+            return {"error": "target not found"}
+        try:
+            return emulate_constant(s, s.get(Project, t.project_id), t, function=function)
+        except PolicyViolation:
+            return {"error": "emulation not permitted — enable features.emulation in Settings "
+                             "to recover a constant by emulating a routine in the sandbox"}
+        except Exception as exc:  # noqa: BLE001 — a sandbox/Ghidra hiccup degrades to an error note
+            return {"error": f"emulation failed: {exc}"}
+
+
 def reachability(finding_id: str | None = None, sink_node_id: str | None = None,
                  max_depth: int = 12) -> dict:
     """Argue STATIC input-reachability (Standard B, static) — search the typed graph for a

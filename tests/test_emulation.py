@@ -65,6 +65,36 @@ def test_emulate_constant_unavailable_without_ghidra(hg_home):
         assert O.list_observations(s, t.id, kind="emulation") == []
 
 
+# ── the MCP agent surface (recover_constant) ──────────────────────────────────────────
+
+def test_recover_constant_advertised_in_catalog():
+    """The verb is reachable by a coding agent — advertised in the read group, callable, typed."""
+    from hexgraph.engine import mcp_tools as M
+
+    spec = next((t for t in M.catalog({"read"}) if t["name"] == "recover_constant"), None)
+    assert spec is not None and callable(spec["fn"])
+    assert spec["schema"]["properties"].keys() >= {"target_id", "function"}
+
+
+def test_recover_constant_gate_off_returns_error_not_raise(hg_home):
+    """The MCP wrapper turns the opt-in PolicyViolation into a friendly error dict — an agent
+    sees a clear message, never an exception, when features.emulation is off (the default)."""
+    from hexgraph.engine.mcp_tools import recover_constant
+
+    with session_scope() as s:
+        p = create_project(s, name="ec")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        tid = t.id
+    out = recover_constant(tid, "anything")
+    assert "error" in out and "features.emulation" in out["error"]
+
+
+def test_recover_constant_unknown_target(hg_home):
+    from hexgraph.engine.mcp_tools import recover_constant
+
+    assert recover_constant("no-such-target", "f") == {"error": "target not found"}
+
+
 # ── Docker + Ghidra: the emulator recovers a runtime-derived constant ─────────────────
 
 def _ghidra_in_image() -> bool:
