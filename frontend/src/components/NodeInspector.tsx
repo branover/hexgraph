@@ -7,6 +7,7 @@ import HypothesisPanel from "./HypothesisPanel";
 import FilesystemBrowser from "./FilesystemBrowser";
 import ToolResults from "./ToolResults";
 import Provenance from "./Provenance";
+import Mitigations from "./Mitigations";
 
 // Node-type-aware detail shown when a target/function/symbol/string node is
 // selected in the graph (findings use the richer Inspector instead).
@@ -83,7 +84,7 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
           <div className="actions"><Launcher allowed={allowed} onChoose={onLaunch} onFuzz={onFuzz} /></div>
           <div className="sec">Recon facts</div>
           <div className="kvs">
-            {target.metadata?.mitigations && <><span className="k">mitigations</span><code>{JSON.stringify(target.metadata.mitigations)}</code></>}
+            {target.metadata?.mitigations && <><span className="k">mitigations</span><Mitigations mitigations={target.metadata.mitigations as any} /></>}
             {target.metadata?.libraries?.length ? <><span className="k">libraries</span><span>{target.metadata.libraries.join(", ")}</span></> : null}
             {target.metadata?.hashes?.sha256 && <><span className="k">sha256</span><code>{String(target.metadata.hashes.sha256).slice(0, 16)}…</code></>}
             {typeof target.metadata?.size === "number" && <><span className="k">size</span><span>{target.metadata.size} B</span></>}

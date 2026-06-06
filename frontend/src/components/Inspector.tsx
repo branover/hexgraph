@@ -3,6 +3,7 @@ import { api, Finding } from "../api";
 import { Icon } from "./Icon";
 import Annotations from "./Annotations";
 import Provenance from "./Provenance";
+import Mitigations from "./Mitigations";
 
 const LIFECYCLE = ["new", "triaging", "confirmed", "reported"];
 function Lifecycle({ status }: { status: string }) {
@@ -111,11 +112,12 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
   const [verifyMsg, setVerifyMsg] = useState<string>();
   const [pocOpen, setPocOpen] = useState(false);
   const [reproCopied, setReproCopied] = useState(false);
+  const [solvedCopied, setSolvedCopied] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   useEffect(() => {
     setSugg([]); setCopied(false); setHypId("");
-    setEditing(false); setEditErr(undefined); setVerifyMsg(undefined); setPocOpen(false); setReproCopied(false);
+    setEditing(false); setEditErr(undefined); setVerifyMsg(undefined); setPocOpen(false); setReproCopied(false); setSolvedCopied(false);
     setConfirmDelete(false); setDeleting(false);
     if (finding) api.suggestions(finding.id).then(setSugg).catch(() => setSugg([]));
   }, [finding?.id]);
@@ -129,6 +131,11 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
   const assurance = ev.extra?.assurance || verification?.assurance;
   const reproCommand = ev.extra?.repro_command;
   const reproStr = Array.isArray(reproCommand) ? reproCommand.join(" ") : reproCommand;
+  // Symbolic-execution (angr) solver evidence: the solved input that drives the
+  // path to the sink, plus how it was found. evidence.reproducer carries the bytes;
+  // evidence.extra.solver carries the model + path + provenance.
+  const solver = ev.extra?.solver;
+  const solvedInput = ev.reproducer || solver?.concrete_input_hex;
 
   const setStatus = async (s: string) => { await api.setStatus(finding.id, s); onChanged(); };
 
@@ -185,6 +192,7 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
   };
   const copy = () => { navigator.clipboard?.writeText(ev.decompiled_snippet || ""); setCopied(true); setTimeout(() => setCopied(false), 1200); };
   const copyRepro = () => { navigator.clipboard?.writeText(reproStr || ""); setReproCopied(true); setTimeout(() => setReproCopied(false), 1200); };
+  const copySolved = () => { navigator.clipboard?.writeText(solvedInput || ""); setSolvedCopied(true); setTimeout(() => setSolvedCopied(false), 1200); };
   const newHypothesis = async () => {
     if (!projectId) return;
     const statement = window.prompt("New hypothesis (this finding becomes supporting evidence):", finding.title);
@@ -351,6 +359,61 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
         </>
       )}
 
+      {/* Symbolic-execution (angr) solver evidence — the flagship "solved input that
+          reaches the sink" result. The reproducer bytes are the headline (copyable);
+          the solver block explains the input model, the path, and how it was found. */}
+      {(solvedInput || solver) && (
+        <>
+          <div className="sec">Solved input <span className="muted" style={{ fontWeight: 400 }}>· {solver?.backend || "angr"} symbolic execution</span></div>
+          {solver?.sink_func && (
+            <p className="muted" style={{ fontSize: 11, margin: "0 0 6px" }}>
+              Constraint-solved an input that drives execution to <code>{solver.sink_func}</code>
+              {solver.input_model ? <> via the <code>{human(solver.input_model)}</code> input boundary</> : null}.
+            </p>
+          )}
+          {solvedInput && (
+            <>
+              <div className="kvs"><span className="k">reproducer</span><span /></div>
+              <div className="codewrap">
+                <button className="btn sm icon copy" title="Copy the solved input bytes" onClick={copySolved}>
+                  <Icon name={solvedCopied ? "check" : "copy"} size={12} />
+                </button>
+                <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", fontSize: 11 }}>{solvedInput}</pre>
+              </div>
+              {solver?.concrete_input_repr && (
+                <p className="muted" style={{ fontSize: 10.5, margin: "2px 0 0" }}>
+                  as bytes: <code>{solver.concrete_input_repr}</code>
+                </p>
+              )}
+            </>
+          )}
+          {solver && (
+            <div className="kvs" style={{ marginTop: 6 }}>
+              {solver.input_model && <><span className="k">input model</span><code>{human(solver.input_model)}</code></>}
+              {solver.reached_addr && <><span className="k">reached</span><code>{solver.reached_addr}</code></>}
+              {(solver.sink_addr || solver.sink_func) && <><span className="k">sink</span><code>{solver.sink_addr || solver.sink_func}</code></>}
+              {Array.isArray(solver.path_addrs) && solver.path_addrs.length > 0 && (
+                <><span className="k">path</span><span className="muted" style={{ fontSize: 11 }}>{solver.path_addrs.length} basic blocks to the sink</span></>
+              )}
+              {solver.provenance?.angr_version && <><span className="k">angr</span><code>{solver.provenance.angr_version}</code></>}
+              {typeof solver.provenance?.steps === "number" && <><span className="k">steps</span><code>{solver.provenance.steps}</code></>}
+              {typeof solver.provenance?.elapsed === "number" && <><span className="k">elapsed</span><code>{solver.provenance.elapsed}s</code></>}
+            </div>
+          )}
+          {Array.isArray(solver?.path_addrs) && solver.path_addrs.length > 0 && (
+            <details style={{ marginTop: 6 }}>
+              <summary style={{ cursor: "pointer", fontSize: 12 }} className="muted">Path to sink ({solver.path_addrs.length} blocks)</summary>
+              <pre className="codewrap" style={{ whiteSpace: "pre-wrap", maxHeight: 200, overflow: "auto", fontSize: 11 }}>{solver.path_addrs.join(" → ")}</pre>
+            </details>
+          )}
+          {solver?.observation_id && (
+            <p className="muted" style={{ fontSize: 10.5, margin: "4px 0 0" }}>
+              observation <code>{String(solver.observation_id).slice(0, 8)}…</code>
+            </p>
+          )}
+        </>
+      )}
+
       {(ev.function || ev.sink || ev.address || ev.file) && (
         <>
           <div className="sec">Evidence</div>
@@ -359,7 +422,7 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
             {ev.sink && <><span className="k">sink</span><code>{ev.sink}</code></>}
             {ev.address && <><span className="k">address</span><code>{ev.address}</code></>}
             {ev.file && <><span className="k">file</span><code>{ev.file}</code></>}
-            {ev.extra?.mitigations && <><span className="k">mitigations</span><code>{JSON.stringify(ev.extra.mitigations)}</code></>}
+            {ev.extra?.mitigations && <><span className="k">mitigations</span><Mitigations mitigations={ev.extra.mitigations} /></>}
           </div>
         </>
       )}
