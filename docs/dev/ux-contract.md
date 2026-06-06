@@ -768,6 +768,36 @@ loud only where you are looking; every node/edge/color kept, mute never deletes.
 - Principle: human curation layered over agent output.
 - Prereq: an entity; (for confirm/reject) a proposed annotation.
 
+**FIND-18 — Solved input (angr symbolic execution)**
+- Steps: select a `vulnerability` finding produced by the angr solver (its `evidence.reproducer` +
+  `evidence.extra.solver` are set) → read the **Solved input** section in the Inspector.
+- Functional: a dedicated EVIDENCE block headed "Solved input · {backend} symbolic execution" shows a
+  one-line explanation (which sink, which input model), the **reproducer bytes in a copyable code block**
+  (with a copy icon that flips to a check), the byte repr, and the key solver fields (input model, reached
+  address, sink, path length, angr version, steps, elapsed) plus a collapsible full path-to-sink and the
+  backing observation id.
+- 🔌 Backend: the fields render straight from the finding's `evidence` (`reproducer` + `extra.solver`); no
+  extra call. The reproducer shown must equal the stored `evidence.reproducer`.
+- Qualitative: the flagship symbolic-execution result reads as a first-class, scannable block — the solved
+  input is the headline and is one click to copy, not buried in a JSON dump (Aesthetics, the whole reason
+  this surfacing exists).
+- Principle: the solver's solved input is visible and copyable, not invisible.
+- Prereq: an angr `vulnerability` finding with a solved reproducer.
+
+**FIND-19 — Mitigations as weak/ok badges (not a JSON blob)**
+- Steps: on a finding whose `evidence.extra.mitigations` is set (e.g. a hardening finding), read the
+  **mitigations** row in the EVIDENCE section.
+- Functional: each protection renders as its own color-coded badge — present protections green ("NX",
+  "canary", "PIE", "FORTIFY", "RELRO full"); missing ones red ("NX off", "no canary", "no PIE",
+  "no FORTIFY", "RELRO off"); partial RELRO amber ("RELRO partial"). No raw `{"nx":false,…}` JSON.
+- 🔌 Backend: rendered from `evidence.extra.mitigations`; the weak/ok split must match the binutils
+  observation summary's honest wording ("weak: nx, canary, relro=partial").
+- Qualitative: "weak, not silently ok" reads at a glance and in the app's chip idiom (Aesthetics/honesty) —
+  a hardened-but-actually-weak binary cannot read as fine. Shared with the NodeInspector RECON-FACTS row
+  (same component, same colors).
+- Principle: weak mitigations are conspicuous, never hidden in a blob.
+- Prereq: a finding (or target node) carrying mitigations.
+
 ---
 
 ## SURFACE 4b — Tool Results panel + provenance (Phase O Observations)
