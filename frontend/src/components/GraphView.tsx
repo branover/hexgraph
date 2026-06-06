@@ -957,6 +957,67 @@ export default function GraphView({
       }
     };
 
+    // Translate a whole block (a compound room moves with its descendants; a loose node moves
+    // alone). Setting a parent's position is a no-op in cytoscape — the parent box tracks its
+    // children — so we shift the leaf descendants and the box follows.
+    const shiftBlock = (el: any, dx: number, dy: number) => {
+      if (Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01) return;
+      const leaves = el.isParent() ? el.descendants().filter((d: any) => d.isChildless()) : el;
+      leaves.forEach((d: any) => { const p = d.position(); d.position({ x: p.x + dx, y: p.y + dy }); });
+    };
+    // Separate a set of SIBLING rooms so their bounding boxes don't overlap. dagreOpenRooms()
+    // re-flows each open room's interior on its own, so a freshly-expanded room grows past the
+    // footprint fcose reserved and lands on top of a sibling (the "expanded rooms overlap" bug).
+    // A few relaxation passes push each overlapping pair apart along its axis of least penetration
+    // until no two sibling boxes intersect (+ a padding gutter). Pure post-process on positions.
+    const separateSiblings = (sibs: any, pad: number) => {
+      const arr = sibs.toArray();
+      if (arr.length < 2) return;
+      // NOT wrapped in cy.batch(): a batch defers boundingBox-cache invalidation, so each pair
+      // would read STALE boxes from before the prior nudges and the relaxation fails to converge
+      // (empirically reintroduces overlaps). Run unbatched — same reason dagreOpenRooms() avoids
+      // batch — so every boundingBox() reflects the moves made so far. Bounded by MAX (below).
+      for (let iter = 0; iter < 24; iter++) {
+        let moved = false;
+        for (let i = 0; i < arr.length; i++) {
+          for (let j = i + 1; j < arr.length; j++) {
+            const ba = arr[i].boundingBox(), bb = arr[j].boundingBox();
+            const ox = Math.min(ba.x2, bb.x2) - Math.max(ba.x1, bb.x1) + pad;
+            const oy = Math.min(ba.y2, bb.y2) - Math.max(ba.y1, bb.y1) + pad;
+            if (ox <= 0 || oy <= 0) continue;                 // already clear (beyond the gutter)
+            const acx = (ba.x1 + ba.x2) / 2, acy = (ba.y1 + ba.y2) / 2;
+            const bcx = (bb.x1 + bb.x2) / 2, bcy = (bb.y1 + bb.y2) / 2;
+            if (ox < oy) {                                     // least overlap is horizontal → split on x
+              const dir = acx <= bcx ? 1 : -1;
+              shiftBlock(arr[i], -dir * ox / 2, 0); shiftBlock(arr[j], dir * ox / 2, 0);
+            } else {                                           // split on y
+              const dir = acy <= bcy ? 1 : -1;
+              shiftBlock(arr[i], 0, -dir * oy / 2); shiftBlock(arr[j], 0, dir * oy / 2);
+            }
+            moved = true;
+          }
+        }
+        if (!moved) break;
+      }
+    };
+    // De-overlap sibling ROOMS in every scope that can grow on expand: the top level + the
+    // children of each open container room. Skipped where nothing is expanded (collapsed cards
+    // were already tiled cleanly by fcose) and where there are too many siblings to be worth the
+    // O(n²) passes (a 250-room firmware skeleton — the user won't expand hundreds by hand).
+    const separateOverlaps = () => {
+      if (!compound) return;
+      const PAD = 30, MAX = 80;
+      const scopes: any[] = [cy.nodes("node[gtype = 'room']").filter((n: any) => n.parent().empty() && n.visible())];
+      cy.nodes("node[gtype = 'room'][roomOpen = 1]").forEach((p: any) => {
+        scopes.push(p.children().filter("node[gtype = 'room']").filter((c: any) => c.visible()));
+      });
+      for (const rooms of scopes) {
+        if (rooms.length < 2 || rooms.length > MAX) continue;
+        if (rooms.filter("[roomOpen = 1]").empty()) continue;  // nothing expanded → can't grow-overlap
+        separateSiblings(rooms, PAD);
+      }
+    };
+
     cy.one("layoutstop", () => {
       // Backstop: one re-run if the skeleton clumped (only the heavy compound view can letterbox).
       if (compound && utilization() < 0.5) {
@@ -968,6 +1029,7 @@ export default function GraphView({
                     numIter: 1500 } as any).run();
       }
       dagreOpenRooms();
+      separateOverlaps();
       layoutDone.current = true;
       // Auto-frame a freshly-expanded room (scoped, never on a plain rebuild) unless a focus
       // owns the camera. (design §3.4 — auto-zoom fires only on an explicit navigation act.)
@@ -1074,7 +1136,11 @@ export default function GraphView({
     cy.on("cxttap", "node", (evt) => {
       evt.originalEvent?.preventDefault?.();
       const n = evt.target;
-      const rp = n.renderedPosition();
+      // Anchor the menu at the CURSOR, not the node's center. `evt.renderedPosition` is the
+      // click point in the same rendered (cy-container) coordinate space the menu is positioned
+      // in (#cy fills the position:relative .graph-wrap), so it drops the menu where the pointer
+      // actually is; fall back to the node center only if the event lacks a position.
+      const rp = evt.renderedPosition ?? n.renderedPosition();
       setMenu({ x: rp.x, y: rp.y, id: n.id(), type: n.data("gtype") });
     });
     cy.on("cxttap", "edge", (evt) => { evt.originalEvent?.preventDefault?.(); setMenu(null); });
@@ -1354,7 +1420,13 @@ export default function GraphView({
       )}
       {menu && (
         <div className="menu graph-cxt"
-             style={{ position: "absolute", left: Math.max(4, Math.min(menu.x, 1100)), top: Math.max(4, menu.y), zIndex: 20, width: 200 }}
+             // Clamp against the ACTUAL canvas size so a cursor-anchored menu near the right/bottom
+             // edge is nudged just enough to stay on-screen (the old fixed 1100 detached it from the
+             // pointer on wide canvases); otherwise it sits exactly where the click landed.
+             style={{ position: "absolute",
+                      left: Math.max(4, Math.min(menu.x, (cyRef.current?.width() ?? 1200) - 204)),
+                      top: Math.max(4, Math.min(menu.y, (cyRef.current?.height() ?? 800) - (menuIsRoom ? 84 : 152))),
+                      zIndex: 20, width: 200 }}
              onMouseLeave={() => setMenu(null)}>
           {menuIsRoom ? (
             <>
