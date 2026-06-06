@@ -83,9 +83,12 @@ _STATIC_SPECS = [
              "in the graph; adds no new graph nodes.",
              {"type": "object", "properties": {"symbol": {"type": "string"}}}),
     ToolSpec("call_graph", "The target's call graph — who-calls-whom across the program, or (with a "
-             "`function`) the neighbourhood rooted at it out to `depth` (default 2). QUERY: records a "
-             "call_graph Observation and SELF-WIRES `calls` edges among functions ALREADY in the graph "
-             "(creates no new nodes — promote functions first to grow the wired graph).",
+             "`function`) the neighbourhood rooted at it out to `depth` (default 2). Returns the "
+             "whole-program graph, falling back to the recon-computed graph in the Observation store "
+             "when the probe path comes up empty (so you see the structure without promoting functions "
+             "one by one). QUERY: records a call_graph Observation and also SELF-WIRES `calls` edges "
+             "among functions ALREADY in the graph (creates no new nodes; promote functions to curate "
+             "the wired graph).",
              {"type": "object", "properties": {"function": {"type": "string"},
                                                "depth": {"type": "integer"}}}),
     ToolSpec("function_xrefs", "Both directions for ONE function: its CALLERS (who calls it) and its "
