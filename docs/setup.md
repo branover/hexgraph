@@ -82,9 +82,49 @@ just sandbox-build with_ghidra=1
 hexgraph config set features.ghidra.enabled true     # then re-run a decompile/recon task
 ```
 
-There are three Ghidra modes, set with `features.ghidra.mode`: `headless` runs analyzeHeadless in the
-sandbox, `bridge` connects to a running Ghidra over `ghidra_bridge`, and `enrich_recon` materializes
-functions, the call graph, and structs. With Ghidra off, HexGraph degrades to radare2.
+Two Ghidra modes are set with `features.ghidra.mode`: `headless` runs analyzeHeadless in the sandbox,
+and `bridge` connects to a running Ghidra over `ghidra_bridge` (covered next). The separate
+`features.ghidra.enrich_recon` toggle materializes functions, the call graph, and structs into the
+substrate. With Ghidra off, HexGraph degrades to radare2.
+
+### Bridge mode: connect to a Ghidra you already have open
+
+Bridge mode is for the analyst who already runs Ghidra: HexGraph connects to it over loopback and
+pulls decompilation straight from your live analysis of the **currently active program**. The bytes
+never leave the machine, so HexGraph and Ghidra must be on the same host (for two hosts, tunnel
+`127.0.0.1:4768` over SSH). It needs two pieces in place — the bridge client in HexGraph's environment,
+and the bridge server running inside your Ghidra.
+
+First install the client into HexGraph's venv:
+
+```bash
+pip install "hexgraph[bridge]"      # or: pip install ghidra_bridge   (pulls jfx_bridge)
+```
+
+Then install the server scripts into your Ghidra and start the server. The documented installer is
+`python -m ghidra_bridge.install_server <your_ghidra_scripts_dir>`, but on recent setuptools it can
+fail with `ModuleNotFoundError: pkg_resources`. If it does, either `pip install "setuptools<81"` and
+retry, or copy the files by hand — `ghidra_bridge/server/*.py` plus the whole `jfx_bridge/` package
+into your Ghidra scripts directory. With that in place, open your target in Ghidra, let auto-analysis
+finish, and from the Script Manager run `ghidra_bridge_server_background.py`; it listens on
+`127.0.0.1:4768`. Keep that program the active tab — the bridge always decompiles whatever Ghidra has
+in front.
+
+No GUI? Run a headless Ghidra as the server with the in-image build (it stays alive holding the program
+as `currentProgram`):
+
+```bash
+docker run -d --name hg-ghidra-bridge --network host \
+  -v /path/to/target:/work/target:ro -v /path/to/ghidra_bridge_scripts:/scripts:ro \
+  hexgraph-sandbox:latest bash -lc \
+  '/opt/ghidra/support/analyzeHeadless /tmp/pj hgbridge -import /work/target \
+     -scriptPath /scripts -postScript ghidra_bridge_server.py'
+```
+
+Finally point HexGraph at it — `features.ghidra = {enabled: true, mode: "bridge", bridge: {host:
+"127.0.0.1", port: 4768}}` (read live, no restart; `127.0.0.1:4768` are the defaults). The Settings
+"Test" button (and the `check_decompiler` tool) confirms it by running a one-function smoke decompile,
+so a green result means decompilation actually works, not merely that the socket is open.
 
 ## Configuration
 

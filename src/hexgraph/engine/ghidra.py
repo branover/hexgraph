@@ -36,6 +36,24 @@ def bridge_reachable(host: str, port: int, timeout: float = 1.5) -> bool:
         return False
 
 
+def _bridge_smoke_decompile(host: str, port: int) -> tuple[bool, str, str | None]:
+    """Prove the bridge can actually DECOMPILE, not just that its socket is open: connect, list
+    the active program's functions, and decompile the first one. Returns (ok, detail, fn_name).
+    An active program with no functions still counts as ok (nothing to test) so an empty target
+    doesn't read as broken. Any failure → (False, "<Error>: …", None)."""
+    try:
+        from hexgraph.engine.ghidra_bridge import connect_ops
+
+        ops = connect_ops(host, port)
+        names = (ops.decompile(None, None).get("functions")) or []
+        if not names:
+            return True, "no functions", None
+        ops.decompile(None, names[0])  # exercises the real remote decompile path
+        return True, "ok", names[0]
+    except Exception as exc:  # noqa: BLE001 — a smoke failure means bridge decompile is broken
+        return False, f"{type(exc).__name__}: {exc}", None
+
+
 def check_ghidra() -> dict:
     """Best-effort status of the configured Ghidra integration (no target needed).
     Returns {enabled, mode, ok, detail, ...} for the Settings 'Test' button."""
@@ -53,15 +71,24 @@ def check_ghidra() -> dict:
         except Exception:  # noqa: BLE001
             installed = False
         reachable = bridge_reachable(host, port)
-        ok = installed and reachable
+        result = {"enabled": True, "mode": mode, "host": host, "port": port,
+                  "bridge_client_installed": installed, "reachable": reachable}
         if not installed:
-            detail = "Install the bridge client: pip install ghidra_bridge (and run the server script in Ghidra)."
-        elif not reachable:
-            detail = f"No Ghidra Bridge listening at {host}:{port}. In Ghidra, run ghidra_bridge_server.py."
+            return {**result, "ok": False,
+                    "detail": "Install the bridge client: pip install ghidra_bridge (and run the server script in Ghidra)."}
+        if not reachable:
+            return {**result, "ok": False,
+                    "detail": f"No Ghidra Bridge listening at {host}:{port}. In Ghidra, run ghidra_bridge_server.py."}
+        # Reachable + client present is NOT enough: a socket check alone reports green while
+        # decompilation throws. Prove a real decompile works (the honest signal).
+        smoke_ok, smoke_detail, fn = _bridge_smoke_decompile(host, port)
+        if smoke_ok:
+            detail = (f"Connected to Ghidra Bridge at {host}:{port}; decompiled {fn} as a smoke test."
+                      if fn else
+                      f"Connected to Ghidra Bridge at {host}:{port} (no functions in the active program to smoke-test).")
         else:
-            detail = f"Connected to Ghidra Bridge at {host}:{port}."
-        return {"enabled": True, "mode": mode, "ok": ok, "detail": detail,
-                "bridge_client_installed": installed, "reachable": reachable, "host": host, "port": port}
+            detail = f"Connected to Ghidra Bridge at {host}:{port}, but a test decompile failed: {smoke_detail}"
+        return {**result, "ok": smoke_ok, "detail": detail}
 
     # headless: Ghidra must be present in the sandbox image (WITH_GHIDRA=1).
     from hexgraph.sandbox.runner import docker_available

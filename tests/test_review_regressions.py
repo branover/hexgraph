@@ -174,9 +174,12 @@ def test_remote_probe_run_tool_allowlist_rejects_ls():
 
 
 def test_ghidra_bridge_rejects_unsafe_function_name():
-    """Review #17: a caller-supplied function name is validated against the strict
-    symbol-name allowlist before any remote_eval, and the safe path passes the name
-    as a BOUND variable (never interpolated into the eval'd code)."""
+    """Review #17 (updated): a caller-supplied focus is validated against the strict
+    symbol-name / address allowlist before any remote_eval. The safe path INLINES the
+    validated token as a "..." string literal — the allowlist excludes quotes, backslashes,
+    parens and whitespace, so it can't break out of the literal — and passes the resolved
+    function as a bound lambda PARAMETER (a bound `fn=` KWARG does NOT work: jfx_bridge puts
+    kwargs in eval-locals, invisible to the nested lambda, which broke every live decompile)."""
     import pytest
 
     from hexgraph.engine.ghidra_bridge import BridgeUnavailable, _RemoteOps
@@ -187,18 +190,20 @@ def test_ghidra_bridge_rejects_unsafe_function_name():
 
         def remote_eval(self, code, **kwargs):
             self.calls.append((code, kwargs))
-            return "decompiled"
+            return ("sym.process_request", "decompiled")
 
     ops = _RemoteOps(_FakeBridge())
 
-    # Breakout attempts are refused before touching the bridge.
-    for bad in ("'); __import__('os').system('id'); ('", "foo bar", "a\nb", "f()", ""):
+    # Breakout attempts are refused before touching the bridge (the load-bearing safety check).
+    for bad in ("'); __import__('os').system('id'); ('", "foo bar", "a\nb", "f()", '"x"', ""):
         with pytest.raises(BridgeUnavailable):
             ops._decompile_one(bad)
+    assert ops.b.calls == []  # not one unsafe focus reached the bridge
 
-    # A valid symbol name is passed as a bound `fn` kwarg, not interpolated.
-    out = ops._decompile_one("sym.process_request")
-    assert out == "decompiled"
+    # A valid symbol name: inlined as a quoted literal, NO bound kwarg, returns (name, code).
+    name, pseudo = ops._decompile_one("sym.process_request")
+    assert (name, pseudo) == ("sym.process_request", "decompiled")
     code, kwargs = ops.b.calls[-1]
-    assert kwargs == {"fn": "sym.process_request"}
-    assert "sym.process_request" not in code  # name never spliced into the eval string
+    assert kwargs == {}                              # no bound fn= kwarg (the bug that broke it)
+    assert '"sym.process_request"' in code          # inlined ONLY as a quoted string literal
+    assert "lambda di, fn:" in code                 # resolved function passed as a lambda param
