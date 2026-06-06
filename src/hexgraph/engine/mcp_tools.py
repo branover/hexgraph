@@ -1449,9 +1449,11 @@ def get_schemas() -> dict:
                                 "pass target_id for target-bound types so the node isn't an orphan.",
         "edge_types": [t.value for t in EdgeType],
         "edge_endpoint_kinds": ["target", "node", "finding", "task"],
-        "edge_note": "A hypothesis IS a node (node_type='hypothesis'); link a finding to it with "
-                     "dst_kind='node' + its id, or better use graph_link_evidence(hypothesis_id, finding_id, "
-                     "relation) which also updates the hypothesis status.",
+        "edge_note": "Pass an `edge_types` value to graph_create_edge as the `type` param (it is "
+                     "NOT named `edge_type`). A hypothesis IS a node (node_type='hypothesis'); "
+                     "link a finding to it with dst_kind='node' + its id, or better use "
+                     "graph_link_evidence(hypothesis_id, finding_id, relation) which also updates "
+                     "the hypothesis status.",
         "edge_attribute_schemas": describe_edges(),
         "edge_attributes_note": "Edges carry attributes (edge.attrs) — the schema above lists what's "
                                 "meaningful per type (e.g. a calls edge's call_sites + arg_constraints, a "
