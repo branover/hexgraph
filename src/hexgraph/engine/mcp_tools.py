@@ -1969,9 +1969,11 @@ def recover_constant(target_id: str, function: str) -> dict:
     graph nodes (review it, then promote/record what matters).
 
     Opt-in: requires features.emulation (a heavy-analysis gate that relaxes NO sandbox
-    boundary). Returns available=false when the Ghidra headless decompiler isn't active, and an
-    `error` when the routine takes arguments or doesn't return a recoverable constant. Returns
-    {available, function, value, value_hex, reached_ret, steps, observation_id, error}."""
+    boundary). Returns available=false when the Ghidra headless decompiler isn't active. Best on a
+    SELF-CONTAINED, parameterless routine — one that takes arguments is emulated over uninitialized
+    inputs and usually won't reach a clean `ret`, so it yields no recoverable value
+    (`reached_ret=false` / an `error`); don't trust a constant from an argument-dependent routine.
+    Returns {available, function, value, value_hex, reached_ret, steps, observation_id, error}."""
     from hexgraph.engine.emulation import emulate_constant
     from hexgraph.policy import PolicyViolation
 
