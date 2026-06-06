@@ -5,6 +5,48 @@ All notable changes to HexGraph are recorded here. The format loosely follows
 [semantic versioning](https://semver.org/) properly once it reaches 1.0. Until then,
 expect breaking changes between minor versions.
 
+## [0.5.0](https://github.com/branover/hexgraph/compare/hexgraph-v0.4.0...hexgraph-v0.5.0) (2026-06-06)
+
+
+### Features
+
+* angr end-to-end behind get_solver() (Phase 5C-B) ([#174](https://github.com/branover/hexgraph/issues/174)) ([9cd9c33](https://github.com/branover/hexgraph/commit/9cd9c334a397430c206c1e1480101e8dab00d230))
+* binutils quick-facts probe (Phase 5A PR 5A-1) ([#158](https://github.com/branover/hexgraph/issues/158)) ([887fd6d](https://github.com/branover/hexgraph/commit/887fd6da1edd3b435a7963dd9b0da12041013541))
+* broaden grounded taint sources to libc buffer inputs ([#159](https://github.com/branover/hexgraph/issues/159)) ([6dd4a33](https://github.com/branover/hexgraph/commit/6dd4a33ea11693c095d2d003d1baeb04978a712a))
+* call_graph falls back to the recon-computed program graph ([#161](https://github.com/branover/hexgraph/issues/161)) ([5f6a1e5](https://github.com/branover/hexgraph/commit/5f6a1e5c9f61ced615f612f3096ce65845ac7155))
+* configurable per-container docker resource ceilings with a shared default ([#153](https://github.com/branover/hexgraph/issues/153)) ([294e9cb](https://github.com/branover/hexgraph/commit/294e9cb6423cfaaed9cd40742e090f043e1905ff))
+* data_xrefs resolves a local/static symbol name, not just an address ([#163](https://github.com/branover/hexgraph/issues/163)) ([fe66d1a](https://github.com/branover/hexgraph/commit/fe66d1ac466200366d2d012c5e743d13c2a57e8b))
+* decompiler-refined function facts + name-based struct noise filter ([#162](https://github.com/branover/hexgraph/issues/162)) ([9d01b13](https://github.com/branover/hexgraph/commit/9d01b13b2e93bac37a2040676e76dc435a18a39e))
+* deterministic static_analysis core + mock scoping (Phase 4 PR2) ([#155](https://github.com/branover/hexgraph/issues/155)) ([047cfb3](https://github.com/branover/hexgraph/commit/047cfb327c6798900b0c12dea3e99162919f2f93))
+* domain-namespaced MCP tool surface + schema enums + clearer descriptions ([#168](https://github.com/branover/hexgraph/issues/168)) ([42a66cd](https://github.com/branover/hexgraph/commit/42a66cdf778e67cb50007392664a449cafdac016))
+* expose P-Code emulation as the recover_constant MCP verb ([#160](https://github.com/branover/hexgraph/issues/160)) ([84a9e21](https://github.com/branover/hexgraph/commit/84a9e21021761e75a206e64670fb3b0c908be7cb))
+* FLOSS string deobfuscation probe (Phase 5A PR 5A-2) ([#167](https://github.com/branover/hexgraph/issues/167)) ([245d50b](https://github.com/branover/hexgraph/commit/245d50b6b6a75dd09fa5dd8bd954a6535efbadb3))
+* freeze the policy ceiling at startup so a running server can't be silently escalated ([#151](https://github.com/branover/hexgraph/issues/151)) ([81c288a](https://github.com/branover/hexgraph/commit/81c288ab1769917fc060e8f584976daa6eac4f75))
+* get_solver() seam + features.angr heavy-analysis gate (Phase 5C-A) ([#171](https://github.com/branover/hexgraph/issues/171)) ([ec3bff4](https://github.com/branover/hexgraph/commit/ec3bff40eabe87403dbe6fe47c6690b016e32155))
+* grounded P-Code source→sink taint analyzer (Phase 4 PR1) ([#154](https://github.com/branover/hexgraph/issues/154)) ([7cf8ad7](https://github.com/branover/hexgraph/commit/7cf8ad7dfc45ace5b9ad2d8769d2fb97e44be541))
+* make Ghidra bridge mode work (fix decompile, headless-safe, honest health) ([#166](https://github.com/branover/hexgraph/issues/166)) ([07e1461](https://github.com/branover/hexgraph/commit/07e14612dc805a3d8370892df736614b3d33cc7b))
+* P-Code emulation for constant/key recovery (Phase 4 PR3) ([#156](https://github.com/branover/hexgraph/issues/156)) ([2a403ab](https://github.com/branover/hexgraph/commit/2a403abefd8772156e42e8f4c459acd7c973097c))
+* refresh the VR skill for the Phase 3–5A RE tools + a strategic RE loop ([#165](https://github.com/branover/hexgraph/issues/165)) ([f6c4b3f](https://github.com/branover/hexgraph/commit/f6c4b3fed10f06f40497b39cc507b36f8b0c969c))
+* rename round-trip into the persistent Ghidra project (Phase 3 PR4) ([#146](https://github.com/branover/hexgraph/issues/146)) ([e17881f](https://github.com/branover/hexgraph/commit/e17881fb8b4f5d4e2413e4aa27c09856c16763d2))
+* YARA project-wide pattern sweep (Phase 5B) ([#169](https://github.com/branover/hexgraph/issues/169)) ([99f6c92](https://github.com/branover/hexgraph/commit/99f6c928e5b1ebf503419a7bf60484be635f60f4))
+
+
+### Bug Fixes
+
+* **angr:** address [#174](https://github.com/branover/hexgraph/issues/174) review nits — finding dedup, timeouts, provenance, faithful argv reproducer ([#175](https://github.com/branover/hexgraph/issues/175)) ([72f190b](https://github.com/branover/hexgraph/commit/72f190b5df06be85f9078bcd344238f53bc6d8f1))
+* **ci:** bump release-please-action v4 -&gt; v5 (Node 24) ([#148](https://github.com/branover/hexgraph/issues/148)) ([816b8b8](https://github.com/branover/hexgraph/commit/816b8b8e795647adc197cecee0f613fbb99bca35))
+* de-overlap expanded graph rooms + open the right-click menu at the cursor ([#173](https://github.com/branover/hexgraph/issues/173)) ([768e042](https://github.com/branover/hexgraph/commit/768e042c4e241f0f6dbd32a527a0576a34ceb770))
+* **fuzz:** scale libFuzzer -rss_limit_mb below the cgroup --memory cap ([#152](https://github.com/branover/hexgraph/issues/152)) ([2325c22](https://github.com/branover/hexgraph/commit/2325c2280db54af85d58b2a91f16e32be99d2184))
+* make the fuzzing e2e tests deterministic (kill the discovery/report flakes) ([#147](https://github.com/branover/hexgraph/issues/147)) ([08ca39a](https://github.com/branover/hexgraph/commit/08ca39a3d49813db73bbeeefe7be9905f48600e5))
+* **sandbox:** PID-1 reaper (--init) so the fuzz forkserver can't die from PID exhaustion ([#150](https://github.com/branover/hexgraph/issues/150)) ([8af7a54](https://github.com/branover/hexgraph/commit/8af7a54a0b396453bbc70769f8716014a12ef702))
+
+
+### Documentation
+
+* **mcp:** clarify rename is proposed by the agent, confirmed by a human ([#164](https://github.com/branover/hexgraph/issues/164)) ([6105fe8](https://github.com/branover/hexgraph/commit/6105fe8167cd87f34a6bf67538a1548aaabeace3))
+* Phase 5 external-tools design — curated catalog, phased rollout, decision points ([#157](https://github.com/branover/hexgraph/issues/157)) ([773e5dd](https://github.com/branover/hexgraph/commit/773e5dd42c07b7da68f6eb9e59a9661a28091fc0))
+* VR skill + user doc for the Phase 5 RE tools (FLOSS, YARA, angr) ([#176](https://github.com/branover/hexgraph/issues/176)) ([b4d77e6](https://github.com/branover/hexgraph/commit/b4d77e62d63e90c34f3d82a68ff29201e30ddd00))
+
 ## [0.4.0](https://github.com/branover/hexgraph/compare/hexgraph-v0.3.0...hexgraph-v0.4.0) (2026-06-05)
 
 
