@@ -144,16 +144,39 @@ _FUZZ_SPEC = ToolSpec(
     {"type": "object", "properties": {"max_total_time": {"type": "integer"}}},
 )
 
+# FLOSS is advertised ONLY when features.floss is enabled (unlike the always-on binutils
+# verb): it is opt-in and slower than strings, so it stays out of the model's tool list
+# until the user turns it on (mirroring fuzz_function's enable-gated advertising).
+_FLOSS_SPEC = ToolSpec(
+    "floss_strings", "Recover OBFUSCATED strings a plain strings/list_strings pass MISSES — STACK "
+    "strings (built byte-by-byte on the stack at runtime), TIGHT strings, and DECODED strings "
+    "(produced by a decode routine FLOSS lightly EMULATES in the sandbox) — via FLARE FLOSS. On "
+    "firmware/malware these hidden strings (URLs, command templates, keys, format strings) are "
+    "often the lead. QUERY: records a floss_strings Observation; adds NO graph nodes — PROMOTE an "
+    "interesting recovered string to a string node deliberately. FLOSS is slow, so check "
+    "list_observations(target_id) first. NOTE: stack/decoded recovery supports x86/amd64 PE "
+    "targets; on an ELF/foreign-arch artifact it degrades to a static-strings-only pass.",
+    {"type": "object", "properties": {"min_length": {"type": "integer",
+     "description": "minimum recovered string length (default 4, clamped 4–64)"}}},
+)
+
 
 def available_tools(ctx: ToolContext) -> list[ToolSpec]:
-    """Tool specs for this target. fuzz_function only when the policy permits
-    execution (fuzzing enabled in Settings)."""
+    """Tool specs for this target. fuzz_function only when the policy permits execution
+    (fuzzing enabled in Settings); floss_strings only when features.floss is enabled."""
     specs = list(_STATIC_SPECS)
     try:
         from hexgraph.policy import current_policy
 
         if current_policy().allow_execution:
             specs.append(_FUZZ_SPEC)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from hexgraph.engine.floss import floss_enabled
+
+        if floss_enabled():
+            specs.append(_FLOSS_SPEC)
     except Exception:  # noqa: BLE001
         pass
     return specs
@@ -378,6 +401,8 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
             return _clip("strings:\n" + ("\n".join(str(s) for s in strings[:200]) or "(none)"))
         if name == "binutils_facts":
             return _binutils(ctx)
+        if name == "floss_strings":
+            return _floss(ctx, args)
         if name == "list_functions":
             out = _decomp(ctx, None)
             if out.get("error"):
@@ -541,6 +566,55 @@ def _binutils(ctx: ToolContext) -> str:
         f"relocations: {f.get('relocation_count', 0)}"
         + (f"; PLT jump-slot imports: {', '.join(jslots[:40])}" if jslots else ""),
     ]
+    ctx.cache[key] = _clip("\n".join(lines))
+    return ctx.cache[key]
+
+
+def _floss(ctx: ToolContext, args: dict) -> str:
+    """Run the FLOSS deobfuscation probe (the engine helper records the Observation) and
+    render the recovered hidden strings as text. QUERY: mutates no graph — the agent
+    promotes interesting strings deliberately. Opt-in: refuses cleanly if features.floss
+    is off (the helper returns the enable message)."""
+    raw_len = args.get("min_length")
+    min_length = None
+    if raw_len is not None:
+        try:
+            min_length = int(raw_len)
+        except (TypeError, ValueError):
+            return "error: 'min_length' must be an integer"
+    key = f"floss:{min_length if min_length is not None else '*'}"
+    if key in ctx.cache:
+        return ctx.cache[key]
+    from hexgraph.engine.floss import collect_floss_strings
+
+    out = collect_floss_strings(ctx.session, ctx.project, ctx.target,
+                                min_length=min_length, source="agent")
+    if out.get("error"):
+        return out["error"]
+    f = out.get("facts", {}) or {}
+    c = f.get("counts", {}) or {}
+
+    def _vals(rows, n):
+        return [r.get("string") for r in (rows or [])[:n] if isinstance(r, dict) and r.get("string")]
+
+    lines = [
+        f"// FLOSS strings for {ctx.target.name}" + (" (cached)" if out.get("cached") else ""),
+        f"counts: stack={c.get('stack_strings', 0)} tight={c.get('tight_strings', 0)} "
+        f"decoded={c.get('decoded_strings', 0)} static={c.get('static_strings', 0)}",
+    ]
+    if f.get("degraded"):
+        lines.append(f"NOTE: {f.get('note') or 'degraded (static-only)'}")
+    stack = _vals(f.get("stack_strings"), 80)
+    tight = _vals(f.get("tight_strings"), 80)
+    decoded = _vals(f.get("decoded_strings"), 80)
+    if stack:
+        lines.append("stack strings: " + ", ".join(repr(s) for s in stack))
+    if tight:
+        lines.append("tight strings: " + ", ".join(repr(s) for s in tight))
+    if decoded:
+        lines.append("decoded strings: " + ", ".join(repr(s) for s in decoded))
+    if not (stack or tight or decoded):
+        lines.append("(no obfuscated strings recovered; see static_strings in the Observation)")
     ctx.cache[key] = _clip("\n".join(lines))
     return ctx.cache[key]
 

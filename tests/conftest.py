@@ -56,6 +56,29 @@ def _fuzz_image_ready() -> bool:
 FUZZ_IMAGE_READY = _fuzz_image_ready()
 
 
+def _floss_ready() -> bool:
+    """True if the sandbox is up AND the ACTIVE sandbox image actually carries FLOSS.
+
+    The flare-floss dependency is added in sandbox.Dockerfile (Phase 5A PR 5A-2) but a
+    not-yet-rebuilt local image (or a worktree pointing at the shared `:latest`) won't have
+    it, so the Docker-gated FLOSS probe test must skip cleanly there rather than fail. We
+    probe the ACTIVE image (HEXGRAPH_SANDBOX_IMAGE-aware via sandbox_image()) for the floss
+    CLI."""
+    if not SANDBOX_READY:
+        return False
+    from hexgraph.sandbox.runner import sandbox_image
+
+    r = subprocess.run(
+        ["docker", "run", "--rm", "--entrypoint", "sh", sandbox_image(),
+         "-c", "command -v floss >/dev/null 2>&1"],
+        capture_output=True,
+    )
+    return r.returncode == 0
+
+
+FLOSS_READY = _floss_ready()
+
+
 @pytest.fixture(autouse=True)
 def _restore_socket_guard():
     """The egress probes' `_egress.install_socket_guard` monkeypatches global stdlib socket
@@ -100,6 +123,19 @@ def sandbox():
     """A SandboxRunner; skips the test if the sandbox isn't available."""
     if not SANDBOX_READY:
         pytest.skip("requires Docker + the hexgraph-sandbox image (just sandbox-build)")
+    from hexgraph.sandbox.runner import SandboxRunner
+
+    return SandboxRunner()
+
+
+@pytest.fixture
+def floss_sandbox():
+    """A SandboxRunner whose ACTIVE image carries FLOSS; skips otherwise. The flare-floss
+    dependency requires a sandbox-image rebuild (Phase 5A PR 5A-2), so this skips cleanly on
+    a stock/not-yet-rebuilt image — like the fuzz/build image fixtures."""
+    if not FLOSS_READY:
+        pytest.skip("requires the flare-floss dependency in the sandbox image "
+                    "(rebuild docker/sandbox.Dockerfile)")
     from hexgraph.sandbox.runner import SandboxRunner
 
     return SandboxRunner()

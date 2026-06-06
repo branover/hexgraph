@@ -29,9 +29,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         cpio \
         python3 \
         python3-pip \
+        python3-dev \
         curl \
         ca-certificates \
         gcc \
+        g++ \
         libc6-dev \
         clang \
         libclang-rt-dev \
@@ -43,11 +45,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Static-analysis Python libs. --break-system-packages: this is a single-purpose
 # disposable image, not a shared host.
+#
+# flare-floss (Phase 5A) is FLOSS — recovers stack/tight/decoded strings a plain
+# `strings` pass misses by lightly emulating the decode routines in-process (it vendors
+# vivisect). Pinned to a known-good release; it pulls a mostly pure-Python emulation stack
+# (vivisect/viv-utils/pefile). Its `binary2strings` dep ships no Linux wheel, so pip builds
+# it (a pybind11 C++ extension) from source here — hence `g++` + `python3-dev` (Python.h)
+# in the apt list above. The
+# floss_probe degrades gracefully to a static-only pass on non-PE/foreign-arch artifacts.
+# The sandbox-build CI job asserts the `floss` CLI is present so an image change can't
+# silently drop it.
 RUN pip3 install --no-cache-dir --break-system-packages \
         pyelftools \
         python-magic \
         r2pipe \
-        paramiko
+        paramiko \
+        flare-floss==3.1.1
 
 # Ghidra is opt-in (large; pulls a JDK 21 + the Ghidra distribution). The
 # R2Decompiler stays the always-available default; GhidraDecompiler is selected

@@ -726,6 +726,13 @@ def binutils_facts(target_id: str) -> str:
     return _tool(target_id, "binutils_facts", {})
 
 
+def floss_strings(target_id: str, min_length: int | None = None) -> str:
+    """Recover OBFUSCATED strings (stack/tight/decoded) a plain strings pass misses, via
+    FLARE FLOSS run in the sandbox. Opt-in (features.floss); advertised only when enabled."""
+    return _tool(target_id, "floss_strings",
+                 {"min_length": min_length} if min_length is not None else {})
+
+
 def list_strings(target_id: str, pattern: str | None = None) -> str:
     return _tool(target_id, "list_strings", {"pattern": pattern} if pattern else {})
 
