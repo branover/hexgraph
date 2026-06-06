@@ -6,6 +6,12 @@ call_graph Observation draws `calls` edges among ALREADY-curated functions, both
 and creates no new nodes), the rooted-BFS helper, and the probe's mode/injection-safety helpers.
 """
 
+import json
+import shutil
+import subprocess
+
+import pytest
+
 from hexgraph.db.models import Edge, Node, Observation
 from hexgraph.db.session import session_scope
 from hexgraph.engine import agent_tools as AT
@@ -13,7 +19,7 @@ from hexgraph.engine.agent_tools import ToolContext, run_tool
 from hexgraph.engine.ingest import create_project, ingest_file
 from hexgraph.engine.nodes import get_or_create_node
 
-from conftest import fixture_path
+from conftest import SANDBOX_READY, fixture_path
 
 
 def _ctx(s):
@@ -208,3 +214,53 @@ def test_probe_mode_and_injection_helpers():
     assert XP._resolve_seek("0x401200", set()) == "0x401200"
     assert XP._resolve_seek("plain_name", set()) == "plain_name"  # safe bare name
     assert XP._resolve_seek("bad; name", set()) is None  # refused (unsafe → unfound)
+
+
+# --- NE: data_xrefs resolves a local/static symbol NAME via the symbol table -----------
+
+class _SymR2:
+    """A fake r2 that answers `isj` (the symbol table) — for _symbol_addr unit tests."""
+
+    def __init__(self, syms):
+        self._syms = syms
+
+    def cmd(self, c):
+        return json.dumps(self._syms) if c == "isj" else ""
+
+
+def test_symbol_addr_resolves_name_via_symbol_table():
+    """A data symbol given by NAME (KEY_ENC) resolves to its address through the symbol table,
+    matching either the full r2 name (`main`) or the trailing component (`obj.KEY_ENC` → KEY_ENC)."""
+    from hexgraph.sandbox.probes import xrefs_probe as XP
+
+    r2 = _SymR2([
+        {"name": "obj.KEY_ENC", "realname": "KEY_ENC", "vaddr": 0x402004},
+        {"name": "main", "vaddr": 0x401000},
+        {"name": "no_addr", "vaddr": 0},
+    ])
+    assert XP._symbol_addr(r2, "KEY_ENC") == "0x402004"   # trailing component of obj.KEY_ENC
+    assert XP._symbol_addr(r2, "main") == "0x401000"      # full name
+    assert XP._symbol_addr(r2, "missing") is None
+    assert XP._symbol_addr(r2, "no_addr") is None         # vaddr 0 is not a usable address
+    assert XP._symbol_addr(r2, "bad; name") is None       # unsafe name refused (no shell reach)
+
+
+@pytest.mark.skipif(not SANDBOX_READY, reason="requires the sandbox image (radare2)")
+def test_data_xrefs_resolves_named_symbol_end_to_end(hg_home, tmp_path):
+    """Finding NE: data_xrefs by a local/static symbol NAME (not just a hex address). The probe
+    resolves KEY_ENC through the symbol table to its address and returns the code refs to it."""
+    if shutil.which("gcc") is None:
+        pytest.skip("gcc unavailable to compile the keytab fixture")
+    src = fixture_path("challenges/keytab.c")
+    binpath = str(tmp_path / "keytab")
+    if subprocess.run(["gcc", "-O0", "-o", binpath, src], capture_output=True).returncode != 0:
+        pytest.skip("could not compile keytab")
+
+    from hexgraph.sandbox.executor import get_executor
+
+    out = get_executor().run_json_probe(
+        "xrefs_probe.py", binpath, extra_args=["KEY_ENC", "--mode", "data"])
+    refs = out.get("data_refs") or []
+    assert refs, out  # resolved BY NAME and found at least one reference
+    # The reference lives in verify() (which does memcmp(in, KEY_ENC, ...)).
+    assert any("verify" in (r.get("from_function") or "") for r in refs), out
