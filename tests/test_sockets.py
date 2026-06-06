@@ -27,7 +27,7 @@ from hexgraph.engine.surfaces import register_service_target
 
 # ── register_service_target: the `service` target + channel + node link ────────────
 
-def test_register_socket_creates_service_target_and_channel(hg_home):
+def test_register_service_creates_service_target_and_channel(hg_home):
     with session_scope() as s:
         p = create_project(s, name="svc")
         t = register_service_target(s, p, "192.168.1.1", 1337, name="bindshell")
@@ -40,7 +40,7 @@ def test_register_socket_creates_service_target_and_channel(hg_home):
         assert t.name == "bindshell"
 
 
-def test_register_socket_links_shared_socket_node(hg_home):
+def test_register_service_links_shared_socket_node(hg_home):
     """The reachable surface (target) links to the SHARED socket NODE (the network-map
     endpoint, target_id=None) via a `listens_on` edge — target vs node stays distinct."""
     with session_scope() as s:
@@ -57,7 +57,7 @@ def test_register_socket_links_shared_socket_node(hg_home):
         assert node.attrs_json.get("port") == 9000
 
 
-def test_register_socket_udp_and_proto_hint(hg_home):
+def test_register_service_udp_and_proto_hint(hg_home):
     with session_scope() as s:
         p = create_project(s, name="svc")
         t = register_service_target(s, p, "10.0.0.5", 5683, transport="udp", proto="coap")
@@ -66,7 +66,7 @@ def test_register_socket_udp_and_proto_hint(hg_home):
         assert (t.metadata_json or {}).get("proto") == "coap"
 
 
-def test_register_socket_validation(hg_home):
+def test_register_service_validation(hg_home):
     with session_scope() as s:
         p = create_project(s, name="svc")
         with pytest.raises(ValueError):
@@ -165,7 +165,7 @@ def test_socket_target_campaign_refuses_public_host(hg_home):
 
 # ── REST + MCP registration paths ─────────────────────────────────────────────────
 
-def test_rest_register_socket(hg_home):
+def test_rest_register_service(hg_home):
     from fastapi.testclient import TestClient
     from hexgraph.api.app import create_app
 
@@ -185,7 +185,7 @@ def test_rest_register_socket(hg_home):
         assert bad.status_code == 400
 
 
-def test_mcp_register_socket(hg_home):
+def test_mcp_register_service(hg_home):
     from hexgraph.engine.mcp_tools import register_service
 
     with session_scope() as s:
@@ -198,7 +198,7 @@ def test_mcp_register_socket(hg_home):
     assert "error" in register_service(pid, "h", 80, parent_ref="nope")
 
 
-def test_mcp_register_socket_in_catalog():
+def test_mcp_register_service_in_catalog():
     """register_service is advertised in the MCP catalog (so an agent can discover it)."""
     from hexgraph.engine.mcp_catalog import _CATALOG
 

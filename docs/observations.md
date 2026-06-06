@@ -73,7 +73,7 @@ flush.
 Tool Results are only useful if you can find them, so HexGraph surfaces them in a few ways.
 
 When a task runs, the context it assembles includes a compact index of prior analysis on the target,
-something like "12 decompilations, a call graph, re_xrefs, a strings pass", so an agent learns what already
+something like "12 decompilations, a call graph, xrefs, a strings pass", so an agent learns what already
 exists without having to guess. Every tool result also comes back with the id of the Tool Result it was
 recorded as and a one-line nudge to check the store before re-running.
 

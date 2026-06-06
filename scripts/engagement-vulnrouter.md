@@ -13,13 +13,13 @@ WORKING, VERIFIED proofs-of-concept** — then record everything in HexGraph so 
 teammate can reproduce your reasoning from the graph alone.
 
 **Success = verified PoCs.** HexGraph can send crafted HTTP requests to the target
-in its sandbox and confirm exploitation. The task is done when `verify_poc` returns
+in its sandbox and confirm exploitation. The task is done when `finding_verify_poc` returns
 `verified: true` for each bug you claim.
 
 ## Rules of engagement
 - Work **only** through the HexGraph `hexgraph` MCP tools. Do **not** use your own
   shell, `curl`, or any other network client against the target — all HTTP goes
-  through HexGraph's `http_request` / `verify_poc`, which run in a bounded, audited,
+  through HexGraph's `net_http_request` / `finding_verify_poc`, which run in a bounded, audited,
   local-only sandbox. (Your `hexgraph-vr` skill has the full rules; §2b covers web.)
 - Judge from evidence: read actual responses before you conclude.
 
@@ -27,15 +27,15 @@ in its sandbox and confirm exploitation. The task is done when `verify_poc` retu
 0. **Orient.** `list_projects`; the operator has created a project and registered
    the surface for you (a `web_app` target). `list_targets(project_id)` to find its
    id. `get_schemas` once for the write-API contract.
-1. **Map the surface.** `run_task(target_id, "surface_recon")` (materializes the
-   route/param graph) and `run_task(target_id, "web_recon")` (liveness). Then probe
-   with **`http_request`** — e.g. `GET /`, `GET /admin/flag` (note the
+1. **Map the surface.** `task_run(target_id, "surface_recon")` (materializes the
+   route/param graph) and `task_run(target_id, "web_recon")` (liveness). Then probe
+   with **`net_http_request`** — e.g. `GET /`, `GET /admin/flag` (note the
    unauthenticated response), `POST /api/login`. Read the bodies.
 2. **Hunt.** Look for an **authentication bypass** (can you reach a protected route
    without valid credentials?) and a **command-injection / RCE** (does a parameter
    reach a shell?). Record each lead immediately as a finding + the `endpoint`/
    `param`/`input` nodes and a `taints` edge to the sink, at low/medium confidence.
-3. **Prove it with `verify_poc(target_id, {steps, oracle})`** (cookies carry across
+3. **Prove it with `finding_verify_poc(target_id, {steps, oracle})`** (cookies carry across
    `steps`):
    - **Auth bypass** — log in with the bypass credential, then GET the protected
      route; `oracle:{type:"body_contains","value":"<the secret only an authed user
@@ -43,7 +43,7 @@ in its sandbox and confirm exploitation. The task is done when `verify_poc` retu
    - **RCE** — inject `; echo {{NONCE}}` (or similar) into the vulnerable parameter;
      `oracle:{type:"body_contains","value":"{{NONCE}}"}`. The echoed nonce proves
      your command ran. Pass `finding_id=` so the result attaches to your finding.
-   (If `verify_poc` says egress isn't permitted, the operator must enable
+   (If `finding_verify_poc` says egress isn't permitted, the operator must enable
    **Settings → Network egress**.)
 4. **Make the graph tell the story.** A confirmed vulnerability finding MUST have a
    verified `poc` finding linked to it (`confirms`→). Populate node attributes per
@@ -52,7 +52,7 @@ in its sandbox and confirm exploitation. The task is done when `verify_poc` retu
 
 ## Deliverable
 A short report: each vulnerability (route, parameter, how it's triggered, pre-auth?,
-impact), the **verified PoC** for each (the steps + that `verify_poc` returned
+impact), the **verified PoC** for each (the steps + that `finding_verify_poc` returned
 `verified: true`), the one-line fix, and the `project_id` so everything is in HexGraph.
 
 Begin by listing the `hexgraph` tools available to you, then orient with

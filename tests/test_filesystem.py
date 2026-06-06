@@ -42,7 +42,7 @@ def test_list_filesystem(hg_home):
         assert all(f["added"] is False for f in fs["files"])
 
 
-def test_add_file_as_target(hg_home, monkeypatch):
+def test_promote_file(hg_home, monkeypatch):
     monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: False)  # skip recon
     with session_scope() as s:
         p, fw = _firmware_with_fs(s)

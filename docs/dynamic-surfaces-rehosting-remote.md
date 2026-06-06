@@ -19,7 +19,7 @@ the bridge between the static and dynamic views.
 A **`service` target** is a bare, non-HTTP network service: a bind shell, a vendor binary's control
 protocol, a custom daemon, anything reached over a raw TCP or UDP Channel `{kind, host, port}`, with no
 bytes and no credentials. You register one with `target_register_service(project_id, host, port,
-transport="tcp")` over MCP, or with `POST /api/projects/{id}/targets/socket`. It links to the shared
+transport="tcp")` over MCP, or with `POST /api/projects/{id}/targets/service`. It links to the shared
 `socket` graph node through a `listens_on` edge, and HexGraph infers the `network` surface from there,
 so `fuzz_start` can point boofuzz straight at `host:port` and `net_tcp_request`/`finding_verify_poc` can
 probe and prove it. Reach for this rather than a `remote`/telnet target when all you have is a bare
@@ -52,7 +52,7 @@ just iotgoat                                         # fetch + rehost + register
 hexgraph rehost <firmware-target> [--brand <hint>]
 ```
 
-`target_rehost` auto-selects the emulator by image type (`select_rehoster`): qemu+KVM for a full-OS disk image
+`rehost` auto-selects the emulator by image type (`select_rehoster`): qemu+KVM for a full-OS disk image
 (IoTGoat's x86 OpenWrt `.img`, say), or FirmAE for a vendor blob (squashfs, cramfs, and the like).
 Booting needs `features.rehost`; assessing the running device with `surface_recon`, `net_http_request`, or
 `finding_verify_poc` needs `features.network`. The probe joins the emulator container's netns so it can reach

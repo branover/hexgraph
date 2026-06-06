@@ -127,6 +127,13 @@ def test_closed_value_set_params_carry_a_schema_enum():
     # importable, so pin the two the original list dropped/wronged as a regression lock).
     remote_tools = set(by_name["net_remote_run"]["tool"]["enum"])
     assert {"processes_full", "ls"} <= remote_tools and len(remote_tools) == 12
+    # build/fuzz enums must ALSO equal their importable authorities (they were hand-typed once
+    # and that re-introduced the drift hazard — these lock them to the source).
+    from hexgraph.engine.build import BUILD_SYSTEMS
+    from hexgraph.engine.fuzzers.base import SURFACE_ENGINES, SURFACES
+    assert set(by_name["src_build"]["system"]["enum"]) == set(BUILD_SYSTEMS)
+    assert set(by_name["fuzz_start"]["surface"]["enum"]) == set(SURFACES)
+    assert set(by_name["fuzz_start"]["engine"]["enum"]) == {e for es in SURFACE_ENGINES.values() for e in es}
 
 
 def test_gated_tools_name_their_feature_in_the_description():

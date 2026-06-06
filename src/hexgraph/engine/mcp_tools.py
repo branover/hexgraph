@@ -846,8 +846,8 @@ def search(project_id: str, q: str) -> dict:
 # --- Observation store: discoverable prior analysis (design §5.6) --------------
 # Reuse hint appended to every result so the agent learns the contract inline.
 _OBS_REUSE = ("Tool results persist as Observations on the target; they do NOT add graph "
-              "nodes. Check list_observations(target_id) before re-running an analysis, and "
-              "get_observation(id) for a prior payload.")
+              "nodes. Check obs_list(target_id) before re-running an analysis, and "
+              "obs_get(id) for a prior payload.")
 
 
 def list_observations(target_id: str, tool: str | None = None, kind: str | None = None,
@@ -1365,14 +1365,14 @@ def _decompiler_info() -> dict:
         "available_default": "radare2",
         "working": health["working"],
         "health": health,
-        "note": "decompile_function / disassemble use the OPERATOR-configured decompiler "
+        "note": "re_decompile_function / re_disassemble use the OPERATOR-configured decompiler "
                 "automatically — you don't select it. radare2 is the always-available default; "
                 "Ghidra is used when the operator enables features.ghidra in Settings AND the "
                 "sandbox image was built with Ghidra (`just sandbox-build with_ghidra=1`). There "
                 "is intentionally no MCP tool to toggle this (it's an operator setting). If you "
                 "want Ghidra and `active` here is 'radare2', ask the operator to enable it. "
                 "`working` reports whether `active` ACTUALLY functions right now — if it's false, "
-                "see health.detail (run check_decompiler for the full diagnostic).",
+                "see health.detail (run meta_check_decompiler for the full diagnostic).",
     }
 
 
@@ -1484,9 +1484,9 @@ def get_schemas() -> dict:
             "what": "Every deterministic tool call (decompile/decompile_at/disassemble/list/"
                     "call_graph/xrefs/function_xrefs/data_xrefs/strings/structs/taint/…) writes a "
                     "durable Observation: the call + a summary + the FULL payload in CAS, scoped to "
-                    "the exact bytes by content_hash. Read them with list_observations(target_id) / "
-                    "get_observation(id) / search_observations(query) over the metadata, or "
-                    "search_decompiled(query) to grep across the decompiled function BODIES.",
+                    "the exact bytes by content_hash. Read them with obs_list(target_id) / "
+                    "obs_get(id) / obs_search(query) over the metadata, or "
+                    "re_search_decompiled(query) to grep across the decompiled function BODIES.",
             "contract": "Results persist HERE — they do NOT auto-populate the graph. CHECK HERE "
                         "BEFORE RE-RUNNING a heavy analysis (an identical call against identical "
                         "bytes is returned from the store, flagged cached — analyze once, reuse "

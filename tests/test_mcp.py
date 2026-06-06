@@ -530,7 +530,7 @@ def test_build_log_tool(hg_home):
     assert mcp_tools.build_log("nope").get("error") == "build not found"
 
 
-def test_add_file_as_target_tool(hg_home, monkeypatch):
+def test_promote_file_tool(hg_home, monkeypatch):
     """Promote a binary from an unpacked firmware FS into its own analyzable target — the
     bridge from browsing the rootfs to decompiling it. Idempotent; bad path/target → error."""
     from test_filesystem import _firmware_with_fs
