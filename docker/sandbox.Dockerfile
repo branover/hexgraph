@@ -55,12 +55,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # floss_probe degrades gracefully to a static-only pass on non-PE/foreign-arch artifacts.
 # The sandbox-build CI job asserts the `floss` CLI is present so an image change can't
 # silently drop it.
+#
+# yara-python (Phase 5B) is the YARA matcher used by yara_probe — a project-wide pattern
+# sweep over targets + extracted firmware files (embedded creds, known-bad library banners,
+# weak-crypto constants, packer signatures). Small, mature; the wheel bundles libyara, so
+# no separate apt package is needed. The yara_probe imports `yara` (yara-python) directly,
+# so the `yara` CLI is optional — but we assert the module imports in the sandbox-build CI
+# job so an image change can't silently drop it. Pinned to a known-good release.
 RUN pip3 install --no-cache-dir --break-system-packages \
         pyelftools \
         python-magic \
         r2pipe \
         paramiko \
-        flare-floss==3.1.1
+        flare-floss==3.1.1 \
+        yara-python==4.5.1
 
 # Ghidra is opt-in (large; pulls a JDK 21 + the Ghidra distribution). The
 # R2Decompiler stays the always-available default; GhidraDecompiler is selected

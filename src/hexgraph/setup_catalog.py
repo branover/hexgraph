@@ -180,6 +180,25 @@ FEATURES: tuple[Feature, ...] = (
                       "foreign-arch it degrades to a static-strings-only pass.",
     ),
     Feature(
+        key="features.yara.enabled",
+        label="YARA pattern sweep",
+        unlocks="Sweep the project's targets and extracted firmware files against YARA rules "
+                "(a bundled high-signal set plus any `.yar` you drop in the rules dir) for "
+                "embedded credentials, known-bad library banners, weak-crypto constants, and "
+                "packer signatures — the fuzzy/structural complement to the exact-hash n-day link. "
+                "Drop your own rules in <HEXGRAPH_HOME>/yara_rules/; rule updates are a manual act "
+                "(the no-network invariant means HexGraph never fetches rules for you).",
+        # YARA is a static MATCH — it reads bytes, never executes the target, opens no socket —
+        # so it relaxes no policy gate/tier. Opt-in only because rule management is a surface and
+        # a sweep can be heavier than a single probe.
+        security="",
+        policy_changing=False,
+        tier=None,
+        builds=("sandbox",),  # needs yara + yara-python in the sandbox image (rebuild required)
+        requires_note="needs yara + yara-python in the sandbox image (a rebuild). Bundled rules "
+                      "ship in-package; add your own under <HEXGRAPH_HOME>/yara_rules/.",
+    ),
+    Feature(
         key="features.poc.enabled",
         label="PoC verification (execute the target)",
         unlocks="The `poc` task + `verify_poc` tool run an attacker-style input against "

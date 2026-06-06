@@ -79,6 +79,28 @@ def _floss_ready() -> bool:
 FLOSS_READY = _floss_ready()
 
 
+def _yara_ready() -> bool:
+    """True if the sandbox is up AND the ACTIVE sandbox image actually carries yara-python.
+
+    yara-python is added in sandbox.Dockerfile (Phase 5B) but a not-yet-rebuilt local image
+    (or a worktree pointing at the shared `:latest`) won't have it, so the Docker-gated YARA
+    probe test must skip cleanly there rather than fail. We probe the ACTIVE image
+    (HEXGRAPH_SANDBOX_IMAGE-aware via sandbox_image()) for the `yara` Python module."""
+    if not SANDBOX_READY:
+        return False
+    from hexgraph.sandbox.runner import sandbox_image
+
+    r = subprocess.run(
+        ["docker", "run", "--rm", "--entrypoint", "python3", sandbox_image(),
+         "-c", "import yara"],
+        capture_output=True,
+    )
+    return r.returncode == 0
+
+
+YARA_READY = _yara_ready()
+
+
 @pytest.fixture(autouse=True)
 def _restore_socket_guard():
     """The egress probes' `_egress.install_socket_guard` monkeypatches global stdlib socket
@@ -135,6 +157,19 @@ def floss_sandbox():
     a stock/not-yet-rebuilt image — like the fuzz/build image fixtures."""
     if not FLOSS_READY:
         pytest.skip("requires the flare-floss dependency in the sandbox image "
+                    "(rebuild docker/sandbox.Dockerfile)")
+    from hexgraph.sandbox.runner import SandboxRunner
+
+    return SandboxRunner()
+
+
+@pytest.fixture
+def yara_sandbox():
+    """A SandboxRunner whose ACTIVE image carries yara-python; skips otherwise. The
+    yara-python dependency requires a sandbox-image rebuild (Phase 5B), so this skips cleanly
+    on a stock/not-yet-rebuilt image — like the floss/fuzz/build image fixtures."""
+    if not YARA_READY:
+        pytest.skip("requires the yara-python dependency in the sandbox image "
                     "(rebuild docker/sandbox.Dockerfile)")
     from hexgraph.sandbox.runner import SandboxRunner
 

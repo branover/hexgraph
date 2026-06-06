@@ -50,4 +50,24 @@ else
 fi
 rm -rf fwroot
 
-echo "built: vuln_httpd, libupnp.so, synthetic_fw.bin, floss_fixture.exe"
+# yara_fixture.bin: a deterministic binary blob carrying strings that fire several of the
+# bundled YARA rules (Phase 5B) — an embedded default-credential pair, a UPX packer signature,
+# a known-bad Dropbear/BusyBox library banner, and a weak-hash banner. Used by the Docker-gated
+# YARA probe test. It is NOT a real packed/credentialed binary; the strings are planted so the
+# match is exact and the rules' meta (severity/cve/category) is exercised end to end.
+python3 - <<'PY'
+blob = (
+    b"\x7fELF\x00\x00\x00\x00"                      # an ELF-ish magic prefix (just bytes; never executed)
+    b"login: admin:admin\n"                          # hexgraph_default_admin_creds
+    b"UPX!\x00\x00UPX0\x00UPX1\x00packed\n"          # hexgraph_upx_packed
+    b"Dropbear sshd v2015.67\n"                      # hexgraph_dropbear_old_banner (CVE-2016-7406)
+    b"BusyBox v1.2.1 (2016) multi-call binary\n"     # hexgraph_busybox_old_banner
+    b"MD5_Init\x00SHA1_Init\x00"                     # hexgraph_weak_hash_md5_sha1_banner
+    + b"\x00" * 64
+)
+with open("yara_fixture.bin", "wb") as fh:
+    fh.write(blob)
+print("built yara_fixture.bin", len(blob), "bytes")
+PY
+
+echo "built: vuln_httpd, libupnp.so, synthetic_fw.bin, floss_fixture.exe, yara_fixture.bin"

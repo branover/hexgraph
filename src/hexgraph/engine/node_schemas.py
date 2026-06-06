@@ -134,10 +134,22 @@ NODE_ATTRIBUTE_SCHEMAS: dict[str, dict[str, Any]] = {
         "attributes": {"statement": _a("the claim", recommended=True), "rationale": _a("why you think so")},
     },
     "pattern": {
-        "description": "A reusable vulnerability/code pattern matched across targets.",
-        "identity": "(project, content_hash).",
-        "use_when": "Generalizing a bug shape to sweep other binaries for it.",
-        "attributes": {"signature": _a("what defines the pattern", recommended=True)},
+        "description": "A reusable vulnerability/code pattern matched across targets (e.g. a "
+                       "YARA rule hit — embedded creds, a known-bad library banner, a packer "
+                       "signature). The fuzzy/structural complement to a `similar_to` exact-hash "
+                       "n-day link.",
+        "identity": "(project, content_hash) — for a YARA hit the hash is derived from the rule, "
+                    "so the SAME rule across many targets dedups to ONE pattern node, linked by "
+                    "`matches_rule` edges from each matched target.",
+        "use_when": "Generalizing a bug shape to sweep other binaries for it; YARA sweeps "
+                    "auto-promote a matched rule here (the yara helper) carrying the rule's "
+                    "declared severity/cve — promote a match to a finding deliberately.",
+        "attributes": {"signature": _a("what defines the pattern", recommended=True),
+                       "rule": _a("the matched rule name (for a YARA-sourced pattern)"),
+                       "severity": _a("the rule's declared severity (info|low|medium|high|critical) "
+                                      "— surfaced from the rule, NOT a fabricated guess"),
+                       "cve": _a("the CVE the rule cites, if any"),
+                       "category": _a("the rule's category tag (embedded_credential|packer|…)")},
     },
     "source_file": {
         "description": "A file in a managed source_tree (trusted source we possess — NOT a "

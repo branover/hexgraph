@@ -95,6 +95,15 @@ EDGE_ATTRIBUTE_SCHEMAS: dict[str, dict[str, Any]] = {
         "attributes": {"by": _attr("what matched, e.g. 'content_hash'"),
                        "score": _attr("similarity 0..1", type="float")},
     },
+    "matches_rule": {
+        "description": "a target (or a node) matched a reusable `pattern` node — a YARA "
+                       "rule hit (target|node → node[pattern]). The fuzzy/structural "
+                       "complement to `similar_to`'s exact-hash n-day link: one rule, "
+                       "swept corpus-wide, links every target it matched to one pattern.",
+        "attributes": {"by": _attr("what matched, e.g. 'yara'"),
+                       "namespace": _attr("the rule file namespace the rule came from"),
+                       "observation_id": _attr("the yara_matches Observation that recorded it")},
+    },
     "routes_to": {
         "description": "a web endpoint/route dispatches to its handler function (the "
                        "static↔dynamic bridge: dynamic surface → static binary).",

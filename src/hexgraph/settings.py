@@ -86,6 +86,18 @@ DEFAULTS: dict[str, Any] = {
             # static-strings-only pass. Needs the flare-floss dependency in the sandbox image.
             "enabled": False,
         },
+        "yara": {
+            # OFF by default. YARA project-wide pattern sweep (Phase 5B): match the project's
+            # targets + extracted firmware files against a set of YARA rules (the bundled
+            # high-signal set + any `.yar` the user drops in the HEXGRAPH_HOME rules dir) — an
+            # embedded credential, a known-bad library banner, a weak-crypto constant, a packer
+            # signature. The fuzzy/structural complement to the exact-hash n-day link. A static
+            # MATCH: it reads bytes, never executes the target, opens no socket — so it relaxes
+            # NO sandbox/exec/egress boundary and raises NO policy tier (NOT a policy gate, no
+            # policy.py entry). Opt-in only because rule management is a surface and a sweep can
+            # be heavier than a single probe. Needs yara + yara-python in the sandbox image.
+            "enabled": False,
+        },
         "fuzzing": {
             # OFF by default: enabling this flips the analysis policy to allow
             # execution (still --network none, capped, timed, disposable). The
@@ -270,6 +282,7 @@ ALLOWED: dict[str, tuple[Any, set | None]] = {
     "features.ghidra.bridge.port": (int, None),
     "features.emulation.enabled": (bool, None),
     "features.floss.enabled": (bool, None),
+    "features.yara.enabled": (bool, None),
     "features.fuzzing.enabled": (bool, None),
     "features.fuzzing.max_total_time": (int, None),
     "features.fuzzing.max_len": (int, None),

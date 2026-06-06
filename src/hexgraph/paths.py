@@ -43,3 +43,14 @@ def finding_schema_path() -> Path:
 def mock_fixtures_dir() -> Path:
     """The mock-LLM fixture tree, shipped inside the package."""
     return _PACKAGE_DIR / "llm" / "fixtures" / "mock_llm"
+
+
+def bundled_yara_rules_dir() -> Path:
+    """The bundled YARA rule set, shipped inside the package (Phase 5B).
+
+    A handful of original, HexGraph-owned high-signal `.yar` rules (embedded creds,
+    weak crypto, packers, known-bad library banners). Resolved relative to the package
+    like the Finding schema / mock fixtures, so installs and tests find them whether or
+    not a source checkout is present. Rule UPDATES are a manual user act (drop files in
+    the user rules dir) — the no-network invariant means HexGraph never auto-fetches rules."""
+    return _PACKAGE_DIR / "rules" / "yara"
