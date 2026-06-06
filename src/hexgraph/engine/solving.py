@@ -179,9 +179,29 @@ def solve_reaching_input(
             "reuse_hint": _REUSE_HINT,
         }
 
+    # Finding-level dedup, INDEPENDENT of the Observation cache: the cache keys on the call args
+    # (mode, sink, function, budget), so re-solving the SAME sink at a DIFFERENT budget/function
+    # writes a fresh Observation and would otherwise mint a SECOND vulnerability finding for the
+    # same sink (the Phase-5 determinism check flags that). If a solver-origin finding for this
+    # (target, sink) already exists, reuse it instead of minting a duplicate.
+    existing = _existing_solver_finding(session, target, sink_func=sink_func, sink_addr=sink_addr)
+    if existing is not None:
+        return {
+            "solved": True, "cached": False, "observation_id": obs.id if obs else None,
+            "finding_id": existing.id, "duplicate_finding_suppressed": True,
+            "concrete_input": result.concrete_input,
+            "concrete_input_repr": (result.provenance or {}).get("input_repr"),
+            "path_addrs": list(result.path_addrs or []),
+            "note": "a solver-origin vulnerability finding for this sink already exists "
+                    "(prior solve); the new observation was recorded but no duplicate finding "
+                    "was created.",
+            "reuse_hint": _REUSE_HINT,
+        }
+
     finding_id = _promote_and_emit(
         session, project, target, result,
-        sink_func=sink_func, function=function, observation_id=obs.id if obs else None,
+        sink_func=sink_func, sink_addr=sink_addr, function=function,
+        function_addr=function_addr, observation_id=obs.id if obs else None,
     )
     return {
         "solved": True,
@@ -196,9 +216,33 @@ def solve_reaching_input(
     }
 
 
+def _existing_solver_finding(session: Session, target: Target, *, sink_func: str | None,
+                             sink_addr: str | None):
+    """An existing solver-origin `vulnerability` finding for this `(target, sink)`, or None.
+
+    Identity is the sink the finding was emitted for — its `sink_func`/`sink_addr` recorded under
+    `evidence.extra.solver` by `_promote_and_emit`. Used to suppress a duplicate finding when the
+    same sink is re-solved at a different budget/function (the Observation cache can't catch that:
+    its key includes the budget). Returns the first match (one finding per sink is the invariant)."""
+    from hexgraph.db.models import Finding as FindingRow
+
+    rows = (session.query(FindingRow)
+            .filter(FindingRow.target_id == target.id,
+                    FindingRow.finding_type == "vulnerability")
+            .all())
+    for r in rows:
+        solver = ((r.evidence_json or {}).get("extra") or {}).get("solver") or {}
+        if solver.get("backend") != "angr":
+            continue
+        if solver.get("sink_func") == sink_func and solver.get("sink_addr") == sink_addr:
+            return r
+    return None
+
+
 def _promote_and_emit(
     session: Session, project: Project, target: Target, result: SolverResult,
-    *, sink_func: str | None, function: str | None, observation_id: str | None,
+    *, sink_func: str | None, sink_addr: str | None = None, function: str | None,
+    function_addr: str | None = None, observation_id: str | None,
 ) -> str:
     """Promote the GROUNDED path (the sink symbol + the enclosing function + a `calls` edge) and
     emit the high-confidence `vulnerability` finding carrying the concrete reaching input. Returns
@@ -230,7 +274,8 @@ def _promote_and_emit(
     if function and sink_node is not None:
         fn_node = materialize_function(
             session, project_id=project.id, target_id=target.id, name=function,
-            address=prov.get("function_addr"), created_by="solver",
+            # The caller's resolved function_addr is authoritative; fall back to the probe's echo.
+            address=function_addr or prov.get("function_addr"), created_by="solver",
         )
         add_edge(
             session, project_id=project.id, src=("node", fn_node.id), dst=("node", sink_node.id),
@@ -246,6 +291,10 @@ def _promote_and_emit(
     )
     solver_extra = {
         "backend": "angr",
+        # The sink identity (func + addr) — the dedup key `_existing_solver_finding` matches on,
+        # so a re-solve of the SAME sink at a different budget reuses this finding.
+        "sink_func": sink_func,
+        "sink_addr": sink_addr,
         "concrete_input_hex": result.concrete_input,
         "concrete_input_repr": prov.get("input_repr"),
         "input_model": prov.get("input_model"),

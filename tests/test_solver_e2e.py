@@ -178,6 +178,53 @@ def test_reaching_input_dedups_and_no_duplicate_finding(hg_home):
         assert s.query(Finding).filter(Finding.finding_type == "vulnerability").count() == 1
 
 
+def test_resolve_same_sink_different_budget_no_duplicate_finding(hg_home):
+    """Polish #1: re-solving the SAME sink at a DIFFERENT budget must NOT mint a second
+    vulnerability finding. The Observation cache keys on the call args (incl. budget), so a
+    different budget writes a FRESH Observation — but the finding-level dedup keeps it to ONE
+    finding (the Phase-5 determinism check would flag the duplicate)."""
+    fake = _FakeSolver()
+    with session_scope() as s:
+        p, t = _seed(s)
+        out1 = solve_reaching_input(s, p, t, sink_func="system", function="main",
+                                    budget="quick", solver=fake)
+        s.flush()
+        out2 = solve_reaching_input(s, p, t, sink_func="system", function="main",
+                                    budget="deep", solver=fake)
+        s.flush()
+        assert out1["solved"] is True and out2["solved"] is True
+        assert out1["finding_id"]
+        # the second solve (different budget) is NOT an Observation-cache hit…
+        assert out1["cached"] is False and out2["cached"] is False
+        assert out2.get("duplicate_finding_suppressed") is True
+        # …it records its own Observation (two now), but reuses the existing finding
+        assert out2["finding_id"] == out1["finding_id"]
+        assert s.query(Observation).filter(Observation.result_kind == "solver").count() == 2
+        # crucially: still only ONE vulnerability finding despite the two solves
+        assert s.query(Finding).filter(Finding.finding_type == "vulnerability").count() == 1
+
+
+def test_reaching_input_threads_function_addr_onto_node(hg_home):
+    """Polish #4: a caller-supplied function_addr is threaded onto the promoted function node's
+    `address` (it was always None before — the probe parsed --function-addr but never surfaced
+    it, and _promote_and_emit read it from a provenance key nothing set)."""
+    fake = _FakeSolver()
+    with session_scope() as s:
+        p, t = _seed(s)
+        out = solve_reaching_input(s, p, t, sink_func="system", function="main",
+                                   function_addr="0x401000", solver=fake)
+        s.flush()
+        assert out["solved"] is True
+        fn = s.query(Node).filter(Node.target_id == t.id,
+                                  Node.node_type == NodeType.function.value,
+                                  Node.name == "main").one()
+        assert fn.address == "0x401000"
+        # and the sink identity is recorded on the finding so the dedup key can match it
+        f = s.query(Finding).filter(Finding.id == out["finding_id"]).one()
+        solver_extra = ((f.evidence_json or {}).get("extra") or {}).get("solver") or {}
+        assert solver_extra.get("sink_func") == "system"
+
+
 def test_no_solution_fabricates_nothing(hg_home):
     """A Solver that finds nothing (returns None) must NOT emit a finding; the engine records an
     honest unsolved Observation and reports solved=false."""
@@ -257,6 +304,11 @@ def test_licensegate_end_to_end_solve(hg_home, angr_image):
         assert _check_serial(recovered), (
             f"angr returned {recovered!r} (hex {out['concrete_input']}) which does NOT satisfy "
             "the licensegate constraints")
+        # Polish #5: argv-mode input is constrained non-NUL, so the recovered reproducer has no
+        # interior NUL that would truncate a real argv[1] — it survives as a faithful argument.
+        assert b"\x00" not in recovered, (
+            f"argv-mode reproducer {recovered!r} contains a NUL byte that wouldn't survive as a "
+            "real argv[1] string")
         # and the vulnerability finding carries that exact input in its envelope
         f = s.query(Finding).filter(Finding.id == out["finding_id"]).one()
         assert f.finding_type == "vulnerability"
