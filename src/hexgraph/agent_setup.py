@@ -34,12 +34,14 @@ should be written back as nodes, edges, findings, hypotheses, and annotations, s
 **How analysis flows into the graph.** The graph is a CURATED result set, not the
 program model. On a target, first read the existing graph AND the Observation index
 (`list_observations(target_id)`) so you don't re-derive what's there. Then:
-- **Query freely.** Tool results (list_functions / decompile_function / decompile_at /
-  disassemble / xrefs / function_xrefs / data_xrefs / call_graph / list_strings /
-  search_decompiled) persist as durable Observations on the target — check
-  `list_observations` before re-running a heavy analysis, `get_observation(id)` to reuse
-  a prior payload, and `search_decompiled(query)` to grep across decompiled bodies
-  (analyze once, reuse forever). A query adds NO graph nodes (call_graph only wires
+- **Query freely.** Tool results (binutils_facts / list_functions / decompile_function /
+  decompile_at / disassemble / reanalyze / xrefs / function_xrefs / data_xrefs / call_graph /
+  list_strings / search_decompiled / recover_constant) persist as durable Observations on the
+  target (result_kinds: decompilation / function_list / call_graph / xrefs / taint /
+  binutils_facts / emulation / strings / structs / …) — check `list_observations` before
+  re-running a heavy analysis, `get_observation(id)` to reuse a prior payload,
+  `search_observations(q)` to find one, and `search_decompiled(query)` to grep across decompiled
+  bodies (analyze once, reuse forever). A query adds NO graph nodes (call_graph only wires
   `calls` edges among functions ALREADY promoted).
 - **Enrich for free.** When a tool recovers richer info about something already in the
   graph (a function's prototype/address, a dangerous import's is_sink tag), HexGraph
@@ -83,18 +85,53 @@ Let the existing graph and any open findings/hypotheses steer your next move: pi
 up unfinished threads, follow related findings to siblings, and target functions
 that haven't been analyzed yet.
 
-## 2. Investigate (all sandboxed)
-- `xrefs` (no symbol) maps the dangerous sinks (system/popen/strcpy/sprintf/…) and
-  who reaches them — start there to find the attack surface fast. `xrefs <sink>`
-  lists exactly which functions call a given sink and where.
-- `list_functions`, then `decompile_function` / `disassemble` the suspicious ones;
-  follow callees and `list_strings`. Trace untrusted input → dangerous sink. (These use
-  the operator-configured decompiler automatically — radare2 by default, Ghidra if the
-  operator enabled it; you don't pick it. `get_schemas.decompiler.active` shows which is
-  live. If you want Ghidra and it's not active, ask the operator to enable it — there's no
-  tool to flip it yourself.)
-- Go deeper with `run_task` (`static_analysis`, `harness_generation`, `fuzzing`),
-  and **`verify_poc`** to PROVE exploitability (a confirmed PoC is the gold bar).
+## 2. Investigate (all sandboxed) — the reverse-engineering loop
+You DIRECT; HexGraph runs each tool in the sandbox and PERSISTS every result as a reusable
+Observation. Work cheap-to-expensive — orienting facts first, heavy synthesis last — and check
+`list_observations(target_id)` before any costly re-run (analyze once, reuse forever).
+- **Orient (the first minute) — get the authoritative facts before you decompile a thing.**
+  **`binutils_facts`** pulls the symbol table, dynamic imports/exports, relocations (PLT
+  jump-slots), sections, and the security mitigations (NX, RELRO, PIE, canary, FORTIFY) straight
+  from GNU binutils — sharper than `target_facts`/`read_imports`, which recon caps. Pair it with
+  `list_strings` (hardcoded creds, URLs, format strings, command fragments). If a decompile ever
+  fails or before you lean on Ghidra, **`check_decompiler`** confirms the backend actually WORKS
+  (active vs. merely configured) so you don't burn turns against a broken decompiler.
+- **Map the attack surface — `xrefs` with NO symbol** maps every dangerous sink
+  (system/popen/exec/strcpy/sprintf/memcpy/…), the format-string sinks, AND the network bind/
+  listen/connect/recv sites, with who reaches each — start here. `xrefs <sink>` lists exactly
+  which functions call a given sink and where. (For firmware, skim the filesystem in parallel —
+  §2a — many bugs live in configs/scripts, not code.)
+- **Map the structure without decompiling everything.** **`call_graph`** gives who-calls-whom
+  across the whole program (or the neighbourhood around one `function` out to `depth`);
+  **`function_xrefs`** gives BOTH directions (callers + callees) for one function; **`data_xrefs`**
+  finds every reference to a hex address or a symbol/label (run it after `list_strings`/decompile
+  surfaces an interesting datum to see who touches it).
+- **Read the code.** `list_functions`, then **`decompile_function`** the suspicious ones — or
+  **`decompile_at <0x…>`** when you have an address (from xrefs / a string / a crash backtrace)
+  but no name. **`disassemble`** (by name or address) when you need instruction-level detail the
+  decompiler smooths over. **`search_decompiled(query)`** greps across functions you've ALREADY
+  decompiled (mines the Observation store, no re-decompile) — decompile candidates, then grep
+  their bodies for a variable/constant/format string. Trace untrusted input → dangerous sink,
+  promoting the functions and sinks on the path as you go. (Decompilation uses the
+  operator-configured backend automatically — radare2 by default, Ghidra if enabled; you don't
+  pick it. `get_schemas.decompiler.active` shows which is live; want Ghidra and it's off? Ask the
+  operator — there's no tool to flip it yourself.)
+- **Recover a value the code COMPUTES instead of storing.** When a constant never appears as a
+  literal and the decompilation shows only the arithmetic that builds it (an XOR/license key, a
+  decoded string, a derived magic), **`recover_constant(target_id, function)`** EMULATES that
+  self-contained routine in Ghidra's P-Code interpreter in the sandbox (a JVM interpreter — never
+  native execution, no network) and returns the value, tagging it onto the function node. Needs
+  **features.emulation** + Ghidra headless (returns `available=false` if Ghidra is off, an error
+  if the routine takes arguments).
+- **When the inventory looks thin, dig deeper — `reanalyze`** re-runs analysis at a HIGHER depth
+  (busting the cached pass) when `list_functions`/`decompile_function` look incomplete (a function
+  you expect is missing, callees come back empty), so the fast first pass's misses get a second
+  chance.
+- **Synthesize, then PROVE it.** Go deeper with `run_task` (`static_analysis`,
+  `harness_generation`, `fuzzing`) and **`verify_poc`** to PROVE exploitability (a confirmed PoC
+  is the gold bar). **`static_analysis` is now GROUNDED** — it runs a real P-Code source→sink
+  TAINT pass over the binary (recorded as a `taint` Observation) and feeds that dataflow into the
+  LLM synthesis, so trust its source→sink reasoning rather than treating it as a guess.
   - **Fuzzing is coverage-guided when source is available.** If you pass the target's own
     `.c`/`.cc` source(s) (task param `target_sources`, or recorded on the target as
     `metadata_json.fuzz_target_sources`), HexGraph compiles them WITH the harness under
@@ -448,8 +485,10 @@ is **record → explore → verify → update**:
    `listens_on` (server) / `connects_to` (client) edges with the listen/connect
    `address` — both sides of a firmware that share a port resolve to one socket, so
    `list_sockets` shows who talks to whom. `xrefs` (no symbol) surfaces the
-   bind/listen/connect sites. `annotate` nodes with what you learn (clearer name,
-   "reachable pre-auth", a CWE tag).
+   bind/listen/connect sites. `annotate` nodes with what you learn ("reachable pre-auth",
+   a CWE tag). To give a function a CLEARER NAME, `annotate(kind="rename")` — you PROPOSE the
+   rename, the analyst CONFIRMS it, and on confirmation HexGraph round-trips the new name into
+   the persistent Ghidra project and re-decompiles, so it sticks for every future decompile.
    **Record the PoC as its own finding BEFORE you run it** (it will be typed
    `poc`), containing the attacker input/spec you intend to try, marked unverified,
    and `create_edge` it `confirms`→ the vulnerability finding.
