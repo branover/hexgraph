@@ -1,6 +1,22 @@
 import { useEffect, useMemo, useRef } from "react";
 import { highlightLines } from "../highlight";
 
+// Escape a string for use as a literal inside a RegExp.
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// Wrap whole-word occurrences of any `names` token in a clickable link span, operating
+// ONLY on the text between highlight.js tags (so we never corrupt a tag or its attrs) and
+// skipping HTML entities (the `(?<!&)` guard keeps `&lt;`/`&gt;`/`&amp;` intact). The
+// callee-navigation affordance for the function source viewer: a token that names a known
+// project function becomes a link → load that function in place.
+function linkify(lineHtml: string, re: RegExp): string {
+  // Split tags out; even indices are text, odd indices are verbatim `<...>` tags.
+  return lineHtml.split(/(<[^>]*>)/).map((seg, i) => {
+    if (i % 2 === 1) return seg; // a tag — leave untouched
+    return seg.replace(re, (m) => `<span class="cp-sym" data-sym="${m}">${m}</span>`);
+  }).join("");
+}
+
 // The shared syntax-highlighted code surface: a single continuous `.codeview` block
 // with a dimmed right-aligned line-number gutter, faithful indentation, and per-row
 // decoration hooks. Extracted from SourceBrowser so the Source/IDE viewer and the
@@ -11,25 +27,49 @@ import { highlightLines } from "../highlight";
 // decorations coexist and the highlighter never clobbers them. The active line wins over
 // any caller-supplied class (mirrors SourceBrowser's `hot` > coverage precedence) and is
 // scrolled into view when it (or the content) changes.
-export function CodePane({ content, lang, activeLine, lineClassFor }: {
+export function CodePane({ content, lang, activeLine, lineClassFor, linkSymbols, onSymbolClick }: {
   content: string;
   lang: string | null;
   /** 1-based line to highlight (`.hot`) and scroll into view. */
   activeLine?: number;
   /** Extra per-row class (e.g. coverage `cov-y`/`cov-n`); ignored on the active line. */
   lineClassFor?: (lineNo: number) => string | undefined;
+  /** Tokens to render as clickable links (e.g. callee names) — paired with onSymbolClick. */
+  linkSymbols?: Iterable<string>;
+  onSymbolClick?: (sym: string) => void;
 }) {
   const activeRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (activeLine && activeRef.current) activeRef.current.scrollIntoView({ block: "center" });
   }, [activeLine, content]);
 
+  // One alternation regex over all link tokens (whole-word, longest-first so a name that
+  // is a prefix of another doesn't shadow it). Null when there's nothing to linkify.
+  const linkRe = useMemo(() => {
+    const names = linkSymbols ? Array.from(new Set(linkSymbols)).filter(Boolean) : [];
+    if (!names.length || !onSymbolClick) return null;
+    names.sort((a, b) => b.length - a.length);
+    return new RegExp(`(?<![\\w&])(${names.map(escapeRe).join("|")})\\b`, "g");
+  }, [linkSymbols, onSymbolClick]);
+
   // Highlighting the whole body is O(content); memoize so unrelated re-renders
-  // (e.g. activeLine changes from a jump) don't re-run the highlighter.
-  const lines = useMemo(() => highlightLines(content, lang), [content, lang]);
+  // (e.g. activeLine changes from a jump) don't re-run the highlighter or the linkifier.
+  const lines = useMemo(() => {
+    const hl = highlightLines(content, lang);
+    return linkRe ? hl.map((h) => linkify(h, linkRe)) : hl;
+  }, [content, lang, linkRe]);
+
+  const onClick = onSymbolClick
+    ? (e: React.MouseEvent) => {
+        const el = (e.target as HTMLElement)?.closest?.("[data-sym]") as HTMLElement | null;
+        const sym = el?.getAttribute("data-sym");
+        if (sym) { e.preventDefault(); onSymbolClick(sym); }
+      }
+    : undefined;
+
   return (
     <div className="scrollx">
-      <div className="codeview">
+      <div className="codeview" onClick={onClick}>
         {lines.map((html, i) => {
           const n = i + 1;
           const hot = activeLine === n;

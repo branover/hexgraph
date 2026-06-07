@@ -147,10 +147,39 @@ def api_decompile(target_id: str, body: dict):
             from hexgraph.sandbox.decompiler import get_decompiler
 
             project = s.get(Project, t.project_id)
-            out = get_decompiler().decompile(t.path, body.get("function"), project=project)
+            decompiler = get_decompiler()
+            out = decompiler.decompile(t.path, body.get("function"), project=project)
         except Exception as exc:  # noqa: BLE001
             return {"available": False, "detail": f"decompilation failed: {exc}"}
-        return {"available": True, "functions": out.get("functions", []), "focus": out.get("focus")}
+        return {"available": True, "backend": decompiler.name,
+                "functions": out.get("functions", []), "focus": out.get("focus")}
+
+
+@router.post("/api/targets/{target_id}/disassemble")
+def api_disassemble(target_id: str, body: dict):
+    """Disassemble a function (by `function` name or `address`) on demand for the in-app
+    source viewer (sandboxed). Parallel to /decompile, but ALWAYS via radare2: the
+    configured decompiler may be Ghidra, which returns empty disasm (it's a decompiler).
+    Returns {available, backend, focus:{name,address,disasm}|null, functions}. Degrades
+    gracefully when Docker/sandbox is absent."""
+    with session_scope() as s:
+        t = s.get(Target, target_id)
+        if t is None:
+            raise HTTPException(404, "target not found")
+        if not runner.docker_available():
+            return {"available": False, "detail": "Docker/sandbox not running — disassembly needs it."}
+        function = body.get("function")
+        address = body.get("address")
+        if not function and not address:
+            raise HTTPException(400, "'function' or 'address' is required")
+        try:
+            from hexgraph.sandbox.decompiler import R2Decompiler
+
+            out = R2Decompiler().decompile(t.path, function, address=address)
+        except Exception as exc:  # noqa: BLE001
+            return {"available": False, "detail": f"disassembly failed: {exc}"}
+        return {"available": True, "backend": "radare2",
+                "functions": out.get("functions", []), "focus": out.get("focus")}
 
 
 @router.get("/api/targets/{target_id}/filesystem")

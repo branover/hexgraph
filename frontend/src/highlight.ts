@@ -20,6 +20,10 @@ import typescript from "highlight.js/lib/languages/typescript";
 import bash from "highlight.js/lib/languages/bash";
 import json from "highlight.js/lib/languages/json";
 import xml from "highlight.js/lib/languages/xml";
+// Assembly grammars for the function source viewer's Disassembly tab (picked by target arch).
+import x86asm from "highlight.js/lib/languages/x86asm";
+import armasm from "highlight.js/lib/languages/armasm";
+import mipsasm from "highlight.js/lib/languages/mipsasm";
 
 hljs.registerLanguage("c", c);
 hljs.registerLanguage("cpp", cpp);
@@ -29,6 +33,9 @@ hljs.registerLanguage("typescript", typescript);
 hljs.registerLanguage("bash", bash);
 hljs.registerLanguage("json", json);
 hljs.registerLanguage("xml", xml);
+hljs.registerLanguage("x86asm", x86asm);
+hljs.registerLanguage("armasm", armasm);
+hljs.registerLanguage("mipsasm", mipsasm);
 
 const EXT_LANG: Record<string, string> = {
   c: "c", h: "c",
@@ -45,6 +52,17 @@ export function langForFile(rel: string): string | null {
   const base = rel.split("/").pop() || "";
   const ext = base.includes(".") ? base.split(".").pop()!.toLowerCase() : "";
   return EXT_LANG[ext] ?? null;
+}
+
+// Pick the highlight.js assembly grammar for a target's architecture (the recon `arch`
+// string, e.g. "x86-64" / "arm" / "aarch64" / "mips"). Falls back to null (the viewer
+// renders escaped-plain, still line-numbered) for arches we don't ship a grammar for.
+export function langForArch(arch: string | null | undefined): string | null {
+  const a = String(arch || "").toLowerCase();
+  if (/(x86|x86-64|x86_64|amd64|i[3-6]86|ia32|ia-32)/.test(a)) return "x86asm";
+  if (/(arm|aarch64|thumb)/.test(a)) return "armasm";
+  if (/mips/.test(a)) return "mipsasm";
+  return null;
 }
 
 // Split highlighted HTML into per-line fragments, carrying open <span> tags across

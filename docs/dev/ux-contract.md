@@ -272,14 +272,16 @@ loud only where you are looking; every node/edge/color kept, mute never deletes.
 - Steps: right-click a content node (function/finding/socket/…) — try clicking the node's edge, not just
   its center.
 - Functional: the app's verb menu appears (Focus neighborhood · Expand one hop · Reveal in panel · Hide this
-  node). The **native browser menu must NOT appear**. The menu is anchored at the **cursor**, not the node's
-  center — its top-left corner sits where you clicked (`evt.renderedPosition`), nudged inward only if it would
-  spill off the canvas edge.
+  node). **On a function node** an extra **Open in source viewer** verb appears (between Reveal and Hide) →
+  opens the function source viewer (see FSV-01). The **native browser menu must NOT appear**. The menu is
+  anchored at the **cursor**, not the node's center — its top-left corner sits where you clicked
+  (`evt.renderedPosition`), nudged inward only if it would spill off the canvas edge.
 - Qualitative: the menu is compact, sized to fit, not clipped (Aesthetics); it lands under the pointer so the
   first verb is a tiny travel away (Direct manipulation); native-menu suppression is absolute anywhere on the
-  canvas (Consistency, Forgiveness).
+  canvas (Consistency, Forgiveness); the source-viewer verb shows ONLY on function nodes, not strings/sockets
+  (Consistency — verbs are type-aware).
 - Principle: HexGraph owns the right-click everywhere on the canvas; a context menu opens at the cursor.
-- Prereq: a graph with content nodes.
+- Prereq: a graph with content nodes (incl. at least one function node).
 
 **GRAPH-03 — Right-click a ROOM → room verb menu**
 - Steps: right-click a compound room (target island), off its center.
@@ -1125,6 +1127,73 @@ later PR).
   Source (Discoverable); selecting a campaign is one click (Friction).
 - Principle: coverage is a lens you point at the source, chosen explicitly.
 - Prereq: S20 — a finished campaign with a coverage map.
+
+---
+
+## SURFACE 7b — Function source viewer (decompiled / disassembled bodies)
+
+The IDE-style reader for one function's body — the right surface for long decompiled /
+disassembled code (the details pane is wrong for it). Built on the same `<CodePane>` as the
+Source view, so the two read identically (syntax highlighting, a dimmed line-number gutter).
+A center-pane overlay: opening it covers whatever view is active; closing returns to it.
+Bodies are fetched on demand (`POST /api/targets/{id}/decompile`, `…/disassemble`) and never
+stored.
+
+**FSV-01 — Open the source viewer (from NodeInspector / graph / deep-link)**
+- Steps: select a **function** node → in its NodeInspector click **Open in source viewer**; OR right-click a
+  function node → **Open in source viewer** (GRAPH-02); OR open a URL with `?fn=<name>&fnt=<targetId>`.
+- Functional: the center pane shows the viewer for that function — a header (back · name · address · target ·
+  backend) + Decompiled/Disassembly/Split tabs + the highlighted body. The URL gains `?fn=&fnt=` (and
+  `&fntab=&fnline=`). A **✕** closes it and clears those params, returning to the underlying view. The
+  NodeInspector **Decompile** quick-peek still exists (an inline snippet) — the viewer is the full reader.
+- 🔌 Backend: `POST /api/targets/{id}/decompile` (configured backend) for the Decompiled tab; the body matches
+  what the decompiler emits. Empty/absent Docker degrades to a clear "decompiling…/unavailable" note, never a
+  blank.
+- Qualitative: the viewer feels like an editor pane, not a cramped sidebar (Aesthetics); opening is one click
+  from the node (Friction, Discoverable); the header orients you (which function, where, by what backend).
+- Principle: long bodies get a real reading surface, deep-linkable like every other view.
+- Prereq: a function node on a target Docker can decompile.
+
+**FSV-02 — Decompiled ⇄ Disassembly ⇄ Split tabs**
+- Steps: toggle the three header tabs.
+- Functional: **Decompiled** shows C pseudocode (highlighted as C); **Disassembly** shows the radare2
+  instruction listing (highlighted by the target's arch grammar — x86/arm/mips — else escaped-plain, still
+  line-numbered); **Split** shows both side-by-side. Each body loads lazily on first view and is cached.
+- 🔌 Backend: Disassembly always calls `POST /api/targets/{id}/disassemble` (radare2 even when the configured
+  decompiler is Ghidra, which emits no disasm); the `backend` tag reads `radare2` on that tab.
+- Qualitative: switching tabs is instant after first load (Friction); the disasm is real instructions, not an
+  empty pane on a Ghidra setup (the reason the dedicated endpoint exists); split is genuinely two readable
+  columns, not a squeeze (Aesthetics).
+- Principle: decompiled and disassembled are two faithful lenses on the same function.
+- Prereq: a decompilable function.
+
+**FSV-03 — Click a callee to navigate**
+- Steps: in the Decompiled (or Disassembly) body, click a **callee** token rendered as a link.
+- Functional: the viewer loads that function's body in place (same target); a **back** affordance appears in
+  the header to return. Linkable tokens are the function's callees ∪ the project's known function names (the
+  function's own name never links to itself).
+- 🔌 Backend: the clicked name drives a fresh `…/decompile` (or `…/disassemble`) on the same target.
+- Qualitative: linked callees are visually distinct (dotted underline) and obviously clickable on hover
+  (Affordance); navigation keeps you in the reader rather than bouncing to the graph (Direct manipulation);
+  back is forgiving (Forgiveness). Non-call tokens and HTML entities must NOT become links (Correctness).
+- Principle: reading code means following calls; the viewer makes the call graph walkable in place.
+- Prereq: a function with callees that are themselves known functions.
+
+**FSV-04 — Copy / raw provenance**
+- Steps: click the header **copy** icon; if a **Raw** chip is present, click it.
+- Functional: copy puts the visible body (both bodies in Split) on the clipboard with a check-flash; **Raw**
+  (shown only when the opened function node carries `attrs.provenance`) opens the raw tool-result Observation
+  modal (OBS-03) for the first backing observation.
+- Qualitative: copy is one click with clear feedback (Feedback); Raw is present exactly when there's a real
+  observation to show, absent otherwise — never a dead link (Honesty).
+- Principle: the body is always copyable; provenance is one hop away when it exists.
+- Prereq: a viewer open on a function (with provenance, for Raw).
+
+**FSV-05 — Deep-link restore on reload**
+- Steps: copy a viewer URL (`?fn=&fnt=&fntab=&fnline=`) → reload / open fresh.
+- Functional: the viewer reopens on that function, on that tab, at that line.
+- Principle: the viewer is addressable and reload-restorable, like Map/Graph/Source.
+- Prereq: a viewer opened on a function.
 
 ---
 
