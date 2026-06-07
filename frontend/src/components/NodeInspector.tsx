@@ -59,7 +59,7 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
     if (!node.target_id) return;
     setDecomp({ loading: true });
     try {
-      const r = await api.decompile(node.target_id, node.label);
+      const r = await api.decompile(node.target_id, node.label, node.address);
       setDecomp({ loading: false, focus: r.focus, detail: r.available ? (r.focus ? undefined : "function not found in the binary") : r.detail });
     } catch (e: any) { setDecomp({ loading: false, detail: String(e.message || e) }); }
   };

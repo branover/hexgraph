@@ -16,7 +16,7 @@ import { RawResultModal } from "./ToolResults";
 // stored. The component owns its own navigation history (a back stack) and reports the
 // current (target, fn, tab, line) up via onChange so the workspace keeps the URL in sync.
 
-type Ref = { targetId: string; fn: string };
+type Ref = { targetId: string; fn: string; address?: string };
 type Tab = "decomp" | "disasm";
 type Body = {
   loading: boolean;
@@ -39,12 +39,15 @@ const importNames = (functions?: string[]): Set<string> => {
 };
 
 export default function FunctionSourceViewer({
-  projectId, targetId, fn, targetName, arch, knownFunctions, provenanceIds,
+  projectId, targetId, fn, address, targetName, arch, knownFunctions, provenanceIds,
   initialTab, initialLine, onClose, onChange,
 }: {
   projectId: string;
   targetId: string;
   fn: string;
+  /** The function node's recorded address — the reliable resolution key (a stripped/renamed/
+   *  fast-analysis-missed name won't resolve by name, but its address always does). */
+  address?: string;
   targetName?: string;
   arch?: string;
   /** Project function names that become navigable links in the body. */
@@ -57,7 +60,7 @@ export default function FunctionSourceViewer({
   /** Report the current view up so the workspace can keep the URL deep-link in sync. */
   onChange?: (ref: { targetId: string; fn: string; tab: Tab; line?: number }) => void;
 }) {
-  const [stack, setStack] = useState<Ref[]>([{ targetId, fn }]);
+  const [stack, setStack] = useState<Ref[]>([{ targetId, fn, address }]);
   const [tab, setTab] = useState<Tab>(initialTab === "disasm" ? "disasm" : "decomp");
   const [split, setSplit] = useState(false);
   const [activeLine, setActiveLine] = useState<number | undefined>(initialLine);
@@ -72,8 +75,8 @@ export default function FunctionSourceViewer({
     const k = keyOf(r, kind);
     setBodies((prev) => (prev[k] ? prev : { ...prev, [k]: { loading: true } }));
     const req = kind === "decomp"
-      ? api.decompile(r.targetId, r.fn)
-      : api.disassemble(r.targetId, { function: r.fn });
+      ? api.decompile(r.targetId, r.fn, r.address)
+      : api.disassemble(r.targetId, { function: r.fn, address: r.address });
     req.then((res) => {
       const f = res.focus;
       const body: Body = !res.available
@@ -149,7 +152,9 @@ export default function FunctionSourceViewer({
   };
 
   const backend = decompBody?.backend || bodies[keyOf(cur, "disasm")]?.backend;
-  const address = decompBody?.address || bodies[keyOf(cur, "disasm")]?.address;
+  // The address the focus actually RESOLVED to (for the header) — not cur.address, so a header
+  // address never sits next to a "not found" pane when resolution missed.
+  const focusAddress = decompBody?.address || bodies[keyOf(cur, "disasm")]?.address;
   const hasRaw = !!(provenanceIds && provenanceIds.length && stack.length === 1);
 
   return (
@@ -160,7 +165,7 @@ export default function FunctionSourceViewer({
         )}
         <Icon name="fn" size={13} />
         <span className="path" style={{ fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{cur.fn}</span>
-        {address && <code className="muted" style={{ fontSize: 10.5, whiteSpace: "nowrap" }}>{address}</code>}
+        {focusAddress && <code className="muted" style={{ fontSize: 10.5, whiteSpace: "nowrap" }}>{focusAddress}</code>}
         {targetName && <span className="tag" title="target" style={{ whiteSpace: "nowrap" }}>{targetName}</span>}
         {backend && <span className="tag" style={{ color: "var(--accent)", whiteSpace: "nowrap" }} title="analysis backend">{backend}</span>}
         <span style={{ flex: 1 }} />

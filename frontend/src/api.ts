@@ -248,7 +248,8 @@ export const api = {
   removeNode: (pid: string, nid: string) => delJSON<{ archived: boolean; id: string }>(`/api/projects/${pid}/nodes/${nid}`),
   restoreNode: (pid: string, nid: string) => postJSON<{ archived: boolean; id: string }>(`/api/projects/${pid}/nodes/${nid}/restore`, {}),
   deleteEdge: (eid: string) => delJSON<{ deleted: boolean; id: string }>(`/api/edges/${eid}`),
-  decompile: (tid: string, fn: string) => postJSON<{ available: boolean; backend?: string; detail?: string; focus?: any; functions?: string[] }>(`/api/targets/${tid}/decompile`, { function: fn }),
+  // Decompile by name and/or address — prefer address (resolves even when the name isn't a symbol).
+  decompile: (tid: string, fn?: string, address?: string) => postJSON<{ available: boolean; backend?: string; detail?: string; focus?: any; functions?: string[] }>(`/api/targets/${tid}/decompile`, { function: fn, address }),
   // Disassembly for the source viewer — always radare2 (Ghidra returns empty disasm). By name or address.
   disassemble: (tid: string, opts: { function?: string; address?: string }) => postJSON<{ available: boolean; backend?: string; detail?: string; focus?: any; functions?: string[] }>(`/api/targets/${tid}/disassemble`, opts),
   filesystem: (tid: string) => getJSON<{ unpacked: boolean; method?: string; files: FsEntry[] }>(`/api/targets/${tid}/filesystem`),

@@ -1186,12 +1186,17 @@ stored.
   `&fntab=&fnline=`). A **✕** closes it and clears those params, returning to the underlying view. The
   NodeInspector **Decompile** quick-peek still exists (an inline snippet) — the viewer is the full reader.
 - 🔌 Backend: `POST /api/targets/{id}/decompile` (configured backend) for the Decompiled tab; the body matches
-  what the decompiler emits. Empty/absent Docker degrades to a clear "decompiling…/unavailable" note, never a
-  blank.
+  what the decompiler emits. The viewer passes the function node's **address** alongside its name, and the
+  endpoint **resolves by address when present** — so a function whose name isn't a discoverable symbol (a
+  STRIPPED binary, a renamed function, or one the fast analysis didn't flag) still decompiles, where a
+  name-only lookup returned "not found". Empty/absent Docker degrades to a clear "decompiling…/unavailable"
+  note, never a blank.
 - Qualitative: the viewer feels like an editor pane, not a cramped sidebar (Aesthetics); opening is one click
-  from the node (Friction, Discoverable); the header orients you (which function, where, by what backend).
-- Principle: long bodies get a real reading surface, deep-linkable like every other view.
-- Prereq: a function node on a target Docker can decompile.
+  from the node (Friction, Discoverable); the header orients you (which function, where, by what backend); a
+  node with a recorded address resolves even on a stripped binary (Forgiveness — no cryptic "not found").
+- Principle: long bodies get a real reading surface, deep-linkable like every other view; the node's address
+  is the reliable resolution key.
+- Prereq: a function node (ideally with a recorded address) on a target Docker can decompile.
 
 **FSV-02 — Decompiled ⇄ Disassembly ⇄ Split tabs**
 - Steps: toggle the three header tabs.
@@ -1199,7 +1204,9 @@ stored.
   instruction listing (highlighted by the target's arch grammar — x86/arm/mips — else escaped-plain, still
   line-numbered); **Split** shows both side-by-side. Each body loads lazily on first view and is cached.
 - 🔌 Backend: Disassembly always calls `POST /api/targets/{id}/disassemble` (radare2 even when the configured
-  decompiler is Ghidra, which emits no disasm); the `backend` tag reads `radare2` on that tab.
+  decompiler is Ghidra, which emits no disasm); the `backend` tag reads `radare2` on that tab. Like Decompiled,
+  it passes the node's **address** and resolves by it when present (so a stripped/renamed function still
+  disassembles instead of "no disassembly").
 - Qualitative: switching tabs is instant after first load (Friction); the disasm is real instructions, not an
   empty pane on a Ghidra setup (the reason the dedicated endpoint exists); split is genuinely two readable
   columns, not a squeeze (Aesthetics).
