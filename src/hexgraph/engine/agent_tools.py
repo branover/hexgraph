@@ -29,7 +29,22 @@ from hexgraph.llm.base import ToolSpec
 
 logger = logging.getLogger(__name__)
 
-_MAX = 6000  # cap any single tool result so the context stays bounded
+_MAX = 6000  # default cap on any single tool result so the context stays bounded
+
+# An agent may ask a body-returning tool (decompile/disassemble/search) to inline more than
+# the default with `max_chars`. The request is clamped to a sane window — a small floor so a
+# fat-fingered tiny value still returns something useful, and a generous ceiling as a
+# backstop (get_observation remains the truly-uncapped full-payload path). The default stays
+# _MAX, so context stays bounded unless the agent deliberately asks for more.
+_MAX_FLOOR = 200
+_MAX_CEILING = 100_000
+
+# Shared param description for the body-returning tools (decompile/disassemble/search). Public
+# (re-exported as MAX_CHARS_DESC) so the MCP catalog schemas source the SAME copy — one authority,
+# no drift between the in-process agent-loop specs and the advertised MCP schemas.
+_MAX_CHARS_DESC = ("max chars of the body to inline; default 6000, clamped 200–100000; "
+                   "use get_observation for the full payload")
+MAX_CHARS_DESC = _MAX_CHARS_DESC
 
 # Per-call promotion budget (design §5.3, the backstop): a single tool call may add
 # at most this many NEW nodes/edges to the graph. A promotion that would exceed it
@@ -59,17 +74,22 @@ _STATIC_SPECS = [
              "deliberately adds THIS function to the graph (enriched in place with its recovered "
              "prototype/address) and draws `calls` edges only to callees ALREADY in the graph — "
              "new callees are listed for optional promotion, never auto-added (no fan-out).",
-             {"type": "object", "properties": {"function": {"type": "string"}}, "required": ["function"]}),
+             {"type": "object", "properties": {"function": {"type": "string"},
+                                               "max_chars": {"type": "integer", "description": _MAX_CHARS_DESC}},
+              "required": ["function"]}),
     ToolSpec("decompile_at", "Decompile the function CONTAINING a hex ADDRESS (e.g. 0x401200) — "
              "analyze-at-address for when you have an address (from xrefs/strings/a crash) but not "
              "a name. PROMOTE: same as decompile_function for the resolved function (adds it, draws "
              "`calls` edges only to callees already in the graph; new callees listed, not auto-added).",
-             {"type": "object", "properties": {"address": {"type": "string"}}, "required": ["address"]}),
+             {"type": "object", "properties": {"address": {"type": "string"},
+                                               "max_chars": {"type": "integer", "description": _MAX_CHARS_DESC}},
+              "required": ["address"]}),
     ToolSpec("disassemble", "Disassemble one function by NAME or by ADDRESS (an address resolves to "
              "the function containing it) — when pseudo-C is unclear. QUERY: records an Observation; "
              "adds no graph nodes.",
              {"type": "object", "properties": {"function": {"type": "string"},
-                                               "address": {"type": "string"}}}),
+                                               "address": {"type": "string"},
+                                               "max_chars": {"type": "integer", "description": _MAX_CHARS_DESC}}}),
     ToolSpec("reanalyze", "Re-run the target's analysis at a HIGHER depth (and bust the cache) so a "
              "function or call edge the fast pass missed gets a second chance — use when "
              "list_functions/decompile look incomplete. QUERY: refreshes the inventory, adds no graph "
@@ -117,7 +137,9 @@ _STATIC_SPECS = [
              "decompilations in the Observation store, NO re-decompile. Returns the matching functions "
              "+ a snippet. Decompile candidates first if nothing's been decompiled yet. QUERY: records "
              "an Observation; adds no graph nodes.",
-             {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}),
+             {"type": "object", "properties": {"query": {"type": "string"},
+                                               "max_chars": {"type": "integer", "description": _MAX_CHARS_DESC}},
+              "required": ["query"]}),
     ToolSpec("check_decompiler", "Verify the decompiler decompile_function/disassemble use ACTUALLY "
              "works (not just the configured name): radare2 needs the sandbox image up; Ghidra needs "
              "WITH_GHIDRA=1 (headless) or a reachable bridge. Run it if a decompile fails so you don't "
@@ -252,6 +274,31 @@ def _clip(s: str) -> str:
     return s if len(s) <= _MAX else s[:_MAX] + "\n…[truncated]"
 
 
+def _effective_limit(max_chars) -> int:
+    """The body inline-limit for a body-returning tool: the agent's `max_chars` clamped to
+    [_MAX_FLOOR, _MAX_CEILING], defaulting to _MAX. A bad/missing value falls back to _MAX."""
+    try:
+        if max_chars is None:
+            return _MAX
+        return max(_MAX_FLOOR, min(int(max_chars), _MAX_CEILING))
+    except (TypeError, ValueError):
+        return _MAX
+
+
+def _clip_body(s: str, *, limit: int, obs_id: str | None) -> str:
+    """Truncate a body-returning tool's text to `limit` chars, but instead of the bare
+    `…[truncated]` marker emit an ACTIONABLE one that names BOTH recovery paths and the sizes:
+    re-call with a larger max_chars, or get_observation(<id>) for the full body. The full body
+    is always in the Observation, so a head-truncation can never silently hide a tail sink."""
+    s = s or ""
+    if len(s) <= limit:
+        return s
+    full = len(s)
+    recover = f", or get_observation('{obs_id}') for the full body" if obs_id else ""
+    return s[:limit] + (
+        f"\n…[truncated {limit}/{full} chars — re-call with max_chars≥{full}{recover}]")
+
+
 def _callee_names(callees) -> list[str]:
     """Callee names from the decompiler's callee list (entries are bare names or dicts)."""
     out = []
@@ -262,9 +309,13 @@ def _callee_names(callees) -> list[str]:
     return out
 
 
-def _format_decomp(out: dict, label: str) -> str:
+def _format_decomp(out: dict, label: str, *, limit: int = _MAX) -> str:
     """Render a focused decompile (decompile_function / decompile_at) result as text:
-    the resolved name+address, callees, pseudocode, and any not-yet-promoted callees."""
+    the resolved name+address, callees, pseudocode, and any not-yet-promoted callees.
+
+    Truncates the body to `limit` chars with the ACTIONABLE marker (recovery knobs + sizes)
+    rather than a bare `…[truncated]`, so a head-truncation can't silently hide a tail sink —
+    the marker names both the max_chars re-call and the get_observation full-body path."""
     focus = out.get("focus")
     if not focus:
         return f"{label} not found among: {', '.join(out.get('functions', [])[:40])}"
@@ -277,8 +328,10 @@ def _format_decomp(out: dict, label: str) -> str:
         # deliberate promotion — decompile_function one of these to promote it.
         note = ("\n// callees not yet in the graph (promote any by decompiling it): "
                 + ", ".join(promo))
-    return _clip(f"// {name}{addr} (callees: {', '.join(_callee_names(focus.get('callees')))})\n"
-                 f"{focus.get('pseudocode', '')}{note}")
+    return _clip_body(
+        f"// {name}{addr} (callees: {', '.join(_callee_names(focus.get('callees')))})\n"
+        f"{focus.get('pseudocode', '')}{note}",
+        limit=limit, obs_id=out.get("observation_id"))
 
 
 def _record_obs(ctx: ToolContext, *, tool: str, args: dict | None, result_kind: str,
@@ -508,13 +561,16 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
                             summary=f"{subj!r} not found; {len(fns)} functions available")
                 return f"{subj!r} not found / no disassembly (functions: {', '.join(fns[:40])})"
             at = f" @ {focus['address']}" if focus.get("address") else ""
-            # Record the disassembly as a QUERY observation (no graph mutation).
-            _record_obs(ctx, tool="disassemble", args=obs_args,
-                        result_kind="disassembly",
-                        payload={"function": focus.get("name") or subj,
-                                 "address": focus.get("address"), "disasm": disasm},
-                        summary=f"disassembled {focus.get('name') or subj}")
-            return _clip(f"// {focus.get('name') or subj}{at} disassembly\n{disasm}")
+            # Record the disassembly as a QUERY observation (no graph mutation). Capture the
+            # obs id so a truncation marker can point the agent at the full body.
+            obs, _cached = _record_obs(ctx, tool="disassemble", args=obs_args,
+                                       result_kind="disassembly",
+                                       payload={"function": focus.get("name") or subj,
+                                                "address": focus.get("address"), "disasm": disasm},
+                                       summary=f"disassembled {focus.get('name') or subj}")
+            return _clip_body(f"// {focus.get('name') or subj}{at} disassembly\n{disasm}",
+                              limit=_effective_limit(args.get("max_chars")),
+                              obs_id=obs.id if obs is not None else None)
         if name == "decompile_function":
             fn = args.get("function")
             if not fn:
@@ -522,7 +578,8 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
             out = _decomp(ctx, fn)
             if out.get("error"):
                 return out["error"]
-            return _format_decomp(out, f"function {fn!r}")
+            return _format_decomp(out, f"function {fn!r}",
+                                  limit=_effective_limit(args.get("max_chars")))
         if name == "decompile_at":
             addr = args.get("address")
             if not addr:
@@ -532,7 +589,8 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
             out = _decomp(ctx, None, address=addr)
             if out.get("error"):
                 return out["error"]
-            return _format_decomp(out, f"address {addr}")
+            return _format_decomp(out, f"address {addr}",
+                                  limit=_effective_limit(args.get("max_chars")))
         if name == "reanalyze":
             # Raise the analysis depth and bust the cache so a function/edge the fast pass
             # missed gets a retry. QUERY: re-runs the inventory, mutates no graph.
@@ -578,7 +636,7 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
             q = args.get("query")
             if not q:
                 return "error: 'query' argument is required"
-            return _search_decompiled(ctx, q)
+            return _search_decompiled(ctx, q, limit=_effective_limit(args.get("max_chars")))
         if name == "fuzz_function":
             return _fuzz(ctx, args)
         return f"error: unknown tool {name!r}"
@@ -1032,22 +1090,25 @@ def _call_graph_tool(ctx: ToolContext, function: str | None, depth) -> str:
     return ctx.cache[key]
 
 
-def _search_decompiled(ctx: ToolContext, query: str) -> str:
+def _search_decompiled(ctx: ToolContext, query: str, *, limit: int = _MAX) -> str:
     """Grep already-decompiled function bodies on this target (mines the Observation store —
-    no re-decompile). QUERY: records an Observation; adds no graph nodes."""
+    no re-decompile). QUERY: records an Observation; adds no graph nodes. Truncates to `limit`
+    chars with the actionable marker (the recorded Observation holds the full hit list)."""
     from hexgraph.engine import observations as O
 
     hits = O.search_decompiled(ctx.session, ctx.target.id, query=query)
-    _record_obs(ctx, tool="search_decompiled", args={"query": query},
-                result_kind="search_decompiled", payload={"query": query, "hits": hits},
-                summary=f"{len(hits)} functions matching {query!r}")
+    obs, _cached = _record_obs(ctx, tool="search_decompiled", args={"query": query},
+                               result_kind="search_decompiled",
+                               payload={"query": query, "hits": hits},
+                               summary=f"{len(hits)} functions matching {query!r}")
     if not hits:
         return (f"no decompiled body contains {query!r}. search_decompiled mines PRIOR "
                 "decompilations — decompile_function the candidates first if nothing's been "
                 "decompiled yet (it does not decompile on demand).")
     lines = [f"functions whose decompiled body contains {query!r}:"]
     lines += [f"- {h['function']}: …{h['snippet']}…" for h in hits]
-    return _clip("\n".join(lines))
+    return _clip_body("\n".join(lines), limit=limit,
+                      obs_id=obs.id if obs is not None else None)
 
 
 def _fuzz(ctx: ToolContext, args: dict) -> str:

@@ -692,19 +692,31 @@ def _tool(target_id: str, name: str, args: dict) -> str:
         return run_tool(ctx, name, args or {})
 
 
-def decompile_function(target_id: str, function: str) -> str:
-    return _tool(target_id, "decompile_function", {"function": function})
+def decompile_function(target_id: str, function: str, max_chars: int | None = None) -> str:
+    """Decompile (and promote) one function. `max_chars` raises the inlined-body cap (default
+    6000, clamped) when the function is long; get_observation reads the full body either way."""
+    a: dict = {"function": function}
+    if max_chars is not None:
+        a["max_chars"] = max_chars
+    return _tool(target_id, "decompile_function", a)
 
 
-def decompile_at(target_id: str, address: str) -> str:
-    """Decompile (and promote) the function CONTAINING a hex address — analyze-at-address."""
-    return _tool(target_id, "decompile_at", {"address": address})
+def decompile_at(target_id: str, address: str, max_chars: int | None = None) -> str:
+    """Decompile (and promote) the function CONTAINING a hex address — analyze-at-address.
+    `max_chars` raises the inlined-body cap (default 6000, clamped); get_observation is uncapped."""
+    a: dict = {"address": address}
+    if max_chars is not None:
+        a["max_chars"] = max_chars
+    return _tool(target_id, "decompile_at", a)
 
 
-def disassemble(target_id: str, function: str | None = None, address: str | None = None) -> str:
+def disassemble(target_id: str, function: str | None = None, address: str | None = None,
+                max_chars: int | None = None) -> str:
     """Disassemble one function by name or by address (the address resolves to the
-    function containing it)."""
+    function containing it). `max_chars` raises the inlined cap (default 6000, clamped)."""
     a = {"address": address} if address else {"function": function}
+    if max_chars is not None:
+        a["max_chars"] = max_chars
     return _tool(target_id, "disassemble", a)
 
 
@@ -787,10 +799,14 @@ def data_xrefs(target_id: str, address: str) -> str:
     return _tool(target_id, "data_xrefs", {"address": address})
 
 
-def search_decompiled(target_id: str, query: str) -> str:
+def search_decompiled(target_id: str, query: str, max_chars: int | None = None) -> str:
     """Substring search across already-decompiled function bodies on a target (mines the
-    Observation store; no re-decompile)."""
-    return _tool(target_id, "search_decompiled", {"query": query})
+    Observation store; no re-decompile). `max_chars` raises the inlined-results cap (default
+    6000, clamped); the recorded Observation holds the full hit list."""
+    a: dict = {"query": query}
+    if max_chars is not None:
+        a["max_chars"] = max_chars
+    return _tool(target_id, "search_decompiled", a)
 
 
 def _node_dict(n: Node) -> dict:

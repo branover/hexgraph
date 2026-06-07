@@ -134,7 +134,13 @@ Observation. Work cheap-to-expensive — orienting facts first, heavy synthesis 
   promoting the functions and sinks on the path as you go. (Decompilation uses the
   operator-configured backend automatically — radare2 by default, Ghidra if enabled; you don't
   pick it. `meta_get_schemas.decompiler.active` shows which is live; want Ghidra and it's off? Ask the
-  operator — there's no tool to flip it yourself.)
+  operator — there's no tool to flip it yourself.) **Truncation is recoverable, never silent.**
+  These body-returning tools (re_decompile_function/_at, re_disassemble, re_search_decompiled)
+  inline at most ~6000 chars to keep your context bounded; a longer body is cut with a marker
+  that tells you exactly how to get the rest — re-call the same tool with a bigger `max_chars`
+  (e.g. `re_decompile_function(target_id, function, max_chars=20000)`), or read the recorded
+  Observation in full with `obs_get(<id>)` (uncapped). So if a sink is hiding in a cut-off tail,
+  pull the whole function with `max_chars` rather than guessing from the head.
 - **Recover a value the code COMPUTES instead of storing.** When a constant never appears as a
   literal and the decompilation shows only the arithmetic that builds it (an XOR/license key, a
   decoded string, a derived magic), **`re_recover_constant(target_id, function)`** EMULATES that
