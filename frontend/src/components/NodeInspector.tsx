@@ -57,9 +57,9 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
     } catch (e: any) { setDecomp({ loading: false, detail: String(e.message || e) }); }
   };
 
-  const addNode = async (name: string, kind: string) => {
+  const addNode = async (name: string, kind: string, attrs?: Record<string, any>) => {
     if (!projectId || !target) return;
-    try { await api.createNode(projectId, { node_type: kind, name, target_id: target.id }); } catch { /* dup ok */ }
+    try { await api.createNode(projectId, { node_type: kind, name, target_id: target.id, attrs }); } catch { /* dup ok */ }
     setAdded((prev) => new Set(prev).add(name));
     onChanged?.();
   };
@@ -91,9 +91,15 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
             {typeof target.metadata?.size === "number" && <><span className="k">size</span><span>{target.metadata.size} B</span></>}
           </div>
           {target.metadata?.imports?.length ? (
-            <><div className="sec">Imports ({target.metadata.imports.length})</div>
+            <><div className="sec">Imports ({target.metadata.imports.length}) <span className="muted">· click + to add as a node</span></div>
               <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-                {target.metadata.imports.slice(0, 40).map((i: string) => <span className="tag" key={i}>{i}</span>)}
+                {target.metadata.imports.slice(0, 80).map((i: string) => (
+                  <button key={i} className="tag addable" disabled={added.has(i)}
+                          title={added.has(i) ? "added" : "Add as a symbol node (auto-tagged a sink if a prior tool flagged it dangerous)"}
+                          onClick={() => addNode(i, "symbol", { kind: "import" })}>
+                    {added.has(i) ? <Icon name="check" size={10} /> : <Icon name="plus" size={10} />} {i}
+                  </button>
+                ))}
               </div></>
           ) : null}
           {exports.length > 0 && (
