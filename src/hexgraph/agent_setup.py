@@ -107,8 +107,10 @@ Observation. Work cheap-to-expensive — orienting facts first, heavy synthesis 
   Likewise, before you lean on FLOSS/YARA or reach for a gated feature (a solver, Ghidra),
   **`meta_check_features`** preflights them: for the always-on static tools (FLOSS, YARA) it reports
   `available` vs. `broken` (the stale-sandbox-image trap — the tool is always reachable but the
-  dependency is missing); for the gated ones it adds `disabled` (the gate is off). Either way it
-  gives the exact rebuild command, so you don't discover a broken tool only by failing mid-analysis.
+  dependency is missing); for the gated ones it adds `disabled` (the gate is off). It also returns
+  `image_stale` — a PROACTIVE hint that the sandbox image PREDATES `docker/sandbox.Dockerfile`, so it
+  may silently lack newer tools even when a per-feature probe passes. Either way it gives the exact
+  rebuild command (`just sandbox-build`), so you don't discover a broken/old tool only by failing mid-analysis.
 - **Map the attack surface — `re_xrefs` with NO symbol** maps every dangerous sink
   (system/popen/exec/strcpy/sprintf/memcpy/…), the format-string sinks, AND the network bind/
   listen/connect/recv sites, with who reaches each — start here. `re_xrefs <sink>` lists exactly

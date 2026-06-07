@@ -81,8 +81,10 @@ availability only, `available` when their dependency is present or `broken` when
 features (angr, Ghidra/emulation) add a `disabled` state when their gate is off. That `broken` state is
 the one worth catching early: a tool whose sandbox image is stale reads as fine in Settings yet errors
 the first time you call it, and the check hands you the exact rebuild command (`just sandbox-build`,
-`just angr-build`) instead of letting you find out mid-analysis. The companion **`meta_check_decompiler`**
-does the same honest verification for whichever decompiler is configured.
+`just angr-build`) instead of letting you find out mid-analysis. It also returns `image_stale`, a
+proactive hint that the sandbox image predates `docker/sandbox.Dockerfile` (so it may silently lack newer
+tools even when a per-feature probe still passes) — rebuild with `just sandbox-build`. The companion
+**`meta_check_decompiler`** does the same honest verification for whichever decompiler is configured.
 
 ```bash
 hexgraph mcp install [--agent claude|codex|gemini]   # print registration steps
