@@ -115,6 +115,14 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
   full including its complete payload from content-addressed storage, and `obs_search(query)`
   for a substring search over tool, summary, and result kind across a project or a single target. Every
   tool result also carries a one-line reuse hint pointing you at them.
+- **Truncation is recoverable, never silent.** The body-returning tools (`re_decompile_function`,
+  `re_decompile_at`, `re_disassemble`, `re_search_decompiled`) inline at most about 6000 characters so
+  your context stays bounded, but the full body always lives in the Observation. When a result is cut,
+  the marker tells you both ways to get the rest: re-call the same tool with a larger `max_chars`
+  (clamped to a generous ceiling, so one call can pull a whole long function), or read the recorded
+  Observation in full with `obs_get(<id>)`, which is uncapped. So a long decompilation can never quietly
+  hide a sink in its tail; if you suspect there's more below the cut, raise `max_chars` rather than
+  guessing from the head.
 
 The fuller, user-facing tour of all this lives in [observations.md](observations.md).
 
