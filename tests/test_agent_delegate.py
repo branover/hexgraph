@@ -8,6 +8,7 @@ from hexgraph.db.session import session_scope
 from hexgraph.engine.agent_delegate import (
     DelegateError, build_command, delegate_prompt, execute_delegate,
 )
+from hexgraph.record_keeping import RECORD_KEEPING
 from hexgraph.engine.ingest import create_project, ingest_file
 from hexgraph.engine.tasks import create_task
 from hexgraph import settings as st
@@ -39,6 +40,9 @@ def test_delegate_prompt_carries_ids_and_rules(hg_home):
         assert "task-123" in prompt and t.id in prompt and p.id in prompt
         assert "Never execute" in prompt and "finding_record" in prompt
         assert "look at cgi_handler" in prompt
+        # delegate mode inlines the record-keeping rubric (no sub-file is materialized,
+        # so the SKILL's "read record-keeping.md" pointer must resolve to inlined content)
+        assert RECORD_KEEPING in prompt
 
 
 def test_execute_delegate_disabled_raises(hg_home):
