@@ -161,6 +161,37 @@ def test_0015_fuzz_environment_applies_on_0014_and_round_trips(tmp_path, monkeyp
     reset_engine_for_tests()
 
 
+def test_0019_journal_applies_on_0018_and_round_trips(tmp_path, monkeypatch):
+    """0019 (journal_entry + journal_mention — the working-memory layer) applies
+    cleanly on 0018, carries the expected columns, and the downgrade removes exactly
+    those two tables — the migration is reversible (design-working-memory.md §5)."""
+    monkeypatch.setenv("HEXGRAPH_DB_PATH", str(tmp_path / "journal.db"))
+    from alembic import command
+    from sqlalchemy import create_engine, inspect
+
+    from hexgraph.db.migrate import _alembic_config
+    from hexgraph.db.session import db_url, reset_engine_for_tests
+
+    reset_engine_for_tests()
+    cfg = _alembic_config()
+    command.upgrade(cfg, "0018_finding_cwe")
+    before = set(inspect(create_engine(db_url())).get_table_names())
+    assert "journal_entry" not in before and "journal_mention" not in before
+
+    command.upgrade(cfg, "0019_journal")
+    after = set(inspect(create_engine(db_url())).get_table_names())
+    assert {"journal_entry", "journal_mention"} <= after
+    ecols = {c["name"] for c in inspect(create_engine(db_url())).get_columns("journal_entry")}
+    assert {"author", "body", "origin_task_id", "edited", "created_at", "updated_at"} <= ecols
+    mcols = {c["name"] for c in inspect(create_engine(db_url())).get_columns("journal_mention")}
+    assert {"entry_id", "ref_kind", "ref_id", "label"} <= mcols
+
+    command.downgrade(cfg, "0018_finding_cwe")
+    rolled = set(inspect(create_engine(db_url())).get_table_names())
+    assert "journal_entry" not in rolled and "journal_mention" not in rolled
+    reset_engine_for_tests()
+
+
 def test_fresh_init_db_has_build_tables(tmp_path, monkeypatch):
     """A fresh create_all (the test path) materializes the new tables too."""
     monkeypatch.setenv("HEXGRAPH_DB_PATH", str(tmp_path / "fresh.db"))
@@ -172,7 +203,7 @@ def test_fresh_init_db_has_build_tables(tmp_path, monkeypatch):
     init_db()
     names = set(inspect(create_engine(db_url())).get_table_names())
     assert {"build", "build_spec", "source_tree", "fuzz_campaign", "fuzz_artifact",
-            "fuzz_environment"} <= names
+            "fuzz_environment", "journal_entry", "journal_mention"} <= names
     reset_engine_for_tests()
 
 

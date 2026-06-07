@@ -85,6 +85,9 @@ see where to go next:
 - `graph_search(project_id, q)` — locate functions/strings/findings by keyword.
 - `graph_stats(project_id)` — per-type node/edge tallies (a cheap before/after count of what's
   already promoted, and what a task added — no need to `graph_list_nodes` and count by hand).
+- `journal_list(project_id)` / `journal_search(q, project_id)` — the research journal: what a
+  prior session (you or the human) tried, ruled out, and learned. The cheapest way to re-orient
+  cold without re-deriving everything; pick up the threads it names instead of re-walking dead ends.
 Let the existing graph and any open findings/hypotheses steer your next move: pick
 up unfinished threads, follow related findings to siblings, and target functions
 that haven't been analyzed yet.
@@ -513,6 +516,15 @@ close with a verdict once proven or ruled out), and how to keep the research jou
 (the four prompts, when to write, and the rule that you may add or edit only your OWN
 entries, never a human's). The graph/finding rhythm below stands as-is; reach for
 `record-keeping.md` for the hypothesis and journal specifics and its worked examples.
+
+**Keep a running JOURNAL with `journal_add`** — the interpreted narrative of what you
+tried and learned, distinct from Observations (raw tool output, recorded for you) and
+findings (substantiated results). Write a short, skimmable line at each meaningful pivot
+or dead end and at task close, not one dump at the end; `@[label](kind:id)`-mention the
+objects you're talking about instead of re-describing them. Re-orient a fresh session
+cheaply with `journal_search("what did I try on the CGI handler")` / `journal_list`
+before re-deriving anything. You may edit only your OWN entries (`journal_update`/
+`journal_delete` refuse a human's) — the human's words stay theirs.
 
 1. **Suspect → record immediately.** When you spot a likely bug, `finding_record`
    right away at your current confidence (e.g. "low"/"medium", status `new`), with

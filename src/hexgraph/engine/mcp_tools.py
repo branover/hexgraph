@@ -1334,6 +1334,87 @@ def set_hypothesis_status(hypothesis_id: str, status: str, rationale: str | None
             return {"error": str(exc)}
 
 
+# --- journal: the freeform research notebook (design-working-memory.md §5/§8) --
+# Function names DROP the `journal_` domain prefix (a routing concern): advertised
+# journal_add ↔ add_journal_entry, journal_search ↔ search_journal, etc. The write
+# tools enforce the authorship rule (an agent may touch only its OWN entries):
+# journal_add forces author="agent"; journal_update/journal_delete refuse a human entry.
+
+def add_journal_entry(body: str, project_id: str, origin_task_id: str | None = None) -> dict:
+    """Add an AGENT journal entry to a project's research notebook (always author=agent —
+    you can never post as the human). Parse @[label](kind:id) mentions from the body."""
+    from hexgraph.engine import journal as J
+
+    with session_scope() as s:
+        project = s.get(Project, project_id)
+        if project is None:
+            return {"error": "project not found"}
+        try:
+            entry = J.add_journal_entry(s, project, body=body, author="agent",
+                                        origin_task_id=origin_task_id)
+        except J.JournalError as exc:
+            return {"error": str(exc)}
+        return J.serialize_entry(s, entry)
+
+
+def list_journal_entries(project_id: str, author: str | None = None, limit: int = 50) -> dict:
+    """A project's journal entries newest-first (filter by author=human|agent)."""
+    from hexgraph.engine import journal as J
+
+    with session_scope() as s:
+        if s.get(Project, project_id) is None:
+            return {"error": "project not found"}
+        rows = J.list_journal_entries(s, project_id, author=author, limit=limit)
+        return {"entries": rows, "count": len(rows)}
+
+
+def get_journal_entry(entry_id: str) -> dict:
+    """Read ONE journal entry in full, with its @-mentions resolved (danglers flagged)."""
+    from hexgraph.engine import journal as J
+
+    with session_scope() as s:
+        out = J.get_journal_entry(s, entry_id)
+        if out is None:
+            return {"error": "journal entry not found"}
+        return out
+
+
+def search_journal(query: str, project_id: str, limit: int = 50) -> dict:
+    """Substring search over a project's journal bodies — cross-session re-orient."""
+    from hexgraph.engine import journal as J
+
+    with session_scope() as s:
+        if s.get(Project, project_id) is None:
+            return {"error": "project not found"}
+        rows = J.search_journal(s, project_id, query, limit=limit)
+        return {"entries": rows, "count": len(rows)}
+
+
+def update_journal_entry(entry_id: str, body: str) -> dict:
+    """Edit one of YOUR OWN journal entries (refuses a human-authored entry); marks it
+    edited and re-parses mentions."""
+    from hexgraph.engine import journal as J
+
+    with session_scope() as s:
+        try:
+            entry = J.update_journal_entry(s, entry_id, body=body, as_author="agent")
+        except J.JournalError as exc:
+            return {"error": str(exc)}
+        return J.serialize_entry(s, entry)
+
+
+def delete_journal_entry(entry_id: str) -> dict:
+    """Delete one of YOUR OWN journal entries (refuses a human-authored entry)."""
+    from hexgraph.engine import journal as J
+
+    with session_scope() as s:
+        try:
+            J.delete_journal_entry(s, entry_id, as_author="agent")
+        except J.JournalError as exc:
+            return {"error": str(exc)}
+        return {"deleted": entry_id}
+
+
 def _sandbox_image_built(tag: str) -> bool:
     """Is the sandbox image actually built locally? Cheap `docker image inspect` (no run);
     used so the radare2 health verdict isn't a false-positive when Docker is up but the
@@ -1630,6 +1711,7 @@ def get_schemas() -> dict:
     from hexgraph.engine.annotations import KINDS as ANN_KINDS, NODE_KINDS as ANN_NODE_KINDS
     from hexgraph.engine.assurance import LADDER as _ASSURANCE_LADDER, PRECONDITIONS as _PRECONDITIONS
     from hexgraph.engine.edge_schemas import SOCKET_KINDS, describe_edges
+    from hexgraph.engine.journal import AUTHORS as _JOURNAL_AUTHORS, REF_KINDS as _JOURNAL_REF_KINDS
     from hexgraph.engine.node_schemas import describe_nodes
     from hexgraph.engine.findings import FINDING_TYPES
     from hexgraph.models.finding import Finding as FModelCls
@@ -1721,6 +1803,16 @@ def get_schemas() -> dict:
         "annotation_kinds": sorted(ANN_KINDS),
         "annotation_node_kinds": sorted(ANN_NODE_KINDS),
         "annotation_note": "Annotations from an agent land status='proposed' (pending analyst approval).",
+        "journal": {
+            "authors": list(_JOURNAL_AUTHORS),
+            "mention_ref_kinds": list(_JOURNAL_REF_KINDS),
+            "mention_syntax": "@[label](kind:id)",
+            "note": "The freeform research JOURNAL is interpreted NARRATIVE (idea/tried/worked/learned) — "
+                    "NOT Observations (raw tool output) or findings (substantiated results). journal_add "
+                    "always posts as the agent; journal_update/journal_delete refuse a HUMAN-authored entry "
+                    "(authorship rule). @[label](kind:id) mentions (kind one of mention_ref_kinds) become "
+                    "clickable links resolved through the merge keeper; a merged/archived target greys out.",
+        },
         "verify_poc_oracles": {
             "note": "finding_verify_poc's oracle vocabulary. The classic in-band oracles prove a "
                     "REFLECTED side effect (best for reflected cmdi / auth-bypass); the extended "

@@ -109,6 +109,14 @@ def _gather_items(session: Session, project: Project, target: Target, task, ctx)
                            + "; ".join(f"[{h['status']}] {h['statement']}" for h in hyps[:10]),
                            92, "target", target.id))
 
+    # Discipline loop, Layer 2 (design-working-memory.md §6): nudge the agent to keep
+    # the shared journal current mid-loop (how stale it is, "record as you go"), so the
+    # omission is visible WHILE it works, not only at task close. Localized + additive.
+    from hexgraph.engine.journal import staleness_nudge
+    nudge = staleness_nudge(session, project.id)
+    if nudge:
+        items.append(_Item("journal_nudge", nudge, 62, "target", target.id))
+
     # The observation index (design §5.6.1): tell the agent what deterministic
     # analysis already exists on this target so it reuses it instead of re-running.
     from hexgraph.engine.observations import observation_index
