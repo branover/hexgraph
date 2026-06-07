@@ -7,15 +7,15 @@ from hexgraph.db.models import Node
 from hexgraph.db.session import session_scope
 from hexgraph.engine.annotations import confirmed_facts, create_annotation, set_status
 from hexgraph.engine.ingest import create_project, ingest_file
-from hexgraph.engine.nodes import materialize_function
+from hexgraph.engine.nodes import is_placeholder_name, materialize_function
 
 from conftest import fixture_path
 
 
-def _project_with_fn(s):
+def _project_with_fn(s, name="FUN_00401abc"):
     p = create_project(s, name="ann")
     t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
-    fn = materialize_function(s, project_id=p.id, target_id=t.id, name="FUN_00401abc")
+    fn = materialize_function(s, project_id=p.id, target_id=t.id, name=name)
     return p, t, fn
 
 
@@ -30,15 +30,35 @@ def test_human_rename_applies_and_keeps_identity(hg_home):
         assert "FUN_00401abc" in (n.attrs_json.get("name_history") or [])
 
 
-def test_agent_proposed_rename_needs_confirm(hg_home):
+def test_agent_rename_of_real_name_needs_confirm(hg_home):
+    # An agent renaming a node that ALREADY has a real (analyst-meaningful) name is
+    # higher-stakes: it stays `proposed` and is not applied until a human confirms.
     with session_scope() as s:
-        p, t, fn = _project_with_fn(s)
+        p, t, fn = _project_with_fn(s, name="parse_config")
         a = create_annotation(s, p.id, node_kind="node", node_id=fn.id, kind="rename",
-                              value="cgi_handler", origin="agent_proposed")
+                              value="cgi_handler", origin="agent")
         assert a.status == "proposed"
-        assert s.get(Node, fn.id).name == "FUN_00401abc"  # not applied yet
+        assert a.origin == "agent"
+        assert s.get(Node, fn.id).name == "parse_config"  # not applied yet
         set_status(s, a.id, "confirmed")
         assert s.get(Node, fn.id).name == "cgi_handler"   # applied on confirm
+
+
+def test_agent_naming_placeholder_auto_confirms(hg_home):
+    # Naming a genuinely-unnamed object (a decompiler placeholder) is pure value-add,
+    # so an agent's rename auto-confirms and applies immediately — no human click —
+    # while staying audited (annotation row origin=agent, status=confirmed) and
+    # reversible (the old placeholder is recorded in name_history).
+    with session_scope() as s:
+        p, t, fn = _project_with_fn(s, name="fcn.00401234")
+        nid = fn.id
+        a = create_annotation(s, p.id, node_kind="node", node_id=fn.id, kind="rename",
+                              value="parse_request", origin="agent")
+        assert a.status == "confirmed"
+        assert a.origin == "agent"                          # auditable: still an agent action
+        n = s.get(Node, nid)
+        assert n.name == "parse_request"                    # applied immediately
+        assert "fcn.00401234" in (n.attrs_json.get("name_history") or [])  # reversible
 
 
 def test_confirmed_facts_feed_context(hg_home):
@@ -84,3 +104,34 @@ def t_id(pid):  # helper: first target id of a project
     from hexgraph.db.models import Target
     with session_scope() as s:
         return s.query(Target).filter(Target.project_id == pid).first().id
+
+
+def test_is_placeholder_name_unit():
+    # Genuinely-unnamed: decompiler-synthesized placeholders + empty/None.
+    placeholders = [
+        None, "", "   ", "\t",
+        "fcn.00401234", "fcn.0000abcd",
+        "sub_401234", "sub_DEADBEEF",
+        "FUN_00401abc", "fun_401000",
+        "loc_804a010", "loc.804a010",
+        "off_12ab", "unk_4001", "byte_8049f00",
+        "nullsub_3", "locret_401050",
+        "sym.fcn.00401234",                 # namespace-prefixed placeholder still detected
+    ]
+    for name in placeholders:
+        assert is_placeholder_name(name) is True, name
+
+    # Real, analyst-meaningful names — conservative: anything not a known placeholder
+    # pattern is treated as a real name.
+    real = [
+        "parse_config", "main", "handle_request", "system",
+        "sym.get_param",                    # a prefixed REAL name (normalizes to get_param)
+        "sub_handler",                      # has a real word, not a bare hex tail
+        "function_table",                   # 'fun'/'fcn' substrings but not the pattern
+        "loc_handler", "fcn_dispatch",
+        "sym.deadbeef", "sym.cafe",         # prefixed REAL names that are all-hex (must NOT auto-confirm)
+        "deadbeef", "cafe", "facade",       # bare all-hex real names
+        "a", "x1",
+    ]
+    for name in real:
+        assert is_placeholder_name(name) is False, name
