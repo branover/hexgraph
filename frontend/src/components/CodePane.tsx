@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { highlightLines } from "../highlight";
 
 // The shared syntax-highlighted code surface: a single continuous `.codeview` block
@@ -24,7 +24,9 @@ export function CodePane({ content, lang, activeLine, lineClassFor }: {
     if (activeLine && activeRef.current) activeRef.current.scrollIntoView({ block: "center" });
   }, [activeLine, content]);
 
-  const lines = highlightLines(content, lang);
+  // Highlighting the whole body is O(content); memoize so unrelated re-renders
+  // (e.g. activeLine changes from a jump) don't re-run the highlighter.
+  const lines = useMemo(() => highlightLines(content, lang), [content, lang]);
   return (
     <div className="scrollx">
       <div className="codeview">
