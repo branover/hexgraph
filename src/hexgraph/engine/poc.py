@@ -8,8 +8,10 @@ model could fake. A `poc` task generates a PoC (LLM/mock) and verifies it,
 emitting a `poc`-type finding whose evidence carries the spec + the verification.
 
 Execution is policy-gated (`assert_allows_execution()` — PoC/fuzzing enabled) and
-runs --network none, capped, timed, disposable. Native-arch targets only (no
-emulation yet).
+runs --network none, capped, timed, disposable. Foreign-arch targets run under
+qemu-user (poc_probe picks `qemu-<arch>` from the ELF header and mounts the parent
+firmware's extracted rootfs as the qemu sysroot), verified end-to-end on real
+MIPS/ARM firmware.
 """
 
 from __future__ import annotations

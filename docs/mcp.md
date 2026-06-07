@@ -33,8 +33,8 @@ every tool that creates a target, including rehosting), `re` (static reverse eng
 target's unpacked filesystem), `obs` (the Observation store), `graph` (the curated node/edge/hypothesis
 graph), `finding` (findings, n-day, and proving), `src` (source trees and builds), `fuzz` (campaigns),
 `net` (live network interaction and the egress log), `task` (the task runner), and `meta` (schemas and
-health). Closed value sets — node and edge types, finding severities, task types, the remote recon
-allowlist, and so on — are real schema `enum`s generated from the codebase's own definitions, so an
+health). Closed value sets — node and edge types, finding severities, task types, the socket kinds,
+and so on — are real schema `enum`s generated from the codebase's own definitions, so an
 agent can't pass a value the engine doesn't understand.
 
 The tools are also grouped into **read**, **write**, and **run**, and each group is gated by
@@ -134,8 +134,7 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
   the marker tells you both ways to get the rest: re-call the same tool with a larger `max_chars`
   (clamped to a generous ceiling, so one call can pull a whole long function), or read the recorded
   Observation in full with `obs_get(<id>)`, which is uncapped. So a long decompilation can never quietly
-  hide a sink in its tail; if you suspect there's more below the cut, raise `max_chars` rather than
-  guessing from the head.
+  hide a sink in its tail — raise `max_chars` rather than guessing from the head.
 
 The fuller, user-facing tour of all this lives in [observations.md](observations.md).
 

@@ -88,12 +88,11 @@ lead you triage, and you promote the ones that matter into findings yourself. Th
 `ruleset`, which selects a bundled rule set by id or sweeps them `all`.
 
 YARA is always on. A match reads bytes and runs nothing, so it relaxes no boundary and needs no feature
-flag, the same as binutils and recon. Rules are still a surface you manage, but managing them is separate
-from whether the matcher runs: because HexGraph never reaches out to the network on its own, updating or
-adding rules is a deliberate, manual act, so drop your `.yar` files into `<HEXGRAPH_HOME>/yara_rules/` and
-they fold into every sweep. The matcher needs `yara` and `yara-python` in the sandbox image, which the
-default image already includes; if a run reports the tool missing you have a stale image, and
-`meta_check_features` will say so along with the fix:
+flag, the same as binutils and recon. Rules are a surface you manage by hand: HexGraph never fetches
+them on its own, so drop your `.yar` files into `<HEXGRAPH_HOME>/yara_rules/` and they fold into every
+sweep. The matcher needs `yara` and `yara-python` in the sandbox image, which the default image already
+includes; if a run reports the tool missing you have a stale image, and `meta_check_features` will say
+so along with the fix:
 
 ```bash
 just sandbox-build

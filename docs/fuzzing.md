@@ -24,13 +24,15 @@ got:
 - A **`file_format`** target goes to AFL++ or libFuzzer with an auto-derived dictionary.
 
 One honest caveat about the network engine: the one shipped in the image today is a built-in
-generational, text-oriented mutator driven by your proto-spec, not the full upstream boofuzz. It works
-well, but it's weaker than real boofuzz on binary protocols, because it doesn't yet keep binary length
-fields or checksum blocks consistent as it mutates a message. In practice that means you shouldn't
-expect it to discover a length/body mismatch on its own. If you're fuzzing a binary, length-prefixed
-protocol, pin the framing fields (the lengths and any checksums) in the proto-spec defaults and let
-the engine vary the payload around them. (A separate change is bringing the engine closer to upstream
-boofuzz.)
+generational mutator driven by your proto-spec, not the full upstream boofuzz. It still handles
+binary, length-prefixed protocols, because the spec understands binary-protocol primitives: a per-field
+`encoding` (`utf8`/`hex`/`bytes`) so binary defaults aren't mangled through UTF-8, a `size` field that
+auto-tracks a named block's byte length (configurable width and endianness, and mutated independently to
+create length/body mismatches), and a `checksum` field (sum8/16/32, crc16, crc32) recomputed over a
+block as the rest of the message mutates. So you describe the framing in the proto-spec and the engine
+keeps it consistent for you while varying the payload — and can also deliberately desync it. It is still
+weaker than real upstream boofuzz on a deeply stateful protocol, and a separate change is bringing it
+closer to upstream.
 
 The UI never hardcodes the engine list. The Fuzz modal shows whatever engines the server advertises
 for the target's surface, fetched from `GET /api/fuzz/engines`.
@@ -100,11 +102,13 @@ optimization; it doesn't force dead code to be kept, so an elided buffer is elid
 sees it. When a harness you expect to crash stays stubbornly clean, suspect elision first and add an
 observable use of the vulnerable result.
 
-When you're iterating like this on a harness HexGraph authored, note that editing it in place and
-rebuilding from the new revision (`src_save_revision`) is gated behind `features.source.edit`,
-which is off by default. With it off, the way to iterate is to re-import a fresh source tree each
-round rather than editing the managed one. See [build-from-source.md](build-from-source.md) for the
-editable-IDE workflow.
+When you're iterating like this on a harness HexGraph authored, you can edit it in place and rebuild
+from the new revision (`src_save_revision`, then pass the returned revision id to `src_build`). Every
+save is a new content-addressed revision rather than an in-place mutation, so it's durable and
+reversible. A scratch/HexGraph-authored tree (where a promoted harness lives) is editable by default;
+only editing *other* authored trees needs `features.source.edit`, and an imported, extracted, or vendor
+tree always stays read-only. See [build-from-source.md](build-from-source.md) for the editable-IDE
+workflow.
 
 ## Fuzzing a local network service with launch-and-join
 

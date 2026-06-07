@@ -30,8 +30,11 @@ src/hexgraph/web/dist/
 # Build-time-stamped identity (scripts/bake_build_info.py); a generated artifact, never committed.
 src/hexgraph/_build_info.py
 .claude/
-# …but DO track committed project skills (CLAUDE.md: capture workflows as skills under .claude/skills/).
+# …but DO track committed project skills (CLAUDE.md: capture workflows as skills under .claude/skills/),
+# the merge-gate reviewer agent, and the checked-in hooks + their settings (NOT settings.local.json).
 !.claude/
 .claude/*
 !.claude/skills/
 !.claude/agents/
+!.claude/hooks/
+!.claude/settings.json

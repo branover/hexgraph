@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-pr-reviewer.sh\"",
+            "timeout": 10,
+            "statusMessage": "Checking PR-review dispatch"
+          }
+        ]
+      }
+    ]
+  }
+}

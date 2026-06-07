@@ -161,6 +161,7 @@ port = 8765
 | `HEXGRAPH_BUILD_IMAGE` | `hexgraph-build:latest` | The build-from-source image (`features.build`). |
 | `HEXGRAPH_BUILDER` | `sandbox` | Override the Builder seam (`sandbox` or `mock`). |
 | `HEXGRAPH_FUZZ_IMAGE` | `hexgraph-fuzz:latest` | The coverage-guided fuzz image (`features.fuzzing`); point at a private tag in a worktree. |
+| `HEXGRAPH_ANGR_IMAGE` | `hexgraph-angr:latest` | The dedicated angr symbolic-execution image (`features.angr`); point at a private tag in a worktree. |
 | `HEXGRAPH_FUZZER` | _(by surface)_ | Force the Fuzzer seam to the offline `mock` engine; otherwise the engine is picked by attack surface. |
 | `HEXGRAPH_EXECUTOR` | `local_docker` | The Executor seam (`local_docker` or `remote_docker`). |
 | `HEXGRAPH_FUZZ_REMOTE_<ID>_DOCKER_HOST` | — | **Secret.** A remote fuzz environment's Docker endpoint (`ssh://…` or `tcp://…`), read on demand and never logged or stored. `…_<ID>_TLS_VERIFY` and `…_<ID>_CERT_PATH` add TLS for `tcp://`. |
