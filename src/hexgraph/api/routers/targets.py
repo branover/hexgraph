@@ -134,8 +134,11 @@ def api_restore_target(project_id: str, target_id: str):
 
 @router.post("/api/targets/{target_id}/decompile")
 def api_decompile(target_id: str, body: dict):
-    """Decompile a function on demand for the in-app viewer (sandboxed). Returns
-    {available, focus|detail}. Degrades gracefully when Docker/sandbox is absent."""
+    """Decompile a function on demand for the in-app viewer (sandboxed). Resolve by
+    `function` NAME and/or `address` — prefer the address when given (analyze-at-address
+    is reliable even when the name isn't a discoverable symbol: a stripped binary, a
+    renamed function, or one the fast analysis didn't flag). Returns {available,
+    focus|detail}. Degrades gracefully when Docker/sandbox is absent."""
     with session_scope() as s:
         t = s.get(Target, target_id)
         if t is None:
@@ -148,7 +151,8 @@ def api_decompile(target_id: str, body: dict):
 
             project = s.get(Project, t.project_id)
             decompiler = get_decompiler()
-            out = decompiler.decompile(t.path, body.get("function"), project=project)
+            out = decompiler.decompile(t.path, body.get("function"),
+                                       address=body.get("address"), project=project)
         except Exception as exc:  # noqa: BLE001
             return {"available": False, "detail": f"decompilation failed: {exc}"}
         return {"available": True, "backend": decompiler.name,

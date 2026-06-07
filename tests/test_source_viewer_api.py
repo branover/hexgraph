@@ -90,8 +90,10 @@ def test_decompile_reports_backend(hg_home, monkeypatch):
     class _FakeDecompiler:
         name = "ghidra"
 
-        def decompile(self, artifact, function=None, *, project=None):
-            return {"functions": ["main"], "focus": {"name": function, "pseudocode": "int main(){}"}}
+        def decompile(self, artifact, function=None, *, address=None, project=None):
+            subj = function or address
+            return {"functions": ["main"], "focus": {"name": subj, "address": address,
+                                                     "pseudocode": "int main(){}"}}
 
     monkeypatch.setattr(dc, "get_decompiler", lambda: _FakeDecompiler())
     c = TestClient(create_app())
@@ -99,3 +101,8 @@ def test_decompile_reports_backend(hg_home, monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert body["available"] is True and body["backend"] == "ghidra"
+    # by ADDRESS (the reliable key when the name isn't a resolvable symbol)
+    r2 = c.post(f"/api/targets/{tid}/decompile", json={"address": "0x401200"})
+    assert r2.status_code == 200
+    b2 = r2.json()
+    assert b2["available"] is True and b2["focus"]["address"] == "0x401200"

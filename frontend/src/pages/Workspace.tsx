@@ -916,11 +916,13 @@ export default function Workspace() {
             (() => {
               const fnNodes = graph.nodes.filter((n) => n.type === "node" && n.node_type === "function" && n.target_id === openFn.targetId);
               const tgt = detail.targets.find((t) => t.id === openFn.targetId);
-              const prov = (fnNodes.find((n) => n.label === openFn.fn)?.attrs as any)?.provenance as string[] | undefined;
+              const fnNode = fnNodes.find((n) => n.label === openFn.fn);
+              const prov = (fnNode?.attrs as any)?.provenance as string[] | undefined;
               return (
                 <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
                   <FunctionSourceViewer key={openFn.seq} projectId={projectId!} targetId={openFn.targetId} fn={openFn.fn}
-                                        targetName={tgt?.name} arch={tgt?.arch} knownFunctions={fnNodes.map((n) => n.label)}
+                                        address={fnNode?.address} targetName={tgt?.name} arch={tgt?.arch}
+                                        knownFunctions={fnNodes.map((n) => n.label)}
                                         provenanceIds={prov} initialTab={openFn.tab} initialLine={openFn.line}
                                         onClose={closeFunctionViewer} onChange={syncFnUrl} />
                 </div>
