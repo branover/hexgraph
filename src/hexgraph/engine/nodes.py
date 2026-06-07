@@ -56,12 +56,6 @@ _PLACEHOLDER_RE = re.compile(
     r"[._]?[0-9a-fA-F]+$",
     re.IGNORECASE,
 )
-# A bare all-hex remnant left after stripping a known decompiler namespace prefix
-# (e.g. `loc.804a010` → `804a010`). Require >=4 hex digits so a short real name that
-# happens to be hex-ish after prefix-stripping isn't misread as an address.
-_BARE_HEX_RE = re.compile(r"^[0-9a-fA-F]{4,}$")
-
-
 def is_placeholder_name(name: str | None) -> bool:
     """True when `name` is a genuinely-unnamed identifier — a decompiler-synthesized
     placeholder (radare2 `fcn.<hex>`/`sub_<hex>`, IDA/Ghidra `FUN_<hex>`/`sub_<hex>`/
@@ -73,17 +67,16 @@ def is_placeholder_name(name: str | None) -> bool:
     stripped = name.strip()
     if not stripped:
         return True
-    # Match the raw name (catches `fcn.00401234`, `loc.804a010`). Then also try the
-    # namespace-normalized form, but note `normalize_symbol_name` strips `loc.`/`sym.`
-    # etc., so a prefixed placeholder like `sym.fcn.00401234` becomes `fcn.00401234`
-    # (still matched) while `loc.804a010` becomes a bare hex tail — which we accept too,
-    # since stripping a known decompiler prefix off an all-hex remnant means there was
-    # never a real name underneath.
+    # Match the raw name (catches `fcn.00401234`, `loc.804a010`), then the namespace-
+    # normalized form so a prefixed placeholder like `sym.fcn.00401234` (-> `fcn.00401234`)
+    # is still caught. We deliberately do NOT treat a bare all-hex remnant as a placeholder:
+    # a real symbol can be all-hex (e.g. `deadbeef`, `cafe`), and auto-renaming it would be
+    # the exact silent overwrite this predicate exists to prevent.
     if _PLACEHOLDER_RE.match(stripped):
         return True
     canonical = normalize_symbol_name(stripped)
     if canonical and canonical != stripped:
-        if _PLACEHOLDER_RE.match(canonical) or _BARE_HEX_RE.match(canonical):
+        if _PLACEHOLDER_RE.match(canonical):
             return True
     return False
 

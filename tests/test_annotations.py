@@ -129,6 +129,8 @@ def test_is_placeholder_name_unit():
         "sub_handler",                      # has a real word, not a bare hex tail
         "function_table",                   # 'fun'/'fcn' substrings but not the pattern
         "loc_handler", "fcn_dispatch",
+        "sym.deadbeef", "sym.cafe",         # prefixed REAL names that are all-hex (must NOT auto-confirm)
+        "deadbeef", "cafe", "facade",       # bare all-hex real names
         "a", "x1",
     ]
     for name in real:
