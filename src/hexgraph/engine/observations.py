@@ -21,7 +21,7 @@ import re
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import or_
+from sqlalchemy import String, cast, or_
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Observation, Project, Target
@@ -163,9 +163,12 @@ def list_observations_for_node(
     and a superset of it. Call `get_observation(id)` for the full CAS payload."""
     q = session.query(Observation)
     q = q.filter(Observation.target_id == target_id) if target_id else q.filter(Observation.project_id == project_id)
-    rows = q.order_by(Observation.created_at.desc()).all()
-    out = [_row_dict(r) for r in rows if node_id in (r.node_refs or [])]
-    return out[:limit]
+    # Narrow in SQL before pulling rows: a node id is a UUID, so a substring match on the
+    # JSON `node_refs` text cannot false-positive on another id — the Python check below is
+    # the exact confirm. This keeps the fetch bounded even on a busy target/project.
+    q = q.filter(cast(Observation.node_refs, String).contains(node_id))
+    rows = q.order_by(Observation.created_at.desc()).limit(limit).all()
+    return [_row_dict(r) for r in rows if node_id in (r.node_refs or [])]
 
 
 def get_observation(session: Session, obs_id: str) -> dict[str, Any] | None:
