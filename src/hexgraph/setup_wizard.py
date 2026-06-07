@@ -149,6 +149,12 @@ class SetupPlan:
     build_keys: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
+    @property
+    def rebuilds_sandbox(self) -> bool:
+        """Does this plan rebuild the sandbox image (so a staleness warning would be noise)?
+        Single source of truth for the sandbox BUILD_STEPS keys."""
+        return "sandbox" in self.build_keys or "sandbox_ghidra" in self.build_keys
+
 
 # Server settings keys the wizard never lets be a secret (none here are) — this is the
 # exhaustive set of dotted paths the wizard may write. Anything else is a bug.
@@ -460,8 +466,7 @@ def _run_non_interactive(state: DetectedState, *, reason: str, rebuild: bool) ->
     except Exception as exc:  # noqa: BLE001
         print(f"  (!) DB init note: {exc}")
     # Proactive staleness warning (only when we DIDN'T just (re)build the sandbox).
-    stale = _sandbox_staleness_warning(will_rebuild="sandbox" in plan.build_keys
-                                       or "sandbox_ghidra" in plan.build_keys)
+    stale = _sandbox_staleness_warning(will_rebuild=plan.rebuilds_sandbox)
     if stale:
         print(f"  (!) {stale}")
     print("✓ HexGraph baseline ready.  Run an interactive setup any time with: hexgraph setup")
@@ -742,8 +747,7 @@ def _run_interactive(state: DetectedState, *, rebuild: bool) -> int:  # pragma: 
         next_steps += ("\n[yellow]You enabled policy-relaxing features.[/yellow] Targets are "
                        "still confined to the locked-down sandbox; review the implications above.")
     # Proactive staleness warning (only when we DIDN'T just (re)build the sandbox).
-    stale = _sandbox_staleness_warning(will_rebuild="sandbox" in plan.build_keys
-                                       or "sandbox_ghidra" in plan.build_keys)
+    stale = _sandbox_staleness_warning(will_rebuild=plan.rebuilds_sandbox)
     if stale:
         next_steps += f"\n\n[yellow]⚠ {stale}[/yellow]"
     console.print(Panel(next_steps, title="Done", border_style="green", expand=True))
