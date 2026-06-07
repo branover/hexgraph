@@ -764,9 +764,17 @@ loud only where you are looking; every node/edge/color kept, mute never deletes.
 - Steps: in a finding/node/target Detail, add a note/tag (rename for function nodes) → for an
   agent-proposed annotation, Confirm or Reject it.
 - Functional: the annotation appears; proposed ones show confirm/reject; rejected ones strike through.
-- 🔌 Backend: create-annotation + set-status; verify.
-- Principle: human curation layered over agent output.
-- Prereq: an entity; (for confirm/reject) a proposed annotation.
+  Note on agent renames: an agent renaming a node that still has a decompiler placeholder name
+  (`fcn.00401234`, `FUN_…`, `sub_…`) is auto-confirmed and applied immediately, so it does NOT appear
+  as a pending confirm/reject proposal — only an agent rename of an already-real name lands as a
+  proposal awaiting a human. (Human renames always apply.)
+- 🔌 Backend: create-annotation + set-status; verify. An agent rename of a placeholder-named node
+  persists with `origin=agent, status=confirmed` and the new name applied (the old placeholder kept in
+  `name_history`); an agent rename of a real-named node persists `status=proposed`, not applied.
+- Principle: human curation layered over agent output — but naming the genuinely-unnamed is pure
+  value-add and need not wait on a click.
+- Prereq: an entity; (for confirm/reject) an agent rename of an already-real name (a placeholder rename
+  won't queue).
 
 **FIND-18 — Solved input (angr symbolic execution)**
 - Steps: select a `vulnerability` finding produced by the angr solver (its `evidence.reproducer` +

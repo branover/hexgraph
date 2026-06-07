@@ -118,20 +118,30 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
 
 The fuller, user-facing tour of all this lives in [observations.md](observations.md).
 
-### Annotations are proposals; a rename is confirmed by a human
+### Annotations are proposals; renaming a real name is confirmed by a human
 
 `graph_annotate` lets a driving agent attach a note, a tag, a type declaration, or a function
-**rename** to a graph entity, and an agent's annotation lands as a *proposal*. It is recorded
-against the node, but on its own it changes nothing else. The rename is where that distinction
-matters most. When you confirm a proposed rename in the web UI, the graph takes the new name;
-and when headless Ghidra is the active backend, HexGraph also writes the rename back into the
-persistent Ghidra project and re-decompiles, so the name sticks for every later decompile and
-the graph reflects the fresh result (with the radare2 backend there is no project to update, so
-the rename lands on the graph alone). That approval is deliberately a person's call rather
-than the agent's: there is no MCP verb for an agent to confirm its own rename. So the loop is
-simply the agent proposes, you confirm, and the round-trip completes — the agent is never left
-guessing whether its rename took, and a human stays in the loop on the names that become the
-shared vocabulary of the analysis.
+**rename** to a graph entity. Notes, tags, and type declarations from an agent land as a
+*proposal*: recorded against the node, but on their own they change nothing else.
+
+Renames are handled with one deliberate exception. If the node still carries a decompiler
+placeholder, one of those auto-generated `fcn.00401234` / `FUN_00401abc` / `sub_401000` names
+that says nothing about what the function actually does, then an agent naming it applies right
+away. There is nothing meaningful to overwrite, so on a binary with hundreds of unnamed
+functions the agent can label them as it understands them without waiting on a click for each
+one. The change is still fully auditable and reversible: the annotation row records that the
+agent made it, and the old placeholder is kept in the node's `name_history`. Renaming a function
+that *already* has a real, analyst-given name is the higher-stakes case, and there it still lands
+as a proposal for a person to confirm. A human rename, of course, always applies.
+
+When a rename does take effect, on a placeholder immediately or on a real name once you confirm
+it in the web UI, the graph takes the new name. With headless Ghidra as the active backend,
+HexGraph also writes the rename back into the persistent Ghidra project and re-decompiles, so the
+name sticks for every later decompile and the graph reflects the fresh result; with the radare2
+backend there is no project to update, so the rename lands on the graph alone. There is still no
+MCP verb for an agent to confirm its own rename of a real name, so a human stays in the loop on
+the names that become the shared vocabulary of the analysis, while the cheap, pure-value-add work
+of naming the unnamed no longer waits on anyone.
 
 ## Delegate mode: HexGraph drives the agent
 

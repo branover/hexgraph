@@ -11,6 +11,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Annotation, Finding, Node, Target
+from hexgraph.engine.nodes import is_placeholder_name
 
 KINDS = {"rename", "note", "tag", "type_decl"}
 NODE_KINDS = {"target", "node", "finding"}
@@ -44,6 +45,14 @@ def create_annotation(
     if kind == "rename" and node_kind != "node":
         raise AnnotationError("rename annotations apply only to nodes")
     status = "confirmed" if origin == "human" else "proposed"
+    # Naming a genuinely-unnamed object (a decompiler placeholder like `fcn.00401234`)
+    # is pure value-add — nothing meaningful is overwritten — so an agent's rename of a
+    # placeholder-named node auto-confirms (still audited: the annotation row stays
+    # origin=agent, and _apply_rename appends the old placeholder to name_history).
+    # Renaming a node that already has a real name is higher-stakes and still needs a
+    # human confirm. (Owner decision.)
+    if kind == "rename" and status == "proposed" and is_placeholder_name(ent.name):
+        status = "confirmed"
     ann = Annotation(project_id=project_id, node_kind=node_kind, node_id=node_id, kind=kind,
                      value=value.strip(), origin=origin, status=status)
     session.add(ann)

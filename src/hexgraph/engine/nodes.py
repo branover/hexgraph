@@ -9,6 +9,7 @@ re-decompilation and match across binaries.
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -40,6 +41,51 @@ def normalize_symbol_name(name: str | None) -> str | None:
         if name.startswith(p) and len(name) > len(p):
             return name[len(p):]
     return name
+
+
+# Decompiler auto-generated placeholder names — a genuinely-unnamed identifier the
+# tool synthesized from an address, carrying no analyst meaning. radare2 emits
+# `fcn.<hex>` / `sub_<hex>`; IDA/Ghidra emit `FUN_<hex>` / `sub_<hex>` / `loc_<hex>`
+# (and data stubs `off_`/`byte_`/`word_`/… and `nullsub_<n>`). Each is a known
+# keyword followed by an optional `.`/`_` and a pure address/index tail, so a name
+# that merely *starts* with one of these words but continues with real text
+# (`sub_handler`, `function_table`) is correctly NOT a placeholder. A leading
+# namespace prefix (`sym.fcn.00401234`) is stripped first so the tail still matches.
+_PLACEHOLDER_RE = re.compile(
+    r"^(?:fcn|sub|fun|loc|locret|off|unk|byte|word|dword|qword|nullsub)"
+    r"[._]?[0-9a-fA-F]+$",
+    re.IGNORECASE,
+)
+# A bare all-hex remnant left after stripping a known decompiler namespace prefix
+# (e.g. `loc.804a010` → `804a010`). Require >=4 hex digits so a short real name that
+# happens to be hex-ish after prefix-stripping isn't misread as an address.
+_BARE_HEX_RE = re.compile(r"^[0-9a-fA-F]{4,}$")
+
+
+def is_placeholder_name(name: str | None) -> bool:
+    """True when `name` is a genuinely-unnamed identifier — a decompiler-synthesized
+    placeholder (radare2 `fcn.<hex>`/`sub_<hex>`, IDA/Ghidra `FUN_<hex>`/`sub_<hex>`/
+    `loc_<hex>`, …) or empty/whitespace/None. Conservative: anything not a known
+    placeholder pattern is treated as a real, analyst-meaningful name (returns False).
+    The single reusable predicate for "this object has no real name yet"."""
+    if name is None:
+        return True
+    stripped = name.strip()
+    if not stripped:
+        return True
+    # Match the raw name (catches `fcn.00401234`, `loc.804a010`). Then also try the
+    # namespace-normalized form, but note `normalize_symbol_name` strips `loc.`/`sym.`
+    # etc., so a prefixed placeholder like `sym.fcn.00401234` becomes `fcn.00401234`
+    # (still matched) while `loc.804a010` becomes a bare hex tail — which we accept too,
+    # since stripping a known decompiler prefix off an all-hex remnant means there was
+    # never a real name underneath.
+    if _PLACEHOLDER_RE.match(stripped):
+        return True
+    canonical = normalize_symbol_name(stripped)
+    if canonical and canonical != stripped:
+        if _PLACEHOLDER_RE.match(canonical) or _BARE_HEX_RE.match(canonical):
+            return True
+    return False
 
 
 def get_or_create_node(
