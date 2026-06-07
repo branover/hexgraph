@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { BuildRow, SourceFileEntry, SourceTreeRow, api } from "../api";
 import { Icon } from "./Icon";
 import BuildModal from "./BuildModal";
 import BuildDetailModal from "./BuildDetailModal";
-import { highlightLines, langForFile } from "../highlight";
+import { langForFile } from "../highlight";
+import CodePane from "./CodePane";
 
 // The read-only Source/IDE mode (Phase 1). A multi-tree file explorer (a dropdown
 // switcher over a shared <FileTree>, mirroring FilesystemBrowser) + a code viewer.
@@ -56,7 +57,6 @@ export default function SourceBrowser({ projectId, open, onPickedTarget, buildEn
   const [draft, setDraft] = useState("");
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [revs, setRevs] = useState<import("../api").SourceRevision[]>([]);
-  const lineRef = useRef<HTMLDivElement>(null);
 
   const loadTrees = () => api.sourceTrees(projectId).then((r) => setTrees(r.source_trees)).catch(() => setTrees([]));
   useEffect(() => { loadTrees(); }, [projectId]);
@@ -144,9 +144,6 @@ export default function SourceBrowser({ projectId, open, onPickedTarget, buildEn
     if (open?.treeId && open.rel && open.treeId === treeId) openFile(open.rel, open.line);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open?.treeId, open?.rel, open?.line, treeId]);
-
-  // scroll the gutter to the target line once content renders
-  useEffect(() => { if (line && lineRef.current) lineRef.current.scrollIntoView({ block: "center" }); }, [line, view?.content]);
 
   if (!trees) return <div className="muted" style={{ padding: 16, fontSize: 12 }}>loading source…</div>;
   if (trees.length === 0) {
@@ -311,29 +308,11 @@ export default function SourceBrowser({ projectId, open, onPickedTarget, buildEn
               <textarea value={draft} onChange={(e) => setDraft(e.target.value)} spellCheck={false}
                         style={{ width: "100%", minHeight: "60vh", boxSizing: "border-box", fontFamily: "var(--mono, monospace)", fontSize: 11.5, lineHeight: "1.55em", background: "var(--bg)", color: "var(--fg)", border: "none", padding: 12, resize: "vertical" }} />
             ) : view.encoding === "text" ? (
-              // Syntax-highlighted, continuous code block with a dimmed gutter. The
-              // highlighter (highlight.js, line-split) only colors the text; coverage
-              // shading + the jump highlight ride as per-row classes UNDER it, so the
-              // two decorations coexist (don't let the highlighter clobber them).
-              <div className="scrollx">
-                <div className="codeview">
-                  {(() => {
-                    const raw = view.content || "";
-                    const hl = highlightLines(raw, langForFile(view.rel));
-                    return hl.map((html, i) => {
-                      const n = i + 1;
-                      const hot = line === n;
-                      const cls = "cl" + (hot ? " hot" : covered.has(n) ? " cov-y" : uncovered.has(n) ? " cov-n" : "");
-                      return (
-                        <div key={i} className={cls} ref={hot ? lineRef : undefined}>
-                          <span className="ln">{n}</span>
-                          <code className="src hljs" dangerouslySetInnerHTML={{ __html: html || " " }} />
-                        </div>
-                      );
-                    });
-                  })()}
-                </div>
-              </div>
+              // Syntax-highlighted, continuous code block with a dimmed gutter. Coverage
+              // shading + the jump highlight ride as per-row classes UNDER the highlighter
+              // (CodePane keeps the two decorations from clobbering each other).
+              <CodePane content={view.content || ""} lang={langForFile(view.rel)} activeLine={line}
+                        lineClassFor={(n) => (covered.has(n) ? "cov-y" : uncovered.has(n) ? "cov-n" : undefined)} />
             ) : (
               <pre className="codewrap" style={{ whiteSpace: "pre-wrap", padding: 12, fontFamily: "var(--mono, monospace)", fontSize: 11 }}>{view.content}</pre>
             )}
