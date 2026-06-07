@@ -252,7 +252,14 @@ def _constrained_byte_len(state, sym, *, length: int) -> int | None:
     Bounded cost: at most `length` solver queries (length is the budget-capped input size), each a
     cheap eval over simple equality assumptions. Defensive throughout: ANY introspection / eval
     failure degrades to None (the caller keeps the full buffer as the only reproducer) — never a
-    crash, and never a misleadingly-small claim. Returns 0 when no byte is significant."""
+    crash, and never a misleadingly-small claim. Returns 0 when no byte is significant.
+
+    LIMITATION (always UNDER-counts, never over-counts): a byte under a loose constraint (more than
+    _BYTE_SIGNIFICANT_MAX_VALUES feasible values, e.g. a range check) or a cross-byte disjunction
+    (e.g. `b0==1 OR b1==1`, where pinning one operand can mask the other's role) reads as filler.
+    That is safe by design — the full `concrete_input` is always retained as the authoritative
+    reproducer, so a short constrained_len never loses data; it only reports a possibly-shorter
+    \"bytes that clearly matter\" prefix."""
     try:
         solver = state.solver
         get_byte = sym.get_byte            # per-byte BV view; byte 0 == the first program-read byte
