@@ -5,6 +5,35 @@ All notable changes to HexGraph are recorded here. The format loosely follows
 [semantic versioning](https://semver.org/) properly once it reaches 1.0. Until then,
 expect breaking changes between minor versions.
 
+## [0.6.0](https://github.com/branover/hexgraph/compare/hexgraph-v0.5.0...hexgraph-v0.6.0) (2026-06-07)
+
+
+### Features
+
+* add meta_check_features preflight for optional-feature health ([#181](https://github.com/branover/hexgraph/issues/181)) ([7534dbb](https://github.com/branover/hexgraph/commit/7534dbb22bd0fca0a41b3abd34e24b803a42aaa2))
+* **angr:** semantic minimal_input/constrained_len + meaningful finding category ([#185](https://github.com/branover/hexgraph/issues/185)) ([12aa00b](https://github.com/branover/hexgraph/commit/12aa00bffcb2e8063582967cf8c24f5111a8cad8))
+* auto-confirm an agent naming a genuinely-unnamed object ([#183](https://github.com/branover/hexgraph/issues/183)) ([74b53a5](https://github.com/branover/hexgraph/commit/74b53a546b7dd8edd88dd7beb6324cf5f6db1438))
+* function source viewer (decompiled / disassembly, navigable callees) ([#188](https://github.com/branover/hexgraph/issues/188)) ([15ec8b2](https://github.com/branover/hexgraph/commit/15ec8b2497b5383c94bde25a8b1c0782c6296876))
+* graph-API / finding-envelope batch (graph_stats · graph_set_node_attr · CWE · reachability precondition) ([#191](https://github.com/branover/hexgraph/issues/191)) ([4b3433d](https://github.com/branover/hexgraph/commit/4b3433dd716b8ca417bd08b82a65fd51f1e071a0))
+* one-click promote a recon import/export to a graph node ([#189](https://github.com/branover/hexgraph/issues/189)) ([cf35f50](https://github.com/branover/hexgraph/commit/cf35f509b4056df83f44de8bdcf09c05af018277))
+* **re:** actionable truncation marker + agent max_chars ([#184](https://github.com/branover/hexgraph/issues/184)) ([36f845c](https://github.com/branover/hexgraph/commit/36f845cbe729560176a35ab7197be5c5fc7cb376))
+* render angr solved input + mitigation badges in the Inspector ([#177](https://github.com/branover/hexgraph/issues/177)) ([a0770c0](https://github.com/branover/hexgraph/commit/a0770c017214e08d5dee134eeab3baa8683a33a6))
+* surface a node's full result-set + collapse long imports + guard mitigations label ([#190](https://github.com/branover/hexgraph/issues/190)) ([4e55add](https://github.com/branover/hexgraph/commit/4e55addfe67dd97a244a7c9273dcbb86b65f38e8))
+* surface FLOSS / YARA / angr feature toggles in Settings (Phase 5) ([#180](https://github.com/branover/hexgraph/issues/180)) ([6984426](https://github.com/branover/hexgraph/commit/69844267812d82fa62eee6544fec399fd0dd261b))
+* ungate FLOSS + YARA as always-on static tools (keep angr gated) ([#182](https://github.com/branover/hexgraph/issues/182)) ([cff5b0c](https://github.com/branover/hexgraph/commit/cff5b0c958f4727a4b2ebca8924bd7f048c5f230))
+
+
+### Bug Fixes
+
+* decompile/disassemble a function by its node address, not just its name ([#192](https://github.com/branover/hexgraph/issues/192)) ([c270d35](https://github.com/branover/hexgraph/commit/c270d352d881b7458455ab2d4b91439555f27fcc))
+* make YARA sweep report errors honestly + clarify graph_create_edge param ([#178](https://github.com/branover/hexgraph/issues/178)) ([a932eef](https://github.com/branover/hexgraph/commit/a932eefbbd96ccd389b6fd0d0ecbeb2268782e0b))
+* **setup:** self-heal a partial .venv instead of dying on missing pip ([#193](https://github.com/branover/hexgraph/issues/193)) ([229895d](https://github.com/branover/hexgraph/commit/229895d5086ef3540437d5cbea9b44cb428aa3e6))
+
+
+### Documentation
+
+* **dev:** backlog the remaining Phase 5 graph-curation UX + tool-ergonomics work ([#186](https://github.com/branover/hexgraph/issues/186)) ([6ec1959](https://github.com/branover/hexgraph/commit/6ec19596fb25d6483405f73df4c4e6bc7d4744a3))
+
 ## [0.5.0](https://github.com/branover/hexgraph/compare/hexgraph-v0.4.0...hexgraph-v0.5.0) (2026-06-06)
 
 
