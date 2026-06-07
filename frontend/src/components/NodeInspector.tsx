@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { GraphNode, TargetNode, api } from "../api";
 import { Icon, NODE_ICON } from "./Icon";
 import Launcher from "./Launcher";
@@ -20,6 +20,10 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
   const isFunction = node.type === "node" && node.node_type === "function";
   const icon = node.type === "target" ? NODE_ICON[node.kind] : NODE_ICON[node.node_type] || "fn";
   const [added, setAdded] = useState<Set<string>>(new Set());
+  // The inspector instance is reused across selections, so clear the promoted-this-session
+  // marks when the selected node/target changes — otherwise a name promoted on one target
+  // shows as already-added on another that happens to import the same name.
+  useEffect(() => { setAdded(new Set()); }, [node.id]);
   const [decomp, setDecomp] = useState<{ loading: boolean; focus?: any; detail?: string } | null>(null);
   const [editing, setEditing] = useState(false);
   const [eName, setEName] = useState("");
@@ -57,11 +61,18 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
     } catch (e: any) { setDecomp({ loading: false, detail: String(e.message || e) }); }
   };
 
+  // Promote a recon symbol to a node WITHOUT decompiling. Keyed by `kind:name` so the
+  // same name imported (→ symbol) and exported (→ function) are tracked independently, and
+  // only marked "added" on a SUCCESSFUL create — a real failure leaves the chip clickable
+  // to retry instead of falsely showing ✓. (create_node is get-or-create, so a re-add of an
+  // existing node succeeds and is correctly marked.)
   const addNode = async (name: string, kind: string, attrs?: Record<string, any>) => {
     if (!projectId || !target) return;
-    try { await api.createNode(projectId, { node_type: kind, name, target_id: target.id, attrs }); } catch { /* dup ok */ }
-    setAdded((prev) => new Set(prev).add(name));
-    onChanged?.();
+    try {
+      await api.createNode(projectId, { node_type: kind, name, target_id: target.id, attrs });
+      setAdded((prev) => new Set(prev).add(`${kind}:${name}`));
+      onChanged?.();
+    } catch { /* leave the chip clickable so a genuine failure can be retried */ }
   };
 
   const removeNode = async () => {
@@ -94,10 +105,10 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
             <><div className="sec">Imports ({target.metadata.imports.length}) <span className="muted">· click + to add as a node</span></div>
               <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
                 {target.metadata.imports.slice(0, 80).map((i: string) => (
-                  <button key={i} className="tag addable" disabled={added.has(i)}
-                          title={added.has(i) ? "added" : "Add as a symbol node (auto-tagged a sink if a prior tool flagged it dangerous)"}
+                  <button key={i} className="tag addable" disabled={added.has(`symbol:${i}`)}
+                          title={added.has(`symbol:${i}`) ? "added" : "Add as a symbol node (auto-tagged a sink if a prior tool flagged it dangerous)"}
                           onClick={() => addNode(i, "symbol", { kind: "import" })}>
-                    {added.has(i) ? <Icon name="check" size={10} /> : <Icon name="plus" size={10} />} {i}
+                    {added.has(`symbol:${i}`) ? <Icon name="check" size={10} /> : <Icon name="plus" size={10} />} {i}
                   </button>
                 ))}
               </div></>
@@ -107,10 +118,10 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
               <div className="sec">Exported functions ({exports.length}) <span className="muted">· click + to add as a node</span></div>
               <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
                 {exports.slice(0, 80).map((e) => (
-                  <button key={e} className="tag addable" disabled={added.has(e)}
-                          title={added.has(e) ? "added" : "Add as a function node"}
+                  <button key={e} className="tag addable" disabled={added.has(`function:${e}`)}
+                          title={added.has(`function:${e}`) ? "added" : "Add as a function node"}
                           onClick={() => addNode(e, "function")}>
-                    {added.has(e) ? <Icon name="check" size={10} /> : <Icon name="plus" size={10} />} {e}
+                    {added.has(`function:${e}`) ? <Icon name="check" size={10} /> : <Icon name="plus" size={10} />} {e}
                   </button>
                 ))}
               </div>
