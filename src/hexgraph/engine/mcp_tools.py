@@ -728,15 +728,15 @@ def binutils_facts(target_id: str) -> str:
 
 def floss_strings(target_id: str, min_length: int | None = None) -> str:
     """Recover OBFUSCATED strings (stack/tight/decoded) a plain strings pass misses, via
-    FLARE FLOSS run in the sandbox. Opt-in (features.floss); advertised only when enabled."""
+    FLARE FLOSS run in the sandbox. Always-on static tool — it relaxes no boundary."""
     return _tool(target_id, "floss_strings",
                  {"min_length": min_length} if min_length is not None else {})
 
 
 def yara_scan(target_id: str, ruleset: str | None = None) -> str:
     """Match ONE target's bytes against YARA rules (bundled + user) in the sandbox,
-    promoting matched rules to pattern nodes + matches_rule edges. Opt-in (features.yara);
-    advertised only when enabled. Use yara_sweep for the whole project."""
+    promoting matched rules to pattern nodes + matches_rule edges. Always-on static tool —
+    it relaxes no boundary. Use yara_sweep for the whole project."""
     return _tool(target_id, "yara_scan", {"ruleset": ruleset} if ruleset else {})
 
 
@@ -745,8 +745,8 @@ def yara_sweep(project_id: str, ruleset: str | None = None) -> dict:
     firmware file against the chosen rules, recording a yara_matches Observation per
     artifact and promoting matches to shared project-level `pattern` nodes via `matches_rule`
     edges. The cross-target n-day complement to link_same_code (exact hash): one rule, swept
-    corpus-wide. `ruleset` is a bundled ruleset id (or 'all', default). Opt-in (features.yara);
-    advertised only when enabled. Returns a roll-up of scanned/match/promotion counts + hits."""
+    corpus-wide. `ruleset` is a bundled ruleset id (or 'all', default). Always-on static tool
+    — it relaxes no boundary. Returns a roll-up of scanned/match/promotion counts + hits."""
     from hexgraph.engine.yara import sweep_project
 
     with session_scope() as s:
@@ -1403,19 +1403,33 @@ def check_decompiler() -> dict:
 
 def _image_smoke(image: str, argv: list[str], *, timeout: int = 30) -> tuple[bool, str]:
     """Run a TINY, side-effect-free command in `image` and report (ok, detail). No target
-    is mounted, `--network none`, auto-removed — this is a dependency presence check, not an
-    analysis run. Returns (False, reason) when Docker is down, the image is unbuilt, or the
-    command exits non-zero (the missing-dep / stale-image case). Never raises."""
+    is mounted, auto-removed — this is a dependency presence check, not an analysis run.
+    Returns (False, reason) when Docker is down, the image is unbuilt, or the command exits
+    non-zero (the missing-dep / stale-image case). Never raises.
+
+    Even though it mounts no target, the launch reuses the FULL sandbox hardening posture
+    (`SandboxRunner._hardening_args`: `--network none`, `--read-only`, `--cap-drop ALL`,
+    `--security-opt no-new-privileges`, `--user 1000`, the resource caps + tmpfs scratch) so
+    EVERY container HexGraph spawns is uniformly locked down — a dependency probe is no
+    weaker than a real probe run."""
     import shutil
     import subprocess
+
+    from hexgraph.sandbox.resources import ResourceSpec
+    from hexgraph.sandbox.runner import SandboxRunner
 
     if not shutil.which("docker"):
         return False, "the docker CLI is not on PATH"
     if not _sandbox_image_built(image):
         return False, f"the image '{image}' is not built"
+    # Mirror run_probe's hardened posture exactly (no network, read-only rootfs, dropped
+    # caps, no-new-privileges, unprivileged uid, resource ceilings + tmpfs) — the dep check
+    # is a presence probe, not an analysis run, but it must not be a softer container.
+    hardening = SandboxRunner(image=image)._hardening_args(
+        allow_network=False, net_container=None, resources=ResourceSpec(), secret=False)
     try:
         proc = subprocess.run(
-            ["docker", "run", "--rm", "--network", "none", "--entrypoint", "", image, *argv],
+            ["docker", "run", "--rm", *hardening, "--entrypoint", "", image, *argv],
             capture_output=True, timeout=timeout, text=True)
     except subprocess.TimeoutExpired:
         return False, f"the dependency check timed out after {timeout}s"
@@ -1427,18 +1441,25 @@ def _image_smoke(image: str, argv: list[str], *, timeout: int = 30) -> tuple[boo
     return False, (reason[-1] if reason else f"exit {proc.returncode}")[:200]
 
 
-# Optional features whose RUNTIME availability can diverge from their `features.X.enabled`
-# gate — an enabled feature whose dependency/image is missing (the stale-image trap) reads
-# "available" in Settings yet errors on first use. Each entry pairs the dotted enabled-gate
-# path with a callable -> (ok, detail) that LIGHTLY checks the runtime dep (no analysis run)
-# and a remediation hint shown when enabled-but-broken. The gate→image/build mapping mirrors
-# setup_catalog (the single source of truth for which feature needs which image); we assert
-# that alignment in the guard test rather than re-deriving it here.
+# Features to health-check — those whose RUNTIME availability can diverge from what's
+# configured. Two flavours:
+#   * GATED features (angr, ghidra, emulation) carry a dotted `gate` path; an enabled feature
+#     whose dependency/image is missing (the stale-image trap) reads "available" in Settings
+#     yet errors on first use, so check_features reports disabled / available / broken.
+#   * ALWAYS-ON static tools (floss, yara) have NO gate (`gate=None`) — they relax no boundary
+#     and ride the static surface ungated. They have no `disabled` state, only available /
+#     broken (the stale-sandbox-image staleness check stays valuable: they're always reachable,
+#     so a missing dep is a silent failure waiting to happen).
+# Each entry pairs the gate (or None) with a callable -> (ok, detail) that LIGHTLY checks the
+# runtime dep (no analysis run) and a remediation hint shown when broken. The gate→image/build
+# mapping mirrors setup_catalog (the single source of truth for which feature needs which
+# image); we assert that alignment in the guard test rather than re-deriving it here.
 def _feature_health_specs() -> list[dict]:
-    """The optional features to health-check, with their lightweight runtime probe. Built
-    lazily (it imports the sandbox/solver image selectors) so importing this module stays
-    cheap and a missing optional dep never breaks the catalog. Ghidra and P-Code emulation
-    share the with-Ghidra sandbox image and both defer to check_ghidra for their verdict."""
+    """The features to health-check, with their lightweight runtime probe. Built lazily (it
+    imports the sandbox/solver image selectors) so importing this module stays cheap and a
+    missing optional dep never breaks the catalog. floss + yara are always-on (gate=None);
+    Ghidra and P-Code emulation share the with-Ghidra sandbox image and both defer to
+    check_ghidra for their verdict."""
     from hexgraph.engine.solver import angr_image
     from hexgraph.sandbox.runner import sandbox_image
 
@@ -1467,9 +1488,10 @@ def _feature_health_specs() -> list[dict]:
         return bool(g.get("ok")), g.get("detail") or "Ghidra status could not be confirmed."
 
     return [
-        {"feature": "floss", "gate": "features.floss.enabled", "check": _floss,
+        # floss + yara are always-on (gate=None) — availability-only (available | broken).
+        {"feature": "floss", "gate": None, "check": _floss,
          "remediation": "rebuild the sandbox image: `just sandbox-build`."},
-        {"feature": "yara", "gate": "features.yara.enabled", "check": _yara,
+        {"feature": "yara", "gate": None, "check": _yara,
          "remediation": "rebuild the sandbox image: `just sandbox-build`."},
         {"feature": "angr", "gate": "features.angr.enabled", "check": _angr,
          "remediation": "build the angr image: `just angr-build`."},
@@ -1483,36 +1505,42 @@ def _feature_health_specs() -> list[dict]:
 
 
 def check_features() -> dict:
-    """Preflight the OPTIONAL features whose runtime dependency can diverge from their gate —
-    so you can tell 'gated off' from 'configured but broken' BEFORE spending a run. Each feature
-    reports a tri-state `state`: `disabled` (its features.X.enabled gate is off — nothing to
-    check), `available` (enabled AND its runtime dep/image is actually present), or `broken`
-    (enabled but the dep/image is MISSING — the stale-sandbox-image trap that silently errored
-    YARA/FLOSS in an eval) with an ACTIONABLE `remediation` hint. Covers floss, yara, angr, and
-    ghidra/emulation. The check is LIGHTWEIGHT (a tiny in-image dep probe, --network none, no
-    target, no analysis) and read-only. Returns {features: [{feature, gate, enabled, state,
-    detail, remediation?}], summary}. Run this in your orient step before reaching for an opt-in
-    tool (re_floss_strings / re_yara_sweep / re_solve_*) so you don't burn turns against a feature
-    that's configured but broken."""
+    """Preflight the features whose runtime dependency can diverge from what's configured —
+    so you can tell 'configured but broken' from ready BEFORE spending a run. Each feature
+    reports a `state`: `available` (its runtime dep/image is actually present), `broken` (the
+    dep/image is MISSING — the stale-sandbox-image trap that silently errored YARA/FLOSS in an
+    eval) with an ACTIONABLE `remediation` hint, or `disabled` (ONLY for the GATED features —
+    angr, ghidra/emulation — when their features.X.enabled gate is off; nothing to check). The
+    always-on static tools floss + yara have no gate, so they're checked unconditionally and
+    report availability only. The check is LIGHTWEIGHT (a tiny in-image dep probe, --network
+    none, no target, no analysis) and read-only. Returns {features: [{feature, gate, enabled,
+    state, detail, remediation?}], summary}. Run this in your orient step before reaching for
+    floss/yara or an opt-in tool (re_solve_*) so you don't burn turns against a broken feature."""
     from hexgraph import settings
 
     rows: list[dict] = []
     for spec in _feature_health_specs():
         gate = spec["gate"]
-        try:
-            enabled = bool(settings.get(gate))
-        except Exception:  # noqa: BLE001 — a settings hiccup reads as "off", never crashes the check
-            enabled = False
-        if not enabled:
-            rows.append({"feature": spec["feature"], "gate": gate, "enabled": False,
-                         "state": "disabled",
-                         "detail": f"{spec['feature']} is gated off ({gate}=false); nothing to check."})
-            continue
+        # An always-on tool (gate=None) is ALWAYS checked — it has no disabled state, only
+        # available/broken. A gated feature is checked only when its gate is on.
+        if gate is None:
+            enabled = True
+        else:
+            try:
+                enabled = bool(settings.get(gate))
+            except Exception:  # noqa: BLE001 — a settings hiccup reads as "off", never crashes
+                enabled = False
+            if not enabled:
+                rows.append({"feature": spec["feature"], "gate": gate, "enabled": False,
+                             "state": "disabled",
+                             "detail": f"{spec['feature']} is gated off ({gate}=false); "
+                                       "nothing to check."})
+                continue
         try:
             ok, detail = spec["check"]()
         except Exception as exc:  # noqa: BLE001 — a broken dep is a reportable state, not a crash
             ok, detail = False, f"the dependency check failed: {exc}"
-        row = {"feature": spec["feature"], "gate": gate, "enabled": True,
+        row = {"feature": spec["feature"], "gate": gate, "enabled": enabled,
                "state": "available" if ok else "broken", "detail": detail}
         if not ok:
             row["remediation"] = spec["remediation"]
@@ -1521,12 +1549,12 @@ def check_features() -> dict:
     broken = [r["feature"] for r in rows if r["state"] == "broken"]
     available = [r["feature"] for r in rows if r["state"] == "available"]
     if broken:
-        summary = (f"{len(broken)} enabled feature(s) BROKEN (dep/image missing): "
+        summary = (f"{len(broken)} feature(s) BROKEN (dep/image missing): "
                    f"{', '.join(broken)} — see each row's remediation.")
     elif available:
-        summary = f"all enabled features available: {', '.join(available)}."
+        summary = f"all checked features available: {', '.join(available)}."
     else:
-        summary = "no optional features enabled."
+        summary = "no features available to check."
     return {"features": rows, "summary": summary}
 
 
@@ -1721,18 +1749,19 @@ def get_schemas() -> dict:
                     "<HEXGRAPH_HOME>/yara_rules dir are ALWAYS included. A match promotes to a "
                     "`pattern` node + a `matches_rule` edge carrying the rule's declared severity/"
                     "cve; the matcher never fabricates a severity or auto-mints a finding — promote "
-                    "a hit to a finding deliberately. Empty unless features.yara is enabled.",
+                    "a hit to a finding deliberately.",
         },
     }
 
 
 def _yara_rulesets_for_schema() -> list[str]:
-    """The bundled YARA ruleset ids for get_schemas — only when the feature is on, so a
-    disabled tool isn't advertised through the schema either."""
+    """The bundled YARA ruleset ids for get_schemas. YARA is always-on (it relaxes no
+    boundary), so the rulesets are always advertised — only an unreadable bundled dir
+    yields an empty list."""
     try:
-        from hexgraph.engine.yara import available_rulesets, yara_enabled
+        from hexgraph.engine.yara import available_rulesets
 
-        return available_rulesets() if yara_enabled() else []
+        return available_rulesets()
     except Exception:  # noqa: BLE001
         return []
 

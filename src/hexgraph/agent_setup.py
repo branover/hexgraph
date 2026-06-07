@@ -98,14 +98,15 @@ Observation. Work cheap-to-expensive — orienting facts first, heavy synthesis 
   command templates byte-by-byte on the stack or behind a decode routine — **`re_floss_strings`**
   recovers the obfuscated strings a plain `re_list_strings` MISSES, having FLARE FLOSS emulate the
   constructing functions in the sandbox; it records a `floss_strings` Observation, and you promote an
-  interesting recovered string to a `string` node deliberately. (Opt-in `features.floss`; stack/
-  decoded recovery is PE/x86-amd64, and on an ELF it degrades to a static-strings pass.) If a
+  interesting recovered string to a `string` node deliberately. (Always-on static tool — no gate;
+  stack/decoded recovery is PE/x86-amd64, and on an ELF it degrades to a static-strings pass.) If a
   decompile ever fails or before you lean on Ghidra, **`meta_check_decompiler`** confirms the backend
   actually WORKS (active vs. merely configured) so you don't burn turns against a broken decompiler.
-  Likewise, before you reach for any opt-in feature (FLOSS, YARA, a solver), **`meta_check_features`**
-  preflights them: it tells gated-off (`disabled`) apart from configured-but-broken (`broken` — the
-  stale-sandbox-image trap where the gate is on but the dependency is missing) and gives the exact
-  rebuild command, so you don't discover a broken feature only by failing mid-analysis.
+  Likewise, before you lean on FLOSS/YARA or reach for a gated feature (a solver, Ghidra),
+  **`meta_check_features`** preflights them: for the always-on static tools (FLOSS, YARA) it reports
+  `available` vs. `broken` (the stale-sandbox-image trap — the tool is always reachable but the
+  dependency is missing); for the gated ones it adds `disabled` (the gate is off). Either way it
+  gives the exact rebuild command, so you don't discover a broken tool only by failing mid-analysis.
 - **Map the attack surface — `re_xrefs` with NO symbol** maps every dangerous sink
   (system/popen/exec/strcpy/sprintf/memcpy/…), the format-string sinks, AND the network bind/
   listen/connect/recv sites, with who reaches each — start here. `re_xrefs <sink>` lists exactly
@@ -117,8 +118,8 @@ Observation. Work cheap-to-expensive — orienting facts first, heavy synthesis 
   is the fuzzy/structural n-day complement to the exact-hash `finding_link_same_code`: a hit promotes
   a project-level `pattern` node + a `matches_rule` edge carrying the rule's DECLARED severity/cve (the
   matcher never invents a severity or auto-mints a finding — promote a hit to a finding deliberately).
-  `ruleset` (a bundled id, or `all`) is the only knob. Opt-in `features.yara`; one analyst's rule
-  becomes a corpus-wide hunt.
+  `ruleset` (a bundled id, or `all`) is the only knob. Always-on static tool — no gate; drop your own
+  `.yar` rules in the HEXGRAPH_HOME rules dir, and one analyst's rule becomes a corpus-wide hunt.
 - **Map the structure without decompiling everything.** **`re_call_graph`** gives who-calls-whom
   across the whole program (or the neighbourhood around one `function` out to `depth`);
   **`re_function_xrefs`** gives BOTH directions (callers + callees) for one function; **`re_data_xrefs`**

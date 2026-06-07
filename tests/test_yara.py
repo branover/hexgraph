@@ -1,10 +1,11 @@
 """Phase 5B — the YARA project-wide pattern sweep (design §3.3).
 
-Layers, matching the Phase O curation contract:
+YARA is now an ALWAYS-ON static tool (a static match reads bytes and never executes the
+target, so it relaxes no boundary), so there is no `features.yara` gate. Layers, matching the
+Phase O curation contract:
 
-- the gate contract: with features.yara OFF (the default) the engine helper refuses with a
-  clear enable-message (no run, no Observation) and the MCP/agent verbs are NOT advertised;
-  with it ON, the verbs appear and the helper runs;
+- the always-on contract: the MCP/agent verbs are ALWAYS advertised (no toggle) and the
+  helper always runs;
 - the engine-helper contract with a FAKED executor (offline, no Docker): a per-target scan
   records a single `yara_matches` Observation scoped by content_hash, PROMOTES each matched
   rule to ONE project-level `pattern` node + a `matches_rule` edge (deduped across targets),
@@ -22,8 +23,8 @@ from hexgraph.db.models import Edge, EdgeType, Node, NodeType, Observation
 from hexgraph.db.session import session_scope
 from hexgraph.engine.filesystem import persistent_base, record_manifest
 from hexgraph.engine.ingest import create_project, ingest_file
-from hexgraph.engine.yara import available_rulesets, scan_target, sweep_project, yara_enabled
-from hexgraph import config, settings as st
+from hexgraph.engine.yara import available_rulesets, scan_target, sweep_project
+from hexgraph import config
 
 from conftest import fixture_path
 
@@ -79,54 +80,25 @@ def _seed(s, name="ya"):
     return p, t
 
 
-def _enable(hg_home):
-    st.update_settings({"features.yara.enabled": True})
+# --- always-on: the verbs are ALWAYS advertised (no gate) --------------------
+
+def test_no_yara_gate_in_settings(hg_home):
+    """YARA is always-on: there is NO features.yara settings key (it was removed when the tool
+    went ungated). Attempting to write it is rejected by the settings schema."""
+    from hexgraph import settings as st
+
+    with pytest.raises(st.SettingsError):
+        st.update_settings({"features.yara.enabled": True})
 
 
-# --- the opt-in gate: off by default, advertised + runs only when enabled ----
-
-def test_yara_off_by_default(hg_home):
-    assert yara_enabled() is False
-
-
-def test_yara_enabled_after_opt_in(hg_home):
-    _enable(hg_home)
-    assert yara_enabled() is True
-
-
-def test_helper_refuses_when_feature_off(hg_home, monkeypatch):
-    """Feature OFF (default): the helper returns the enable-message WITHOUT running the probe
-    and records NO Observation / mints NO node."""
-    fake = _wire(monkeypatch)
-    with session_scope() as s:
-        p, t = _seed(s)
-        out = scan_target(s, p, t, source="agent")
-        assert "error" in out and "features.yara" in out["error"]
-        assert fake.calls == []  # never ran
-        assert s.query(Observation).filter(Observation.result_kind == "yara_matches").count() == 0
-        assert s.query(Node).filter(Node.node_type == NodeType.pattern.value).count() == 0
-
-
-def test_sweep_refuses_when_feature_off(hg_home, monkeypatch):
-    fake = _wire(monkeypatch)
-    with session_scope() as s:
-        p, t = _seed(s)
-        out = sweep_project(s, p)
-        assert "error" in out and "features.yara" in out["error"]
-        assert fake.calls == []
-
-
-def test_verbs_not_advertised_when_off_but_appear_when_on(hg_home):
-    """The MCP read verb (yara_scan) + write verb (yara_sweep) are feature-gated: absent when
-    off, present + typed when on."""
+def test_verbs_always_advertised(hg_home):
+    """The MCP read verb (yara_scan) + write verb (yara_sweep) are ALWAYS in the catalog (no
+    gate), typed — always-on contract."""
     from hexgraph.engine import mcp_tools as M
 
     def _present(group, name):
         return any(t["name"] == name for t in M.catalog({group}))
 
-    assert _present("read", "re_yara_scan") is False
-    assert _present("write", "re_yara_sweep") is False
-    _enable(hg_home)
     assert _present("read", "re_yara_scan") is True
     assert _present("write", "re_yara_sweep") is True
     spec = next(t for t in M.catalog({"read"}) if t["name"] == "re_yara_scan")
@@ -134,24 +106,20 @@ def test_verbs_not_advertised_when_off_but_appear_when_on(hg_home):
     assert spec["schema"]["properties"].keys() >= {"target_id", "ruleset"}
 
 
-def test_agent_tool_advertised_only_when_enabled(hg_home):
-    """The in-process agent loop advertises yara_scan only when the feature is on."""
+def test_agent_tool_always_advertised(hg_home):
+    """The in-process agent loop ALWAYS advertises yara_scan (always-on static tool)."""
     from hexgraph.engine.agent_tools import ToolContext, available_tools
 
     with session_scope() as s:
         p, t = _seed(s)
         ctx = ToolContext(session=s, project=p, target=t)
-        names_off = {spec.name for spec in available_tools(ctx)}
-        assert "yara_scan" not in names_off
-        _enable(hg_home)
-        names_on = {spec.name for spec in available_tools(ctx)}
-        assert "yara_scan" in names_on
+        names = {spec.name for spec in available_tools(ctx)}
+        assert "yara_scan" in names
 
 
 # --- engine helper: one Observation, promotes patterns, dedups (offline) -----
 
 def test_scan_records_observation_and_promotes_patterns(hg_home, monkeypatch):
-    _enable(hg_home)
     fake = _wire(monkeypatch)
     with session_scope() as s:
         p, t = _seed(s)
@@ -197,7 +165,6 @@ def test_scan_records_observation_and_promotes_patterns(hg_home, monkeypatch):
 def test_same_rule_dedups_to_one_pattern_across_targets(hg_home, monkeypatch):
     """The cross-target shape: the SAME rule matched in two targets resolves to ONE project-
     level pattern node, with a matches_rule edge from each target (the corpus-wide hunt)."""
-    _enable(hg_home)
     _wire(monkeypatch)
     with session_scope() as s:
         p, t1 = _seed(s, name="ya-multi")
@@ -220,7 +187,6 @@ def test_same_rule_dedups_to_one_pattern_across_targets(hg_home, monkeypatch):
 
 
 def test_scan_dedups_on_repeat_call(hg_home, monkeypatch):
-    _enable(hg_home)
     _wire(monkeypatch)
     with session_scope() as s:
         p, t = _seed(s)
@@ -239,7 +205,6 @@ def test_scan_dedups_on_repeat_call(hg_home, monkeypatch):
 def test_ruleset_knob_is_validated(hg_home, monkeypatch):
     """The single agent knob (ruleset) is validated against the bundled set — a bad id is a
     clean error, never a raw command line."""
-    _enable(hg_home)
     _wire(monkeypatch)
     with session_scope() as s:
         p, t = _seed(s)
@@ -251,7 +216,6 @@ def test_ruleset_knob_is_validated(hg_home, monkeypatch):
 
 
 def test_no_match_records_observation_but_no_patterns(hg_home, monkeypatch):
-    _enable(hg_home)
     _wire(monkeypatch, result=_NO_MATCH)
     with session_scope() as s:
         p, t = _seed(s)
@@ -263,7 +227,6 @@ def test_no_match_records_observation_but_no_patterns(hg_home, monkeypatch):
 
 
 def test_scan_reports_error_without_docker(hg_home, monkeypatch):
-    _enable(hg_home)
     monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: False)
     with session_scope() as s:
         p, t = _seed(s)
@@ -273,7 +236,6 @@ def test_scan_reports_error_without_docker(hg_home, monkeypatch):
 
 
 def test_scan_surfaces_probe_error_json(hg_home, monkeypatch):
-    _enable(hg_home)
     _wire(monkeypatch, result={"error": "no YARA rule files found"})
     with session_scope() as s:
         p, t = _seed(s)
@@ -303,7 +265,6 @@ def _firmware_with_fs(s, p):
 def test_sweep_covers_targets_and_firmware_files(hg_home, monkeypatch):
     """sweep_project scans every non-archived byte target AND each extracted firmware file,
     recording an Observation per artifact and promoting matches to shared pattern nodes."""
-    _enable(hg_home)
     fake = _wire(monkeypatch)
     with session_scope() as s:
         p, t = _seed(s, name="ya-sweep")
@@ -326,7 +287,6 @@ def test_sweep_covers_targets_and_firmware_files(hg_home, monkeypatch):
 
 
 def test_sweep_skips_archived_targets(hg_home, monkeypatch):
-    _enable(hg_home)
     _wire(monkeypatch)
     with session_scope() as s:
         p, t = _seed(s, name="ya-arch")
@@ -344,7 +304,6 @@ def test_sweep_all_errored_does_not_look_clean(hg_home, monkeypatch):
     missing so each probe raised ModuleNotFoundError), the sweep must NOT present as a clean
     match_count 0 scan — it must be an explicit error outcome with the reason bubbled up, not
     buried only in errors[]."""
-    _enable(hg_home)
     # the probe payload is a per-file error every time (the all-errored case)
     _wire(monkeypatch, result={"error": "ModuleNotFoundError: No module named 'yara'"})
     with session_scope() as s:
@@ -372,7 +331,6 @@ def test_sweep_all_errored_does_not_look_clean(hg_home, monkeypatch):
 def test_sweep_partial_reports_both_ok_and_errored(hg_home, monkeypatch):
     """A partial outcome (some artifacts scanned cleanly, some errored) reports both, so
     '0 found in the N we COULD scan, but M errored' is distinguishable from a clean sweep."""
-    _enable(hg_home)
 
     class _FlakyExec:
         """Errors on the first artifact, scans clean (0 matches) on the rest."""
@@ -456,7 +414,6 @@ def test_user_rule_dir_is_picked_up(hg_home):
 # --- the agent tool renders the matches --------------------------------------
 
 def test_agent_tool_renders_matches(hg_home, monkeypatch):
-    _enable(hg_home)
     _wire(monkeypatch)
     from hexgraph.engine.agent_tools import ToolContext, run_tool
 
@@ -496,7 +453,6 @@ def test_probe_str_entry_renders_text_and_hex():
 def test_yara_probe_on_real_fixture(hg_home, yara_sandbox):
     """Real YARA runs in the sandbox over the committed fixture and matches the bundled rules,
     promoting them to pattern nodes (skips without the YARA-enabled sandbox image)."""
-    _enable(hg_home)
     with session_scope() as s:
         p = create_project(s, name="ya-real")
         t = ingest_file(s, p, fixture_path("yara_fixture.bin"), name="yara_fixture")
@@ -524,7 +480,6 @@ def test_yara_probe_on_real_fixture(hg_home, yara_sandbox):
 
 def test_yara_probe_single_ruleset(hg_home, yara_sandbox):
     """Scoping to a single bundled ruleset only fires that file's rules (the agent knob)."""
-    _enable(hg_home)
     with session_scope() as s:
         p = create_project(s, name="ya-one")
         t = ingest_file(s, p, fixture_path("yara_fixture.bin"), name="yara_fixture")

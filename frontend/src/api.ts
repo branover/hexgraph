@@ -53,10 +53,9 @@ export interface SettingsView {
     resources: ResourcesView;
     features: {
       ghidra: { enabled: boolean; mode: string; enrich_recon: boolean; timeout: number; bridge: { host: string; port: number } };
-      // Phase 5 deeper-static analyses — opt-in, heavier than `strings`/a single probe,
-      // but none relaxes a sandbox/exec/egress boundary (no native execution, no network).
-      floss?: { enabled: boolean };
-      yara?: { enabled: boolean };
+      // angr is the one deeper-static analysis that stays gated — symbolic execution is heavy
+      // on CPU/memory. (FLOSS + YARA are always-on, so they carry no features.* toggle; the
+      // YARA rules dir is exposed under `paths.yara_rules_dir` below.)
       angr?: { enabled: boolean; image?: string };
       fuzzing: { enabled: boolean; max_total_time: number; max_len: number; max_crashes: number; timeout: number; image?: string };
       build: { enabled: boolean; image?: string; timeout?: number };

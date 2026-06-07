@@ -133,11 +133,11 @@ _CATALOG = [
      {"type": "object", "properties": {"target_id": {"type": "string"}}, "required": ["target_id"]}),
     ("read", "re_list_strings", _t.list_strings, "Notable strings in a target (optional substring filter) — hardcoded creds, URLs, format strings, command fragments. QUERY: records an Observation; adds no graph nodes.",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "pattern": {"type": "string", "description": "optional substring filter"}}, "required": ["target_id"]}),
-    ("read", "re_floss_strings", _t.floss_strings, "Recover OBFUSCATED strings a plain re_list_strings pass MISSES — STACK strings (built byte-by-byte on the stack at runtime), TIGHT strings, and DECODED strings (produced by a decode routine FLOSS lightly EMULATES in the sandbox) — via FLARE FLOSS. On firmware/malware these hidden strings (URLs, command templates, keys, format strings) are often the lead. QUERY: records a floss_strings Observation; adds NO graph nodes — PROMOTE an interesting recovered string to a string node deliberately (graph_create_node node_type=string). FLOSS is slow, so check obs_list(target_id) first to reuse a prior pass. NOTE: stack/decoded recovery supports x86/amd64 PE targets; on an ELF/foreign-arch artifact it degrades to a static-strings-only pass with a note. Gated: features.floss (default off; advertised only when enabled — it relaxes no policy boundary, FLOSS emulates decode routines in-process and never executes the target, but is slower than re_list_strings).",
+    ("read", "re_floss_strings", _t.floss_strings, "Recover OBFUSCATED strings a plain re_list_strings pass MISSES — STACK strings (built byte-by-byte on the stack at runtime), TIGHT strings, and DECODED strings (produced by a decode routine FLOSS lightly EMULATES in the sandbox) — via FLARE FLOSS. On firmware/malware these hidden strings (URLs, command templates, keys, format strings) are often the lead. QUERY: records a floss_strings Observation; adds NO graph nodes — PROMOTE an interesting recovered string to a string node deliberately (graph_create_node node_type=string). FLOSS is slow, so check obs_list(target_id) first to reuse a prior pass. NOTE: stack/decoded recovery supports x86/amd64 PE targets; on an ELF/foreign-arch artifact it degrades to a static-strings-only pass with a note. Always-on static tool (no gate — FLOSS emulates decode routines in-process and never executes the target, so it relaxes no boundary); slower than re_list_strings, hence the obs_list reuse check above.",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "min_length": {"type": "integer", "description": "min string length (default 4, clamped 4–64)"}}, "required": ["target_id"]}),
-    ("read", "re_yara_scan", _t.yara_scan, "Match ONE target's bytes against YARA rules (the bundled high-signal set — embedded creds, known-bad library banners, weak-crypto constants, packer signatures — plus any .yar the user dropped in the HEXGRAPH_HOME rules dir), run in the sandbox. PROMOTE: each matched rule becomes a project-level `pattern` node + a `matches_rule` edge from this target, carrying the rule's DECLARED severity/cve (the matcher never fabricates a severity or auto-mints a finding — promote a match to a finding deliberately). Records a yara_matches Observation; check obs_list(target_id, kind='yara_matches') first to reuse a prior pass. `ruleset` (a bundled ruleset id, or 'all', default 'all') is the only knob — never a yara command line. The pattern complement to the exact-hash n-day link finding_link_same_code. For the WHOLE project (every target + extracted firmware file) use re_yara_sweep. Gated: features.yara (a static MATCH — reads bytes, never executes — so it relaxes no policy boundary; opt-in because rule management is a surface).",
+    ("read", "re_yara_scan", _t.yara_scan, "Match ONE target's bytes against YARA rules (the bundled high-signal set — embedded creds, known-bad library banners, weak-crypto constants, packer signatures — plus any .yar the user dropped in the HEXGRAPH_HOME rules dir), run in the sandbox. PROMOTE: each matched rule becomes a project-level `pattern` node + a `matches_rule` edge from this target, carrying the rule's DECLARED severity/cve (the matcher never fabricates a severity or auto-mints a finding — promote a match to a finding deliberately). Records a yara_matches Observation; check obs_list(target_id, kind='yara_matches') first to reuse a prior pass. `ruleset` (a bundled ruleset id, or 'all', default 'all') is the only knob — never a yara command line. The pattern complement to the exact-hash n-day link finding_link_same_code. For the WHOLE project (every target + extracted firmware file) use re_yara_sweep. Always-on static tool (no gate — a static MATCH reads bytes and never executes, so it relaxes no boundary); drop your own .yar rules in the HEXGRAPH_HOME rules dir.",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "ruleset": {"type": "string", "description": "bundled ruleset id, or 'all' (default)"}}, "required": ["target_id"]}),
-    ("write", "re_yara_sweep", _t.yara_sweep, "Project-wide YARA sweep — the PATTERN n-day complement to finding_link_same_code (exact hash): match every non-archived byte target AND every extracted firmware file against the bundled high-signal rules (+ any user .yar in the HEXGRAPH_HOME rules dir), recording a yara_matches Observation per artifact and promoting matched rules to shared project-level `pattern` nodes via `matches_rule` edges (so the graph shows which targets/files a rule matched). One analyst's rule → a corpus-wide hunt. `ruleset` is a bundled ruleset id (or 'all', default). The matcher carries each rule's DECLARED severity/cve onto the pattern node but never fabricates a severity or auto-mints a finding — promote a hit to a finding deliberately. Returns a roll-up of scanned/match/promotion counts + hits. Gated: features.yara (a static MATCH; relaxes no policy boundary).",
+    ("write", "re_yara_sweep", _t.yara_sweep, "Project-wide YARA sweep — the PATTERN n-day complement to finding_link_same_code (exact hash): match every non-archived byte target AND every extracted firmware file against the bundled high-signal rules (+ any user .yar in the HEXGRAPH_HOME rules dir), recording a yara_matches Observation per artifact and promoting matched rules to shared project-level `pattern` nodes via `matches_rule` edges (so the graph shows which targets/files a rule matched). One analyst's rule → a corpus-wide hunt. `ruleset` is a bundled ruleset id (or 'all', default). The matcher carries each rule's DECLARED severity/cve onto the pattern node but never fabricates a severity or auto-mints a finding — promote a hit to a finding deliberately. Returns a roll-up of scanned/match/promotion counts + hits. Always-on static tool (no gate — a static MATCH relaxes no boundary).",
      {"type": "object", "properties": {"project_id": {"type": "string"}, "ruleset": {"type": "string", "description": "bundled ruleset id, or 'all' (default)"}}, "required": ["project_id"]}),
     ("run", "re_solve_reaching_input", _t.solve_reaching_input, "SOLVE for a concrete input that DRIVES execution to a sink (e.g. system/execve/strcpy) via angr SYMBOLIC EXECUTION in the dedicated angr sandbox image — the strongest STATIC claim short of a live PoC, because it produces a concrete REACHING INPUT (often raw non-ASCII bytes a guess can't hit). You REQUEST it with a sink selector — you never write an angr script; HexGraph runs the bounded, deterministic solve (DFS + wall-clock/step/state caps). PROMOTE: on success it promotes the grounded path (the sink as an is_sink node + the enclosing function + a `calls` edge) and emits a high-confidence `vulnerability` finding whose evidence.reproducer is the solved input (hex), assurance input_reachable/static; records a `solver` Observation either way. `sink_func` (the dangerous callee to reach, e.g. 'system') is the main knob; optionally `function` (the enclosing routine) and `budget`. angr is HEAVY + slow — check obs_list(target_id, kind='solver') first to reuse a prior solve. Returns cleanly unsolved when no reaching input exists within the budget (nothing fabricated). Gated: features.angr (symbolic execution; relaxes no sandbox/exec/egress boundary — it explores bytes, never runs the target — but heavy, so policy-gated like emulation).",
      {"type": "object", "properties": {"target_id": {"type": "string"}, "sink_func": {"type": "string", "description": "the dangerous callee to reach, e.g. 'system'"}, "function": {"type": "string", "description": "optional enclosing routine"}, "budget": {"type": "string", "enum": ["quick", "default", "deep"]}}, "required": ["target_id", "sink_func"]}),
@@ -291,7 +291,7 @@ _CATALOG = [
      {"type": "object", "properties": {}}),
     ("read", "meta_check_decompiler", _t.check_decompiler, "Verify the decompiler re_decompile_function/re_disassemble use ACTUALLY works (not merely the configured name) — radare2 needs the sandbox image up; Ghidra (headless) needs WITH_GHIDRA=1 in the image, Ghidra (bridge) needs a reachable server. Returns {active, working, mode, version, detail} with an ACTIONABLE detail when broken. Run this if a re_decompile_function fails or before relying on Ghidra, so you don't burn turns against a broken backend.",
      {"type": "object", "properties": {}}),
-    ("read", "meta_check_features", _t.check_features, "Preflight the OPTIONAL features whose RUNTIME dependency can diverge from their gate (floss, yara, angr, ghidra/emulation) — so you can tell 'gated off' from 'configured but BROKEN' BEFORE spending a run. Each feature returns a tri-state `state`: `disabled` (its features.X gate is off), `available` (enabled AND its dep/image is actually present), or `broken` (enabled but the dep/image is MISSING — the stale-sandbox-image trap) with an ACTIONABLE `remediation` (e.g. `just sandbox-build`, `just angr-build`). The check is LIGHTWEIGHT (a tiny in-image dep probe, --network none, no analysis) and read-only. Run this in your orient step, alongside meta_check_decompiler, before reaching for an opt-in tool (re_floss_strings / re_yara_sweep / re_solve_reaching_input) so you don't burn turns against a feature that's on-but-broken.",
+    ("read", "meta_check_features", _t.check_features, "Preflight the features whose RUNTIME dependency can diverge from what's configured (floss, yara, angr, ghidra/emulation) — so you can tell 'configured but BROKEN' from ready BEFORE spending a run. Each feature returns a `state`: `available` (its dep/image is present), `broken` (the dep/image is MISSING — the stale-sandbox-image trap) with an ACTIONABLE `remediation` (e.g. `just sandbox-build`, `just angr-build`), or `disabled` (only for the GATED features angr + ghidra/emulation, when their features.X gate is off). The always-on static tools floss + yara have no gate, so they report availability only (available or broken). The check is LIGHTWEIGHT (a tiny in-image dep probe, --network none, no analysis) and read-only. Run this in your orient step, alongside meta_check_decompiler, before reaching for floss/yara or an opt-in tool (re_solve_reaching_input) so you don't burn turns against a feature that's broken.",
      {"type": "object", "properties": {}}),
 ]
 
@@ -299,28 +299,11 @@ _CATALOG = [
 # Tools advertised ONLY when their opt-in feature is enabled (vs. the always-on verbs that
 # just return an "enable X" message when used while off). Keeping these OUT of the list until
 # the user opts in keeps the agent's context lean. Each entry maps a tool name to a predicate
-# read at catalog-build time. FLOSS relaxes NO policy boundary, so this reads the live setting.
-def _floss_advertised() -> bool:
-    try:
-        from hexgraph.engine.floss import floss_enabled
-
-        return floss_enabled()
-    except Exception:  # noqa: BLE001 — never advertise a tool whose gate can't be read
-        return False
-
-
-def _yara_advertised() -> bool:
-    try:
-        from hexgraph.engine.yara import yara_enabled
-
-        return yara_enabled()
-    except Exception:  # noqa: BLE001 — never advertise a tool whose gate can't be read
-        return False
-
-
+# read at catalog-build time. FLOSS + YARA are NOT here — they relax no policy boundary and
+# ride the static surface ungated (like binutils), so they are always advertised.
 def _solver_advertised() -> bool:
     # angr IS a policy gate (policy.assert_allows_solver) but, like emulation, it raises no tier,
-    # so the advertisement reads the plain feature flag (same shape as floss/yara).
+    # so the advertisement reads the plain feature flag.
     try:
         from hexgraph.engine.solver import solver_enabled
 
@@ -330,9 +313,6 @@ def _solver_advertised() -> bool:
 
 
 _FEATURE_GATED_TOOLS = {
-    "re_floss_strings": _floss_advertised,
-    "re_yara_scan": _yara_advertised,
-    "re_yara_sweep": _yara_advertised,
     "re_solve_reaching_input": _solver_advertised,
     "re_solve_constraint": _solver_advertised,
 }
@@ -340,9 +320,9 @@ _FEATURE_GATED_TOOLS = {
 
 def catalog(enabled_groups: set[str] | None = None) -> list[dict]:
     """Tool specs for the MCP server, filtered to the enabled groups (default: all) and to the
-    opt-in feature gates (a feature-gated tool like re_floss_strings is advertised only when its
-    feature is enabled). Trimming groups keeps the agent's tool list small when only part of
-    HexGraph is wanted (e.g. write-only, to populate the graph from a UI-driven session)."""
+    opt-in feature gates (a feature-gated tool like re_solve_reaching_input is advertised only
+    when its feature is enabled). Trimming groups keeps the agent's tool list small when only
+    part of HexGraph is wanted (e.g. write-only, to populate the graph from a UI-driven session)."""
     groups = set(GROUPS) if enabled_groups is None else enabled_groups
     return [
         {"group": g, "name": n, "fn": fn, "description": d, "schema": sch}

@@ -75,29 +75,13 @@ DEFAULTS: dict[str, Any] = {
             # the execution/egress tier. Requires Ghidra (features.ghidra) to be enabled.
             "enabled": False,
         },
-        "floss": {
-            # OFF by default. FLOSS string deobfuscation (Phase 5A): recovers the stack/tight/
-            # decoded strings a plain `strings` pass misses, by lightly EMULATING the decode
-            # routines IN-PROCESS in the sandbox (vivisect — never native target execution, no
-            # network). Like emulation, it relaxes NO sandbox/exec/egress boundary and raises NO
-            # policy tier, so it is NOT a policy gate (no policy.py entry); it is opt-in only
-            # because the deobfuscation pass is slower than `strings`. NOTE: the obfuscated-string
-            # recovery applies to x86/amd64 PE targets; on ELF/foreign-arch it degrades to a
-            # static-strings-only pass. Needs the flare-floss dependency in the sandbox image.
-            "enabled": False,
-        },
-        "yara": {
-            # OFF by default. YARA project-wide pattern sweep (Phase 5B): match the project's
-            # targets + extracted firmware files against a set of YARA rules (the bundled
-            # high-signal set + any `.yar` the user drops in the HEXGRAPH_HOME rules dir) — an
-            # embedded credential, a known-bad library banner, a weak-crypto constant, a packer
-            # signature. The fuzzy/structural complement to the exact-hash n-day link. A static
-            # MATCH: it reads bytes, never executes the target, opens no socket — so it relaxes
-            # NO sandbox/exec/egress boundary and raises NO policy tier (NOT a policy gate, no
-            # policy.py entry). Opt-in only because rule management is a surface and a sweep can
-            # be heavier than a single probe. Needs yara + yara-python in the sandbox image.
-            "enabled": False,
-        },
+        # FLOSS string deobfuscation (Phase 5A) and the YARA pattern sweep (Phase 5B) are
+        # ALWAYS-ON static tools — they read bytes, never execute the target, open no socket,
+        # and relax NO sandbox/exec/egress boundary (FLOSS only EMULATES decode routines
+        # in-process in the sandbox). Like recon and binutils they ride the static surface
+        # ungated, so they have NO features.* toggle here. (YARA rule management — your own
+        # .yar files in the HEXGRAPH_HOME rules dir — is still an operator surface, but that
+        # never gated whether the matcher runs.)
         "angr": {
             # OFF by default. angr symbolic execution behind get_solver() (Phase 5C, the
             # flagship): given a sink, solve for an input that REACHES it; given a check,
@@ -298,8 +282,6 @@ ALLOWED: dict[str, tuple[Any, set | None]] = {
     "features.ghidra.bridge.host": (str, None),
     "features.ghidra.bridge.port": (int, None),
     "features.emulation.enabled": (bool, None),
-    "features.floss.enabled": (bool, None),
-    "features.yara.enabled": (bool, None),
     "features.angr.enabled": (bool, None),
     # The DEDICATED angr image tag (its own optional sibling image, never the base
     # sandbox) — same writable-image pattern as features.fuzzing/build.image.

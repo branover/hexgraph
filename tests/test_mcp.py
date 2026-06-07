@@ -379,55 +379,48 @@ def test_check_decompiler_ghidra_broken(hg_home, monkeypatch):
     assert sch["decompiler"]["working"] is False
 
 
-# ---- meta_check_features: the optional-feature preflight tri-state ----------------------
+# ---- meta_check_features: always-on static tools + the gated tri-state -------------------
 
 def test_check_features_in_catalog():
     names = {t["name"] for t in mcp_tools.catalog()}
     assert "meta_check_features" in names
 
 
-def test_check_features_all_disabled_by_default(hg_home):
-    """No optional feature enabled (the shipped default) → every row is `disabled`, nothing probed."""
-    out = mcp_tools.check_features()
-    states = {r["feature"]: r["state"] for r in out["features"]}
-    # the features the tool covers, all gated off out of the box
-    assert {"floss", "yara", "angr", "ghidra", "emulation"} <= set(states)
-    assert all(v == "disabled" for v in states.values())
-    # a disabled row carries no remediation (nothing to fix)
-    assert all("remediation" not in r for r in out["features"])
-    assert "no optional features enabled" in out["summary"]
-
-
-def test_check_features_enabled_and_available(hg_home, monkeypatch):
-    """Enabled AND its in-image dep present → `available`, no remediation."""
-    from hexgraph import settings as st
-
-    st.update_settings({"features.floss.enabled": True})
+def test_check_features_floss_yara_are_availability_only(hg_home, monkeypatch):
+    """floss + yara are ALWAYS-ON (no gate): they have NO `disabled` state — they're checked
+    unconditionally and report availability only. With the in-image dep faked PRESENT they read
+    `available`; the gated features (angr, ghidra, emulation) still read `disabled` by default."""
     # fake the lightweight in-image dep probe as PRESENT (no Docker needed)
     monkeypatch.setattr("hexgraph.engine.mcp_tools._image_smoke",
                         lambda image, argv, timeout=30: (True, "3.1.1"))
     out = mcp_tools.check_features()
-    floss = next(r for r in out["features"] if r["feature"] == "floss")
-    assert floss["enabled"] is True
-    assert floss["state"] == "available"
-    assert "remediation" not in floss
-    assert "FLOSS" in floss["detail"]
+    by = {r["feature"]: r for r in out["features"]}
+    assert {"floss", "yara", "angr", "ghidra", "emulation"} <= set(by)
+    # always-on tools: never disabled — here available, gate is None, enabled is True
+    for f in ("floss", "yara"):
+        assert by[f]["state"] == "available"
+        assert by[f]["gate"] is None
+        assert by[f]["enabled"] is True
+        assert "remediation" not in by[f]
+    # the gated features are off out of the box
+    for f in ("angr", "ghidra", "emulation"):
+        assert by[f]["state"] == "disabled"
+    assert "available" in out["summary"]
 
 
-def test_check_features_enabled_but_broken_has_remediation(hg_home, monkeypatch):
-    """The stale-image trap: enabled but the dep/image is MISSING → `broken` + an actionable hint."""
-    from hexgraph import settings as st
-
-    st.update_settings({"features.yara.enabled": True})
-    # fake the in-image dep probe as MISSING (the stale-sandbox-image case)
+def test_check_features_floss_yara_broken_when_dep_missing(hg_home, monkeypatch):
+    """The stale-image trap for the always-on tools: with the in-image dep MISSING they read
+    `broken` (NOT disabled) + an actionable rebuild hint — they're always reachable, so a missing
+    dep is a silent failure worth catching."""
     monkeypatch.setattr("hexgraph.engine.mcp_tools._image_smoke",
                         lambda image, argv, timeout=30: (False, "the image 'hexgraph-sandbox:latest' is not built"))
     out = mcp_tools.check_features()
-    yara = next(r for r in out["features"] if r["feature"] == "yara")
-    assert yara["enabled"] is True
-    assert yara["state"] == "broken"
-    assert yara["remediation"] and "just sandbox-build" in yara["remediation"]
-    assert "BROKEN" in out["summary"] and "yara" in out["summary"]
+    by = {r["feature"]: r for r in out["features"]}
+    for f in ("floss", "yara"):
+        assert by[f]["enabled"] is True
+        assert by[f]["state"] == "broken"
+        assert by[f]["remediation"] and "just sandbox-build" in by[f]["remediation"]
+    assert "BROKEN" in out["summary"] and "floss" in out["summary"] and "yara" in out["summary"]
 
 
 def test_check_features_angr_uses_the_angr_image(hg_home, monkeypatch):
