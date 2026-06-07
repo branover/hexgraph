@@ -186,3 +186,46 @@ def test_sink_and_constraint_refs_carry_graph_references():
     check = ConstraintRef(function="check_license", function_addr="0x401200",
                           check_addr="0x401234", description="if (strcmp(input, secret))")
     assert check.function == "check_license" and check.check_addr == "0x401234"
+
+
+# ── Fix 1: the minimal-reproducer fields ride from the probe JSON into the SolverResult ──────
+
+def test_solver_result_carries_minimal_input_and_constrained_len():
+    # The minimal reproducer (the part that matters) is a first-class field alongside the full input.
+    r = SolverResult(kind="reaching_input", concrete_input="1cfe401a4b02010100000000",
+                     minimal_input="1cfe401a4b020101", constrained_len=8)
+    assert r.concrete_input == "1cfe401a4b02010100000000"   # the full buffer (back-compat)
+    assert r.minimal_input == "1cfe401a4b020101"            # only the constrained prefix
+    assert r.constrained_len == 8
+    # Defaults are None when the probe couldn't determine them (older payload / no introspection).
+    bare = SolverResult(kind="reaching_input", concrete_input="deadbeef")
+    assert bare.minimal_input is None and bare.constrained_len is None
+
+
+def test_to_result_maps_minimal_input_from_probe_payload():
+    # AngrSolver._to_result maps the probe's minimal_input/constrained_len onto the SolverResult AND
+    # echoes them into provenance (so evidence.extra.solver carries them). A buffer of 25 bytes where
+    # only the first 8 are constrained → minimal_input is just those 8 bytes.
+    payload = {
+        "solved": True, "reason": "solved", "angr_version": "9.2.x", "input_model": "argv",
+        "concrete_input": "1cfe401a4b020101" + "00" * 17,   # 8 real + 17 filler bytes
+        "concrete_input_repr": "...", "minimal_input": "1cfe401a4b020101", "constrained_len": 8,
+        "path_addrs": ["0x401146"], "reached_addr": "0x401080",
+    }
+    r = AngrSolver._to_result(payload, kind="reaching_input")
+    assert r is not None
+    assert r.minimal_input == "1cfe401a4b020101" and r.constrained_len == 8
+    assert len(bytes.fromhex(r.concrete_input)) == 25       # the full buffer is preserved
+    assert len(bytes.fromhex(r.minimal_input)) == 8          # the prefix is the 8 bytes that matter
+    assert r.provenance.get("minimal_input") == "1cfe401a4b020101"
+    assert r.provenance.get("constrained_len") == 8
+
+
+def test_to_result_omits_minimal_input_when_probe_did_not_determine_it():
+    # An older/older-build probe payload without the new keys → the fields are None (the caller
+    # falls back to the full reproducer), and the absent keys don't pollute provenance.
+    payload = {"solved": True, "reason": "solved", "concrete_input": "deadbeef", "input_model": "argv"}
+    r = AngrSolver._to_result(payload, kind="reaching_input")
+    assert r is not None
+    assert r.minimal_input is None and r.constrained_len is None
+    assert "minimal_input" not in r.provenance and "constrained_len" not in r.provenance

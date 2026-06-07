@@ -32,13 +32,18 @@ from conftest import ANGR_READY, fixture_path
 HASH = "cafebabe00"
 
 # A representative SOLVED reaching-input result (the shape AngrSolver returns from the probe).
+# The full `concrete_input` is the whole symbolic buffer (8 real serial bytes + 4 unconstrained
+# filler bytes); `minimal_input`/`constrained_len` carry the 8 bytes that actually matter.
 _REACHING = SolverResult(
     kind="reaching_input",
-    concrete_input="1cfe401a4b020101",          # 8 bytes; a licensegate-shaped serial (hex)
+    concrete_input="1cfe401a4b02010100000000",  # 12 bytes: 8 real serial + 4 filler (hex)
+    minimal_input="1cfe401a4b020101",           # the 8 constrained bytes — the part that matters
+    constrained_len=8,
     path_addrs=["0x401146", "0x4011a0", "0x4011f0"],
     provenance={"backend": "angr", "angr_version": "9.2.221", "reason": "solved",
                 "input_model": "argv", "reached_addr": "0x401080", "steps": 42,
-                "input_repr": "\\x1c\\xfe@\\x1aK\\x02\\x01\\x01"},
+                "input_repr": "\\x1c\\xfe@\\x1aK\\x02\\x01\\x01",
+                "minimal_input": "1cfe401a4b020101", "constrained_len": 8},
 )
 _CONSTRAINT = SolverResult(
     kind="constraint_value",
@@ -144,15 +149,26 @@ def test_reaching_input_records_observation_and_emits_finding(hg_home):
                                           Observation.result_kind == "solver").all()
         assert len(obs) == 1 and obs[0].content_hash == HASH and obs[0].tool == "solve_reaching_input"
 
+        # Fix 1: the minimal reproducer + its length ride the engine return dict too
+        assert out["minimal_input"] == _REACHING.minimal_input
+        assert out["constrained_len"] == _REACHING.constrained_len
+
         # the vulnerability finding carries the concrete input + the strong static assurance
         f = s.query(Finding).filter(Finding.id == out["finding_id"]).one()
         assert f.finding_type == "vulnerability"
         assert f.severity == "high" and f.confidence == "high"
+        # Fix 2: a meaningful category, not the generic "other" — a command-exec sink classifies
+        # as command-injection (a license/auth-style gate would be "auth"; see the unit test).
+        assert f.category == "command-injection"
+        assert f.category != "other"
         ev = f.evidence_json or {}
         assert ev.get("reproducer") == _REACHING.concrete_input          # the input rides the envelope
         assert ev.get("sink") == "system" and ev.get("function") == "main"
         solver_extra = (ev.get("extra") or {}).get("solver") or {}
         assert solver_extra.get("concrete_input_hex") == _REACHING.concrete_input
+        # Fix 1: the finding envelope carries the minimal reproducer (the constrained-byte prefix)
+        assert solver_extra.get("minimal_input_hex") == _REACHING.minimal_input
+        assert solver_extra.get("constrained_len") == _REACHING.constrained_len
         asr = (ev.get("extra") or {}).get("assurance") or {}
         assert asr.get("standard") == "input_reachable" and asr.get("method") == "static"
 
@@ -265,6 +281,48 @@ def test_reaching_input_requires_a_sink_selector(hg_home):
         assert "error" in out and "sink" in out["error"]
 
 
+# ── Fix 2: the meaningful category (a crackable gate, not "other") ───────────────────────────
+
+def test_classify_solver_category_picks_a_meaningful_category():
+    """The solver finding's `category` is derived from the sink — never the generic 'other' — and
+    always lands in the frozen Finding schema enum. A command-exec sink → command-injection; a
+    memory-unsafe copy → memory-safety; anything else (a license/serial/auth gate behind a check)
+    → auth (the check was PROVED satisfiable, i.e. bypassable)."""
+    from hexgraph.engine.solving import _classify_solver_category
+    from hexgraph.models.finding import Category
+    from typing import get_args
+
+    valid = set(get_args(Category))
+
+    assert _classify_solver_category("system") == "command-injection"
+    assert _classify_solver_category("sym.imp.system") == "command-injection"   # decompiler-prefixed
+    assert _classify_solver_category("popen") == "command-injection"
+    assert _classify_solver_category("strcpy") == "memory-safety"
+    assert _classify_solver_category("memcpy") == "memory-safety"
+    # A license/serial/auth gate (no dangerous-named sink) reads as a bypassable check → auth.
+    assert _classify_solver_category("check_license") == "auth"
+    assert _classify_solver_category("grant_admin") == "auth"
+    assert _classify_solver_category(None) == "auth"
+    # NEVER the generic catch-all, and ALWAYS a value the frozen schema accepts.
+    for sink in ("system", "strcpy", "check_license", None):
+        cat = _classify_solver_category(sink)
+        assert cat != "other"
+        assert cat in valid, f"{cat!r} not in the frozen Category enum"
+
+
+def test_auth_gate_sink_classifies_as_auth(hg_home):
+    """End-to-end (faked solver): a license/auth-style gate sink (no dangerous-named callee) gets
+    the `auth` category — the crackable-gate case the eval flagged."""
+    fake = _FakeSolver()
+    with session_scope() as s:
+        p, t = _seed(s)
+        out = solve_reaching_input(s, p, t, sink_func="check_license", function="main", solver=fake)
+        s.flush()
+        assert out["solved"] is True
+        f = s.query(Finding).filter(Finding.id == out["finding_id"]).one()
+        assert f.category == "auth"
+
+
 # ── the REAL proof: a Docker-gated end-to-end solve of the committed licensegate fixture ─────
 
 def _check_serial(b: bytes) -> bool:
@@ -309,8 +367,27 @@ def test_licensegate_end_to_end_solve(hg_home, angr_image):
         assert b"\x00" not in recovered, (
             f"argv-mode reproducer {recovered!r} contains a NUL byte that wouldn't survive as a "
             "real argv[1] string")
+        # Fix 1 (the real proof): angr reports WHICH bytes matter. licensegate constrains the first
+        # 8 serial bytes, so constrained_len must be the SMALL serial length (~8) — NOT the full
+        # symbolic buffer (the default budget's 64 bytes) — and minimal_input is that prefix, itself
+        # a constraint-satisfying serial.
+        assert out.get("constrained_len") is not None, out
+        assert out["constrained_len"] <= 16, (
+            f"constrained_len {out['constrained_len']} should reflect the ~8-byte serial, not the "
+            "full symbolic buffer")
+        assert out["constrained_len"] >= 8, out  # the gate checks all 8 leading bytes
+        minimal = bytes.fromhex(out["minimal_input"])
+        assert len(minimal) == out["constrained_len"]
+        assert _check_serial(minimal), (
+            f"the minimal_input prefix {minimal!r} should itself satisfy the licensegate constraints")
         # and the vulnerability finding carries that exact input in its envelope
         f = s.query(Finding).filter(Finding.id == out["finding_id"]).one()
         assert f.finding_type == "vulnerability"
+        # Fix 2: a meaningful category for this crackable gate — system() reaches → command-injection
+        assert f.category != "other"
         assert (f.evidence_json or {}).get("reproducer") == out["concrete_input"]
         assert _check_serial(bytes.fromhex((f.evidence_json or {})["reproducer"]))
+        # the finding envelope carries the minimal reproducer too
+        solver_extra = ((f.evidence_json or {}).get("extra") or {}).get("solver") or {}
+        assert solver_extra.get("minimal_input_hex") == out["minimal_input"]
+        assert solver_extra.get("constrained_len") == out["constrained_len"]

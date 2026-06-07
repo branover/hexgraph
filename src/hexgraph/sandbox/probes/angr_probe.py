@@ -224,6 +224,78 @@ def _bounded_explore(simgr, find_addrs, *, timeout: int, max_steps: int, max_act
     return tele
 
 
+def _constrained_byte_len(state, sym, *, length: int) -> int | None:
+    """Best-effort: how many LEADING bytes of the symbolic input the satisfying path actually
+    constrains. The full `concrete_input` is the whole `length`-byte buffer (e.g. 8 real serial
+    bytes + unconstrained filler), which over-states the reproducer — a human can't tell which
+    bytes matter. We derive that here from the satisfying state's constraints.
+
+    Method: the symbolic input is one BVS (`hexgraph_input`); per-byte references appear as
+    `Extract(hi, lo, input)` AST nodes inside the path constraints. We scan every constraint that
+    mentions the input variable, find the highest BIT touched (either an `Extract`'s `hi`, or the
+    full width when the whole BVS is used un-extracted), and return ``hi // 8 + 1`` — the count of
+    leading bytes up to and including the last constrained one. Returns 0 when the input appears in
+    no constraint, or **None** when we can't introspect (a claripy/angr build that doesn't expose
+    the AST shape we expect) — the caller then omits the field rather than guessing.
+
+    Defensive throughout: any introspection failure degrades to None (the caller keeps the full
+    buffer as the only reproducer), never a crash and never a misleadingly-small claim."""
+    try:
+        input_names = set(sym.variables)  # the leaf-variable name(s) of the symbolic input BVS
+    except Exception:  # noqa: BLE001 — a build without `.variables`: can't attribute constraints
+        return None
+    if not input_names:
+        return None
+
+    max_bit = -1
+    saw_input = False
+    try:
+        constraints = list(state.solver.constraints)
+    except Exception:  # noqa: BLE001
+        return None
+
+    for con in constraints:
+        try:
+            con_vars = set(getattr(con, "variables", ()) or ())
+        except Exception:  # noqa: BLE001 — a non-AST constraint; skip it
+            continue
+        if con_vars.isdisjoint(input_names):
+            continue  # this constraint doesn't touch the symbolic input
+        saw_input = True
+        # Walk the AST; for each Extract over the input, the high bit index bounds the byte range.
+        # A bare use of the whole input variable (no Extract) means the full width is constrained.
+        try:
+            nodes = list(con.children_asts())
+        except Exception:  # noqa: BLE001 — no traversal API: fall back to full-width below
+            return length
+        nodes.append(con)
+        for node in nodes:
+            try:
+                node_vars = set(getattr(node, "variables", ()) or ())
+            except Exception:  # noqa: BLE001
+                continue
+            if node_vars.isdisjoint(input_names):
+                continue
+            op = getattr(node, "op", None)
+            if op == "Extract":
+                # claripy Extract(high, low, val): args[0] is the inclusive high BIT index.
+                try:
+                    hi = int(node.args[0])
+                except Exception:  # noqa: BLE001
+                    hi = 8 * length - 1
+                max_bit = max(max_bit, hi)
+            elif op == "BVS":
+                # The whole symbolic input used directly — every byte is in play.
+                max_bit = max(max_bit, 8 * length - 1)
+
+    if not saw_input:
+        return 0
+    if max_bit < 0:
+        # The input is constrained but we couldn't localise the bits → don't under-report.
+        return length
+    return min(length, max_bit // 8 + 1)
+
+
 def _path_addrs(state) -> list[str]:
     """The few grounded basic-block addresses on the satisfying path (for promoting the
     grounded nodes/edges, never the whole program). Bounded to the head + tail of the trace."""
@@ -346,6 +418,20 @@ def _solve(args) -> dict:
     result["concrete_input_repr"] = _safe_repr(data)
     result["path_addrs"] = _path_addrs(found)
     result["reached_addr"] = _hx(found.addr)
+
+    # Which bytes actually MATTER: `concrete_input` is the whole symbolic buffer (the few real
+    # bytes the gate checks + unconstrained filler), so it over-states the reproducer. Derive how
+    # many LEADING bytes the satisfying path constrains and surface that prefix as `minimal_input`
+    # — "the part that matters" — so a human copies the real serial, not the padding. Additive:
+    # `concrete_input` stays the full buffer for back-compat. Best-effort: on any introspection
+    # failure `_constrained_byte_len` returns None and we omit both fields rather than mislead.
+    clen = _constrained_byte_len(found, sym, length=length)
+    if clen is not None:
+        # Never report more bytes than we actually have (argv data was NUL-truncated above; the
+        # constrained prefix can't extend past the real reproducer bytes).
+        clen = min(clen, len(data))
+        result["constrained_len"] = clen
+        result["minimal_input"] = data[:clen].hex()
 
     if args.mode == "constraint":
         # The angr analogue of emulation's constant recovery: surface a best-effort scalar

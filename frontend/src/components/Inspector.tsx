@@ -113,6 +113,7 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
   const [pocOpen, setPocOpen] = useState(false);
   const [reproCopied, setReproCopied] = useState(false);
   const [solvedCopied, setSolvedCopied] = useState(false);
+  const [minimalCopied, setMinimalCopied] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   useEffect(() => {
@@ -136,6 +137,12 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
   // evidence.extra.solver carries the model + path + provenance.
   const solver = ev.extra?.solver;
   const solvedInput = ev.reproducer || solver?.concrete_input_hex;
+  // The minimal reproducer: angr's full reproducer includes unconstrained filler bytes, so the
+  // constrained-byte prefix (minimal_input_hex) is the part that actually matters — what a human
+  // should copy. Only show it when it's genuinely shorter than the full buffer.
+  const minimalInput: string | undefined = solver?.minimal_input_hex;
+  const constrainedLen: number | undefined = solver?.constrained_len;
+  const showMinimal = !!minimalInput && minimalInput !== solvedInput;
 
   const setStatus = async (s: string) => { await api.setStatus(finding.id, s); onChanged(); };
 
@@ -193,6 +200,7 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
   const copy = () => { navigator.clipboard?.writeText(ev.decompiled_snippet || ""); setCopied(true); setTimeout(() => setCopied(false), 1200); };
   const copyRepro = () => { navigator.clipboard?.writeText(reproStr || ""); setReproCopied(true); setTimeout(() => setReproCopied(false), 1200); };
   const copySolved = () => { navigator.clipboard?.writeText(solvedInput || ""); setSolvedCopied(true); setTimeout(() => setSolvedCopied(false), 1200); };
+  const copyMinimal = () => { navigator.clipboard?.writeText(minimalInput || ""); setMinimalCopied(true); setTimeout(() => setMinimalCopied(false), 1200); };
   const newHypothesis = async () => {
     if (!projectId) return;
     const statement = window.prompt("New hypothesis (this finding becomes supporting evidence):", finding.title);
@@ -371,9 +379,33 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
               {solver.input_model ? <> via the <code>{human(solver.input_model)}</code> input boundary</> : null}.
             </p>
           )}
+          {/* The constrained prefix is the part that actually matters — angr's full reproducer
+              pads with unconstrained filler bytes. Surface it FIRST (and most prominently) so a
+              human copies the real serial, with the full buffer shown below for completeness. */}
+          {showMinimal && (
+            <>
+              <div className="kvs">
+                <span className="k">constrained serial</span>
+                <span className="muted" style={{ fontSize: 10.5 }}>
+                  first {constrainedLen} {constrainedLen === 1 ? "byte" : "bytes"} that matter
+                </span>
+              </div>
+              <div className="codewrap">
+                <button className="btn sm icon copy" title="Copy the constrained bytes (the part that matters)" onClick={copyMinimal}>
+                  <Icon name={minimalCopied ? "check" : "copy"} size={12} />
+                </button>
+                <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", fontSize: 11 }}>{minimalInput}</pre>
+              </div>
+            </>
+          )}
           {solvedInput && (
             <>
-              <div className="kvs"><span className="k">reproducer</span><span /></div>
+              <div className="kvs">
+                <span className="k">{showMinimal ? "full reproducer" : "reproducer"}</span>
+                {showMinimal
+                  ? <span className="muted" style={{ fontSize: 10.5 }}>incl. unconstrained filler</span>
+                  : <span />}
+              </div>
               <div className="codewrap">
                 <button className="btn sm icon copy" title="Copy the solved input bytes" onClick={copySolved}>
                   <Icon name={solvedCopied ? "check" : "copy"} size={12} />
