@@ -153,6 +153,7 @@ def finding_dict(f: Finding) -> dict:
         "status": f.status,
         "origin": f.origin,
         "finding_type": f.finding_type,
+        "cwe": f.cwe,  # first-class triage field (envelope), lifted from evidence.extra.cwe
         "verified": is_verified(f.evidence_json),  # a PoC that executed + matched its oracle
         "dismissed_reason": f.dismissed_reason,
         "human_notes": f.human_notes,

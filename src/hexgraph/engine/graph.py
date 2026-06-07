@@ -152,6 +152,44 @@ def graph_size(session: Session, project_id: str) -> dict:
     }
 
 
+def graph_stats(session: Session, project_id: str) -> dict:
+    """Per-type node/edge tallies for the live graph (archived targets/nodes excluded), so a
+    caller can get before/after counts without listing — and counting — every node. Returns
+    {targets, findings, nodes_by_type{type:count}, edges_by_type{type:count}, totals{...}}."""
+    target_ids = [
+        t.id for t in session.query(Target).filter(
+            Target.project_id == project_id, Target.archived.is_(False)
+        ).all()
+    ]
+    live = set(target_ids)
+    nodes_by_type: dict[str, int] = {}
+    for n in session.query(Node).filter(
+        Node.project_id == project_id, Node.archived.is_(False)
+    ).all():
+        if n.target_id is None or n.target_id in live:
+            nodes_by_type[n.node_type] = nodes_by_type.get(n.node_type, 0) + 1
+    edges_by_type: dict[str, int] = {}
+    for (etype,) in session.query(Edge.type).filter(Edge.project_id == project_id).all():
+        edges_by_type[etype] = edges_by_type.get(etype, 0) + 1
+    n_findings = sum(
+        1 for f in session.query(Finding.target_id).filter(Finding.project_id == project_id).all()
+        if f.target_id in live
+    )
+    return {
+        "project_id": project_id,
+        "targets": len(target_ids),
+        "findings": n_findings,
+        "nodes_by_type": dict(sorted(nodes_by_type.items())),
+        "edges_by_type": dict(sorted(edges_by_type.items())),
+        "totals": {
+            "nodes": sum(nodes_by_type.values()),
+            "edges": sum(edges_by_type.values()),
+            "targets": len(target_ids),
+            "findings": n_findings,
+        },
+    }
+
+
 def build_skeleton(session: Session, project_id: str) -> dict:
     """Serialize the STRUCTURAL SKELETON only — rooms (byte targets) with per-room
     rollups, the shared cross-binary sockets, and aggregated cross-room
