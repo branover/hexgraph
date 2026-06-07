@@ -151,6 +151,15 @@ def main() -> int:
     cmd = _build_cmd(prefix, target, spec)
     timeout = int(spec.get("timeout", 20))
 
+    # argv can't carry a NUL byte (POSIX execve truncates at it). A solver reproducer whose
+    # meaningful argv contains 0x00 therefore can't be replayed AS argv — report that cleanly
+    # (a `ran:false` with a pointer to stdin_b64) instead of crashing on subprocess's ValueError.
+    if spec.get("argv_b64") is not None and any(isinstance(c, bytes) and b"\x00" in c for c in cmd):
+        print(json.dumps({"tool": "poc_probe", "ran": False, "verified": False,
+                          "detail": "argv contains a NUL byte, which POSIX execve cannot pass; "
+                                    "if the target reads the input from stdin, use stdin_b64 instead."}))
+        return 0
+
     # stdin: prefer the BYTE-FAITHFUL `stdin_b64` (raw bytes — 0x00/0xff preserved exactly,
     # never text-encoded; the fix for replaying a binary fuzz reproducer over stdin). Falls
     # back to the text `stdin` field. Byte-mode subprocess (text=False) when bytes are given.
@@ -175,7 +184,9 @@ def main() -> int:
             rc, out = proc.returncode, (proc.stdout or "") + (proc.stderr or "")
     except subprocess.TimeoutExpired as exc:
         rc, out = 124, (exc.output or "") if isinstance(exc.output, str) else ""
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
+        # OSError: exec failed. ValueError: a defensive catch for any other un-execable argv
+        # (the NUL case is handled above; this keeps the probe emitting clean JSON regardless).
         print(json.dumps({"tool": "poc_probe", "ran": False, "verified": False,
                           "detail": f"could not execute target: {exc}"}))
         return 0

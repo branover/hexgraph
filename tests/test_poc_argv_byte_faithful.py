@@ -164,6 +164,18 @@ def test_probe_high_byte_argv_b64_succeeds_where_text_fails(tmp_path):
     assert SUCCESS not in bad["output"]
 
 
+@pytest.mark.skipif(sys.platform != "linux" or os.uname().machine not in ("x86_64", "amd64"),
+                    reason="runs the committed x86-64 ELF natively (no qemu/Docker here)")
+def test_probe_nul_in_argv_is_clean_not_a_crash(tmp_path):
+    """An argv_b64 element with an embedded NUL can't be passed as argv (POSIX execve truncates
+    at NUL). The probe must report a clean ran:false naming the limitation — NOT crash with an
+    uncaught ValueError (which would emit non-JSON and break verification)."""
+    b64 = base64.b64encode(b"AB\x00CD").decode()
+    r = _run_probe({"argv_b64": [b64], "oracle": {"type": "output_contains", "value": SUCCESS}}, tmp_path)
+    assert r["ran"] is False
+    assert "NUL" in r["detail"] and "stdin_b64" in r["detail"]
+
+
 # ── the solver handoff: spec_from_solver_finding ────────────────────────────────────────────
 
 def _solver_finding(input_model="argv", minimal=SERIAL_HEX, concrete=SERIAL_HEX + "00000000"):
