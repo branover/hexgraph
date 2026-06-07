@@ -60,6 +60,16 @@ agent's context small:
   its own target), `task_run`, `finding_verify_poc`, `fuzz_verify_artifact`,
   `fuzz_start`/`fuzz_resume`, `src_build`, and more.
 
+When a binary PoC needs to feed raw, non-printable bytes (an angr-solved serial, a binary stdin
+payload), `finding_verify_poc` takes byte-faithful `argv_b64` and `stdin_b64` fields: each is base64
+that HexGraph decodes back to exact bytes and feeds to the target, instead of the text `argv`/`stdin`
+that would mangle a byte like `0x06` or `0x0f`. The byte fields take precedence over their text
+siblings and pair with an `output_contains`/`exit_code`/`crash` oracle. There is a direct handoff from
+the solver, too: call `finding_verify_poc(target_id, {"oracle": {…}}, finding_id=<solver finding>)` with
+no input in the spec, and HexGraph reconstructs the recovered reaching-input from the finding's
+`evidence.extra.solver` (honoring its `input_model`) so the solved input runs as a real `argv[1]` and
+you can confirm end to end that it reaches the sink.
+
 Call **`meta_get_schemas` first.** It advertises the Finding shape, the node and edge vocabulary, the
 per-type node-attribute schemas (including the sink-versus-symbol rule), the edge-attribute schemas,
 the socket kinds, and the active decompiler.

@@ -49,13 +49,20 @@ def _find_sysroot(root):
     return root
 
 
+# Spec keys whose values are RAW base64 byte data, NOT a {{NONCE}} substitution surface:
+# rewriting them would corrupt the encoded bytes (and a nonce literal can't appear in base64).
+# An argv_b64 reproducer pairs with an output/exit/crash oracle, not a reflected-nonce oracle.
+_RAW_BYTE_KEYS = frozenset({"argv_b64", "stdin_b64"})
+
+
 def _substitute(obj, nonce: str):
     if isinstance(obj, str):
         return obj.replace(NONCE_PLACEHOLDER, nonce)
     if isinstance(obj, list):
         return [_substitute(x, nonce) for x in obj]
     if isinstance(obj, dict):
-        return {k: _substitute(v, nonce) for k, v in obj.items()}
+        # Leave raw base64 byte fields (argv_b64/stdin_b64) verbatim — they are bytes, not text.
+        return {k: (v if k in _RAW_BYTE_KEYS else _substitute(v, nonce)) for k, v in obj.items()}
     return obj
 
 
@@ -353,6 +360,59 @@ def verify_finding_reproducer(session: Session, project: Project, finding,
         raise ValueError("finding target not found")
     return verify_reproducer(session, project, target, reproducer_ref=ref,
                              function=ev.get("function"), runner=runner)
+
+
+def _spec_has_input(spec: dict) -> bool:
+    """True if the spec already supplies its OWN input/exploit surface — so the solver-
+    handoff must NOT clobber a caller-authored argv/stdin/steps/payload with the recovered
+    bytes. (An oracle / precondition / timeout alone is not an input.)"""
+    return any(spec.get(k) is not None
+               for k in ("argv", "argv_b64", "stdin", "stdin_b64", "steps", "request",
+                         "payload", "tcp"))
+
+
+def spec_from_solver_finding(finding, base_spec: dict | None = None) -> dict | None:
+    """Build a byte-faithful binary PoC spec from an angr-SOLVER finding's recovered input —
+    the handoff that lets `finding_verify_poc` confirm a solved argv reproducer actually
+    reaches the sink, byte-for-byte.
+
+    A solver finding (engine.solving) carries `evidence.extra.solver` with `input_model`
+    ('argv'|'stdin'), the recovered bytes as `minimal_input_hex` (the constrained prefix —
+    "the part that matters", preferred) / `concrete_input_hex`, and `evidence.reproducer`
+    (hex). We decode those hex bytes and feed them RAW: for `input_model=='argv'` as a single
+    `argv_b64` element (so a non-printable serial like 0x3b25065c4b20040f survives as a real
+    argv[1] that str() would mangle); for `'stdin'` as `stdin_b64`. The default oracle is the
+    sink-execution evidence `output_contains "License valid."`-style success isn't knowable
+    generically, so we default to `exit_code 0` ONLY when the caller gives no oracle — but a
+    caller SHOULD pass an oracle (output_contains/crash/exit_code) that matches the success
+    path. Returns None when the finding carries no recovered input (nothing to hand off)."""
+    ev = (finding.evidence_json or {}) if finding is not None else {}
+    solver = ((ev.get("extra") or {}).get("solver") or {})
+    if not solver:
+        return None
+    input_hex = solver.get("minimal_input_hex") or solver.get("concrete_input_hex") or ev.get("reproducer")
+    if not input_hex:
+        return None
+    try:
+        raw = bytes.fromhex(str(input_hex))
+    except ValueError:
+        return None
+    if not raw:
+        return None
+
+    import base64
+
+    spec = dict(base_spec or {})
+    model = (solver.get("input_model") or "argv").strip().lower()
+    if model == "stdin":
+        spec.setdefault("stdin_b64", base64.b64encode(raw).decode())
+    else:  # 'argv' (the common solver input model) — feed the bytes as a single raw argv[1]
+        spec.setdefault("argv_b64", [base64.b64encode(raw).decode()])
+    # An argv_b64/stdin_b64 reproducer pairs with an output/exit/crash oracle (NOT a reflected
+    # nonce). Default to a clean-exit oracle when the caller supplied none; a caller is
+    # encouraged to pass a tighter oracle (output_contains the success string / crash).
+    spec.setdefault("oracle", {"type": "exit_code", "value": 0})
+    return spec
 
 
 def _generate_spec(session: Session, project: Project, target: Target, task: Task):

@@ -5,7 +5,12 @@
 
 The spec describes how to run the target and how to know the PoC worked:
   {
-    "argv":  ["..."],                 # extra args after the program (optional)
+    "argv":  ["..."],                 # extra args after the program, TEXT (optional)
+    "argv_b64": ["...", "..."],       # extra args as RAW BYTES, each base64'd (optional, byte-faithful);
+                                      #   takes precedence over `argv` when present — for an
+                                      #   angr-solver argv reproducer whose bytes aren't printable
+                                      #   (e.g. a serial 0x3b25065c4b20040f, with 0x06/0x04/0x0f) that
+                                      #   str() would mangle. POSIX exec takes a bytes argv directly.
     "env":   {"QUERY_STRING": "..."}, # environment for the run (optional)
     "stdin": "...",                   # stdin to feed as text (optional)
     "stdin_b64": "...",               # stdin to feed as RAW BYTES, base64'd (optional, byte-faithful)
@@ -82,6 +87,30 @@ def _flag(args, name, default=None):
     return default
 
 
+def _build_cmd(prefix: list, target: str, spec: dict) -> list:
+    """The argv to exec: `[*prefix, target, *args]`.
+
+    Prefer the BYTE-FAITHFUL `argv_b64` (a list of base64'd elements fed as RAW BYTES —
+    0x00..0xff preserved exactly) over the text `argv` (which `str()`-mangles a non-printable
+    byte like 0x06/0x0f). This is the fix that lets an angr-SOLVER argv reproducer (e.g. a
+    serial whose bytes aren't printable) be verified as a real argv[1]. POSIX exec accepts a
+    bytes argv directly; when ANY element is bytes the WHOLE list must be bytes (subprocess
+    refuses a mixed str/bytes argv), so we os.fsencode the qemu prefix + the target path too."""
+    argv_b64 = spec.get("argv_b64")
+    if argv_b64 is not None:
+        import base64
+
+        args_b: list[bytes] = []
+        for a in argv_b64:
+            try:
+                args_b.append(base64.b64decode(a))
+            except Exception:  # noqa: BLE001 — a malformed element decodes to empty, never str
+                args_b.append(b"")
+        # Homogeneous bytes argv: encode the (text) qemu prefix + target path consistently.
+        return [os.fsencode(p) for p in prefix] + [os.fsencode(target)] + args_b
+    return [*prefix, target, *[str(a) for a in (spec.get("argv") or [])]]
+
+
 def _check_oracle(oracle: dict, output: str, rc: int) -> tuple[bool, str]:
     t = (oracle or {}).get("type", "output_contains")
     val = (oracle or {}).get("value")
@@ -119,7 +148,7 @@ def main() -> int:
     env.update({str(k): str(v) for k, v in (spec.get("env") or {}).items()})
     # Foreign-arch targets (MIPS/ARM/…) run under qemu-user; host-native run directly.
     prefix = _qemu_prefix(target, spec.get("sysroot"), spec.get("argv0"))
-    cmd = [*prefix, target, *[str(a) for a in (spec.get("argv") or [])]]
+    cmd = _build_cmd(prefix, target, spec)
     timeout = int(spec.get("timeout", 20))
 
     # stdin: prefer the BYTE-FAITHFUL `stdin_b64` (raw bytes — 0x00/0xff preserved exactly,
