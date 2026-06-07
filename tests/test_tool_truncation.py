@@ -76,7 +76,7 @@ def test_clip_body_marker_is_actionable_with_sizes_and_obs_id():
     assert head == "X" * 6000                         # the head is intact, exactly `limit`
     assert "[truncated 6000/14213 chars" in marker    # both sizes present
     assert "max_chars≥14213" in marker                # the re-call knob to get the whole body
-    assert "get_observation('obs-42')" in marker      # the full-data channel, with the id
+    assert "get_observation/obs_get('obs-42')" in marker      # both tool names (in-process + MCP)      # the full-data channel, with the id
     assert "…[truncated]" not in out                  # the bare opaque marker is gone
 
 
@@ -109,7 +109,7 @@ def test_search_decompiled_truncates_with_actionable_marker(hg_home):
         assert "[truncated" in marker and "chars" in marker
         # the marker names BOTH recovery paths
         assert "max_chars≥" in marker
-        assert "get_observation('" in marker
+        assert "get_observation/obs_get('" in marker
         # and the obs id it points at is the search_decompiled Observation just recorded
         from hexgraph.db.models import Observation
         obs = s.query(Observation).filter(
@@ -130,7 +130,7 @@ def test_search_decompiled_max_chars_n_returns_about_n(hg_home):
         body, marker = out[:1000], out[1000:]
         assert len(body) == 1000                  # exactly the requested window of body
         assert "[truncated 1000/" in marker       # marker reports the limit it applied
-        assert "get_observation('" in marker
+        assert "get_observation/obs_get('" in marker
 
 
 def test_search_decompiled_max_chars_over_body_returns_full_no_marker(hg_home):

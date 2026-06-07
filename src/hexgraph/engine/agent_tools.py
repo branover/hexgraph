@@ -294,9 +294,17 @@ def _clip_body(s: str, *, limit: int, obs_id: str | None) -> str:
     if len(s) <= limit:
         return s
     full = len(s)
-    recover = f", or get_observation('{obs_id}') for the full body" if obs_id else ""
-    return s[:limit] + (
-        f"\n…[truncated {limit}/{full} chars — re-call with max_chars≥{full}{recover}]")
+    # Name BOTH tool forms — the in-process agent loop has `get_observation`, the MCP surface
+    # advertises `obs_get`; both return the full body uncapped. Suggest a larger max_chars only
+    # when it can actually reach the full size (it clamps at _MAX_CEILING); past that, the
+    # observation tool is the only way to the full body.
+    obs = f"get_observation/obs_get('{obs_id}')" if obs_id else None
+    if full <= _MAX_CEILING:
+        knob = f"re-call with max_chars\u2265{full}"
+        tail = f"{knob}, or {obs} for the full body" if obs else f"{knob} for the full body"
+    else:
+        tail = f"{obs} for the full body" if obs else "the full body is in the Observation store"
+    return s[:limit] + f"\n\u2026[truncated {limit}/{full} chars — {tail}]"
 
 
 def _callee_names(callees) -> list[str]:
@@ -657,7 +665,9 @@ def _observations(ctx: ToolContext, name: str, args: dict) -> str:
         if not oid:
             return "error: 'observation_id' argument is required"
         out = O.get_observation(ctx.session, oid)
-        return _clip(_json.dumps(out, default=str)) if out else f"observation {oid!r} not found"
+        # get_observation is the FULL-body channel (the truncation marker points here),
+        # so it must NOT re-clip — return the complete payload uncapped, matching MCP obs_get.
+        return _json.dumps(out, default=str) if out else f"observation {oid!r} not found"
     if name == "search_observations":
         q = args.get("query") or ""
         rows = O.search_observations(ctx.session, target_id=ctx.target.id, query=q)
