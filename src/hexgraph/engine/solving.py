@@ -68,6 +68,8 @@ def _serialize(result: SolverResult | None) -> dict:
         "solved": True,
         "kind": result.kind,
         "concrete_input": result.concrete_input,
+        "minimal_input": result.minimal_input,
+        "constrained_len": result.constrained_len,
         "recovered_value": result.recovered_value,
         "recovered_value_hex": result.recovered_value_hex,
         "path_addrs": list(result.path_addrs or []),
@@ -172,6 +174,7 @@ def solve_reaching_input(
         return {
             "solved": True, "cached": True, "observation_id": obs.id if obs else None,
             "finding_id": None, "concrete_input": result.concrete_input,
+            "minimal_input": result.minimal_input, "constrained_len": result.constrained_len,
             "concrete_input_repr": (result.provenance or {}).get("input_repr"),
             "path_addrs": list(result.path_addrs or []),
             "note": "this solve was already recorded (an identical prior solve emitted the "
@@ -190,6 +193,7 @@ def solve_reaching_input(
             "solved": True, "cached": False, "observation_id": obs.id if obs else None,
             "finding_id": existing.id, "duplicate_finding_suppressed": True,
             "concrete_input": result.concrete_input,
+            "minimal_input": result.minimal_input, "constrained_len": result.constrained_len,
             "concrete_input_repr": (result.provenance or {}).get("input_repr"),
             "path_addrs": list(result.path_addrs or []),
             "note": "a solver-origin vulnerability finding for this sink already exists "
@@ -209,6 +213,8 @@ def solve_reaching_input(
         "finding_id": finding_id,
         "cached": cached,
         "concrete_input": result.concrete_input,
+        "minimal_input": result.minimal_input,
+        "constrained_len": result.constrained_len,
         "concrete_input_repr": (result.provenance or {}).get("input_repr"),
         "path_addrs": list(result.path_addrs or []),
         "provenance": dict(result.provenance or {}),
@@ -237,6 +243,36 @@ def _existing_solver_finding(session: Session, target: Target, *, sink_func: str
         if solver.get("sink_func") == sink_func and solver.get("sink_addr") == sink_addr:
             return r
     return None
+
+
+# Map a solved-reachable sink onto a frozen Finding `category` (schemas/finding.schema.json).
+# The generic "other" reads poorly for what this finding actually is — a gate whose check angr
+# PROVED is satisfiable, i.e. a reachable/bypassable guard. We pick the category from the sink:
+# a command-exec sink is command-injection, a memory-unsafe copy is memory-safety, and anything
+# else (a license/serial/auth guard, or a generic sink behind a check) is `auth` — the gate is
+# bypassable with a crafted input. (Sink names are matched on the normalized libc symbol.)
+_CMD_EXEC_SINKS = frozenset({
+    "system", "popen", "execl", "execlp", "execle", "execv", "execvp", "execvpe",
+    "execve", "doSystem", "do_system", "twsystem", "CsteSystem",
+})
+_MEMORY_SINKS = frozenset({
+    "strcpy", "strcat", "sprintf", "vsprintf", "gets", "memcpy", "stpcpy", "scanf",
+})
+
+
+def _classify_solver_category(sink_func: str | None) -> str:
+    """The frozen `category` for a solver-reachable-sink finding, derived from the sink. Defaults
+    to `auth` (a crafted input was PROVED to satisfy the gate guarding the sink — a bypassable
+    check), and sharpens to `command-injection` / `memory-safety` when the sink itself names the
+    impact. Always returns a value from the frozen schema enum — never the generic `other`."""
+    name = (sink_func or "").strip()
+    # Normalize a decompiler-prefixed symbol (e.g. `sym.imp.system` → `system`) before matching.
+    base = name.rsplit(".", 1)[-1] if name else name
+    if base in _CMD_EXEC_SINKS:
+        return "command-injection"
+    if base in _MEMORY_SINKS:
+        return "memory-safety"
+    return "auth"
 
 
 def _promote_and_emit(
@@ -289,6 +325,12 @@ def _promote_and_emit(
         INPUT_REACHABLE, STATIC, UNSPECIFIED,
         detail=f"angr symbolically solved a concrete input that drives execution to {sink_label}",
     )
+    # The faithful reproducer: angr's full `concrete_input` includes unconstrained filler bytes, so
+    # `minimal_input` (the leading `constrained_len` bytes the path actually constrains) is the part
+    # that matters — what a human should copy. Fall back to the full input when the probe couldn't
+    # determine it (older payload / introspection unavailable).
+    minimal_input = result.minimal_input
+    constrained_len = result.constrained_len
     solver_extra = {
         "backend": "angr",
         # The sink identity (func + addr) — the dedup key `_existing_solver_finding` matches on,
@@ -296,6 +338,9 @@ def _promote_and_emit(
         "sink_func": sink_func,
         "sink_addr": sink_addr,
         "concrete_input_hex": result.concrete_input,
+        # The minimal reproducer (the constrained-byte prefix) + its length — "the part that matters".
+        "minimal_input_hex": minimal_input,
+        "constrained_len": constrained_len,
         "concrete_input_repr": prov.get("input_repr"),
         "input_model": prov.get("input_model"),
         "path_addrs": list(result.path_addrs or []),
@@ -307,7 +352,7 @@ def _promote_and_emit(
         title=f"Solver-reachable sink: {sink_label} reachable with a crafted input on {target.name}",
         severity="high",
         confidence="high",  # a concrete reaching input is concrete evidence, not a guess
-        category="other",
+        category=_classify_solver_category(sink_func),
         summary=(f"angr symbolic execution solved a concrete input that drives execution all the "
                  f"way to {sink_label} in {target.name}. A privileged/dangerous sink is reachable, "
                  f"and the exact reaching input has been recovered (recorded as the reproducer)."),

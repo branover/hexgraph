@@ -57,6 +57,14 @@ _MAX_INPUT_CEIL = 4096        # an obvious upper guard on an agent-supplied leng
 _LOOP_BOUND = 50              # max iterations of any single loop (LoopSeer) — a runaway guard
 _PATH_ADDR_CAP = 64           # how many grounded basic-block addresses we report on the path
 _PER_QUERY_TIMEOUT = 30       # max wall-clock seconds for ANY SINGLE z3 query (per-query cap)
+# A byte "matters" iff, with every OTHER input byte pinned to the solved model, it still has at
+# most this many distinct feasible values (i.e. it is genuinely RESTRICTED by the gate). The
+# separation is wide and clean: on the licensegate calibration the 8 semantic serial bytes have
+# exactly 1 feasible value each (fully forced), while every filler byte has 256 (entirely free) —
+# this threshold sits in the empty gap between those clusters, so it also catches a legitimately
+# small-but-not-singleton byte (a fixed nibble = 16 values, a 2-of-256 choice, …) while excluding
+# an incidental `byte != 0` (255 values) or a fully-free byte (256). See _constrained_byte_len.
+_BYTE_SIGNIFICANT_MAX_VALUES = 16
 
 
 def _hx(n: int) -> str:
@@ -224,6 +232,65 @@ def _bounded_explore(simgr, find_addrs, *, timeout: int, max_steps: int, max_act
     return tele
 
 
+def _constrained_byte_len(state, sym, *, length: int) -> int | None:
+    """How many LEADING bytes of the symbolic input the satisfying path actually constrains. The
+    full `concrete_input` is the whole `length`-byte buffer (e.g. 8 real serial bytes + filler z3
+    happened to assign), which OVER-STATES the reproducer — a human can't tell which bytes matter.
+    We derive the honest count here, SEMANTICALLY, from the satisfying state's solver.
+
+    Method (semantic, not syntactic). A byte "matters" iff it is genuinely RESTRICTED, not iff it
+    merely appears in some accumulated path constraint — angr's incidental constraints (strlen /
+    length checks, argv buffer + NUL-terminator modeling, libc internals) reference input bytes far
+    past the semantic serial without forcing them, so "appears in a constraint" badly over-counts
+    (the earlier syntactic max-Extract-bit heuristic returned 52 on licensegate, not 8). Instead,
+    per byte `i`, we PIN every OTHER byte to its solved value and ask the solver how free byte `i`
+    still is — `eval_upto(byte_i, K+1, extra_constraints=[others == solved])` counts its feasible
+    values up to K+1. Byte `i` is SIGNIFICANT iff it has at most ``_BYTE_SIGNIFICANT_MAX_VALUES``
+    feasible values (genuinely forced/near-forced); an incidental `byte != 0` (≈255 values) or a
+    free byte (256) is not. `constrained_len` = highest significant index + 1.
+
+    Bounded cost: at most `length` solver queries (length is the budget-capped input size), each a
+    cheap eval over simple equality assumptions. Defensive throughout: ANY introspection / eval
+    failure degrades to None (the caller keeps the full buffer as the only reproducer) — never a
+    crash, and never a misleadingly-small claim. Returns 0 when no byte is significant.
+
+    LIMITATION (always UNDER-counts, never over-counts): a byte under a loose constraint (more than
+    _BYTE_SIGNIFICANT_MAX_VALUES feasible values, e.g. a range check) or a cross-byte disjunction
+    (e.g. `b0==1 OR b1==1`, where pinning one operand can mask the other's role) reads as filler.
+    That is safe by design — the full `concrete_input` is always retained as the authoritative
+    reproducer, so a short constrained_len never loses data; it only reports a possibly-shorter
+    \"bytes that clearly matter\" prefix."""
+    try:
+        solver = state.solver
+        get_byte = sym.get_byte            # per-byte BV view; byte 0 == the first program-read byte
+        eval_upto = solver.eval_upto       # SimSolver: model enumeration (raises if not present)
+    except Exception:  # noqa: BLE001 — a build that doesn't expose the API we rely on → caller keeps full buffer
+        return None
+
+    # The solved value of every input byte: we pin all-but-one to these and probe the remaining one.
+    try:
+        solved = [int(solver.eval(get_byte(i))) for i in range(length)]
+    except Exception:  # noqa: BLE001 — model extraction failed; don't guess
+        return None
+
+    last_significant = -1
+    for i in range(length):
+        # Pin every OTHER byte to its solved value, then count how many values byte i can still
+        # take. Few feasible values ⇒ the gate genuinely restricts this byte ⇒ it matters.
+        extra = [get_byte(j) == solved[j] for j in range(length) if j != i]
+        try:
+            feasible = eval_upto(get_byte(i), _BYTE_SIGNIFICANT_MAX_VALUES + 1,
+                                 extra_constraints=extra)
+        except Exception:  # noqa: BLE001 — a single byte's query failed (e.g. per-query z3 timeout)
+            # Don't fabricate a smaller claim from a partial scan, and don't crash: bail to None so
+            # the caller keeps the full buffer rather than an under-reported prefix.
+            return None
+        if len(feasible) <= _BYTE_SIGNIFICANT_MAX_VALUES:
+            last_significant = i
+
+    return last_significant + 1  # 0 when no byte is significant
+
+
 def _path_addrs(state) -> list[str]:
     """The few grounded basic-block addresses on the satisfying path (for promoting the
     grounded nodes/edges, never the whole program). Bounded to the head + tail of the trace."""
@@ -346,6 +413,20 @@ def _solve(args) -> dict:
     result["concrete_input_repr"] = _safe_repr(data)
     result["path_addrs"] = _path_addrs(found)
     result["reached_addr"] = _hx(found.addr)
+
+    # Which bytes actually MATTER: `concrete_input` is the whole symbolic buffer (the few real
+    # bytes the gate checks + unconstrained filler), so it over-states the reproducer. Derive how
+    # many LEADING bytes the satisfying path constrains and surface that prefix as `minimal_input`
+    # — "the part that matters" — so a human copies the real serial, not the padding. Additive:
+    # `concrete_input` stays the full buffer for back-compat. Best-effort: on any introspection
+    # failure `_constrained_byte_len` returns None and we omit both fields rather than mislead.
+    clen = _constrained_byte_len(found, sym, length=length)
+    if clen is not None:
+        # Never report more bytes than we actually have (argv data was NUL-truncated above; the
+        # constrained prefix can't extend past the real reproducer bytes).
+        clen = min(clen, len(data))
+        result["constrained_len"] = clen
+        result["minimal_input"] = data[:clen].hex()
 
     if args.mode == "constraint":
         # The angr analogue of emulation's constant recovery: surface a best-effort scalar

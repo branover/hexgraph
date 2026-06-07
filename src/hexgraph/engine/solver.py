@@ -83,17 +83,26 @@ class SolverResult:
     """What a solver recovered. `kind` is ``"reaching_input"`` or ``"constraint_value"``.
 
     For a reaching-input solve, `concrete_input` is the bytes (hex-encoded for transport) that
-    drive execution to the sink. For a constraint solve, `recovered_value`/`recovered_value_hex`
-    are the value that satisfies the check (fed to the same function-node annotation path as
-    `engine/emulation.py`). `path_addrs` is the few grounded basic-block addresses on the
-    satisfying path (promotable as nodes/edges, never the whole program). `provenance` records
-    HOW it was obtained (backend, step/time budget actually used) so a finding can cite it.
+    drive execution to the sink. `concrete_input` is the FULL symbolic buffer (real bytes + any
+    unconstrained filler z3 happened to assign), so `minimal_input` carries just the leading
+    `constrained_len` bytes that genuinely MATTER — the bytes the gate actually restricts (the
+    probe measures this semantically: with the others pinned to the solution, a byte that still has
+    many feasible values is filler, not part of the serial). It is "the part that matters", the
+    faithful reproducer a human should copy (both omitted when the probe couldn't introspect the
+    solver). For a constraint
+    solve, `recovered_value`/`recovered_value_hex` are the value that satisfies the check (fed to
+    the same function-node annotation path as `engine/emulation.py`). `path_addrs` is the few
+    grounded basic-block addresses on the satisfying path (promotable as nodes/edges, never the
+    whole program). `provenance` records HOW it was obtained (backend, step/time budget actually
+    used) so a finding can cite it.
 
     A solver returns **None** (not an empty `SolverResult`) when it finds nothing — the
     caller treats None as "no solution", and nothing is ever fabricated."""
 
     kind: str
     concrete_input: str | None = None        # hex-encoded reaching input, when kind=="reaching_input"
+    minimal_input: str | None = None         # hex of the leading constrained-byte prefix ("the part that matters")
+    constrained_len: int | None = None       # number of leading input bytes the path constrains
     recovered_value: int | str | None = None  # the satisfying value, when kind=="constraint_value"
     recovered_value_hex: str | None = None
     path_addrs: list[str] = field(default_factory=list)
@@ -315,10 +324,16 @@ class AngrSolver(Solver):
             "reached_addr": payload.get("reached_addr"),
             "function_addr": payload.get("function_addr"),
             "input_repr": payload.get("concrete_input_repr"),
+            # The minimal-reproducer hints also ride in provenance so a finding's
+            # evidence.extra.solver carries them (alongside the dedicated fields below).
+            "minimal_input": payload.get("minimal_input"),
+            "constrained_len": payload.get("constrained_len"),
         }
         return SolverResult(
             kind=kind,
             concrete_input=payload.get("concrete_input"),
+            minimal_input=payload.get("minimal_input"),
+            constrained_len=payload.get("constrained_len"),
             recovered_value=payload.get("recovered_value"),
             recovered_value_hex=payload.get("recovered_value_hex"),
             path_addrs=list(payload.get("path_addrs") or []),
