@@ -245,7 +245,9 @@ export const api = {
   removeNode: (pid: string, nid: string) => delJSON<{ archived: boolean; id: string }>(`/api/projects/${pid}/nodes/${nid}`),
   restoreNode: (pid: string, nid: string) => postJSON<{ archived: boolean; id: string }>(`/api/projects/${pid}/nodes/${nid}/restore`, {}),
   deleteEdge: (eid: string) => delJSON<{ deleted: boolean; id: string }>(`/api/edges/${eid}`),
-  decompile: (tid: string, fn: string) => postJSON<{ available: boolean; detail?: string; focus?: any; functions?: string[] }>(`/api/targets/${tid}/decompile`, { function: fn }),
+  decompile: (tid: string, fn: string) => postJSON<{ available: boolean; backend?: string; detail?: string; focus?: any; functions?: string[] }>(`/api/targets/${tid}/decompile`, { function: fn }),
+  // Disassembly for the source viewer — always radare2 (Ghidra returns empty disasm). By name or address.
+  disassemble: (tid: string, opts: { function?: string; address?: string }) => postJSON<{ available: boolean; backend?: string; detail?: string; focus?: any; functions?: string[] }>(`/api/targets/${tid}/disassemble`, opts),
   filesystem: (tid: string) => getJSON<{ unpacked: boolean; method?: string; files: FsEntry[] }>(`/api/targets/${tid}/filesystem`),
   promoteFile: (pid: string, fwId: string, rel: string) => postJSON<any>(`/api/projects/${pid}/targets/${fwId}/promote-file`, { rel }),
   // Source trees (Phase 1 — read-only IDE browse)

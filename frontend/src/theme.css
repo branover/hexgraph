@@ -532,13 +532,18 @@ select.sel:focus, .settings select.sel:focus { outline: none; border-color: var(
 .codeview .hljs-addition { color: #62d27a; }
 .codeview .hljs-emphasis { font-style: italic; }
 .codeview .hljs-strong { font-weight: 700; }
+/* a clickable callee in the function source viewer (navigate to that function) */
+.codeview .cp-sym { cursor: pointer; text-decoration: underline dotted rgba(106,163,255,.5);
+  text-underline-offset: 2px; border-radius: 2px; }
+.codeview .cp-sym:hover { background: rgba(106,163,255,.16); color: var(--accent);
+  text-decoration-style: solid; }
 
 /* source file tree + file header */
 .srctree .fsfile.sel { background: var(--surface-3); border-radius: 6px; color: var(--fg); }
-.srcview .filehdr { display: flex; align-items: center; gap: 8px; padding: 8px 14px;
-  border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 1;
+.srcview .filehdr, .fnviewer .filehdr { display: flex; align-items: center; gap: 8px; padding: 8px 14px;
+  border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 1; flex: none;
   background: linear-gradient(180deg, var(--surface-2), var(--surface)); }
-.srcview .filehdr .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 12.5px; }
+.srcview .filehdr .path, .fnviewer .filehdr .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 12.5px; }
 
 /* ---- Toolbar groups (intentional, divided, responsive) ---- */
 .toolbar .tgroup { display: inline-flex; align-items: center; gap: 6px; }

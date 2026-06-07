@@ -11,9 +11,10 @@ import Mitigations from "./Mitigations";
 
 // Node-type-aware detail shown when a target/function/symbol/string node is
 // selected in the graph (findings use the richer Inspector instead).
-export default function NodeInspector({ node, target, allowed, projectId, onLaunch, onFuzz, onChanged, onViewFinding }: {
+export default function NodeInspector({ node, target, allowed, projectId, onLaunch, onFuzz, onChanged, onViewFinding, onOpenSourceViewer }: {
   node: GraphNode; target?: TargetNode; allowed: string[]; isMock?: boolean; projectId?: string;
   onLaunch: (type: string) => void; onFuzz?: () => void; onChanged?: () => void; onViewFinding?: (fid: string) => void;
+  onOpenSourceViewer?: (node: GraphNode) => void;
 }) {
   const isHypothesis = node.type === "node" && node.node_type === "hypothesis";
   const isFunction = node.type === "node" && node.node_type === "function";
@@ -124,6 +125,12 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
         <>
           <div className="actions">
             {allowed.length > 0 && <Launcher allowed={allowed} onChoose={onLaunch} onFuzz={onFuzz} />}
+            {node.target_id && onOpenSourceViewer && (
+              <button className="btn sm primary" onClick={() => onOpenSourceViewer(node)}
+                      title="Open this function in the source viewer (decompiled + disassembly, navigable callees)">
+                <Icon name="doc" size={12} /> Open in source viewer
+              </button>
+            )}
             {node.target_id && (
               <button className="btn sm ghost" onClick={doDecompile} disabled={decomp?.loading}>
                 <Icon name="fn" size={12} /> {decomp?.loading ? "decompiling…" : "Decompile"}

@@ -19,6 +19,7 @@ import ReportModal from "../components/ReportModal";
 import RunCompareModal from "../components/RunCompareModal";
 import GhidraImportModal from "../components/GhidraImportModal";
 import SourceBrowser from "../components/SourceBrowser";
+import FunctionSourceViewer from "../components/FunctionSourceViewer";
 import { CampaignsPanel } from "../components/CampaignsPanel";
 import ArtifactsView from "../components/ArtifactsView";
 import FuzzModal from "../components/FuzzModal";
@@ -92,6 +93,17 @@ export default function Workspace() {
   const [activeLens, setActiveLens] = useState<string | null>(
     new URLSearchParams(window.location.search).get("lens") || null);
   const [openSource, setOpenSource] = useState<{ treeId?: string; rel?: string; line?: number } | null>(null);
+  // Function source viewer (the IDE-style decompiled/disassembled body reader). `seq` keys
+  // the component so internal callee-navigation (which only updates the URL) never remounts
+  // it, while an explicit re-open does. Seeded from ?fn=<name>&fnt=<targetId> on first load.
+  const [openFn, setOpenFn] = useState<{ seq: number; targetId: string; fn: string; tab?: "decomp" | "disasm"; line?: number } | null>(() => {
+    const sp = new URLSearchParams(window.location.search);
+    const fn = sp.get("fn"), fnt = sp.get("fnt");
+    if (!fn || !fnt) return null;
+    const tab = sp.get("fntab") === "disasm" ? "disasm" : undefined;
+    const line = Number(sp.get("fnline")) || undefined;
+    return { seq: 0, targetId: fnt, fn, tab, line };
+  });
   // Phase-2 focus stack (design §4.2): focusing a node pushes a reversible frame; the
   // breadcrumb trail lets you pop back. The TOP frame is the live focus driving the graph.
   // Seeded from the URL (?focus=<id>&hop=N) so a focused view is shareable + reload-restorable.
@@ -418,6 +430,18 @@ export default function Workspace() {
     setUrl({ view: "source", file: ref.rel, line: ref.line != null ? String(ref.line) : undefined });
   };
 
+  // Open the function source viewer on a function NODE (by name + its target). Bumps `seq`
+  // so an explicit open always (re)mounts the viewer at the requested function.
+  const openFunctionViewer = (fnNode: GraphNode) => {
+    if (fnNode.type !== "node" || !fnNode.target_id) return;
+    setOpenFn((prev) => ({ seq: (prev?.seq ?? 0) + 1, targetId: fnNode.target_id!, fn: fnNode.label }));
+    setUrl({ fn: fnNode.label, fnt: fnNode.target_id, fntab: undefined, fnline: undefined });
+  };
+  const closeFunctionViewer = () => { setOpenFn(null); setUrl({ fn: undefined, fnt: undefined, fntab: undefined, fnline: undefined }); };
+  // The viewer reports its live (target, fn, tab, line) so the deep-link stays addressable.
+  const syncFnUrl = (r: { targetId: string; fn: string; tab: "decomp" | "disasm"; line?: number }) =>
+    setUrl({ fn: r.fn, fnt: r.targetId, fntab: r.tab === "disasm" ? "disasm" : undefined, fnline: r.line != null ? String(r.line) : undefined });
+
   // The single navigation primitive (design §6.3): every entity routes through reveal()
   // so "reveal in graph" / "open in source" / "show campaign" share one path.
   const reveal = (kind: "finding" | "node" | "target" | "campaign" | "artifact" | "source",
@@ -741,7 +765,8 @@ export default function Workspace() {
       const onFuzz = caps.features?.fuzzing && fuzzTarget && fuzzTarget.kind !== "firmware_image"
         ? () => setFuzzFor(fuzzTarget) : undefined;
       return <NodeInspector node={selNode} target={tgt} allowed={allowed} isMock={isMock} projectId={projectId}
-                            onChanged={load} onViewFinding={viewFinding} onLaunch={onLaunch} onFuzz={onFuzz} />;
+                            onChanged={load} onViewFinding={viewFinding} onLaunch={onLaunch} onFuzz={onFuzz}
+                            onOpenSourceViewer={openFunctionViewer} />;
     }
     return <Inspector finding={selFinding} projectId={projectId} hypotheses={hypotheses} onChanged={load}
                       onDeleted={() => { setSelFinding(null); setSelGraphId(undefined); load(); }}
@@ -885,7 +910,23 @@ export default function Workspace() {
               <div className="cov">{results.coverage?.note}</div>
             </div>
           )}
-          {view === "source" ? (
+          {openFn ? (
+            // The function source viewer overlays whatever center view is active; closing
+            // returns to it. knownFunctions / arch / provenance are scoped to its target.
+            (() => {
+              const fnNodes = graph.nodes.filter((n) => n.type === "node" && n.node_type === "function" && n.target_id === openFn.targetId);
+              const tgt = detail.targets.find((t) => t.id === openFn.targetId);
+              const prov = (fnNodes.find((n) => n.label === openFn.fn)?.attrs as any)?.provenance as string[] | undefined;
+              return (
+                <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+                  <FunctionSourceViewer key={openFn.seq} projectId={projectId!} targetId={openFn.targetId} fn={openFn.fn}
+                                        targetName={tgt?.name} arch={tgt?.arch} knownFunctions={fnNodes.map((n) => n.label)}
+                                        provenanceIds={prov} initialTab={openFn.tab} initialLine={openFn.line}
+                                        onClose={closeFunctionViewer} onChange={syncFnUrl} />
+                </div>
+              );
+            })()
+          ) : view === "source" ? (
             <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
               <SourceBrowser projectId={projectId!} open={openSource} buildEnabled={!!caps.features?.build}
                              buildFetchEnabled={!!caps.features?.build_fetch}
@@ -938,6 +979,7 @@ export default function Workspace() {
                      findings={findingsLayer} onFindings={onFindingsLayer}
                      scope={scope}
                      skeletonMode={skeletonMode} onRoomExpand={expandRoom} roomLoading={roomLoading}
+                     onOpenSourceViewer={(id) => { const n = graph.nodes.find((x) => x.id === id); if (n) openFunctionViewer(n); }}
                      onEdgeSelect={(e) => { setSelEdge(e); if (e) { setSelNode(null); setSelFinding(null); setSelTask(undefined); } }}
                      onDrawEdge={(src, dst) => { setEdgePrefill({ src, dst }); setModal("edge"); }} />
           {(() => {

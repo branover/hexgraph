@@ -124,10 +124,12 @@ export default function GraphView({
   focus, onFocus, onClearFocus,
   groupBy: groupByProp, onGroupBy, layers: layersProp, onLayers,
   filters: filtersProp, onFilters, findings: findingsProp, onFindings, scope,
-  skeletonMode, onRoomExpand, roomLoading, mapMode, onRoomDrill,
+  skeletonMode, onRoomExpand, roomLoading, mapMode, onRoomDrill, onOpenSourceViewer,
 }: {
   graph: Graph;
   onSelect: (id: string, type: string) => void;
+  // Open the function source viewer on a function node (right-click → "Open in source viewer").
+  onOpenSourceViewer?: (id: string) => void;
   onEdgeSelect?: (edge: Graph["edges"][number] | null) => void;
   onDrawEdge?: (srcId: string, dstId: string) => void;
   selectedId?: string;
@@ -1338,6 +1340,10 @@ export default function GraphView({
   const menuHide = () => { if (menu) setHidden((s) => { const x = new Set(s); x.add(menu.id); return x; }); setMenu(null); };
   const menuReveal = () => { if (menu) { const realId = menu.id.startsWith("room:") ? menu.id.slice(5) : menu.id; onSelect(realId, menuIsRoom ? "target" : menu.type); } setMenu(null); };
   const menuToggleRoom = () => { if (menu) toggleRoom(menu.id); setMenu(null); };
+  // "Open in source viewer" — only on a function node (it has decompilable/disassemblable code).
+  const menuNode = menu ? graph.nodes.find((n) => n.id === menu.id) : null;
+  const menuIsFunction = menuNode?.type === "node" && menuNode.node_type === "function" && !!menuNode.target_id;
+  const menuOpenSource = () => { if (menu) onOpenSourceViewer?.(menu.id); setMenu(null); };
   const restoreHidden = () => setHidden(new Set());
 
   const curHop = focus?.hop || 1;
@@ -1438,6 +1444,9 @@ export default function GraphView({
               <div className="mi" onClick={menuFocus}><Icon name="search" size={13} /> Focus neighborhood</div>
               <div className="mi" onClick={menuExpand}><Icon name="plus" size={13} /> Expand one hop</div>
               <div className="mi" onClick={menuReveal}><Icon name="fit" size={13} /> Reveal in panel</div>
+              {menuIsFunction && onOpenSourceViewer && (
+                <div className="mi" onClick={menuOpenSource}><Icon name="doc" size={13} /> Open in source viewer</div>
+              )}
               <div className="mi danger" onClick={menuHide}><Icon name="x" size={13} /> Hide this node</div>
             </>
           )}
