@@ -165,6 +165,116 @@ def docker_available() -> bool:
         return False
 
 
+def _image_created_epoch(image: str) -> float | None:
+    """The build time of a local docker image as a POSIX timestamp, or None.
+
+    Reads `docker image inspect <image> --format {{.Created}}` (an RFC-3339 / ISO-8601
+    timestamp like `2026-06-01T12:34:56.789012345Z`). Returns None when docker is absent,
+    the image isn't built, or the date can't be parsed — never raises. Docker reports
+    nanosecond precision and a trailing `Z`; Python's `datetime.fromisoformat` only handles
+    microseconds (and, before 3.11, not `Z`), so we normalise both before parsing."""
+    import shutil
+    from datetime import datetime, timezone
+
+    if not shutil.which("docker"):
+        return None
+    try:
+        proc = subprocess.run(
+            ["docker", "image", "inspect", image, "--format", "{{.Created}}"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    raw = (proc.stdout or "").strip()
+    if not raw:
+        return None
+    # Normalise: trailing 'Z' → '+00:00', and truncate sub-second precision to the
+    # 6 digits fromisoformat accepts (docker emits up to 9 / nanoseconds).
+    ts = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    if "." in ts:
+        head, _, tail = ts.partition(".")
+        frac = tail
+        tzpart = ""
+        for sign in ("+", "-"):
+            if sign in tail:
+                frac, tzpart = tail.split(sign, 1)
+                tzpart = sign + tzpart
+                break
+        ts = f"{head}.{frac[:6]}{tzpart}"
+    try:
+        dt = datetime.fromisoformat(ts)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _toolchain_source_epoch() -> float | None:
+    """When the sandbox image's TOOLCHAIN source last CHANGED, as a POSIX epoch — the git
+    COMMIT time of `docker/sandbox.Dockerfile`, NOT its filesystem mtime.
+
+    Filesystem mtime is the wrong signal: a fresh `git clone` / `git worktree add` /
+    `git checkout` stamps every file with the CHECKOUT time, which would make a perfectly good
+    image read 'stale' the moment you clone. The Dockerfile's last-commit time is
+    checkout-independent and is the real 'toolchain changed' moment. The probes baked in by the
+    Dockerfile's `COPY` are DELIBERATELY excluded — they mount read-only at run time
+    (`PROBES_DIR`), so editing/adding a probe needs no rebuild (CLAUDE.md is explicit).
+
+    Returns None (→ staleness reads 'unknown', never a false alarm) when git isn't available,
+    the source isn't a git checkout, or the Dockerfile isn't tracked (e.g. an installed wheel
+    with no source). A purely-local UNCOMMITTED Dockerfile edit isn't reflected (it reports the
+    last commit) — acceptable: a dev editing the toolchain already knows to rebuild. Never raises."""
+    try:
+        from hexgraph.paths import repo_root
+
+        root = repo_root()
+        dockerfile = root / "docker" / "sandbox.Dockerfile"
+        if not dockerfile.is_file():
+            return None
+        proc = subprocess.run(
+            ["git", "-C", str(root), "log", "-1", "--format=%ct", "--",
+             "docker/sandbox.Dockerfile"],
+            capture_output=True, text=True, timeout=10,
+        )
+        ts = proc.stdout.strip()
+        if proc.returncode != 0 or not ts:
+            return None
+        return float(ts)
+    except Exception:  # noqa: BLE001 — locating/reading source must never crash a health check
+        return None
+
+
+def sandbox_image_staleness(image: str | None = None) -> bool | None:
+    """Is the local sandbox image OLDER than its toolchain source (so a rebuild is due)?
+
+    Compares the image's build time (`docker image inspect … {{.Created}}`) against the
+    git COMMIT time of the toolchain source (`docker/sandbox.Dockerfile`). This is the
+    PROACTIVE counterpart to `meta_check_features` (which catches a broken/missing dep
+    REACTIVELY by probing the image at run time): here we flag, at setup time, that an
+    otherwise-present image predates the Dockerfile and silently lacks newer tools.
+
+    Tri-state, never raises:
+      * True  — the image is STALE (built before the Dockerfile's last commit); rebuild it.
+      * False — the image is FRESH (built at/after the Dockerfile's last commit).
+      * None  — UNKNOWN: docker absent, image not built, the date can't be read, or the
+                Dockerfile's commit time can't be read (git absent / not a checkout / a wheel).
+
+    The git COMMIT time (not the filesystem mtime) is used deliberately, so a fresh clone or
+    worktree doesn't falsely read 'stale'. Probes are NOT part of the comparison (mounted at
+    run time, no rebuild needed) — see `_toolchain_source_epoch`."""
+    image = image or sandbox_image()
+    created = _image_created_epoch(image)
+    if created is None:
+        return None
+    src_epoch = _toolchain_source_epoch()
+    if src_epoch is None:
+        return None
+    return created < src_epoch
+
+
 def _assert_network_gate(network_gate: str) -> None:
     """The runner's defense-in-depth egress re-check (on top of the caller's assert).
     `"build_fetch"` re-checks the SEPARATE bounded-fetch tier (features.build_fetch) — a
