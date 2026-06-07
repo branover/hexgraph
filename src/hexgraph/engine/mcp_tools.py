@@ -1732,6 +1732,23 @@ def get_schemas() -> dict:
                 "web": ["body_contains", "status_is", "status_differs"],
                 "tcp": ["response_contains"],
             },
+            "binary_spec": {
+                "input_fields": "argv (TEXT list) | argv_b64 (RAW-BYTE list, each element base64'd) | "
+                                "stdin (TEXT) | stdin_b64 (RAW BYTES, base64'd) | env (dict) | timeout.",
+                "byte_faithful": "Use argv_b64/stdin_b64 — NOT argv/stdin — when the input contains "
+                                 "NON-PRINTABLE bytes (e.g. an angr-SOLVER serial 0x3b25065c4b20040f). "
+                                 "argv_b64 elements are decoded to bytes and exec'd as a RAW argv (POSIX "
+                                 "exec takes a bytes argv); the text argv would str()-mangle them. "
+                                 "argv_b64 takes precedence over argv; stdin_b64 over stdin. A byte-input "
+                                 "PoC pairs with an output_contains/exit_code/crash oracle (NOT a "
+                                 "reflected {{NONCE}}, which can't ride inside raw bytes).",
+                "solver_handoff": "To verify an angr-solver finding's reproducer byte-faithfully, call "
+                                  "finding_verify_poc(finding_id=<the solver finding>, poc={oracle:{…}}) "
+                                  "with NO argv/stdin in the spec — HexGraph fills argv_b64 (or stdin_b64) "
+                                  "from evidence.extra.solver (input_model + minimal_input_hex/"
+                                  "concrete_input_hex). Pass an oracle matching the success path (e.g. "
+                                  "output_contains the success string the solved path prints).",
+            },
             "callback": {
                 "use_for": "blind command-injection, SSRF, blind RCE, OOB exfil (NO reflected output)",
                 "spec": "{steps|request|transport+port..., oracle:{type:'callback', timeout?:secs, "
@@ -2129,9 +2146,17 @@ def http_request(target_id: str, method: str, path: str, params: dict | None = N
 def verify_poc(target_id: str, poc: dict, finding_id: str | None = None) -> dict:
     """Prove an exploit really works and report verified true/false. Two flavours, chosen
     by the target:
-    - **binary target** → executes it IN THE SANDBOX. Spec: {argv?, env?, stdin?, timeout?,
-      oracle:{type:"output_contains|exit_code|exit_nonzero|crash", value}}. Requires
-      features.poc enabled.
+    - **binary target** → executes it IN THE SANDBOX. Spec: {argv?, argv_b64?, env?, stdin?,
+      stdin_b64?, timeout?, oracle:{type:"output_contains|exit_code|exit_nonzero|crash",
+      value}}. Requires features.poc enabled. For RAW-BYTE input (a non-printable argv serial
+      like 0x3b25065c4b20040f, or binary stdin) use `argv_b64` (a list of base64'd elements,
+      exec'd as raw bytes) / `stdin_b64` instead of the text `argv`/`stdin` (which str()-mangle
+      non-printable bytes); the byte fields take precedence and pair with an
+      output_contains/exit_code/crash oracle. SOLVER HANDOFF: to verify an angr-solver finding's
+      reproducer byte-faithfully, pass `finding_id`=<that finding> with poc={oracle:{…}} and NO
+      argv/stdin — HexGraph fills argv_b64/stdin_b64 from evidence.extra.solver (input_model +
+      minimal_input_hex/concrete_input_hex), so the solved input reaches the sink as a real
+      argv[1] instead of being text-mangled.
     - **web surface** (a web_app registered with register_web_surface) → sends HTTP step(s).
       Spec: {steps:[{method,path,params?,headers?,body?,json?}, ...],
       oracle:{type:"body_contains|status_is|status_differs", value}}. Cookies carry across
@@ -2167,13 +2192,28 @@ def verify_poc(target_id: str, poc: dict, finding_id: str | None = None) -> dict
     .verification + .assurance) so it shows as `verified` in list_findings — the typed home for a
     confirmed exploit. ALWAYS attach: a confirmed vuln finding must carry its verified PoC."""
     from hexgraph.db.models import Finding
-    from hexgraph.engine.poc import verify_poc as _verify
+    from hexgraph.engine.poc import (
+        _spec_has_input,
+        spec_from_solver_finding,
+        verify_poc as _verify,
+    )
     from hexgraph.policy import PolicyViolation
 
     with session_scope() as s:
         t = s.get(Target, target_id)
         if t is None:
             return {"error": "target not found"}
+        poc = dict(poc or {})
+        # SOLVER HANDOFF: when attaching to an angr-solver finding and the caller didn't supply
+        # its OWN input, fill the recovered reaching-input as a BYTE-FAITHFUL argv_b64/stdin_b64
+        # (input_model-driven) — so a solved non-printable argv serial verifies as a real argv[1]
+        # instead of being str()-mangled. The caller's oracle (output_contains the success
+        # string / crash / exit_code) is preserved; only the input is filled in.
+        if finding_id and not _spec_has_input(poc):
+            f0 = s.get(Finding, finding_id)
+            derived = spec_from_solver_finding(f0, base_spec=poc) if f0 is not None else None
+            if derived is not None:
+                poc = derived
         try:
             r = _verify(s, s.get(Project, t.project_id), t, poc)
         except PolicyViolation:

@@ -85,7 +85,16 @@ def _tcp_command(spec: dict, target: Target | None) -> str:
     return f"printf {shlex.quote(str(payload))} | nc {shlex.quote(str(host))} {port}"
 
 
+def _ansi_c_quote(raw: bytes) -> str:
+    r"""Render raw bytes as a shell ANSI-C `$'\xNN…'` literal — the portable idiom for a
+    non-printable byte sequence as a single argv element (a solved serial like 0x3b…0f). Every
+    byte is escaped as `\xNN`, so it stays one inert word with no quoting surprises."""
+    return "$'" + "".join(f"\\x{b:02x}" for b in raw) + "'"
+
+
 def _binary_command_str(spec: dict, target: Target | None) -> str:
+    import base64
+
     path = (target.path if target is not None else None) or "./target"
     parts: list[str] = []
     # Set env via the `env` utility so the WHOLE `KEY=VALUE` token can be shlex-quoted —
@@ -96,8 +105,26 @@ def _binary_command_str(spec: dict, target: Target | None) -> str:
         parts.append("env")
         parts += [shlex.quote(f"{k}={v}") for k, v in env.items()]
     parts.append(shlex.quote(path))
-    parts += [shlex.quote(str(a)) for a in (spec.get("argv") or [])]
+    # Prefer the BYTE-FAITHFUL argv_b64 (each element raw bytes) over the text argv — rendered
+    # as $'\xNN…' so a human pastes the exact non-printable serial the solver recovered.
+    argv_b64 = spec.get("argv_b64")
+    if argv_b64 is not None:
+        for a in argv_b64:
+            try:
+                parts.append(_ansi_c_quote(base64.b64decode(a)))
+            except Exception:  # noqa: BLE001
+                parts.append("''")
+    else:
+        parts += [shlex.quote(str(a)) for a in (spec.get("argv") or [])]
     cmd = " ".join(parts)
+    # stdin: the byte-faithful stdin_b64 (printf '\xNN…') wins over the text stdin field.
+    stdin_b64 = spec.get("stdin_b64")
+    if stdin_b64 is not None:
+        try:
+            raw = base64.b64decode(stdin_b64)
+            return "printf " + "'" + "".join(f"\\x{b:02x}" for b in raw) + "'" + f" | {cmd}"
+        except Exception:  # noqa: BLE001
+            pass
     stdin = spec.get("stdin")
     if stdin is not None:
         return f"printf {shlex.quote(str(stdin))} | {cmd}"

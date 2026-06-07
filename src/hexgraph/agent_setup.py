@@ -185,7 +185,13 @@ Observation. Work cheap-to-expensive — orienting facts first, heavy synthesis 
   a check. It composes with the grounded taint pass — taint argues a path EXISTS, angr produces the
   concrete input that takes it, the strongest static claim short of a live `finding_verify_poc`. It is
   heavy but bounded (it runs in the dedicated angr image), so check `obs_list(target, kind='solver')`
-  before re-running.
+  before re-running. **Then PROVE it dynamically (raise input_reachable/static → /dynamic):** call
+  `finding_verify_poc(target, poc={"oracle":{…}}, finding_id=<the solver finding>)` with NO argv/stdin
+  in the spec — HexGraph fills the recovered input BYTE-FAITHFULLY as `argv_b64`/`stdin_b64` from the
+  finding's `evidence.extra.solver` (so a solved non-printable serial like `0x3b25065c4b20040f` reaches
+  the sink as a real `argv[1]`, never str()-mangled). Pass an oracle that matches the success path
+  (e.g. `output_contains` the success string the solved path prints). For a hand-authored byte input,
+  set `argv_b64` (a list of base64'd raw-byte elements) / `stdin_b64` yourself instead of `argv`/`stdin`.
 
 ## 2a. Browse the firmware filesystem (configs, scripts, keys — not just code)
 A firmware target unpacks into a filesystem, and a large share of real findings live in
