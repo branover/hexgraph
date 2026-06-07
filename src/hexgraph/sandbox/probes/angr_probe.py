@@ -57,6 +57,14 @@ _MAX_INPUT_CEIL = 4096        # an obvious upper guard on an agent-supplied leng
 _LOOP_BOUND = 50              # max iterations of any single loop (LoopSeer) — a runaway guard
 _PATH_ADDR_CAP = 64           # how many grounded basic-block addresses we report on the path
 _PER_QUERY_TIMEOUT = 30       # max wall-clock seconds for ANY SINGLE z3 query (per-query cap)
+# A byte "matters" iff, with every OTHER input byte pinned to the solved model, it still has at
+# most this many distinct feasible values (i.e. it is genuinely RESTRICTED by the gate). The
+# separation is wide and clean: on the licensegate calibration the 8 semantic serial bytes have
+# exactly 1 feasible value each (fully forced), while every filler byte has 256 (entirely free) —
+# this threshold sits in the empty gap between those clusters, so it also catches a legitimately
+# small-but-not-singleton byte (a fixed nibble = 16 values, a 2-of-256 choice, …) while excluding
+# an incidental `byte != 0` (255 values) or a fully-free byte (256). See _constrained_byte_len.
+_BYTE_SIGNIFICANT_MAX_VALUES = 16
 
 
 def _hx(n: int) -> str:
@@ -225,75 +233,55 @@ def _bounded_explore(simgr, find_addrs, *, timeout: int, max_steps: int, max_act
 
 
 def _constrained_byte_len(state, sym, *, length: int) -> int | None:
-    """Best-effort: how many LEADING bytes of the symbolic input the satisfying path actually
-    constrains. The full `concrete_input` is the whole `length`-byte buffer (e.g. 8 real serial
-    bytes + unconstrained filler), which over-states the reproducer — a human can't tell which
-    bytes matter. We derive that here from the satisfying state's constraints.
+    """How many LEADING bytes of the symbolic input the satisfying path actually constrains. The
+    full `concrete_input` is the whole `length`-byte buffer (e.g. 8 real serial bytes + filler z3
+    happened to assign), which OVER-STATES the reproducer — a human can't tell which bytes matter.
+    We derive the honest count here, SEMANTICALLY, from the satisfying state's solver.
 
-    Method: the symbolic input is one BVS (`hexgraph_input`); per-byte references appear as
-    `Extract(hi, lo, input)` AST nodes inside the path constraints. We scan every constraint that
-    mentions the input variable, find the highest BIT touched (either an `Extract`'s `hi`, or the
-    full width when the whole BVS is used un-extracted), and return ``hi // 8 + 1`` — the count of
-    leading bytes up to and including the last constrained one. Returns 0 when the input appears in
-    no constraint, or **None** when we can't introspect (a claripy/angr build that doesn't expose
-    the AST shape we expect) — the caller then omits the field rather than guessing.
+    Method (semantic, not syntactic). A byte "matters" iff it is genuinely RESTRICTED, not iff it
+    merely appears in some accumulated path constraint — angr's incidental constraints (strlen /
+    length checks, argv buffer + NUL-terminator modeling, libc internals) reference input bytes far
+    past the semantic serial without forcing them, so "appears in a constraint" badly over-counts
+    (the earlier syntactic max-Extract-bit heuristic returned 52 on licensegate, not 8). Instead,
+    per byte `i`, we PIN every OTHER byte to its solved value and ask the solver how free byte `i`
+    still is — `eval_upto(byte_i, K+1, extra_constraints=[others == solved])` counts its feasible
+    values up to K+1. Byte `i` is SIGNIFICANT iff it has at most ``_BYTE_SIGNIFICANT_MAX_VALUES``
+    feasible values (genuinely forced/near-forced); an incidental `byte != 0` (≈255 values) or a
+    free byte (256) is not. `constrained_len` = highest significant index + 1.
 
-    Defensive throughout: any introspection failure degrades to None (the caller keeps the full
-    buffer as the only reproducer), never a crash and never a misleadingly-small claim."""
+    Bounded cost: at most `length` solver queries (length is the budget-capped input size), each a
+    cheap eval over simple equality assumptions. Defensive throughout: ANY introspection / eval
+    failure degrades to None (the caller keeps the full buffer as the only reproducer) — never a
+    crash, and never a misleadingly-small claim. Returns 0 when no byte is significant."""
     try:
-        input_names = set(sym.variables)  # the leaf-variable name(s) of the symbolic input BVS
-    except Exception:  # noqa: BLE001 — a build without `.variables`: can't attribute constraints
-        return None
-    if not input_names:
+        solver = state.solver
+        get_byte = sym.get_byte            # per-byte BV view; byte 0 == the first program-read byte
+        eval_upto = solver.eval_upto       # SimSolver: model enumeration (raises if not present)
+    except Exception:  # noqa: BLE001 — a build that doesn't expose the API we rely on → caller keeps full buffer
         return None
 
-    max_bit = -1
-    saw_input = False
+    # The solved value of every input byte: we pin all-but-one to these and probe the remaining one.
     try:
-        constraints = list(state.solver.constraints)
-    except Exception:  # noqa: BLE001
+        solved = [int(solver.eval(get_byte(i))) for i in range(length)]
+    except Exception:  # noqa: BLE001 — model extraction failed; don't guess
         return None
 
-    for con in constraints:
+    last_significant = -1
+    for i in range(length):
+        # Pin every OTHER byte to its solved value, then count how many values byte i can still
+        # take. Few feasible values ⇒ the gate genuinely restricts this byte ⇒ it matters.
+        extra = [get_byte(j) == solved[j] for j in range(length) if j != i]
         try:
-            con_vars = set(getattr(con, "variables", ()) or ())
-        except Exception:  # noqa: BLE001 — a non-AST constraint; skip it
-            continue
-        if con_vars.isdisjoint(input_names):
-            continue  # this constraint doesn't touch the symbolic input
-        saw_input = True
-        # Walk the AST; for each Extract over the input, the high bit index bounds the byte range.
-        # A bare use of the whole input variable (no Extract) means the full width is constrained.
-        try:
-            nodes = list(con.children_asts())
-        except Exception:  # noqa: BLE001 — no traversal API: fall back to full-width below
-            return length
-        nodes.append(con)
-        for node in nodes:
-            try:
-                node_vars = set(getattr(node, "variables", ()) or ())
-            except Exception:  # noqa: BLE001
-                continue
-            if node_vars.isdisjoint(input_names):
-                continue
-            op = getattr(node, "op", None)
-            if op == "Extract":
-                # claripy Extract(high, low, val): args[0] is the inclusive high BIT index.
-                try:
-                    hi = int(node.args[0])
-                except Exception:  # noqa: BLE001
-                    hi = 8 * length - 1
-                max_bit = max(max_bit, hi)
-            elif op == "BVS":
-                # The whole symbolic input used directly — every byte is in play.
-                max_bit = max(max_bit, 8 * length - 1)
+            feasible = eval_upto(get_byte(i), _BYTE_SIGNIFICANT_MAX_VALUES + 1,
+                                 extra_constraints=extra)
+        except Exception:  # noqa: BLE001 — a single byte's query failed (e.g. per-query z3 timeout)
+            # Don't fabricate a smaller claim from a partial scan, and don't crash: bail to None so
+            # the caller keeps the full buffer rather than an under-reported prefix.
+            return None
+        if len(feasible) <= _BYTE_SIGNIFICANT_MAX_VALUES:
+            last_significant = i
 
-    if not saw_input:
-        return 0
-    if max_bit < 0:
-        # The input is constrained but we couldn't localise the bits → don't under-report.
-        return length
-    return min(length, max_bit // 8 + 1)
+    return last_significant + 1  # 0 when no byte is significant
 
 
 def _path_addrs(state) -> list[str]:

@@ -84,9 +84,12 @@ class SolverResult:
 
     For a reaching-input solve, `concrete_input` is the bytes (hex-encoded for transport) that
     drive execution to the sink. `concrete_input` is the FULL symbolic buffer (real bytes + any
-    unconstrained filler), so `minimal_input` carries just the leading `constrained_len` bytes the
-    satisfying path actually constrains — "the part that matters", the faithful reproducer a human
-    should copy (both omitted when the probe couldn't introspect the constraints). For a constraint
+    unconstrained filler z3 happened to assign), so `minimal_input` carries just the leading
+    `constrained_len` bytes that genuinely MATTER — the bytes the gate actually restricts (the
+    probe measures this semantically: with the others pinned to the solution, a byte that still has
+    many feasible values is filler, not part of the serial). It is "the part that matters", the
+    faithful reproducer a human should copy (both omitted when the probe couldn't introspect the
+    solver). For a constraint
     solve, `recovered_value`/`recovered_value_hex` are the value that satisfies the check (fed to
     the same function-node annotation path as `engine/emulation.py`). `path_addrs` is the few
     grounded basic-block addresses on the satisfying path (promotable as nodes/edges, never the
