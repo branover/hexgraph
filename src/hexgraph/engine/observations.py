@@ -21,7 +21,7 @@ import re
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import or_
+from sqlalchemy import String, cast, or_
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Observation, Project, Target
@@ -150,6 +150,25 @@ def list_observations(
         q = q.filter(Observation.created_at >= since)
     rows = q.order_by(Observation.created_at.desc()).limit(limit).all()
     return [_row_dict(r) for r in rows]
+
+
+def list_observations_for_node(
+    session: Session, *, node_id: str, project_id: str,
+    target_id: str | None = None, limit: int = 200,
+) -> list[dict[str, Any]]:
+    """Every Observation whose `node_refs` includes this node — the node's FULL result-set
+    (decompile/disasm/xrefs/recover_constant/…), newest first, row metadata only. Scoped to
+    the node's target when it has one (the common case); project-wide for cross-target nodes
+    (e.g. a shared socket, `target_id=None`). The reverse of the node's `attrs.provenance`,
+    and a superset of it. Call `get_observation(id)` for the full CAS payload."""
+    q = session.query(Observation)
+    q = q.filter(Observation.target_id == target_id) if target_id else q.filter(Observation.project_id == project_id)
+    # Narrow in SQL before pulling rows: a node id is a UUID, so a substring match on the
+    # JSON `node_refs` text cannot false-positive on another id — the Python check below is
+    # the exact confirm. This keeps the fetch bounded even on a busy target/project.
+    q = q.filter(cast(Observation.node_refs, String).contains(node_id))
+    rows = q.order_by(Observation.created_at.desc()).limit(limit).all()
+    return [_row_dict(r) for r in rows if node_id in (r.node_refs or [])]
 
 
 def get_observation(session: Session, obs_id: str) -> dict[str, Any] | None:

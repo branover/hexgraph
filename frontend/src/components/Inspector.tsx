@@ -3,7 +3,7 @@ import { api, Finding } from "../api";
 import { Icon } from "./Icon";
 import Annotations from "./Annotations";
 import Provenance from "./Provenance";
-import Mitigations from "./Mitigations";
+import Mitigations, { hasKnownMitigations } from "./Mitigations";
 
 const LIFECYCLE = ["new", "triaging", "confirmed", "reported"];
 function Lifecycle({ status }: { status: string }) {
@@ -454,7 +454,7 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
             {ev.sink && <><span className="k">sink</span><code>{ev.sink}</code></>}
             {ev.address && <><span className="k">address</span><code>{ev.address}</code></>}
             {ev.file && <><span className="k">file</span><code>{ev.file}</code></>}
-            {ev.extra?.mitigations && <><span className="k">mitigations</span><Mitigations mitigations={ev.extra.mitigations} /></>}
+            {hasKnownMitigations(ev.extra?.mitigations) && <><span className="k">mitigations</span><Mitigations mitigations={ev.extra.mitigations} /></>}
           </div>
         </>
       )}

@@ -18,7 +18,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query
 
-from hexgraph.db.models import Project, Target
+from hexgraph.db.models import Node, Project, Target
 from hexgraph.db.session import session_scope
 from hexgraph.engine import observations as O
 
@@ -53,6 +53,26 @@ def api_list_observations(
         if s.get(Target, target_id) is None:
             raise HTTPException(404, "target not found")
         rows = O.list_observations(s, target_id, tool=tool, kind=kind, since=since_dt, limit=limit)
+        return {"observations": rows}
+
+
+@router.get("/api/projects/{project_id}/nodes/{node_id}/observations")
+def api_list_node_observations(
+    project_id: str,
+    node_id: str,
+    limit: int = Query(200, ge=1, le=_MAX_LIMIT),
+):
+    """A node's FULL result-set: every tool result referencing it via `node_refs`
+    (decompile/disasm/xrefs/recover_constant/…), newest first. Row metadata only —
+    GET /api/observations/{id} for the full CAS payload."""
+    with session_scope() as s:
+        if s.get(Project, project_id) is None:
+            raise HTTPException(404, "project not found")
+        node = s.get(Node, node_id)
+        if node is None or node.project_id != project_id:
+            raise HTTPException(404, "node not found")
+        rows = O.list_observations_for_node(
+            s, node_id=node_id, project_id=project_id, target_id=node.target_id, limit=limit)
         return {"observations": rows}
 
 

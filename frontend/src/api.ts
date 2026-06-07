@@ -224,6 +224,9 @@ export const api = {
     if (opts.limit) qs.set("limit", String(opts.limit));
     return getJSON<{ observations: Observation[] }>(`/api/projects/${pid}/targets/${tid}/observations${qs.toString() ? "?" + qs.toString() : ""}`);
   },
+  // A node's full result-set: every tool result referencing it (via node_refs).
+  nodeObservations: (pid: string, nodeId: string, limit = 200) =>
+    getJSON<{ observations: Observation[] }>(`/api/projects/${pid}/nodes/${nodeId}/observations?limit=${limit}`),
   observation: (oid: string) => getJSON<Observation>(`/api/observations/${oid}`),
   searchObservations: (pid: string, q: string, targetId?: string) => {
     const qs = new URLSearchParams({ q });

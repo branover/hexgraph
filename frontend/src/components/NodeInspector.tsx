@@ -7,7 +7,7 @@ import HypothesisPanel from "./HypothesisPanel";
 import FilesystemBrowser from "./FilesystemBrowser";
 import ToolResults from "./ToolResults";
 import Provenance from "./Provenance";
-import Mitigations from "./Mitigations";
+import Mitigations, { hasKnownMitigations } from "./Mitigations";
 
 // Node-type-aware detail shown when a target/function/symbol/string node is
 // selected in the graph (findings use the richer Inspector instead).
@@ -20,10 +20,13 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
   const isFunction = node.type === "node" && node.node_type === "function";
   const icon = node.type === "target" ? NODE_ICON[node.kind] : NODE_ICON[node.node_type] || "fn";
   const [added, setAdded] = useState<Set<string>>(new Set());
+  // A long import list buries the Tool Results below it (the eval flag), so it collapses to
+  // a preview by default and expands on demand.
+  const [importsOpen, setImportsOpen] = useState(false);
   // The inspector instance is reused across selections, so clear the promoted-this-session
-  // marks when the selected node/target changes — otherwise a name promoted on one target
-  // shows as already-added on another that happens to import the same name.
-  useEffect(() => { setAdded(new Set()); }, [node.id]);
+  // marks (and the imports-expanded state) when the selected node/target changes — otherwise
+  // a name promoted on one target shows as already-added on another that imports the same name.
+  useEffect(() => { setAdded(new Set()); setImportsOpen(false); }, [node.id]);
   const [decomp, setDecomp] = useState<{ loading: boolean; focus?: any; detail?: string } | null>(null);
   const [editing, setEditing] = useState(false);
   const [eName, setEName] = useState("");
@@ -96,23 +99,35 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
           <div className="actions"><Launcher allowed={allowed} onChoose={onLaunch} onFuzz={onFuzz} /></div>
           <div className="sec">Recon facts</div>
           <div className="kvs">
-            {target.metadata?.mitigations && <><span className="k">mitigations</span><Mitigations mitigations={target.metadata.mitigations as any} /></>}
+            {hasKnownMitigations(target.metadata?.mitigations as any) && <><span className="k">mitigations</span><Mitigations mitigations={target.metadata.mitigations as any} /></>}
             {target.metadata?.libraries?.length ? <><span className="k">libraries</span><span>{target.metadata.libraries.join(", ")}</span></> : null}
             {target.metadata?.hashes?.sha256 && <><span className="k">sha256</span><code>{String(target.metadata.hashes.sha256).slice(0, 16)}…</code></>}
             {typeof target.metadata?.size === "number" && <><span className="k">size</span><span>{target.metadata.size} B</span></>}
           </div>
-          {target.metadata?.imports?.length ? (
-            <><div className="sec">Imports ({target.metadata.imports.length}) <span className="muted">· click + to add as a node</span></div>
-              <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-                {target.metadata.imports.slice(0, 80).map((i: string) => (
-                  <button key={i} className="tag addable" disabled={added.has(`symbol:${i}`)}
-                          title={added.has(`symbol:${i}`) ? "added" : "Add as a symbol node (auto-tagged a sink if a prior tool flagged it dangerous)"}
-                          onClick={() => addNode(i, "symbol", { kind: "import" })}>
-                    {added.has(`symbol:${i}`) ? <Icon name="check" size={10} /> : <Icon name="plus" size={10} />} {i}
-                  </button>
-                ))}
-              </div></>
-          ) : null}
+          {target.metadata?.imports?.length ? (() => {
+            const imports: string[] = target.metadata.imports;
+            const PREVIEW = 24;
+            const long = imports.length > PREVIEW;
+            const shown = (importsOpen ? imports : imports.slice(0, PREVIEW)).slice(0, 80);
+            return (
+              <><div className="sec">Imports ({imports.length}) <span className="muted">· click + to add as a node</span></div>
+                <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                  {shown.map((i: string) => (
+                    <button key={i} className="tag addable" disabled={added.has(`symbol:${i}`)}
+                            title={added.has(`symbol:${i}`) ? "added" : "Add as a symbol node (auto-tagged a sink if a prior tool flagged it dangerous)"}
+                            onClick={() => addNode(i, "symbol", { kind: "import" })}>
+                      {added.has(`symbol:${i}`) ? <Icon name="check" size={10} /> : <Icon name="plus" size={10} />} {i}
+                    </button>
+                  ))}
+                  {long && (
+                    <button className="tag" style={{ cursor: "pointer" }} onClick={() => setImportsOpen((o) => !o)}
+                            title={importsOpen ? "Collapse the imports list" : "Show more imports"}>
+                      {importsOpen ? "show fewer" : `+${Math.min(imports.length, 80) - PREVIEW} more`}
+                    </button>
+                  )}
+                </div></>
+            );
+          })() : null}
           {exports.length > 0 && (
             <>
               <div className="sec">Exported functions ({exports.length}) <span className="muted">· click + to add as a node</span></div>
@@ -210,6 +225,10 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
               : "Explore this node's edges in the graph for its relationships."}
           </div>
           <Provenance ids={(node.attrs as any)?.provenance} />
+          {/* The node's FULL result-set (every tool result referencing it via node_refs:
+              decompile/disasm/xrefs/recover_constant/…) — a superset of the curated
+              provenance above. Click a row for the raw payload. */}
+          {projectId && <ToolResults projectId={projectId} nodeId={node.id} />}
           {projectId && (
             <div className="actions" style={{ marginTop: 12 }}>
               <button className="btn sm ghost danger" onClick={removeNode} title="Soft-remove (reversible)">

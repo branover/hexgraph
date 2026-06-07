@@ -251,7 +251,9 @@ entries reference them by name.
 - Functional: that entry becomes a graph node WITHOUT decompiling — an **import → a `symbol` node**, an
   **export → a `function` node** — wired `contains` to the target; the chip flips to a ✓ (added); the graph
   node count goes up and the new node's type appears in the legend. Both the Imports and the Exported-functions
-  lists carry the same `· click + to add as a node` affordance (previously only exports did).
+  lists carry the same `· click + to add as a node` affordance (previously only exports did). A **long imports
+  list collapses to a preview** (24) with a `+N more` / `show fewer` toggle, so a busy binary doesn't bury the
+  Tool Results below it.
 - 🔌 Backend: `POST /api/projects/{id}/nodes` (`graph_create_node`) — the same path the agent uses. The node
   **auto-enriches** on creation (`get_or_create_node` → `apply_facts_for_node`): a promoted import that a prior
   tool already flagged dangerous joins its `is_sink` tag; a function joins any waiting prototype/address. Verify
@@ -830,7 +832,9 @@ loud only where you are looking; every node/edge/color kept, mute never deletes.
   observation summary's honest wording ("weak: nx, canary, relro=partial").
 - Qualitative: "weak, not silently ok" reads at a glance and in the app's chip idiom (Aesthetics/honesty) —
   a hardened-but-actually-weak binary cannot read as fine. Shared with the NodeInspector RECON-FACTS row
-  (same component, same colors).
+  (same component, same colors). If a mitigations map carries ONLY unrecognized keys (no nx/canary/pie/
+  fortify/relro), neither the badges NOR the **mitigations** label render — no dangling label beside an empty
+  value (`hasKnownMitigations` guards both the Inspector and NodeInspector rows).
 - Principle: weak mitigations are conspicuous, never hidden in a blob.
 - Prereq: a finding (or target node) carrying mitigations.
 
@@ -902,6 +906,23 @@ later PR).
   dense Inspector — it sits after the analyst notes (Aesthetics).
 - Principle: a finding is traceable to the grounded results behind it.
 - Prereq: a finding carrying `evidence.extra.provenance`.
+
+**OBS-06 — A node's full result-set at the node**
+- Steps: select a graph node that tool calls have referenced (e.g. a decompiled function) → in its
+  NodeInspector read the **Tool Results** section below the attributes/provenance.
+- Functional: a count + a filterable list of EVERY tool result referencing this node (its `node_refs`) —
+  decompilation, disassembly, xrefs, recover_constant, … — not just the producing/enriching ones in the
+  provenance block above. Same rows + tool/kind filters + raw-payload modal as the per-target panel
+  (OBS-01..03), but scoped to the node. Empty state explains how results get attached.
+- 🔌 Backend: `GET /api/projects/{id}/nodes/{nodeId}/observations` — every Observation whose `node_refs`
+  includes the node (a superset of `attrs.provenance`), row metadata only; the single-get carries the
+  payload. Verify the rows match the node's `node_refs`.
+- Qualitative: the node becomes the place to see everything known about it without hunting the target's
+  full Tool Results (Discoverable); the section reuses the per-target panel's idiom (Consistency); a node
+  with no results shows a calm explanation, not a void (Feedback).
+- Principle: the graph node is the hub — its full analysis history is one selection away, while the bodies
+  still live in the Observation store (the graph stays curated).
+- Prereq: a node with ≥1 referencing tool result.
 
 ---
 
