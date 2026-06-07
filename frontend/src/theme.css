@@ -89,7 +89,12 @@ pre { background: #0c0f17; border: 1px solid var(--border); border-radius: var(-
 code { font-family: var(--mono); }
 
 /* projects */
-.proj-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; margin-top: 18px; }
+/* Cards are a fixed comfortable width (not `1fr`-stretched) so every card is identical and a
+   lone trailing card on the last row reads as one more card at the left, not a wide stretched
+   box with an awkward empty column beside it (issue 5.4a). `auto-fill` lays as many per row as
+   fit; the row is left-aligned so the grid never centers oddly when only partly full. */
+.proj-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 320px)); justify-content: start;
+  gap: 14px; margin-top: 18px; }
 .proj-card { position: relative; }
 .proj-card .trash { position: absolute; right: 10px; top: 10px; opacity: 0; transition: opacity .12s, color .12s; color: var(--muted); }
 .proj-card:hover .trash { opacity: .6; }

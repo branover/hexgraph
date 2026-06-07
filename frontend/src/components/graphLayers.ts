@@ -41,7 +41,7 @@ export const NODE_LAYER_DEFAULT_OFF = new Set(["symbol", "string", "param", "sou
 export const EDGE_CLASSES: { key: string; label: string; types: string[] }[] = [
   { key: "structural", label: "structural", types: ["contains", "located_in", "references", "links_against", "built_from", "about"] },
   { key: "call", label: "call graph", types: ["calls"] },
-  { key: "semantic", label: "semantic / security", types: ["taints", "bypasses", "routes_to", "listens_on", "connects_to", "related_to", "instance_of_pattern", "similar_to"] },
+  { key: "semantic", label: "semantic / security", types: ["taints", "bypasses", "routes_to", "listens_on", "connects_to", "related_to", "instance_of_pattern", "matches_rule", "similar_to"] },
   { key: "provenance", label: "provenance", types: ["produced_artifact", "instrumented_build_of", "fuzzed_by", "derived_from"] },
 ];
 // type → edge-class lookup (for hiding/scoping by class). Anything unlisted → "semantic".
