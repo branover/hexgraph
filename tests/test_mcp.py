@@ -423,6 +423,42 @@ def test_check_features_floss_yara_broken_when_dep_missing(hg_home, monkeypatch)
     assert "BROKEN" in out["summary"] and "floss" in out["summary"] and "yara" in out["summary"]
 
 
+def test_check_features_image_stale_hint(hg_home, monkeypatch):
+    """check_features carries a PROACTIVE `image_stale` hint (tri-state) alongside the
+    per-feature REACTIVE dep probes: true when the sandbox image predates its Dockerfile."""
+    monkeypatch.setattr("hexgraph.engine.mcp_tools._image_smoke",
+                        lambda image, argv, timeout=30: (True, "ok"))
+    monkeypatch.setattr("hexgraph.sandbox.runner.sandbox_image_staleness", lambda *a, **k: True)
+    out = mcp_tools.check_features()
+    assert out["image_stale"] is True
+    assert "STALE" in out["summary"] and "just sandbox-build" in out["summary"]
+
+
+def test_check_features_image_stale_tristate_fresh_and_unknown(hg_home, monkeypatch):
+    """A fresh (False) or unknown (None) image is reported faithfully and adds NO stale
+    line to the summary."""
+    monkeypatch.setattr("hexgraph.engine.mcp_tools._image_smoke",
+                        lambda image, argv, timeout=30: (True, "ok"))
+    for verdict in (False, None):
+        monkeypatch.setattr("hexgraph.sandbox.runner.sandbox_image_staleness", lambda *a, **k: verdict)
+        out = mcp_tools.check_features()
+        assert out["image_stale"] is verdict
+        assert "STALE" not in out["summary"]
+
+
+def test_check_features_image_stale_never_crashes(hg_home, monkeypatch):
+    """A blowing-up staleness probe degrades to image_stale=None, never an exception."""
+    monkeypatch.setattr("hexgraph.engine.mcp_tools._image_smoke",
+                        lambda image, argv, timeout=30: (True, "ok"))
+
+    def _boom(*a, **k):
+        raise RuntimeError("docker fell over")
+
+    monkeypatch.setattr("hexgraph.sandbox.runner.sandbox_image_staleness", _boom)
+    out = mcp_tools.check_features()
+    assert out["image_stale"] is None
+
+
 def test_check_features_angr_uses_the_angr_image(hg_home, monkeypatch):
     """angr's broken-state remediation points at the DEDICATED angr image, not the sandbox."""
     from hexgraph import settings as st

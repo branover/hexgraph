@@ -165,6 +165,101 @@ def docker_available() -> bool:
         return False
 
 
+def _image_created_epoch(image: str) -> float | None:
+    """The build time of a local docker image as a POSIX timestamp, or None.
+
+    Reads `docker image inspect <image> --format {{.Created}}` (an RFC-3339 / ISO-8601
+    timestamp like `2026-06-01T12:34:56.789012345Z`). Returns None when docker is absent,
+    the image isn't built, or the date can't be parsed — never raises. Docker reports
+    nanosecond precision and a trailing `Z`; Python's `datetime.fromisoformat` only handles
+    microseconds (and, before 3.11, not `Z`), so we normalise both before parsing."""
+    import shutil
+    from datetime import datetime, timezone
+
+    if not shutil.which("docker"):
+        return None
+    try:
+        proc = subprocess.run(
+            ["docker", "image", "inspect", image, "--format", "{{.Created}}"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    raw = (proc.stdout or "").strip()
+    if not raw:
+        return None
+    # Normalise: trailing 'Z' → '+00:00', and truncate sub-second precision to the
+    # 6 digits fromisoformat accepts (docker emits up to 9 / nanoseconds).
+    ts = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    if "." in ts:
+        head, _, tail = ts.partition(".")
+        frac = tail
+        tzpart = ""
+        for sign in ("+", "-"):
+            if sign in tail:
+                frac, tzpart = tail.split(sign, 1)
+                tzpart = sign + tzpart
+                break
+        ts = f"{head}.{frac[:6]}{tzpart}"
+    try:
+        dt = datetime.fromisoformat(ts)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _toolchain_source_mtime() -> float | None:
+    """The most-recent mtime among the sandbox image's TOOLCHAIN source inputs, or None.
+
+    The toolchain source is `docker/sandbox.Dockerfile` — the only thing whose change
+    requires rebuilding the image. The probes baked in by its single `COPY` are
+    DELIBERATELY excluded: probes are mounted read-only at run time (`PROBES_DIR`), so
+    editing/adding a probe needs no rebuild (CLAUDE.md is explicit). Returns None when the
+    Dockerfile can't be located (e.g. an installed wheel with no source checkout — the
+    Dockerfile isn't packaged), so staleness reads as 'unknown' rather than a false alarm.
+    Never raises."""
+    try:
+        from hexgraph.paths import repo_root
+
+        dockerfile = repo_root() / "docker" / "sandbox.Dockerfile"
+        if not dockerfile.is_file():
+            return None
+        return dockerfile.stat().st_mtime
+    except Exception:  # noqa: BLE001 — locating/statting source must never crash a health check
+        return None
+
+
+def sandbox_image_staleness(image: str | None = None) -> bool | None:
+    """Is the local sandbox image OLDER than its toolchain source (so a rebuild is due)?
+
+    Compares the image's build time (`docker image inspect … {{.Created}}`) against the
+    last-modified time of the toolchain source (`docker/sandbox.Dockerfile`). This is the
+    PROACTIVE counterpart to `meta_check_features` (which catches a broken/missing dep
+    REACTIVELY by probing the image at run time): here we flag, at setup time, that an
+    otherwise-present image predates the Dockerfile and silently lacks newer tools.
+
+    Tri-state, never raises:
+      * True  — the image is STALE (built before the Dockerfile's last edit); rebuild it.
+      * False — the image is FRESH (built at/after the Dockerfile's last edit).
+      * None  — UNKNOWN: docker absent, image not built, the date can't be read, or the
+                Dockerfile can't be located (an installed wheel with no source checkout).
+
+    Probes are NOT part of the comparison (they're mounted at run time, no rebuild needed)
+    — see `_toolchain_source_mtime`."""
+    image = image or sandbox_image()
+    created = _image_created_epoch(image)
+    if created is None:
+        return None
+    src_mtime = _toolchain_source_mtime()
+    if src_mtime is None:
+        return None
+    return created < src_mtime
+
+
 def _assert_network_gate(network_gate: str) -> None:
     """The runner's defense-in-depth egress re-check (on top of the caller's assert).
     `"build_fetch"` re-checks the SEPARATE bounded-fetch tier (features.build_fetch) — a

@@ -1560,8 +1560,12 @@ def check_features() -> dict:
     always-on static tools floss + yara have no gate, so they're checked unconditionally and
     report availability only. The check is LIGHTWEIGHT (a tiny in-image dep probe, --network
     none, no target, no analysis) and read-only. Returns {features: [{feature, gate, enabled,
-    state, detail, remediation?}], summary}. Run this in your orient step before reaching for
-    floss/yara or an opt-in tool (re_solve_*) so you don't burn turns against a broken feature."""
+    state, detail, remediation?}], summary, image_stale}. `image_stale` is a PROACTIVE hint
+    (tri-state: true = the sandbox image PREDATES docker/sandbox.Dockerfile so a rebuild is
+    due; false = up to date; null = unknown) — the per-feature checks above catch a missing
+    dep REACTIVELY, this catches an image that's merely old before a tool silently misbehaves.
+    Run this in your orient step before reaching for floss/yara or an opt-in tool (re_solve_*)
+    so you don't burn turns against a broken feature."""
     from hexgraph import settings
 
     rows: list[dict] = []
@@ -1601,7 +1605,20 @@ def check_features() -> dict:
         summary = f"all checked features available: {', '.join(available)}."
     else:
         summary = "no features available to check."
-    return {"features": rows, "summary": summary}
+
+    # Proactive staleness hint: is the sandbox image OLDER than its Dockerfile? This is
+    # orthogonal to the per-feature dep probes above (those catch a MISSING dep; this catches
+    # a merely-OLD image that may silently lack newer tools). Tri-state, never raises.
+    try:
+        from hexgraph.sandbox.runner import sandbox_image_staleness
+
+        image_stale = sandbox_image_staleness()
+    except Exception:  # noqa: BLE001 — the hint must never crash the read call
+        image_stale = None
+    if image_stale:
+        summary += (" The sandbox image is STALE (older than docker/sandbox.Dockerfile) — "
+                    "rebuild it: `just sandbox-build`.")
+    return {"features": rows, "summary": summary, "image_stale": image_stale}
 
 
 def get_schemas() -> dict:

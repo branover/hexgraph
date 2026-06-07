@@ -351,6 +351,67 @@ def test_run_setup_falls_back_when_no_tty(hg_home, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Proactive sandbox-image staleness warning (complements meta_check_features,
+# which catches a broken dep reactively — this warns when the image merely
+# predates docker/sandbox.Dockerfile). The staleness PROBE is unit-tested in
+# test_sandbox_staleness.py; here we cover the wizard's WARNING wiring.
+# ---------------------------------------------------------------------------
+
+
+def test_staleness_warning_when_stale(monkeypatch):
+    import hexgraph.setup_wizard as w
+
+    monkeypatch.setattr("hexgraph.sandbox.runner.sandbox_image_staleness", lambda *a, **k: True)
+    monkeypatch.setattr("hexgraph.sandbox.runner.sandbox_image", lambda: "hexgraph-sandbox:latest")
+    msg = w._sandbox_staleness_warning()
+    assert msg and "just sandbox-build" in msg
+    assert "older" in msg.lower()
+
+
+def test_staleness_warning_silent_when_fresh_or_unknown(monkeypatch):
+    import hexgraph.setup_wizard as w
+
+    for verdict in (False, None):
+        monkeypatch.setattr("hexgraph.sandbox.runner.sandbox_image_staleness", lambda *a, **k: verdict)
+        assert w._sandbox_staleness_warning() is None
+
+
+def test_staleness_warning_suppressed_when_rebuilding(monkeypatch):
+    import hexgraph.setup_wizard as w
+
+    # Even a STALE image is not flagged when this setup run is about to rebuild it —
+    # the staleness is about to be fixed, so a warning would be noise.
+    monkeypatch.setattr("hexgraph.sandbox.runner.sandbox_image_staleness", lambda *a, **k: True)
+    assert w._sandbox_staleness_warning(will_rebuild=True) is None
+
+
+def test_staleness_warning_never_raises(monkeypatch):
+    import hexgraph.setup_wizard as w
+
+    def _boom(*a, **k):
+        raise RuntimeError("docker fell over")
+
+    monkeypatch.setattr("hexgraph.sandbox.runner.sandbox_image_staleness", _boom)
+    assert w._sandbox_staleness_warning() is None  # swallowed, never propagates
+
+
+def test_non_interactive_setup_prints_staleness_warning(hg_home, monkeypatch, capsys):
+    import hexgraph.setup_wizard as w
+
+    # Sandbox already built (so the plan won't rebuild it), but it's STALE → warn.
+    monkeypatch.setattr(w, "_interactive_available", lambda: False)
+    monkeypatch.setattr(w, "docker_available", lambda: True)
+    monkeypatch.setattr(w, "_docker_image_exists", lambda tag: True)
+    monkeypatch.setattr(w, "run_build_step", lambda *a, **k: 0)
+    monkeypatch.setattr("hexgraph.sandbox.runner.sandbox_image_staleness", lambda *a, **k: True)
+    monkeypatch.setattr("hexgraph.sandbox.runner.sandbox_image", lambda: "hexgraph-sandbox:latest")
+    rc = w.run_setup(non_interactive=True)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "OLDER than" in out and "just sandbox-build" in out
+
+
+# ---------------------------------------------------------------------------
 # Coding-agent integration: MCP-server registration + VR-skill install
 # (the wizard's new optional step). The registration helpers in agent_setup
 # PERFORM the install by editing the agent's own config file directly, so they

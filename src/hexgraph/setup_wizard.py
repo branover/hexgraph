@@ -337,6 +337,30 @@ def run_build_step(key: str, *, cwd: str | None = None) -> int:
     return proc.returncode
 
 
+def _sandbox_staleness_warning(*, will_rebuild: bool = False) -> str | None:
+    """If the EXISTING sandbox image predates its Dockerfile, return a one-line warning
+    naming the fix; otherwise None. Proactive complement to `meta_check_features` (which
+    catches a broken/missing dep reactively at run time) — here we warn at setup time that
+    an otherwise-present image is older than the toolchain source and may silently lack
+    newer tools (the FLOSS/YARA-dead-in-a-stale-image trap from the Phase-5 eval).
+
+    `will_rebuild=True` (this setup run is about to rebuild the sandbox anyway) suppresses
+    the warning — the staleness is about to be fixed, so flagging it would just be noise.
+    Never raises (the staleness probe is itself tri-state and swallows errors)."""
+    if will_rebuild:
+        return None
+    try:
+        from hexgraph.sandbox.runner import sandbox_image, sandbox_image_staleness
+
+        if sandbox_image_staleness() is True:
+            return (f"the sandbox image '{sandbox_image()}' is OLDER than "
+                    "docker/sandbox.Dockerfile — it may be missing newer tools (e.g. FLOSS/"
+                    "YARA). Rebuild it: `just sandbox-build`.")
+    except Exception:  # noqa: BLE001 — a staleness hint must never derail setup
+        return None
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Interactive rendering (Rich + questionary). Imported lazily so the headless path
 # (apply_*, default_plan, build_plan) has zero hard dependency on them in tests.
@@ -435,6 +459,11 @@ def _run_non_interactive(state: DetectedState, *, reason: str, rebuild: bool) ->
         prepare_database()
     except Exception as exc:  # noqa: BLE001
         print(f"  (!) DB init note: {exc}")
+    # Proactive staleness warning (only when we DIDN'T just (re)build the sandbox).
+    stale = _sandbox_staleness_warning(will_rebuild="sandbox" in plan.build_keys
+                                       or "sandbox_ghidra" in plan.build_keys)
+    if stale:
+        print(f"  (!) {stale}")
     print("✓ HexGraph baseline ready.  Run an interactive setup any time with: hexgraph setup")
     print("  Start it with:  just serve")
     return rc
@@ -712,5 +741,10 @@ def _run_interactive(state: DetectedState, *, rebuild: bool) -> int:  # pragma: 
     if any(by_key[k].policy_changing for k in selected_set):
         next_steps += ("\n[yellow]You enabled policy-relaxing features.[/yellow] Targets are "
                        "still confined to the locked-down sandbox; review the implications above.")
+    # Proactive staleness warning (only when we DIDN'T just (re)build the sandbox).
+    stale = _sandbox_staleness_warning(will_rebuild="sandbox" in plan.build_keys
+                                       or "sandbox_ghidra" in plan.build_keys)
+    if stale:
+        next_steps += f"\n\n[yellow]⚠ {stale}[/yellow]"
     console.print(Panel(next_steps, title="Done", border_style="green", expand=True))
     return rc
