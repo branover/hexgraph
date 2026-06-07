@@ -245,6 +245,24 @@ entries reference them by name.
 - Principle: Ghidra is an optional, gated seam.
 - Prereq: `features.ghidra` = bridge, a reachable Ghidra (intended; assessment notes if unverifiable offline).
 
+**TGT-12 — One-click promote a recon import / export to a node**
+- Steps: select a byte target → in its NodeInspector, under **Imports** or **Exported functions**, click the
+  `+` on an entry (e.g. `strcpy`).
+- Functional: that entry becomes a graph node WITHOUT decompiling — an **import → a `symbol` node**, an
+  **export → a `function` node** — wired `contains` to the target; the chip flips to a ✓ (added); the graph
+  node count goes up and the new node's type appears in the legend. Both the Imports and the Exported-functions
+  lists carry the same `· click + to add as a node` affordance (previously only exports did).
+- 🔌 Backend: `POST /api/projects/{id}/nodes` (`graph_create_node`) — the same path the agent uses. The node
+  **auto-enriches** on creation (`get_or_create_node` → `apply_facts_for_node`): a promoted import that a prior
+  tool already flagged dangerous joins its `is_sink` tag; a function joins any waiting prototype/address. Verify
+  the node exists in `/graph/{id}` with the right `node_type`.
+- Qualitative: promoting is one click, mirroring the export affordance exactly (Consistency); re-clicking an
+  already-added entry is a no-op disabled chip (Forgiveness); a bare symbol with no prior analysis comes in
+  plain rather than mislabeled (Honesty — auto-enrichment never *judges*).
+- Principle: anything recon surfaced is one click from the curated graph; promotion is lightweight and
+  forward-enriching.
+- Prereq: a target whose recon facts include imports/exports.
+
 ---
 
 ## SURFACE 2 — Graph canvas (center, default view)
