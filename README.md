@@ -131,9 +131,10 @@ an agent loop. The model asks for sandboxed tools (decompile, strings, imports, 
 executes them, and the loop continues until the model emits findings. You triage the results and can
 one-click whatever follow-up it suggests.
 
-The second is a **coding agent over MCP**. Running `hexgraph mcp install` registers HexGraph as an MCP
-server, and Claude Code, Codex, or gemini-cli can then inspect targets and populate the graph on their
-own through the same sandboxed tools. The details are in **[docs/mcp.md](docs/mcp.md)**.
+The second is a **coding agent over MCP**. `hexgraph mcp install` prints the steps to register
+HexGraph as an MCP server (the setup wizard can also do it for you), and Claude Code, Codex, or
+gemini-cli then inspect targets and populate the graph on their own through the same sandboxed tools.
+The details are in **[docs/mcp.md](docs/mcp.md)**.
 
 In both cases the model only ever directs the work; HexGraph runs the tools. A plain API key is enough
 on its own, and no external coding agent is required.
@@ -195,7 +196,7 @@ hexgraph serve [--host H] [--port P]          # loopback-only API/UI (default 12
 
 The task types are `recon`, `static_analysis`, `reverse_engineering`, `pattern_sweep`, and
 `harness_generation`, plus `fuzzing`, `poc`, and `agent_delegate` once you enable them. Web surfaces
-add `surface_recon` and `web_recon`. The full configuration story (environment variables,
+add `surface_recon`, `web_discover`, and `web_recon`. The full configuration story (environment variables,
 `config.toml`, and how the layers override each other) is in **[docs/setup.md](docs/setup.md)**.
 
 ---

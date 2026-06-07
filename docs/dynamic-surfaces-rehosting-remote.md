@@ -12,9 +12,11 @@ both the binary you reversed and the live service it serves. The design is writt
 Alongside byte targets, there are surfaces that hold no bytes of their own.
 
 A **`web_app` target** is a running web surface reached over a Channel (a `base_url`). A
-`surface_recon` task crawls it into `endpoint` and `param` nodes, and where it can identify the code
-behind a route, it draws a `routes_to` edge from the endpoint to its handler `function`. That edge is
-the bridge between the static and dynamic views.
+`surface_recon` task materializes a supplied route spec into `endpoint` and `param` nodes offline (no
+egress); a `web_discover` task instead crawls the live surface to find routes from links, forms, and a
+common-path probe. Either way, where it can identify the code behind a route, it draws a `routes_to`
+edge from the endpoint to its handler `function`. That edge is the bridge between the static and
+dynamic views.
 
 A **`service` target** is a bare, non-HTTP network service: a bind shell, a vendor binary's control
 protocol, a custom daemon, anything reached over a raw TCP or UDP Channel `{kind, host, port}`, with no
@@ -28,7 +30,7 @@ protocol, since `remote` carries SSH/telnet shell semantics that a socket servic
 ## Bounded, audited live assessment (`features.network`)
 
 Live assessment is gated by `features.network`, which is off by default. With it on, HexGraph can talk
-to the surface through an `net_http_request` tool (with a `session` cookie jar that persists across calls)
+to the surface through a `net_http_request` tool (with a `session` cookie jar that persists across calls)
 and a web-flavored `finding_verify_poc`, whose oracle is the same unforgeable `{{NONCE}}` token used for binary
 PoCs, plus `body_contains` and `status` checks.
 
@@ -54,10 +56,15 @@ hexgraph rehost <firmware-target> [--brand <hint>]
 
 `rehost` auto-selects the emulator by image type (`select_rehoster`): qemu+KVM for a full-OS disk image
 (IoTGoat's x86 OpenWrt `.img`, say), or FirmAE for a vendor blob (squashfs, cramfs, and the like).
-Booting needs `features.rehost`; assessing the running device with `surface_recon`, `net_http_request`, or
+Booting needs `features.rehost`; assessing the running device with `web_discover`, `net_http_request`, or
 `finding_verify_poc` needs `features.network`. The probe joins the emulator container's netns so it can reach
 the device's private IP. Build the rehosting images first with `just firmae-build` (privileged, with
 `/dev/net/tun`) or `just qemu-build` (which needs `--device /dev/kvm`).
+
+When the booted device answers on SSH or telnet, rehosting also auto-registers it as a `remote` child
+target (pinned to the same emulator netns), so you can drive the live device, not just its extracted
+rootfs; using that child still needs `features.remote`. Any other ports it leaves open are recorded for
+raw-TCP testing with `net_tcp_request`/`finding_verify_poc`.
 
 For a quick guided run, `just vulnrouter` stands up a live vulnrouter web target and a project pointed
 at it.
@@ -68,7 +75,8 @@ The live-remote tier (`TIER_LIVE_REMOTE`, with `policy.assert_allows_remote()` a
 `remote_scope(host, port)`) covers a physical box on the bench when you have no firmware in hand. A
 `remote` target reached over SSH or telnet lets the agent run the same read-only analysis it would on a
 rootfs: `net_remote_list_files`, `net_remote_read_file`, and `net_remote_run`, all from a fixed read-only tool
-allowlist, with no arbitrary shell.
+allowlist, with no arbitrary shell. The lone exception is `net_remote_launch`, which starts a service
+that didn't auto-start (by binary path plus shell-quoted args) so its socket can be tested live.
 
 Egress is pinned to the single operator-authorized host (and it can be any host, since that is the
 operator's responsibility here, unlike the loopback-and-private web tier) and is audited. Credentials

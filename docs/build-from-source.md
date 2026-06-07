@@ -82,8 +82,9 @@ ccache make rebuilds both deterministic and incremental).
 - **Bounded dependency fetch (`features.build_fetch`, off by default).** When a build genuinely needs
   to fetch dependencies, enabling this raises a separate, audited, allowlisted fetch phase: a distinct
   sandbox container with the network on but bounded to a registry allowlist (crates.io, pypi.org,
-  github.com, a distro mirror, all operator-extendable but never "any host", enforced by an egress
-  backstop that drops any off-list connect). It produces a hash-pinned lockfile and an SBOM-lite.
+  registry.npmjs.org, github.com, a Debian mirror, all operator-extendable but never "any host",
+  enforced by an egress backstop that drops any off-list connect). It produces a hash-pinned lockfile
+  and an SBOM-lite.
   HexGraph then drops the network and runs the compile `--network none` against the snapshotted deps.
   This is fetch-then-offline, in different containers, so a fetched dep can be recorded but never run
   during the compile. It has its own gate and is never folded into `features.network`.

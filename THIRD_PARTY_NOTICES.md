@@ -57,7 +57,7 @@ images. None of them is linked into the HexGraph host process.
 | **paramiko** (SSH for remote-device tier) | https://github.com/paramiko/paramiko | LGPL-2.1+ |
 | **afl-cov** | https://github.com/vanhauser-thc/afl-cov | GPL-2.0 |
 | **cstruct** (rehosting image) | https://github.com/andreax79/python-cstruct | MIT |
-| **yara-python** (YARA pattern matcher; opt-in `features.yara`) | https://github.com/VirusTotal/yara-python | Apache-2.0 (bundles libyara, BSD-3-Clause) |
+| **yara-python** (YARA pattern matcher; always-on static tool) | https://github.com/VirusTotal/yara-python | Apache-2.0 (bundles libyara, BSD-3-Clause) |
 
 ---
 

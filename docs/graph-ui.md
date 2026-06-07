@@ -12,11 +12,13 @@ Each row has a launcher, where you pick a task type and, on the mock backend, a 
 **Run**. Firmware targets also show a browsable unpacked filesystem, and any file in it can be promoted
 to a child target.
 
-The center pane switches between two views with a segmented control. The **Graph** view renders the
+A toolbar switches the center pane between several views. The **Graph** view (the default) renders the
 targets, functions, sockets, hypotheses, harnesses, and findings as typed nodes joined by typed edges
 (`contains`, `calls`, `taints`, `listens_on`, `built_from`, `located_in`, `harnesses`, and more),
 drawn offline with Cytoscape.js. Click an edge and you see its attributes: call sites, ports,
-addresses. The **Source** view is the in-browser IDE, covered in [build-from-source.md](build-from-source.md).
+addresses. **Map** is a finding-weighted territory overview, **Table** a sortable/filterable list of
+nodes and edges that scales to pathological graphs, and **Matrix** a cross-target adjacency view. The
+**Source** view is the in-browser IDE, covered in [build-from-source.md](build-from-source.md).
 
 On the right is the **findings** panel. Every finding is typed (vulnerability, poc, recon, harness,
 fuzz_crash, and so on) and filterable; click one to see its evidence, its reasoning, any verification,
@@ -101,9 +103,11 @@ sort and filter controls in the findings panel.
 
 ## Mock scenarios
 
-On the mock backend, the launcher offers a set of scenarios on `sbin/httpd`:
-`static_analysis/critical_overflow` (a critical overflow plus a `related_to` edge to `libupnp.so`),
-`/no_findings`, `/malformed_then_valid` (which exercises the JSON-repair retry), `reverse_engineering`,
-`pattern_sweep` (a sibling match), `error_rate_limit` and `error_timeout` (graceful failure), and a
-default scenario that always succeeds. For the three fidelity layers and the contract test, see
+On the mock backend, the launcher's scenario picker drives a `static_analysis` task down a chosen
+path: `critical_overflow` (the default, on a templated `/sbin/httpd` target, with one critical overflow
+finding plus follow-ups), `agentic_overflow` (the same finding via a tool-use loop), `no_findings`,
+`malformed_then_valid` (which exercises the JSON-repair retry), and `error_rate_limit` /
+`error_timeout` (graceful failure). Other task types carry their own canned scenarios: a `pattern_sweep`
+produces the sibling match that draws a `related_to` edge to `libupnp.so`, and a `poc` task returns a
+runnable `command_injection` spec. For the three fidelity layers and the contract test, see
 [design/mock-llm-provider.md](design/mock-llm-provider.md).

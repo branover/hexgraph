@@ -15,10 +15,11 @@ Every finding's evidence records a two-part ladder, a **standard** crossed with 
 | **`code_present`** | the vulnerable code is present (the floor) | lab-confirmed in isolation: the bug fires, but the input path is not yet established |
 | **`input_reachable`** | a source-to-sink path is argued over the typed graph | reached *and* triggered end to end through the live input boundary |
 
-An optional access qualifier (`unauthenticated`, `authenticated`, and so on) sharpens it further. The
-UI renders all of this as an assurance chip on every finding and crash, and green marks reachability
-through the live boundary. The point of the four rungs is to let you sort a backlog by how real each
-claim is, rather than treating a static guess and a verified PoC as if they were equals.
+A precondition qualifier (`unauthenticated`, `requires_credentials`, or `unspecified`) sharpens it
+further by stating *for whom* the claim holds. The UI renders all of this as an assurance chip on
+every finding and crash, and green marks reachability through the live boundary. The point of the four
+rungs is to let you sort a backlog by how real each claim is, rather than treating a static guess and a
+verified PoC as if they were equals.
 
 The rationale and the full oracle taxonomy are in
 [design/design-verification-oracles.md](design/design-verification-oracles.md).
