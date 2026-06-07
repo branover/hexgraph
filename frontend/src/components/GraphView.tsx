@@ -44,9 +44,15 @@ export const EDGE_C: Record<string, string> = {
   instance_of_pattern: "#f0883e", links_against: "#39c5cf", similar_to: "#8b5cf6",
   taints: "#ff7b72", bypasses: "#ff5d6c", listens_on: "#f778ba", connects_to: "#f0a0d0",
   routes_to: "#2dd4bf", references: "#46506a", derived_from: "#8b5cf6",
+  // a YARA rule hit (target|node → pattern node). Violet to echo the purple `pattern`
+  // node fill, distinct from instance_of_pattern's orange so the two pattern relations
+  // read apart on the canvas.
+  matches_rule: "#bc8cff",
 };
 // Semantic edges whose type/attrs are the point — always labelled, not just on hover.
-const ALWAYS_LABEL = new Set(["taints", "bypasses", "listens_on", "connects_to", "routes_to"]);
+// matches_rule (the YARA→target relationship) is a typed semantic edge whose meaning is the
+// label — without it the canvas only showed a faint, anonymous hairline to the pattern node.
+const ALWAYS_LABEL = new Set(["taints", "bypasses", "listens_on", "connects_to", "routes_to", "matches_rule"]);
 // Structural / scaffolding edges (the gray cobweb): recede hardest at rest so the colored
 // semantic edges separate out. (containment, location, references, build provenance.)
 const STRUCTURAL = new Set([
@@ -56,7 +62,7 @@ const STRUCTURAL = new Set([
 // Semantic / security edges carry the finding — sit a touch stronger at rest.
 const SEMANTIC = new Set([
   "calls", "taints", "bypasses", "routes_to", "listens_on", "connects_to",
-  "links_against", "similar_to", "related_to", "instance_of_pattern", "fuzzed_by",
+  "links_against", "similar_to", "related_to", "instance_of_pattern", "matches_rule", "fuzzed_by",
 ]);
 const RESOLVED = new Set(["confirmed", "dismissed", "reported"]);
 // Severity rank for the per-room rollup (worst finding inside a collapsed room).
@@ -279,9 +285,18 @@ export default function GraphView({
     // src=finding → dst=node/target (engine/findings.py), so the finding is e.source. (Hypothesis
     // `about` edges go node→target — guard on the source being a finding so they don't pollute.)
     const findingAbout = new Map<string, string[]>(); // findingId → [nodeId/targetId]
+    // A hypothesis/pattern node carries no `target_id` of its own, but a hypothesis is `about`
+    // a target (node→target `about` edge, engine/hypotheses.py). Without placing it, it floats
+    // as a LOOSE node — on a single-binary graph that stranded the lone hypothesis far below the
+    // room, leaving a big dead gap (issue 5.1). Map each non-finding node to the target it's
+    // `about` so we can nest it under that target's room instead of letting it float.
+    const nodeAboutTarget = new Map<string, string>(); // nodeId → targetId
     for (const e of graph.edges) {
-      if (e.type === "about" && byId.get(e.source)?.type === "finding") {
+      const src = byId.get(e.source);
+      if (e.type === "about" && src?.type === "finding") {
         (findingAbout.get(e.source) ?? findingAbout.set(e.source, []).get(e.source)!).push(e.target);
+      } else if (e.type === "about" && src?.type === "node" && byId.get(e.target)?.type === "target") {
+        nodeAboutTarget.set(e.source, e.target);
       }
     }
 
@@ -324,6 +339,9 @@ export default function GraphView({
         if (n.type !== "node") continue;
         if (n.node_type === "socket" && !n.target_id) { loose.add(n.id); continue; } // bus lane
         if (n.target_id && byId.has(n.target_id)) parentOf.set(n.id, "room:" + n.target_id);
+        // A target_id-less node (hypothesis/pattern) that is `about` a single target nests in
+        // that target's room rather than floating loose (issue 5.1).
+        else if (nodeAboutTarget.has(n.id) && byId.has(nodeAboutTarget.get(n.id)!)) parentOf.set(n.id, "room:" + nodeAboutTarget.get(n.id)!);
         else loose.add(n.id);
       }
       for (const n of graph.nodes) {
@@ -677,19 +695,35 @@ export default function GraphView({
       ...metaShown.filter(endpointsPresent),
     ];
 
-    const cy = cytoscape({
-      // Scroll-to-zoom sensitivity (issue 5, round 2). 0.25→0.6 (PR #89) was STILL sluggish —
-      // a wheel notch barely moved the scale. 1.4 makes a notch a clearly-felt zoom step while
-      // staying short of the jumpy/overshooting feel a value ≥2 gives. NOTE: cytoscape reads
-      // wheelSensitivity ONLY at construction (it's ignored if set on the live instance later),
-      // so this MUST live here in the cytoscape() options — it's the single source of truth and
-      // nothing reassigns cy.wheelSensitivity afterwards.
+    // Scroll-to-zoom sensitivity (issue 5, round 2). 0.25→0.6 (PR #89) was STILL sluggish —
+    // a wheel notch barely moved the scale. 1.4 makes a notch a clearly-felt zoom step while
+    // staying short of the jumpy/overshooting feel a value ≥2 gives. NOTE: cytoscape reads
+    // wheelSensitivity ONLY at construction (it's ignored if set on the live instance later),
+    // so this MUST live in the cytoscape() options — it's the single source of truth and
+    // nothing reassigns cy.wheelSensitivity afterwards.
+    //
+    // Any wheelSensitivity ≠ 1 makes cytoscape emit a one-line console.warn at construction
+    // ("You have set a custom wheel sensitivity…") — fired on EVERY graph mount (issue 5.4b).
+    // We deliberately keep the tuned 1.4 feel (GRAPH-05), so silence only THAT exact warning,
+    // and only for the duration of the cytoscape() call, restoring console.warn immediately
+    // after (in a finally) so no other warning is ever swallowed.
+    const realWarn = console.warn;
+    console.warn = (...args: any[]) => {
+      if (typeof args[0] === "string" && args[0].includes("wheel sensitivity")) return;
+      realWarn.apply(console, args);
+    };
+    let cy: cytoscape.Core;
+    try {
+    cy = cytoscape({
       container: ref.current, elements, wheelSensitivity: 1.4,
       style: [
         {
           selector: "node",
           style: {
-            label: "data(label)", color: "#cdd5e2", "font-size": "9px", "font-weight": 600,
+            // 9→11px (issue 5.1): leaf labels (function/string/sink/…) read tiny at the default
+            // frame of a single-binary graph; a 2px bump makes them legible without crowding —
+            // the hubs/anchors/rooms set their own larger sizes below, so this only lifts leaves.
+            label: "data(label)", color: "#cdd5e2", "font-size": "11px", "font-weight": 600,
             // Floor the resting label opacity at 0.5 so even a degree-2 leaf is LABELLED once
             // it's resolvable (issue 6: low-degree functions/endpoints/strings were mapped to
             // text-opacity 0 and stayed anonymous at every zoom). Hubs still ramp brighter.
@@ -906,6 +940,9 @@ export default function GraphView({
         { selector: "edge[filtered = 1]", style: { opacity: 0.06, label: "" } },
       ],
     });
+    } finally {
+      console.warn = realWarn;   // restore immediately — only the construction warn was masked
+    }
     // An edge is filtered if either endpoint faded out (keeps the fade consistent).
     cy.batch(() => cy.edges().forEach((e) => {
       if (e.source().data("filtered") === 1 || e.target().data("filtered") === 1) e.data("filtered", 1);
@@ -1060,9 +1097,32 @@ export default function GraphView({
         // LARGE/PATHOLOGICAL frame is the full set of labelled cards filling the pane.
         // On an explicit COLLAPSE, GLIDE the re-fit (issue 3) so the view eases back to the
         // skeleton instead of snapping; a true first-mount fits instantly (nothing to glide from).
+        //
+        // Issue 5.1: a SMALL/single-binary graph used to fit with the same 36px letterbox the
+        // big skeleton uses, so a handful of curated nodes left huge dead vertical space and
+        // leaf labels read tiny at the resulting low zoom. For the small/medium tier we fit
+        // TIGHTER (smaller padding → content fills more) and then enforce a comfortable minimum
+        // zoom so a single binary's call graph fills the canvas with readable leaves; we never
+        // over-zoom (cap at LOD_NEAR + a touch, so the NEAR full-detail band is reached) and
+        // never enlarge an already-larger fit. The large/skeleton frame keeps its calm 36px
+        // letterbox unchanged.
         const collapsing = justCollapsed.current; justCollapsed.current = false;
-        if (collapsing) cy.animate({ fit: { eles: cy.elements(":visible"), padding: 36 } }, { duration: 340, easing: "ease-in-out-cubic" });
-        else cy.fit(cy.elements(":visible"), 36);
+        const eles = cy.elements(":visible");
+        const small = tier !== "large";
+        const pad = small ? 24 : 36;
+        const fitSmall = () => {
+          cy.fit(eles, pad);
+          // After the fit-to-frame, if the content is small enough that it sits at a low zoom
+          // (tiny leaves), zoom up to a readable floor — but never past a sensible ceiling, and
+          // never below the fit zoom (don't shrink content that already fills the pane).
+          const z = cy.zoom();
+          const floor = 0.95, ceil = 1.6;
+          if (z < floor) cy.zoom({ level: Math.min(ceil, floor), renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
+          cy.center(eles);
+        };
+        if (collapsing) cy.animate({ fit: { eles, padding: 36 } }, { duration: 340, easing: "ease-in-out-cubic" });
+        else if (small) fitSmall();
+        else cy.fit(eles, 36);
       }
       justCollapsed.current = false;
       applyLod();

@@ -481,6 +481,21 @@ export default function Workspace() {
     if (!text.trim()) { setResults(null); return; }
     searchTimer.current = setTimeout(() => { if (projectId) api.search(projectId, text).then(setResults).catch(() => {}); }, 200);
   };
+  // Enter in the toolbar search lands the TOP result via the SAME reveal path the popover
+  // click uses (focusOn for a target/node, viewFinding for a finding) and closes the popover —
+  // so "find X and show me its world" is one keystroke (SEARCH-01). Ranking mirrors the
+  // popover order: targets, then graph nodes, then findings. Awaits the debounced fetch if the
+  // user hits Enter before results have landed, so the first Enter never no-ops.
+  const revealTopResult = async () => {
+    if (!projectId || !q.trim()) return;
+    let r = results;
+    if (!r) { try { r = await api.search(projectId, q); } catch { return; } }
+    const top = r?.targets?.[0] ?? r?.nodes?.[0];
+    const topFinding = r?.findings?.[0];
+    setResults(null); setQ("");
+    if (top) focusOn(top.id);
+    else if (topFinding) viewFinding(topFinding.id);
+  };
   const exportGraph = () => {
     if (!graph || !detail) return;
     const blob = new Blob([JSON.stringify(graph, null, 2)], { type: "application/json" });
@@ -862,7 +877,11 @@ export default function Workspace() {
             {/* search — grows to fill the row */}
             <div className="input" style={{ flex: 1, minWidth: 180 }}>
               <Icon name="search" size={14} />
-              <input placeholder="Search functions, strings, findings…" value={q} onChange={(e) => doSearch(e.target.value)} />
+              <input placeholder="Search functions, strings, findings…" value={q} onChange={(e) => doSearch(e.target.value)}
+                     onKeyDown={(e) => {
+                       if (e.key === "Enter") { e.preventDefault(); void revealTopResult(); }
+                       else if (e.key === "Escape") { setResults(null); setQ(""); }
+                     }} />
             </div>
             <div className="tsep" />
             {/* create */}

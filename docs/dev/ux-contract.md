@@ -76,7 +76,9 @@ entries reference them by name.
 - 🔌 Backend: `GET /api/projects` then a per-project `GET /api/projects/{id}` to enrich counts. The
   counts must be *real* (match the DB), not placeholders.
 - Qualitative: cards land calm, scannable; skeleton cards while loading (Feedback); the grid breathes
-  rather than cramming (Aesthetics).
+  rather than cramming (Aesthetics). Cards are a **uniform, capped width** (they don't stretch to fill a
+  partly-full row), and the grid is **left-aligned**, so a lone trailing card on the last row reads as one
+  more card at the left — never a wide stretched box beside an awkward empty column (Aesthetics).
 - Principle: a calm table-of-contents entry point.
 - Prereq: ≥1 project exists.
 
@@ -277,6 +279,10 @@ loud only where you are looking; every node/edge/color kept, mute never deletes.
 - Functional: SMALL/MEDIUM = the full graph (rooms auto-expanded). LARGE/PATHOLOGICAL = skeleton-collapsed
   to ~10–25 labeled, finding-weighted *rooms*. REAL (skeleton mode) = rooms only, a "skeleton · N rooms" badge
   + a hint to double-click a room to load its interior; the browser never holds ~13k nodes.
+  **SMALL/single-binary specifically** fits TIGHTER (smaller letterbox) and enforces a comfortable minimum
+  zoom so the curated content *fills* the canvas with readable leaf labels — it must NOT open as a lone room
+  card up top with huge dead vertical space below (the issue-5.1 failure). A `target_id`-less node that is
+  `about` a target (e.g. a hypothesis) nests INSIDE that target's room rather than floating loose far below it.
 - 🔌 Backend: `GET /graph/{id}/size` decides skeleton vs full; skeleton mode uses `GET /graph/{id}/skeleton`.
 - Qualitative (the headline metric): within ~3 seconds the eye should *land* on the firmware root and the
   red/orange high-severity rollups; the frame feels as calm as a MEDIUM graph regardless of DB size
@@ -319,7 +325,9 @@ loud only where you are looking; every node/edge/color kept, mute never deletes.
 **GRAPH-05 — Scroll-to-zoom responsiveness**
 - Steps: scroll the wheel over the canvas.
 - Functional: zooms in/out; a single notch is a clearly-felt step (not sluggish, not jumpy/overshooting).
-- Qualitative: the responsiveness feels right to a hand (Overall) — `wheelSensitivity` tuned to ~1.4.
+- Qualitative: the responsiveness feels right to a hand (Overall) — `wheelSensitivity` tuned to ~1.4. The
+  tuned value no longer logs cytoscape's "custom wheel sensitivity" **console warning** on every graph mount
+  (it's silenced for the construction call only, so no other warning is ever swallowed) — a clean console (Polish).
 - Principle: direct manipulation feels immediate.
 - Prereq: any graph.
 
@@ -578,6 +586,17 @@ loud only where you are looking; every node/edge/color kept, mute never deletes.
   while interiors fetch.
 - Qualitative: honest about what's loaded (Feedback) — skeleton shows ROOM count, not the not-loaded node count.
 - Prereq: any graph; a skeleton for the loading badge.
+
+**GRAPH-39 — YARA `matches_rule` edge labeled on canvas**
+- Steps: open a project that ran a YARA sweep/scan (it has `pattern` nodes + `matches_rule` edges from the
+  scanned target to them).
+- Functional: the YARA→target relationship draws as a **violet, labeled `matches_rule` edge** (always-labeled,
+  like the other typed semantic edges) — NOT a faint anonymous hairline that only exists in data/Table. It's a
+  distinct color from `instance_of_pattern` (orange) so the two pattern relations read apart, and it appears in
+  the legend below the canvas and toggles with the semantic edge-class layer.
+- Qualitative: the rule-hit relationship is legible at a glance, consistent with every other typed edge (Consistency).
+- Principle: a meaningful typed edge is a labeled, colored canvas edge — not a data-only relationship.
+- Prereq: a project with `matches_rule` edges (a YARA sweep result).
 
 ---
 
@@ -1317,13 +1336,18 @@ stored.
 - Prereq: egress events (the seed records allowed + denied).
 
 **SEARCH-01 — Toolbar search → focus / view finding**
-- Steps: type in the toolbar search (functions / strings / findings / targets).
+- Steps: type in the toolbar search (functions / strings / findings / targets). Either CLICK a result, or
+  press **Enter** to take the top result.
 - Functional: a results popover grouped by kind; picking a target/node focuses it in the graph; picking a
-  finding opens its Inspector; a coverage note shows.
-- 🔌 Backend: `GET` search (debounced); verify results match.
+  finding opens its Inspector; a coverage note shows. **Pressing Enter** lands the TOP result via the SAME
+  reveal path (focus a target/node, or open a finding's Inspector), **closes the popover, and clears the
+  query** — it must not leave the popover open and the focus un-landed (the issue-5.3 failure). Esc clears
+  the search.
+- 🔌 Backend: `GET` search (debounced); verify results match. (Enter awaits the in-flight fetch if pressed
+  before results land, so the first Enter never no-ops.)
 - Qualitative: search RANKS nodes/targets first and DRIVES focus (not just a passive ring) — the
   search-drives-the-graph promise; nodes inside a collapsed room auto-expand to land the focus.
-- Principle: "find X and show me its world" is one action.
+- Principle: "find X and show me its world" is one action — by click OR by Enter.
 - Prereq: a graph with searchable entities.
 
 ---
