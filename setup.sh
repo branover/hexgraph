@@ -13,6 +13,11 @@
 #   ./setup.sh --yes      # non-interactive: accept the static-only defaults (CI-safe)
 # Any arguments are passed straight through to `hexgraph setup` (e.g. --yes, --rebuild).
 
+# We use bash-only features below (BASH_SOURCE, the source-vs-exec guard). The shebang
+# already selects bash for `./setup.sh`, but re-exec under bash if someone runs it as
+# `sh setup.sh` so it doesn't die on a "Bad substitution".
+if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
+
 set -euo pipefail
 
 say() { printf '\n\033[1m>> %s\033[0m\n' "$*"; }

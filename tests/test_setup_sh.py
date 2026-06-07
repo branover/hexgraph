@@ -58,8 +58,27 @@ fi
 exit 0
 """
 
+# A `python3` whose `-m venv` builds a venv but WITHOUT a pip (the distro-ships-python3-venv-
+# without-ensurepip case). Drives the guard's "created .venv but it has no pip" die path.
+FAKE_PYTHON3_NO_PIP = r"""#!/usr/bin/env bash
+if [ "${1:-}" = "-m" ] && [ "${2:-}" = "venv" ]; then
+    echo "venv ${3}" >> "$VENV_CALLS"
+    mkdir -p "${3}/bin"
+    cat > "${3}/bin/python" <<'PYEOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = "-m" ] && [ "${2:-}" = "pip" ]; then echo "No module named pip" >&2; exit 1; fi
+exit 0
+PYEOF
+    chmod +x "${3}/bin/python"
+    exit 0
+fi
+exit 0
+"""
 
-def _run_ensure_venv(workdir: Path) -> tuple[subprocess.CompletedProcess[str], Path]:
+
+def _run_ensure_venv(
+    workdir: Path, python3_body: str = FAKE_PYTHON3
+) -> tuple[subprocess.CompletedProcess[str], Path]:
     """Source setup.sh and run `ensure_venv` in `workdir` with a stubbed python3 on PATH.
 
     Returns the completed process plus the path to the file recording `python3 -m venv` calls
@@ -68,7 +87,7 @@ def _run_ensure_venv(workdir: Path) -> tuple[subprocess.CompletedProcess[str], P
     fakebin = workdir / "fakebin"
     fakebin.mkdir()
     py = fakebin / "python3"
-    py.write_text(FAKE_PYTHON3)
+    py.write_text(python3_body)
     py.chmod(0o755)
 
     venv_calls = workdir / "venv_calls.log"
@@ -133,6 +152,16 @@ def test_rebuilds_directory_only_venv(tmp_path: Path):
     assert proc.returncode == 0, proc.stderr
     assert venv_calls.read_text().count("venv ") == 1
     assert (tmp_path / ".venv" / "bin" / "pip").exists()
+
+
+def test_errors_clearly_when_created_venv_has_no_pip(tmp_path: Path):
+    """If `python3 -m venv` succeeds but produces no pip (a distro shipping python3-venv
+    without ensurepip), the guard must fail loudly with a fix hint rather than letting the
+    next line die obscurely on `.venv/bin/pip install`."""
+    proc, venv_calls = _run_ensure_venv(tmp_path, python3_body=FAKE_PYTHON3_NO_PIP)
+    assert proc.returncode != 0  # die'd
+    assert "no pip" in proc.stderr.lower()
+    assert venv_calls.read_text().count("venv ") == 1  # it did attempt to build
 
 
 def test_leaves_healthy_venv_untouched(tmp_path: Path):
