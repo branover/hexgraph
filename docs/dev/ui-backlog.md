@@ -879,3 +879,37 @@ active-lens badge (the view diverged).
 surfacing of the skeleton rather than a bespoke read-only territory canvas (the design sanctions this:
 "Map = the §1 skeleton given a name"); a richer no-intra-edges Map canvas could be a later polish. The
 1.16 MB JS bundle warning is pre-existing (code-splitting is a separate cleanup).
+
+## Graph-curation UX cluster + tool-ergonomics batch — from the Phase 5 eval (2026-06-07)
+
+From the Phase 5 tool evaluation (a VR agent doing real RE through the MCP tools + a simulated-user Playwright UI assessment) plus a design discussion with the owner. **Three of the four cluster items already shipped** (#183 auto-confirm naming, #184 truncation marker + `max_chars`, #185 solver `minimal_input`/`constrained_len` + finding category; also #177 reproducer render + mitigation badges, #180 Settings UI, #181 `meta_check_features`, #182 ungate FLOSS/YARA, #178 YARA honesty). This section is the **REMAINING** work, with enough design to implement cold. Shared theme: read/curate over machinery that ALREADY exists (the enrichment index, `Observation.node_refs`, `highlight.ts`, the `calls` edges) — little new backend, no storage/schema change.
+
+### 1. One-click promote of tool-discovered symbols  [M]
+Today only `target.metadata.exports` is one-click-promotable (`NodeInspector.tsx`). Functions/symbols/imports that appear in TOOL RESULTS — the binutils symbol/import table, `re_list_functions`, xref targets — are not: you either decompile (heavyweight; it promotes) or re-type the name in the generic add-node modal. The VR agent independently asked for a lightweight "promote this callee" verb.
+- **Frontend:** render those result items as clickable rows with a one-click "add as node" (mirror the existing exports affordance).
+- **Why it's high-value + cheap:** a promoted function/symbol node AUTO-ENRICHES on creation — `engine/nodes.get_or_create_node` calls `enrichment.apply_facts_for_node`, which joins every waiting always-welcome fact for the node's `(name, address)`: prototype/address/params/calling-convention/demangled-name (if a prior decompile/Ghidra recorded them) + `is_sink` (for dangerous imports). The node arrives pre-enriched, not empty. Reuse `graph_create_node` (MCP/API exists).
+- **Agent side:** a lightweight verb to promote a symbol/callee to a node WITHOUT decompiling (decompile is the only current promote path for a function). Caveat: a fact only joins if a prior tool recorded it; a bare symbol with no prior analysis comes in plain (future runs enrich it forward).
+
+### 2. Surface a node's FULL result set at the node  [M]
+Bodies (decompile/disasm) stay in the Observation (correct — graph = curated facts, Observation store = full results; do NOT change that). But `NodeInspector` shows only the decompilation on demand (the "Decompile" button) + the provenance block — not disassembly, `recover_constant`, or the other Observations referencing the node. The linkage exists: `Observation.node_refs` ↔ the node.
+- **Frontend:** surface ALL of a node's linked Observations at the node (decomp · disasm · xrefs · recover_constant · …), on demand, via `node_refs`.
+- The eval also flagged "Tool Results buried under the imports grid": collapse the imports grid by default, or move the Tool-Results section above it on a node with a long import list.
+
+### 3. "Open in source viewer"  [L — the big one] — FULL v1 (owner: do NOT punt the fast-follows)
+The details pane is wrong for reading long decompiled/disassembled bodies. Add a dedicated viewer matched to the EXISTING `frontend/src/components/SourceBrowser.tsx` (the read-only Source/IDE mode used by builder+fuzzing) — which already has, via `frontend/src/highlight.ts` (highlight.js core): per-line syntax highlighting, line numbers, jump-to-line, deep-linking (`open:{treeId,rel,line}`).
+- **Architecture:** extract a shared `<CodePane lines lang activeLine decorations onSymbolClick>` from `SourceBrowser`'s highlighted-row rendering; refactor `SourceBrowser` onto it (same pixels); build the new viewer on the SAME component (structural style-match, not "tried to look similar").
+- **`FunctionSourceViewer`** (opened by an "Open in source viewer" button in `NodeInspector` + the functions list + the graph node context menu): **Decompiled** (lang `c`) ⇄ **Disassembly** tabs + a side-by-side toggle; line numbers + copy + a header (name · address · target · backend · a "view raw Observation" provenance link); **click-a-callee-to-navigate** (tokens matching a known project function become links → load that function's decompile in place, resolved via the `calls` edges + `re_decompile_at`); **deep-linkable** (`?fn=<nodeId>&view=decomp&line=`).
+- **Backend:** reuse `POST /api/targets/{id}/decompile` (exists); add ONE thin parallel `POST /api/targets/{id}/disassemble` returning the cached `disassembly` Observation. NO schema/migration/new storage — bodies stay in Observations.
+- **highlight.ts gap:** register the asm grammars highlight.js ships (`x86asm`/`armasm`/`mipsasm`), pick by target arch; fall back to escaped-plain (still line-numbered) for uncovered arches.
+- **Rejected alternative:** shoehorning decompiled functions into `SourceBrowser` as a synthetic source *tree* (needs a fake virtual-tree backend + muddies the source-tree model). The shared `<CodePane>` gets the look without it.
+
+### 4. Small graph-API / finding-envelope batch  [S each] — from the VR agent's tool-experience report
+- **`graph_stats`/counts verb** — per-type node/edge tallies. Listing 100+ nodes to count is unworkable + truncates; the agent needed before/after counts. (A `meta`/`graph` read tool.)
+- **`graph_set_node_attr`** — set a single node attribute (e.g. `is_sink`) without re-`graph_create_node` (the create-merge trick is awkward).
+- **First-class CWE field on Finding** — agents stash `cwe` in `evidence.extra`; a first-class field is triage-friendlier. DB-envelope only (the JSON schema is FROZEN — ride the envelope, not the schema).
+- **`finding_reachability` precondition** — let the caller mark a path "unauthenticated"; today it infers `unspecified`, under-stating an unauth-reachable bug.
+
+### 5. Nit (cheap follow-up)
+`Mitigations` (#177): if `evidence.extra.mitigations` ever had ONLY unrecognized keys, the sibling "mitigations" label dangles (the component returns null). Not reachable today (backend writes exactly nx/relro/pie/canary/fortify). Guard the label on a `hasKnownMitigations` check — `Inspector.tsx` / `NodeInspector.tsx`.
+
+**Process for whoever picks this up:** every PR goes through the merge gate (worktree off `origin/main`; an independent `pr-reviewer` subagent runs `/code-review` + `/security-review` and POSTS on the PR; squash-merge on green CI + resolved threads; no `--admin`). For UI PRs, verify visually (Playwright against a populated `HEXGRAPH_HOME`). NOTE: the remote session-connection has dropped repeatedly, killing in-flight background agents — keep the Windows-side network/standby stable for long unattended runs, and never remove a subagent's worktree until its completion notification (it makes the agent's git ops hijack the primary checkout).
