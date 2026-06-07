@@ -28,8 +28,11 @@ prompt="$(printf '%s' "$input" | jq -r '.tool_input.prompt // ""' 2>/dev/null)" 
 
 # Heuristic: a PR/merge-gate review delegation mentions BOTH a review verb AND a
 # PR/merge context. Both must be present to deny, to keep false positives low.
-review_re='review|reviewer'
-pr_re='\bPR\b|pull request|pull/[0-9]|merge gate|merge-gate|git diff|origin/main\.\.\.|--squash'
+# `review` is anchored on a leading word boundary so it matches review/reviewer/
+# reviewing but NOT substrings like "preview"; the PR side avoids a bare "git diff"
+# (common in non-review work) and keeps the review-diff idiom `origin/main...`.
+review_re='\breview'
+pr_re='\bPR\b|pull request|pull/[0-9]|merge gate|merge-gate|origin/main\.\.\.|--squash'
 
 if printf '%s' "$prompt" | grep -iqE "$review_re" \
    && printf '%s' "$prompt" | grep -iqE "$pr_re"; then
