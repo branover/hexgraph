@@ -834,6 +834,31 @@ def list_nodes(project_id: str, target_id: str | None = None, node_type: str | N
         return [_node_dict(n) for n in q.limit(500).all()]
 
 
+def graph_stats(project_id: str) -> dict:
+    """Per-type node/edge tallies for the project's live graph — before/after counts
+    without listing (and truncating on) every node."""
+    from hexgraph.engine.graph import graph_stats as _stats
+
+    with session_scope() as s:
+        if s.get(Project, project_id) is None:
+            return {"error": "project not found"}
+        return _stats(s, project_id)
+
+
+def set_node_attr(node_id: str, key: str, value: Any) -> dict:
+    """Set ONE attribute on a node (e.g. is_sink=true) without re-creating it. Sets the
+    single `key`; other attrs are untouched. Returns the updated node."""
+    with session_scope() as s:
+        n = s.get(Node, node_id)
+        if n is None:
+            return {"error": "node not found"}
+        attrs = dict(n.attrs_json or {})
+        attrs[key] = value
+        n.attrs_json = attrs
+        s.flush()
+        return _node_dict(n)
+
+
 def list_edges(project_id: str, node_id: str | None = None) -> list[dict]:
     """List edges in the project (or just those touching `node_id`) so you can
     confirm the dataflow/relationships you wired (calls/taints/about/…)."""
@@ -926,7 +951,7 @@ def list_findings(project_id: str) -> list[dict]:
             ev = f.evidence_json or {}
             extra = ev.get("extra") or {}
             row = {"id": f.id, "title": f.title, "severity": f.severity, "category": f.category,
-                   "status": f.status, "finding_type": f.finding_type,
+                   "status": f.status, "finding_type": f.finding_type, "cwe": f.cwe,
                    "verified": is_verified(ev), "target_id": f.target_id,
                    "function": ev.get("function"),
                    "assurance": compact_assurance(assurance_of(ev))}
@@ -958,7 +983,7 @@ def get_finding(finding_id: str) -> dict:
         verified = is_verified(ev)
         return {"id": f.id, "title": f.title, "severity": f.severity, "confidence": f.confidence,
                 "category": f.category, "status": f.status, "finding_type": f.finding_type,
-                "origin": f.origin, "target_id": f.target_id, "task_id": f.task_id,
+                "cwe": f.cwe, "origin": f.origin, "target_id": f.target_id, "task_id": f.task_id,
                 "summary": f.summary, "reasoning": f.reasoning, "evidence": ev,
                 "human_notes": f.human_notes, "verified": verified}
 
@@ -1247,11 +1272,13 @@ def list_egress(project_id: str) -> list[dict]:
 
 
 def update_finding(finding_id: str, status: str | None = None, severity: str | None = None,
-                   confidence: str | None = None, human_notes: str | None = None) -> dict:
+                   confidence: str | None = None, human_notes: str | None = None,
+                   cwe: str | None = None) -> dict:
     """Update an EXISTING finding in place (don't create a duplicate) — e.g. raise
-    confidence/severity and set status='confirmed' after a PoC verifies, or
-    'dismissed' if it's a false positive."""
+    confidence/severity and set status='confirmed' after a PoC verifies, 'dismissed'
+    if it's a false positive, or set/correct the triage `cwe`."""
     from hexgraph.db.models import Finding, FindingStatus
+    from hexgraph.engine.findings import normalize_cwe
 
     with session_scope() as s:
         f = s.get(Finding, finding_id)
@@ -1268,7 +1295,10 @@ def update_finding(finding_id: str, status: str | None = None, severity: str | N
             f.confidence = confidence
         if human_notes is not None:
             f.human_notes = human_notes
-        return {"id": f.id, "status": f.status, "severity": f.severity, "confidence": f.confidence}
+        if cwe is not None:
+            f.cwe = normalize_cwe(cwe)
+        return {"id": f.id, "status": f.status, "severity": f.severity,
+                "confidence": f.confidence, "cwe": f.cwe}
 
 
 def link_evidence(hypothesis_id: str, finding_id: str, relation: str) -> dict:
@@ -1581,7 +1611,7 @@ def get_schemas() -> dict:
 
     from hexgraph.db.models import EdgeType, FindingStatus, NodeType
     from hexgraph.engine.annotations import KINDS as ANN_KINDS, NODE_KINDS as ANN_NODE_KINDS
-    from hexgraph.engine.assurance import LADDER as _ASSURANCE_LADDER
+    from hexgraph.engine.assurance import LADDER as _ASSURANCE_LADDER, PRECONDITIONS as _PRECONDITIONS
     from hexgraph.engine.edge_schemas import SOCKET_KINDS, describe_edges
     from hexgraph.engine.node_schemas import describe_nodes
     from hexgraph.engine.findings import FINDING_TYPES
@@ -1731,7 +1761,7 @@ def get_schemas() -> dict:
             "note": "Two STANDARDS of 'verified': code_present (the flaw exists in code) vs "
                     "input_reachable (it's triggerable via user input in normal operation), each by "
                     "method static (argued) or dynamic (a live trigger fired an unforgeable oracle), "
-                    "under a precondition (unauthenticated / requires_credentials / unspecified). The "
+                    f"under a precondition ({' / '.join(_PRECONDITIONS)}). The "
                     "engine records this per finding in evidence.extra.assurance: a verified finding_verify_poc "
                     "→ input_reachable/dynamic (the strongest claims are engine-set and can't be faked); "
                     "any other vuln finding defaults to the FLOOR code_present/static. AIM FOR THE "
@@ -2261,7 +2291,7 @@ def solve_constraint(target_id: str, function: str | None = None, check_addr: st
 
 
 def reachability(finding_id: str | None = None, sink_node_id: str | None = None,
-                 max_depth: int = 12) -> dict:
+                 max_depth: int = 12, precondition: str | None = None) -> dict:
     """Argue STATIC input-reachability (Standard B, static) — search the typed graph for a
     directed source→sink path so a finding can claim `input_reachable/static` even when you can't
     trigger it live (the DIR-823G case: a real sink, but the service won't boot). Pass `finding_id`
@@ -2282,14 +2312,20 @@ def reachability(finding_id: str | None = None, sink_node_id: str | None = None,
 
     if not finding_id and not sink_node_id:
         return {"error": "pass finding_id and/or sink_node_id"}
+    from hexgraph.engine.assurance import PRECONDITIONS
+
+    if precondition is not None and precondition not in PRECONDITIONS:
+        return {"error": f"precondition must be one of {PRECONDITIONS}"}
     with session_scope() as s:
         try:
             if finding_id:
-                return argue_reachability_for_finding(s, finding_id, max_depth=max_depth)
+                return argue_reachability_for_finding(s, finding_id, max_depth=max_depth,
+                                                      precondition=precondition)
             n = s.get(Node, sink_node_id)
             if n is None:
                 return {"error": "sink node not found"}
-            res = find_source_to_sink_path(s, n.project_id, sink_node_id, max_depth=max_depth)
+            res = find_source_to_sink_path(s, n.project_id, sink_node_id, max_depth=max_depth,
+                                           precondition=precondition)
             if res is None:
                 return {"found": False, "sink_node_id": sink_node_id,
                         "detail": f"no source→sink path within {max_depth} hops to {n.name!r}"}

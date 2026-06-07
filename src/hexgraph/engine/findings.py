@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import EdgeType
@@ -37,6 +39,20 @@ def classify_finding(task_type: str | None, category: str | None) -> str:
     if category == "annotation":
         return "annotation"
     return _TYPE_BY_TASK.get(task_type or "", "vulnerability")
+
+
+def normalize_cwe(value: object) -> str | None:
+    """Canonicalize a CWE id to `CWE-<n>` (accepts "CWE-787" / "787" / 787 / "cwe_787").
+    Returns None for anything that isn't recognizably a CWE reference — a bare number or a
+    `CWE`-prefixed one — so a stray-digit string ("version 3") doesn't mint a bogus CWE-3 and
+    the envelope `cwe` stays unset rather than storing junk."""
+    if value is None:
+        return None
+    s = str(value).strip()
+    if s.isdigit():                                   # a bare CWE number
+        return f"CWE-{int(s)}"
+    m = re.search(r"cwe[-_ ]?(\d+)", s, re.IGNORECASE)  # a CWE-NNN reference (anchored on "cwe")
+    return f"CWE-{int(m.group(1))}" if m else None
 
 
 def persist_finding(
@@ -83,6 +99,8 @@ def persist_finding(
         related_target_refs_json=list(finding.related_target_refs or []),
         status=status,
         finding_type=finding_type,
+        # Lift CWE out of evidence.extra into a first-class, filterable envelope field.
+        cwe=normalize_cwe((evidence_json.get("extra") or {}).get("cwe")),
     )
     session.add(row)
     session.flush()

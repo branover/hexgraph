@@ -42,12 +42,13 @@ The tools are also grouped into **read**, **write**, and **run**, and each group
 agent's context small:
 
 - **read** covers the listing and inspection verbs across the domains, `graph_get_node`, `finding_get`, `re_xrefs`, `graph_list_sockets`,
+  `graph_stats` (per-type node/edge tallies — a cheap before/after count without listing every node),
   `fs_list`/`fs_read_file`, `src_list_trees`/`src_read_file`, `fuzz_status`,
   `src_list_builds`/`src_build_log`/`fuzz_coverage_diff`, the observation read verbs
   `obs_list`/`obs_get`/`obs_search` (see the next section), and the `meta` health checks
   `meta_check_decompiler` and `meta_check_features` (preflight the optional features before you lean on one).
 - **write** covers `proj_create` (start an empty, source-first project), `finding_record`,
-  `finding_update`, `graph_create_node`, `graph_create_edge`, `graph_create_socket`,
+  `finding_update`, `graph_create_node`, `graph_set_node_attr` (set one attr — e.g. `is_sink` — on an existing node), `graph_create_edge`, `graph_create_socket`,
   `graph_create_hypothesis`, `finding_link_same_code`, `finding_propagate`, `src_import_tree`,
   `finding_link_to_source`, `src_save_revision`, `src_import_oss_fuzz`, and more. It also
   holds the graph-removal tools — the reversible `graph_archive_node`/`graph_restore_node`/`target_archive`/`target_restore`

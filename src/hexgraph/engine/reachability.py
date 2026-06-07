@@ -234,12 +234,16 @@ def _summarize(path: list[dict]) -> str:
 
 def find_source_to_sink_path(
     session: Session, project_id: str, sink_node_id: str, *, max_depth: int = 12,
+    precondition: str | None = None,
 ) -> dict | None:
     """Search the project graph for a directed source→sink path to `sink_node_id`. Returns
-    {path, via_taint, precondition, precondition_why, summary} or None if no path exists.
+    {path, via_taint, precondition, precondition_why, precondition_inferred, summary} or None if
+    no path exists.
 
     `path` is the ordered node/edge sequence (the argument). `via_taint` is True iff at least one
-    `taints`/`dataflow_hint` edge was used (the stronger dataflow argument)."""
+    `taints`/`dataflow_hint` edge was used (the stronger dataflow argument). `precondition`, when
+    given, OVERRIDES the path-derived one — the operator asserting (e.g.) `unauthenticated` when
+    the graph lacks the auth markers that would otherwise under-state it as `unspecified`."""
     nodes = _node_index(session, project_id)
     sink = nodes.get(sink_node_id)
     if sink is None:
@@ -258,12 +262,17 @@ def find_source_to_sink_path(
                      adj=adj, nodes=nodes)
     if path is None:
         return None
-    precondition, why = _derive_precondition(path, nodes)
+    derived, why = _derive_precondition(path, nodes)
+    if precondition:
+        pre, why, inferred = precondition, "operator-asserted precondition", False
+    else:
+        pre, inferred = derived, True
     return {
         "path": path,
         "via_taint": any(step.get("via_taint") for step in path),
-        "precondition": precondition,
+        "precondition": pre,
         "precondition_why": why,
+        "precondition_inferred": inferred,
         "summary": _summarize(path),
     }
 
@@ -307,6 +316,7 @@ def _candidate_sinks_for_finding(session: Session, finding: Finding) -> list[Nod
 
 def argue_reachability_for_finding(
     session: Session, finding_id: str, *, max_depth: int = 12, record: bool = True,
+    precondition: str | None = None,
 ) -> dict:
     """Compute a static source→sink reachability argument for the finding's cited sink and, when
     one exists and `record` is set, UPGRADE the finding's assurance to input_reachable/static
@@ -322,7 +332,8 @@ def argue_reachability_for_finding(
                                           "create the sink node first, then re-run."}
     best: dict[str, Any] | None = None
     for sink in sinks:
-        res = find_source_to_sink_path(session, finding.project_id, sink.id, max_depth=max_depth)
+        res = find_source_to_sink_path(session, finding.project_id, sink.id, max_depth=max_depth,
+                                       precondition=precondition)
         if res is None:
             continue
         res["sink_node_id"] = sink.id
@@ -339,7 +350,8 @@ def argue_reachability_for_finding(
                           "(record this honestly; it does not mean unreachable)."}
 
     cand = A.assurance(
-        A.INPUT_REACHABLE, A.STATIC, best["precondition"], precondition_inferred=True,
+        A.INPUT_REACHABLE, A.STATIC, best["precondition"],
+        precondition_inferred=best["precondition_inferred"],
         detail=f"static source→sink path: {best['summary']}"
                f"{' (taint-backed)' if best['via_taint'] else ' (control-flow only)'}; "
                f"precondition: {best['precondition_why']}",
@@ -348,6 +360,7 @@ def argue_reachability_for_finding(
         "found": True, "sink_node_id": best["sink_node_id"], "sink_name": best.get("sink_name"),
         "path": best["path"], "via_taint": best["via_taint"],
         "precondition": best["precondition"], "precondition_why": best["precondition_why"],
+        "precondition_inferred": best["precondition_inferred"],
         "summary": best["summary"], "assurance": cand,
     }
     if record:
@@ -363,7 +376,8 @@ def argue_reachability_for_finding(
         ev.setdefault("extra", {})["reachability"] = {
             "sink_node_id": best["sink_node_id"], "summary": best["summary"],
             "via_taint": best["via_taint"], "precondition": best["precondition"],
-            "precondition_why": best["precondition_why"], "path": best["path"],
+            "precondition_why": best["precondition_why"],
+            "precondition_inferred": best["precondition_inferred"], "path": best["path"],
         }
         finding.evidence_json = ev
         session.flush()

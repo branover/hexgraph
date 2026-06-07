@@ -30,6 +30,9 @@ DYNAMIC = "dynamic"    # demonstrated by a live trigger + an unforgeable oracle
 UNAUTHENTICATED = "unauthenticated"
 REQUIRES_CREDENTIALS = "requires_credentials"
 UNSPECIFIED = "unspecified"
+# The closed precondition vocabulary — the single source the reachability tool's schema enum
+# and meta_get_schemas both read, so they can't drift from these constants.
+PRECONDITIONS = (UNAUTHENTICATED, REQUIRES_CREDENTIALS, UNSPECIFIED)
 
 # Scope of a DYNAMIC test — the crux of "lab-confirmed" vs "reachable in the deployed system":
 HARNESS = "harness"        # the code was executed in ISOLATION (a binary/fuzz harness) → code_present

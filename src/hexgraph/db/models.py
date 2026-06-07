@@ -566,6 +566,9 @@ class Finding(Base):
     # Classifies the finding for sort/filter (vulnerability | recon | harness |
     # fuzz_crash | poc | annotation | other). DB envelope, not the frozen schema.
     finding_type: Mapped[str] = mapped_column(String(24), default="vulnerability", index=True)
+    # First-class CWE id (e.g. "CWE-787"), lifted from evidence.extra.cwe at persist time —
+    # a triage-/filter-friendly envelope field, NOT part of the frozen Finding JSON schema.
+    cwe: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
     # String column (no CHECK) so the triage vocabulary can widen without migration pain.
     status: Mapped[str] = mapped_column(String(20), default=FindingStatus.new.value)
     # HITL envelope (design §8): provenance + supersession + human edits.

@@ -109,6 +109,7 @@ def test_closed_value_set_params_carry_a_schema_enum():
         ("task_run", "type"), ("net_remote_run", "tool"), ("target_rehost", "brand"),
         ("target_register_service", "transport"), ("src_build", "system"),
         ("fuzz_start", "surface"), ("proj_create", "backend"),
+        ("finding_reachability", "precondition"),
     }
     for tool, param in must_enum:
         prop = by_name[tool].get(param, {})
@@ -134,6 +135,9 @@ def test_closed_value_set_params_carry_a_schema_enum():
     assert set(by_name["src_build"]["system"]["enum"]) == set(BUILD_SYSTEMS)
     assert set(by_name["fuzz_start"]["surface"]["enum"]) == set(SURFACES)
     assert set(by_name["fuzz_start"]["engine"]["enum"]) == {e for es in SURFACE_ENGINES.values() for e in es}
+    # the reachability precondition enum is the engine's PRECONDITIONS authority (no drift).
+    from hexgraph.engine.assurance import PRECONDITIONS
+    assert set(by_name["finding_reachability"]["precondition"]["enum"]) == set(PRECONDITIONS)
 
 
 def test_gated_tools_name_their_feature_in_the_description():

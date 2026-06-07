@@ -81,6 +81,8 @@ see where to go next:
   **`assurance`** triple `{standard, method, precondition}` (the rung), so you can read
   the assurance at a glance without a per-finding `finding_get`.
 - `graph_search(project_id, q)` — locate functions/strings/findings by keyword.
+- `graph_stats(project_id)` — per-type node/edge tallies (a cheap before/after count of what's
+  already promoted, and what a task added — no need to `graph_list_nodes` and count by hand).
 Let the existing graph and any open findings/hypotheses steer your next move: pick
 up unfinished threads, follow related findings to siblings, and target functions
 that haven't been analyzed yet.
@@ -495,7 +497,9 @@ is **record → explore → verify → update**:
 
 1. **Suspect → record immediately.** When you spot a likely bug, `finding_record`
    right away at your current confidence (e.g. "low"/"medium", status `new`), with
-   the function, sink, and reasoning so far. `graph_create_node` the relevant entities and
+   the function, sink, and reasoning so far. Put a `cwe` (e.g. `"CWE-787"`) in
+   `evidence.extra` — it's lifted to a first-class, filterable triage field (or set/correct
+   it later with `finding_update(finding_id, cwe=…)`). `graph_create_node` the relevant entities and
    **populate the attributes the type expects** — read `node_attribute_schemas` in
    `meta_get_schemas` for each type's `recommended` fields, so two runs of the same analysis
    produce the same graph instead of varying:
@@ -507,7 +511,9 @@ is **record → explore → verify → update**:
      `symbol` (or `function`) node with **`attrs={"is_sink":true}`** — do NOT also make a
      separate `sink` node for it. Reserve `node_type:"sink"` for an abstract dangerous
      point that isn't already a node (e.g. "the shell string built at 0x401200"), with
-     `attrs={"operation","why"}`.
+     `attrs={"operation","why"}`. To tag an EXISTING node a sink (or mark a reachability
+     source `attrs.entry=true`) without re-sending it, **`graph_set_node_attr(node_id,
+     "is_sink", true)`** sets the one attribute in place.
    Always pass `target_id` for target-bound nodes (else they float as orphans).
    `graph_create_hypothesis` for the open question, then **`graph_link_evidence(hypothesis_id,
    finding_id, "supports")`** to connect the finding to it (this also drives the
@@ -585,9 +591,12 @@ production input path not yet found").
   from source to sink — and call **`finding_reachability(finding_id=…)`**. If a source→sink path exists it
   UPGRADES `code_present/static` → `input_reachable/static`, records the path, and derives the
   precondition (an auth boundary on the path ⇒ `requires_credentials`; an unauth boundary ⇒
-  `unauthenticated`). It is an ARGUMENT, never a demonstration — strictly weaker than a live
-  trigger, and it NEVER downgrades a dynamic claim. (This is exactly the DIR-823G situation: a real
-  cmdi sink HexGraph couldn't boot goahead to trigger — argue the path, state the precondition.)
+  `unauthenticated`). When the route is pre-auth but the graph lacks the auth markers — so the
+  derived default would under-state it as `unspecified` — pass **`precondition="unauthenticated"`**
+  to assert it (recorded as not-inferred). It is an ARGUMENT, never a demonstration — strictly weaker
+  than a live trigger, and it NEVER downgrades a dynamic claim. (This is exactly the DIR-823G
+  situation: a real cmdi sink HexGraph couldn't boot goahead to trigger — argue the path, state the
+  precondition.)
 
 **n-day across binaries.** After confirming a bug, run `finding_link_same_code(project_id)`
 — it links functions with identical code across the project's other binaries and
