@@ -780,17 +780,25 @@ loud only where you are looking; every node/edge/color kept, mute never deletes.
 - Steps: select a `vulnerability` finding produced by the angr solver (its `evidence.reproducer` +
   `evidence.extra.solver` are set) → read the **Solved input** section in the Inspector.
 - Functional: a dedicated EVIDENCE block headed "Solved input · {backend} symbolic execution" shows a
-  one-line explanation (which sink, which input model), the **reproducer bytes in a copyable code block**
-  (with a copy icon that flips to a check), the byte repr, and the key solver fields (input model, reached
-  address, sink, path length, angr version, steps, elapsed) plus a collapsible full path-to-sink and the
-  backing observation id.
+  one-line explanation (which sink, which input model). When the solver determined which bytes actually
+  matter (`evidence.extra.solver.minimal_input_hex` is set and is shorter than the full reproducer), a
+  **"constrained serial" code block is shown FIRST and most prominently** — labelled "first N bytes that
+  matter" — with its own copy icon (flips to a check); the full buffer then renders below it relabelled
+  **"full reproducer"** with an "incl. unconstrained filler" note. When no minimal prefix is available the
+  single block is headed **"reproducer"** as before. Both code blocks are copyable, and the section also
+  shows the byte repr and the key solver fields (input model, reached address, sink, path length, angr
+  version, steps, elapsed) plus a collapsible full path-to-sink and the backing observation id.
 - 🔌 Backend: the fields render straight from the finding's `evidence` (`reproducer` + `extra.solver`); no
-  extra call. The reproducer shown must equal the stored `evidence.reproducer`.
-- Qualitative: the flagship symbolic-execution result reads as a first-class, scannable block — the solved
-  input is the headline and is one click to copy, not buried in a JSON dump (Aesthetics, the whole reason
-  this surfacing exists).
-- Principle: the solver's solved input is visible and copyable, not invisible.
-- Prereq: an angr `vulnerability` finding with a solved reproducer.
+  extra call. The full reproducer shown must equal the stored `evidence.reproducer`; the constrained serial
+  must equal `evidence.extra.solver.minimal_input_hex` (and is only shown when shorter than the full buffer).
+- Qualitative: the flagship symbolic-execution result reads as a first-class, scannable block — the part
+  that actually matters (the constrained serial) is the headline and is one click to copy, with the padded
+  full buffer kept for completeness but visually demoted, not buried in a JSON dump (Aesthetics, the whole
+  reason this surfacing exists).
+- Principle: the solver's solved input is visible and copyable, and the bytes that matter are surfaced
+  ahead of the unconstrained filler — never invisible.
+- Prereq: an angr `vulnerability` finding with a solved reproducer (and, for the constrained-serial block,
+  a `minimal_input_hex` shorter than the full buffer).
 
 **FIND-19 — Mitigations as weak/ok badges (not a JSON blob)**
 - Steps: on a finding whose `evidence.extra.mitigations` is set (e.g. a hardening finding), read the

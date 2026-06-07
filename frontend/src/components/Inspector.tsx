@@ -118,7 +118,7 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
   const [deleting, setDeleting] = useState(false);
   useEffect(() => {
     setSugg([]); setCopied(false); setHypId("");
-    setEditing(false); setEditErr(undefined); setVerifyMsg(undefined); setPocOpen(false); setReproCopied(false); setSolvedCopied(false);
+    setEditing(false); setEditErr(undefined); setVerifyMsg(undefined); setPocOpen(false); setReproCopied(false); setSolvedCopied(false); setMinimalCopied(false);
     setConfirmDelete(false); setDeleting(false);
     if (finding) api.suggestions(finding.id).then(setSugg).catch(() => setSugg([]));
   }, [finding?.id]);
