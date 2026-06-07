@@ -6,14 +6,22 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // Wrap whole-word occurrences of any `names` token in a clickable link span, operating
 // ONLY on the text between highlight.js tags (so we never corrupt a tag or its attrs) and
-// skipping HTML entities (the `(?<!&)` guard keeps `&lt;`/`&gt;`/`&amp;` intact). The
+// skipping HTML entities (the `(?<![\w&])` guard keeps `&lt;`/`&gt;`/`&amp;` intact). The
 // callee-navigation affordance for the function source viewer: a token that names a known
 // project function becomes a link → load that function in place.
+//
+// SECURITY: the matched text `m` derives from symbol/function names recovered from a HOSTILE
+// target binary, and is re-inserted via dangerouslySetInnerHTML. We deliberately carry NO
+// attribute (no `data-sym="${m}"` — highlight.js's escape does not escape `"`, so a name like
+// `a" onmouseover=…` would break out of the attribute → XSS). `m` is a slice of the already
+// highlight.js-escaped text segment (its `<`/`>`/`&` are entities), so re-inserting it as the
+// span's text content is the same escaped content, verbatim and safe. The click handler reads
+// the clicked span's textContent (the decoded name) — no name ever round-trips through HTML.
 function linkify(lineHtml: string, re: RegExp): string {
   // Split tags out; even indices are text, odd indices are verbatim `<...>` tags.
   return lineHtml.split(/(<[^>]*>)/).map((seg, i) => {
     if (i % 2 === 1) return seg; // a tag — leave untouched
-    return seg.replace(re, (m) => `<span class="cp-sym" data-sym="${m}">${m}</span>`);
+    return seg.replace(re, (m) => `<span class="cp-sym">${m}</span>`);
   }).join("");
 }
 
@@ -61,8 +69,8 @@ export function CodePane({ content, lang, activeLine, lineClassFor, linkSymbols,
 
   const onClick = onSymbolClick
     ? (e: React.MouseEvent) => {
-        const el = (e.target as HTMLElement)?.closest?.("[data-sym]") as HTMLElement | null;
-        const sym = el?.getAttribute("data-sym");
+        const el = (e.target as HTMLElement)?.closest?.(".cp-sym") as HTMLElement | null;
+        const sym = el?.textContent?.trim();
         if (sym) { e.preventDefault(); onSymbolClick(sym); }
       }
     : undefined;
