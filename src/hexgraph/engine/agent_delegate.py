@@ -20,6 +20,7 @@ import subprocess
 from sqlalchemy.orm import Session
 
 from hexgraph.agent_setup import SKILL, mcp_server_entry
+from hexgraph.record_keeping import RECORD_KEEPING
 from hexgraph.db.models import Project, Target, Task
 from hexgraph.engine.tasks import write_trace
 
@@ -38,10 +39,13 @@ def agent_config(target: Target) -> dict:
 
 
 def delegate_prompt(project_id: str, target: Target, task_id: str, objective: str | None) -> str:
-    """The task brief handed to the agent: the skill + the concrete assignment."""
+    """The task brief handed to the agent: the skill, its record-keeping rubric, and
+    the concrete assignment. Delegate mode inlines the rubric because — unlike the
+    deployed VR skill — it never materializes the `record-keeping.md` sub-file the
+    SKILL body points to, so without this the pointer would dangle."""
     obj = (objective or "").strip() or f"Find vulnerabilities in {target.name}."
     return (
-        f"{SKILL}\n\n---\n\n## Your assignment\n"
+        f"{SKILL}\n\n---\n\n# record-keeping.md\n\n{RECORD_KEEPING}\n\n---\n\n## Your assignment\n"
         f"project_id: {project_id}\n"
         f"target_id: {target.id}  (name: {target.name})\n"
         f"hexgraph task_id: {task_id}  ← pass this as task_id to finding_record\n\n"

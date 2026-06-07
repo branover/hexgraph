@@ -76,14 +76,14 @@ The current `status` describes what the **evidence** says. A task list also need
 
 Add a **work-state** dimension, distinct from the evidence verdict:
 
-- `work_state` ∈ `{active, parked, done}` — *am I on this?*
+- `work_state` ∈ `{investigating, parked, done}` — *am I on this?*
 - `status` (existing) ∈ `{open, supported, refuted, contested, confirmed, rejected}` — *what does the evidence say?*
 
 The user's "check it off as proven/unsubstantiated" maps cleanly: **checking off = `work_state → done`**, and the *reason* it closed is the evidence `status` (proven ≈ `confirmed`/`supported`-and-done; unsubstantiated ≈ `rejected`/`refuted`-and-done; abandoned ≈ done with no verdict). The panel's checkbox sets `done` and offers to record the verdict. Don't overload `confirmed`/`rejected` to also mean "closed" — "I proved it" and "I stopped looking" are different facts.
 
 **Storage is cheap:** `status` already lives in `attrs_json` (a JSON column), so `work_state` and the graph-visibility flag below go there too — **no migration needed** for the hypothesis changes. At the expected scale (tens to low hundreds of hypotheses per project) the panel loads all and filters in Python; promoting these to real, queryable columns is a later optimization, not a v1 need.
 
-> Final vocabulary (`active/parked/done`) is an open question — see Section 11. The user floated "unsubstantiated/proven"; reconcile that as evidence-verdict language layered on the close action.
+> Vocabulary is locked to `investigating / parked / done` for the work-state axis; the "proven / unsubstantiated" language the user floated is the evidence verdict, layered on the close action (see §12).
 
 ### 4.3 Decouple existence from graph visibility
 
@@ -319,15 +319,17 @@ The user's explicit worry. Hold these:
 
 ---
 
-## 12. Open questions / decisions for the human
+## 12. Decisions (resolved by the user)
 
-1. **`work_state` vocabulary** — `active / parked / done`? And how the panel's "check off" surfaces the evidence verdict (the user floated "unsubstantiated / proven"). Reconcile the two axes' wording.
-2. **Editor library** — lean (textarea + preview + typeahead) for v1 vs. WYSIWYG (TipTap/Lexical) now. Recommendation: lean.
-3. **Hypotheses domain** — keep `graph_*` (recommended, avoids fixture/doc churn) vs. a new `hyp_*` domain now that they're top-level.
-4. **Mentions as graph edges** — default no (lightweight references). Revisit only if you want mentions to show on the canvas.
-5. **Journal edit history depth in v1** — "edited" marker only vs. full versioning. Recommendation: marker now, versioning later.
-6. **Skill structure** — tightened in-body section vs. a referenced `record-keeping.md` sub-file (needs `write_skill()` to emit multiple files).
-7. **Auto-journaling from non-LLM events?** (e.g. a fuzz crash → an auto note.) Recommendation: no — keep the journal human/agent-authored narrative; the crash is already a finding.
+All seven open questions are locked; the build follows these:
+
+1. **`work_state` vocabulary** → **`investigating / parked / done`**. "Check off" sets `done`; the evidence verdict ("proven"/"unsubstantiated" ≈ `confirmed`/`rejected`) is recorded on close.
+2. **Editor library** → **lean** (markdown source + preview + @-typeahead; no WYSIWYG in v1).
+3. **Hypotheses MCP domain** → **keep `graph_*`** (no new `hyp_*` domain).
+4. **Mentions as graph edges** → **no** (lightweight references only).
+5. **Journal edit history (v1)** → **"edited" marker only** (no full versioning yet).
+6. **Skill structure** → **referenced `record-keeping.md` sub-file** (progressive disclosure); `write_skill()` emits it.
+7. **Auto-journaling from non-LLM events** → **no**; the journal stays human/agent-authored narrative.
 
 ---
 
