@@ -10,6 +10,7 @@ from __future__ import annotations
 from functools import lru_cache
 
 from hexgraph.paths import finding_schema_path
+from hexgraph.record_keeping import RECORD_KEEPING_COMPACT
 
 
 @lru_cache(maxsize=1)
@@ -37,6 +38,7 @@ def system_prompt(task_type: str) -> str:
         "(decompile_at) — deliberately promotes THAT function (no fan-out to its "
         "callees). Promote only the few results that matter — the functions you're "
         "investigating, the sinks, the taint path, the findings.\n\n"
+        f"{RECORD_KEEPING_COMPACT}\n\n"
         "When you are ready to report, respond with ONLY a JSON object of the form "
         "{\"findings\": [ ... ]} — no prose, no markdown fences, no tool call. Each "
         "element MUST validate against this JSON Schema:\n"

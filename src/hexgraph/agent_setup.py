@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 import shutil
 
+from hexgraph.record_keeping import RECORD_KEEPING
+
 # The agent's standing instructions. Whether HexGraph launches the agent
 # (delegate task) or the user drives it themselves, this is the context that makes
 # it use HexGraph safely and productively.
@@ -503,6 +505,15 @@ agents and is what you come back to confirm. **Do NOT wait until a PoC verifies
 to add the finding** — that hides work in progress and risks losing it. The rhythm
 is **record → explore → verify → update**:
 
+**Read `record-keeping.md` (the sub-file next to this one) before you record a
+hypothesis or a journal entry.** It is HexGraph's discipline for the shared working
+memory: which of the five stores a given fact belongs in, how to run hypotheses as a
+live worklist (a falsifiable open question — NOT a fact — that you link evidence to and
+close with a verdict once proven or ruled out), and how to keep the research journal
+(the four prompts, when to write, and the rule that you may add or edit only your OWN
+entries, never a human's). The graph/finding rhythm below stands as-is; reach for
+`record-keeping.md` for the hypothesis and journal specifics and its worked examples.
+
 1. **Suspect → record immediately.** When you spot a likely bug, `finding_record`
    right away at your current confidence (e.g. "low"/"medium", status `new`), with
    the function, sink, and reasoning so far. Put a `cwe` (e.g. `"CWE-787"`) in
@@ -667,7 +678,14 @@ def skill_markdown() -> str:
 
 
 def write_skill(base_dir: str) -> str:
-    """Write the skill to <base_dir>/hexgraph-vr/SKILL.md and return the path."""
+    """Write the skill to <base_dir>/hexgraph-vr/ and return the SKILL.md path.
+
+    Emits two files in the skill dir: `SKILL.md` (the workflow + hostile-target rules)
+    and `record-keeping.md` (the working-memory rubric the SKILL body points to — the
+    single source of truth in `record_keeping.RECORD_KEEPING`). Progressive disclosure:
+    a skill-capable agent reads the sub-file on demand when it's about to record a
+    hypothesis or journal entry, instead of carrying the whole rubric in every prompt.
+    """
     import os
 
     d = os.path.join(base_dir, "hexgraph-vr")
@@ -675,6 +693,8 @@ def write_skill(base_dir: str) -> str:
     path = os.path.join(d, "SKILL.md")
     with open(path, "w") as fh:
         fh.write(skill_markdown())
+    with open(os.path.join(d, "record-keeping.md"), "w") as fh:
+        fh.write(RECORD_KEEPING)
     return path
 
 
