@@ -28,6 +28,14 @@ from hexgraph.sandbox import executor, runner
 router = APIRouter()
 
 
+def _focus_has_body(out: dict) -> bool:
+    """Did a decompile/disassemble actually resolve a function (real pseudocode or disasm)?
+    An address focus that misses returns a focus with empty bodies — treat that as a miss so
+    the caller can fall back to name resolution."""
+    focus = (out or {}).get("focus") or {}
+    return bool(focus.get("pseudocode") or focus.get("disasm"))
+
+
 @router.post("/api/projects/{project_id}/targets")
 def api_add_target(
     project_id: str,
@@ -151,8 +159,14 @@ def api_decompile(target_id: str, body: dict):
 
             project = s.get(Project, t.project_id)
             decompiler = get_decompiler()
-            out = decompiler.decompile(t.path, body.get("function"),
-                                       address=body.get("address"), project=project)
+            function, address = body.get("function"), body.get("address")
+            out = decompiler.decompile(t.path, function, address=address, project=project)
+            # Address-focus is preferred (resolves a stripped/renamed function), but it can miss
+            # — e.g. a Ghidra-recorded address sent to a radare2 base, or simply a wrong address.
+            # When it resolves to nothing AND we have a name, fall back to the name so we never
+            # regress a function that name-resolution would have found.
+            if address and function and not _focus_has_body(out):
+                out = decompiler.decompile(t.path, function, project=project)
         except Exception as exc:  # noqa: BLE001
             return {"available": False, "detail": f"decompilation failed: {exc}"}
         return {"available": True, "backend": decompiler.name,
@@ -180,6 +194,10 @@ def api_disassemble(target_id: str, body: dict):
             from hexgraph.sandbox.decompiler import R2Decompiler
 
             out = R2Decompiler().decompile(t.path, function, address=address)
+            # Prefer the address, but fall back to the name when it resolves to nothing
+            # (e.g. a Ghidra-recorded address sent to radare2's base) — see /decompile.
+            if address and function and not _focus_has_body(out):
+                out = R2Decompiler().decompile(t.path, function)
         except Exception as exc:  # noqa: BLE001
             return {"available": False, "detail": f"disassembly failed: {exc}"}
         return {"available": True, "backend": "radare2",

@@ -152,8 +152,9 @@ export default function FunctionSourceViewer({
   };
 
   const backend = decompBody?.backend || bodies[keyOf(cur, "disasm")]?.backend;
-  // The address the focus resolved to (for the header), falling back to the node's recorded one.
-  const focusAddress = decompBody?.address || bodies[keyOf(cur, "disasm")]?.address || cur.address;
+  // The address the focus actually RESOLVED to (for the header) — not cur.address, so a header
+  // address never sits next to a "not found" pane when resolution missed.
+  const focusAddress = decompBody?.address || bodies[keyOf(cur, "disasm")]?.address;
   const hasRaw = !!(provenanceIds && provenanceIds.length && stack.length === 1);
 
   return (
