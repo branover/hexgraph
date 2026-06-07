@@ -152,6 +152,22 @@ def list_observations(
     return [_row_dict(r) for r in rows]
 
 
+def list_observations_for_node(
+    session: Session, *, node_id: str, project_id: str,
+    target_id: str | None = None, limit: int = 200,
+) -> list[dict[str, Any]]:
+    """Every Observation whose `node_refs` includes this node — the node's FULL result-set
+    (decompile/disasm/xrefs/recover_constant/…), newest first, row metadata only. Scoped to
+    the node's target when it has one (the common case); project-wide for cross-target nodes
+    (e.g. a shared socket, `target_id=None`). The reverse of the node's `attrs.provenance`,
+    and a superset of it. Call `get_observation(id)` for the full CAS payload."""
+    q = session.query(Observation)
+    q = q.filter(Observation.target_id == target_id) if target_id else q.filter(Observation.project_id == project_id)
+    rows = q.order_by(Observation.created_at.desc()).all()
+    out = [_row_dict(r) for r in rows if node_id in (r.node_refs or [])]
+    return out[:limit]
+
+
 def get_observation(session: Session, obs_id: str) -> dict[str, Any] | None:
     """One Observation in full, with its payload loaded back from CAS."""
     obs = session.get(Observation, obs_id)

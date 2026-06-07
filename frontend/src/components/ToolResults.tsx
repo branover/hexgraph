@@ -73,11 +73,13 @@ export function RawResultModal({ obsId, onClose }: { obsId: string; onClose: () 
   ), document.body);
 }
 
-// The per-target "Tool Results" panel (Phase O, design §5.6): the durable record of
-// every deterministic tool call on this target — decompiles, listings, xrefs, taint,
-// strings. Filter by tool/kind; click a row to read the raw CAS payload. Read-only:
-// results persist here and do NOT auto-populate the graph; promote what matters.
-export default function ToolResults({ projectId, targetId }: { projectId: string; targetId: string }) {
+// The "Tool Results" panel (Phase O, design §5.6): the durable record of deterministic
+// tool calls — decompiles, listings, xrefs, taint, strings. Scoped to a TARGET (every call
+// on that binary) or, with `nodeId`, to a NODE (its full result-set — every result that
+// references it via node_refs: decompile/disasm/xrefs/recover_constant/…). Filter by
+// tool/kind; click a row to read the raw CAS payload. Read-only: results persist here and
+// do NOT auto-populate the graph; promote what matters.
+export default function ToolResults({ projectId, targetId, nodeId }: { projectId: string; targetId?: string; nodeId?: string }) {
   const [rows, setRows] = useState<Observation[] | null>(null);
   const [err, setErr] = useState<string>();
   const [tool, setTool] = useState("all");
@@ -86,10 +88,11 @@ export default function ToolResults({ projectId, targetId }: { projectId: string
 
   useEffect(() => {
     setRows(null); setErr(undefined);
-    api.observations(projectId, targetId, { limit: 200 })
-      .then((r) => setRows(r.observations))
-      .catch((e) => setErr(String(e.message || e)));
-  }, [projectId, targetId]);
+    const req = nodeId
+      ? api.nodeObservations(projectId, nodeId)
+      : api.observations(projectId, targetId!, { limit: 200 });
+    req.then((r) => setRows(r.observations)).catch((e) => setErr(String(e.message || e)));
+  }, [projectId, targetId, nodeId]);
 
   const tools = useMemo(() => Array.from(new Set((rows || []).map((o) => o.tool))).sort(), [rows]);
   const kinds = useMemo(() => Array.from(new Set((rows || []).map((o) => o.result_kind))).sort(), [rows]);
@@ -104,7 +107,9 @@ export default function ToolResults({ projectId, targetId }: { projectId: string
       {err && <div className="err">{err}</div>}
       {rows && rows.length === 0 && !err && (
         <div className="muted" style={{ fontSize: 11.5 }}>
-          No tool results yet. Running a task or an agent's analysis tools on this target records them here.
+          {nodeId
+            ? "No tool results reference this node yet. Decompiling it, or running xrefs / recover-constant against it, records them here."
+            : "No tool results yet. Running a task or an agent's analysis tools on this target records them here."}
         </div>
       )}
       {rows && rows.length > 0 && (

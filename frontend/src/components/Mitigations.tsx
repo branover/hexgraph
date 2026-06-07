@@ -21,6 +21,15 @@ const BOOL_FLAGS: { key: string; on: string; off: string }[] = [
   { key: "fortify", on: "FORTIFY", off: "no FORTIFY" },
 ];
 
+// Does this mitigations map carry at least one RECOGNIZED protection (a boolean flag or
+// relro)? <Mitigations> renders null when none are recognized, so a caller must guard its
+// sibling "mitigations" label on this — otherwise an all-unrecognized map leaves a label
+// with no badges dangling beside it.
+export function hasKnownMitigations(mitigations?: Mit | null): boolean {
+  if (!mitigations || typeof mitigations !== "object") return false;
+  return BOOL_FLAGS.some((f) => f.key in mitigations) || "relro" in mitigations;
+}
+
 function Badge({ label, color, title }: { label: string; color: string; title: string }) {
   return (
     <span
