@@ -153,9 +153,11 @@ def graph_size(session: Session, project_id: str) -> dict:
 
 
 def graph_stats(session: Session, project_id: str) -> dict:
-    """Per-type node/edge tallies for the live graph (archived targets/nodes excluded), so a
-    caller can get before/after counts without listing — and counting — every node. Returns
-    {targets, findings, nodes_by_type{type:count}, edges_by_type{type:count}, totals{...}}."""
+    """Per-type node/edge tallies, so a caller can get before/after counts without listing — and
+    counting — every node. Node + finding counts honor liveness (archived targets/nodes excluded,
+    mirroring graph_size); the edge tally is the project-wide per-type count (as graph_size's edge
+    count is). Returns {targets, findings, nodes_by_type{type:count}, edges_by_type{type:count},
+    totals{...}}."""
     target_ids = [
         t.id for t in session.query(Target).filter(
             Target.project_id == project_id, Target.archived.is_(False)

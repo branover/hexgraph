@@ -1611,7 +1611,7 @@ def get_schemas() -> dict:
 
     from hexgraph.db.models import EdgeType, FindingStatus, NodeType
     from hexgraph.engine.annotations import KINDS as ANN_KINDS, NODE_KINDS as ANN_NODE_KINDS
-    from hexgraph.engine.assurance import LADDER as _ASSURANCE_LADDER
+    from hexgraph.engine.assurance import LADDER as _ASSURANCE_LADDER, PRECONDITIONS as _PRECONDITIONS
     from hexgraph.engine.edge_schemas import SOCKET_KINDS, describe_edges
     from hexgraph.engine.node_schemas import describe_nodes
     from hexgraph.engine.findings import FINDING_TYPES
@@ -1761,7 +1761,7 @@ def get_schemas() -> dict:
             "note": "Two STANDARDS of 'verified': code_present (the flaw exists in code) vs "
                     "input_reachable (it's triggerable via user input in normal operation), each by "
                     "method static (argued) or dynamic (a live trigger fired an unforgeable oracle), "
-                    "under a precondition (unauthenticated / requires_credentials / unspecified). The "
+                    f"under a precondition ({' / '.join(_PRECONDITIONS)}). The "
                     "engine records this per finding in evidence.extra.assurance: a verified finding_verify_poc "
                     "→ input_reachable/dynamic (the strongest claims are engine-set and can't be faked); "
                     "any other vuln finding defaults to the FLOOR code_present/static. AIM FOR THE "

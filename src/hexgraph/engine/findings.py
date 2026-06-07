@@ -43,12 +43,16 @@ def classify_finding(task_type: str | None, category: str | None) -> str:
 
 def normalize_cwe(value: object) -> str | None:
     """Canonicalize a CWE id to `CWE-<n>` (accepts "CWE-787" / "787" / 787 / "cwe_787").
-    Returns None for anything without a number — the envelope `cwe` stays unset rather than
-    storing junk."""
+    Returns None for anything that isn't recognizably a CWE reference — a bare number or a
+    `CWE`-prefixed one — so a stray-digit string ("version 3") doesn't mint a bogus CWE-3 and
+    the envelope `cwe` stays unset rather than storing junk."""
     if value is None:
         return None
-    m = re.search(r"(\d+)", str(value))
-    return f"CWE-{m.group(1)}" if m else None
+    s = str(value).strip()
+    if s.isdigit():                                   # a bare CWE number
+        return f"CWE-{int(s)}"
+    m = re.search(r"cwe[-_ ]?(\d+)", s, re.IGNORECASE)  # a CWE-NNN reference (anchored on "cwe")
+    return f"CWE-{int(m.group(1))}" if m else None
 
 
 def persist_finding(

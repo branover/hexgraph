@@ -71,8 +71,12 @@ def test_normalize_cwe_variants():
     assert normalize_cwe("787") == "CWE-787"
     assert normalize_cwe(787) == "CWE-787"
     assert normalize_cwe("cwe_787") == "CWE-787"
+    assert normalize_cwe("CWE 787") == "CWE-787"
     assert normalize_cwe(None) is None
     assert normalize_cwe("n/a") is None
+    # a stray-digit string must NOT mint a bogus CWE — only a bare number or a "cwe"-anchored ref.
+    assert normalize_cwe("version 3") is None
+    assert normalize_cwe("CWE-787: stack overflow") == "CWE-787"  # extracts from a labeled ref
 
 
 def _vuln_with_cwe(s, p, t, cwe):
