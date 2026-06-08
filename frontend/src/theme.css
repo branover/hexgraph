@@ -155,6 +155,9 @@ code { font-family: var(--mono); }
 .pane-h { display: flex; align-items: center; gap: 8px; padding: 11px 13px; border-bottom: 1px solid var(--border); }
 .pane-h .ttl { font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); font-weight: 700; }
 .pane-h.sub { padding: 7px 11px; background: var(--surface-2); }
+/* the right-pane primary tab bar wraps before pushing the expand/collapse controls
+   off a narrow pane (min width 280px) — they are primary nav, never hidden behind a scroll. */
+.rp-tabs { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex: 1 1 auto; min-width: 0; }
 .scroll { overflow: auto; padding: 10px; flex: 1; }
 
 /* tree */
