@@ -24,7 +24,7 @@ def test_health(hg_home):
 def test_project_payload_includes_cost(hg_home):
     from conftest import fixture_path
     from hexgraph.db.session import session_scope
-    from hexgraph.engine.ingest import create_project, ingest_file
+    from hexgraph.engine.targets.ingest import create_project, ingest_file
 
     with session_scope() as s:
         project = create_project(s, name="costs")

@@ -10,7 +10,7 @@ import os
 import pytest
 
 from hexgraph.db.session import session_scope
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph.engine.tasks import create_task
 from hexgraph.engine.worker import run_task_sync
 from hexgraph.eval import load_expectations, run_scored_eval, score_detection

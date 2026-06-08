@@ -58,8 +58,8 @@ def main() -> int:
     from hexgraph import settings
     from hexgraph.db.migrate import prepare_database
     from hexgraph.db.session import session_scope
-    from hexgraph.engine.ingest import create_project
-    from hexgraph.engine.surfaces import register_web_surface
+    from hexgraph.engine.targets.ingest import create_project
+    from hexgraph.engine.targets.surfaces import register_web_surface
 
     prepare_database()
     settings.update_settings({"features": {"network": {"enabled": True}}})

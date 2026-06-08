@@ -92,7 +92,7 @@ def resolve_surface_inputs(session, project, target, spec) -> None:
             spec.target_binary = target.path
         if not spec.sysroot and target.parent_id:
             try:
-                from hexgraph.engine.filesystem import host_root
+                from hexgraph.engine.targets.filesystem import host_root
                 from hexgraph.engine.findings.poc import _find_sysroot
                 fw = session.get(Target, target.parent_id)
                 if fw is not None and (fw.metadata_json or {}).get("filesystem"):
@@ -131,7 +131,7 @@ def resolve_surface_inputs(session, project, target, spec) -> None:
         # binary_only/poc path) so a dynamically-linked MIPS/ARM server finds its libs.
         if spec.launch_binary and not spec.sysroot and target.parent_id:
             try:
-                from hexgraph.engine.filesystem import host_root
+                from hexgraph.engine.targets.filesystem import host_root
                 from hexgraph.engine.findings.poc import _find_sysroot
                 fw = session.get(Target, target.parent_id)
                 if fw is not None and (fw.metadata_json or {}).get("filesystem"):
@@ -1382,7 +1382,7 @@ def _network_replay(session, project, target, port, payload, *, executor=None,
     keeps the pure TCP re-probe as its oracle (the service keeps running)."""
     from hexgraph.engine.findings.assurance import (assurance, DYNAMIC, INPUT_REACHABLE, UNCONFIRMED,
                                            UNSPECIFIED)
-    from hexgraph.engine.surfaces import run_tcp_probe
+    from hexgraph.engine.targets.surfaces import run_tcp_probe
     from hexgraph.sandbox.runner import SandboxError
 
     pre = run_tcp_probe(session, project, target, port=port, runner=executor,

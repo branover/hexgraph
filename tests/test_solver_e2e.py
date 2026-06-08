@@ -23,7 +23,7 @@ import pytest
 from hexgraph import settings as st
 from hexgraph.db.models import Edge, Finding, Node, NodeType, Observation
 from hexgraph.db.session import session_scope
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph.engine.re.solver import SolverResult
 from hexgraph.engine.re.solving import solve_constraint, solve_reaching_input
 

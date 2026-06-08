@@ -4,7 +4,7 @@ directly here."""
 
 from hexgraph.db.session import session_scope
 from hexgraph.agent import mcp_tools
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 
 from conftest import fixture_path
 
@@ -172,7 +172,7 @@ def _patch_executor(monkeypatch, fake):
 
 
 def _rehosted_surface(s):
-    from hexgraph.engine.surfaces import register_web_surface
+    from hexgraph.engine.targets.surfaces import register_web_surface
     p = create_project(s, name="dev")
     surface = register_web_surface(s, p, "http://192.168.0.1", name="rehosted")
     ch = dict(surface.metadata_json["channel"])
@@ -209,7 +209,7 @@ def test_mcp_tcp_request_features_off_returns_error_string(hg_home):
 
 def test_mcp_remote_launch_success_and_features_off(hg_home, monkeypatch):
     from hexgraph import settings
-    from hexgraph.engine.remote import register_remote_target
+    from hexgraph.engine.targets.remote import register_remote_target
 
     # features.remote OFF → error string, not an exception.
     with session_scope() as s:

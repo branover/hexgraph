@@ -14,9 +14,9 @@ import pytest
 from hexgraph import settings as st
 from hexgraph.db.session import session_scope
 from hexgraph.engine.audit import list_egress
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph.engine.findings.poc import verify_poc
-from hexgraph.engine.surfaces import register_web_surface
+from hexgraph.engine.targets.surfaces import register_web_surface
 from hexgraph.policy import PolicyViolation
 
 from conftest import fixture_path

@@ -172,8 +172,8 @@ def import_program(session, project, *, path: str, name: str | None = None, ops:
     import os
 
     from hexgraph.engine.pipeline import analyze_target
-    from hexgraph.engine.ingest import ingest_file
-    from hexgraph.engine.unpack import build_links_against
+    from hexgraph.engine.targets.ingest import ingest_file
+    from hexgraph.engine.targets.unpack import build_links_against
     from hexgraph.sandbox.executor import get_executor
     from hexgraph.sandbox.runner import docker_available
 

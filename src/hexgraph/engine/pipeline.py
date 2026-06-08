@@ -14,9 +14,9 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Project, Target
-from hexgraph.engine.ingest import ingest_file
+from hexgraph.engine.targets.ingest import ingest_file
 from hexgraph.engine.re.recon import run_recon
-from hexgraph.engine.unpack import build_links_against, unpack_firmware
+from hexgraph.engine.targets.unpack import build_links_against, unpack_firmware
 from hexgraph.sandbox.executor import Executor, get_executor
 
 _FIRMWARE_FORMATS = {"squashfs", "cpio", "disk_image"}

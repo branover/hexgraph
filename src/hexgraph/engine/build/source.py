@@ -3,7 +3,7 @@
 A `SourceTree` is trusted material we possess and (in later phases) build — the
 opposite of a hostile `target`. A project holds MULTIPLE independent source trees;
 each may be linked to a target via a `built_from` edge. This module mirrors
-`engine/filesystem.py` (a firmware's extracted rootfs): files live on disk under
+`engine/targets/filesystem.py` (a firmware's extracted rootfs): files live on disk under
 the project data dir, indexed by a manifest on the `source_tree` row; individual
 `source_file` *graph nodes* are materialized LAZILY on reference (a finding links
 to a line, a harness is promoted), never one row per file — exactly the

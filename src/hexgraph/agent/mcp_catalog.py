@@ -76,7 +76,7 @@ REMOTE_TOOLS = ["uname", "id", "ps", "netstat", "mount", "ifconfig", "df", "env"
                 "ls"]  # + the `ls` op (mcp_tools.remote_run maps tool='ls' → the read-only ls op)
 REHOST_BRANDS = ["linksys", "netgear", "dlink", "tplink", "tenda", "trendnet", "zyxel",
                  "belkin", "asus", "mikrotik", "ubiquiti", "openwrt", "ddwrt", "buffalo",
-                 "actiontec"]  # engine/rehost.py:_VENDOR_BRANDS (FirmAE vendor profiles)
+                 "actiontec"]  # engine/targets/rehost.py:_VENDOR_BRANDS (FirmAE vendor profiles)
 LLM_BACKENDS = ["mock", "anthropic", "claude_code"]  # llm backend registry
 SOURCE_ROLES = ["code", "harness", "poc", "script", "build_recipe"]
 BUILD_SYSTEMS = list(_BUILD_SYSTEMS)  # engine/build/build.py:BUILD_SYSTEMS

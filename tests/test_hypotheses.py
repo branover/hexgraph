@@ -11,7 +11,7 @@ from hexgraph.engine.graph.hypotheses import (
     DEFAULT_WORK_STATE, WORK_STATES, create_hypothesis, link_evidence, list_hypotheses,
     recompute_status, set_pinned, set_status, set_work_state, summary,
 )
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph.engine.tasks import create_task
 from hexgraph.models.finding import Evidence, Finding as FModel
 

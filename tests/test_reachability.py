@@ -15,7 +15,7 @@ from hexgraph.db.session import session_scope
 from hexgraph.engine.findings import assurance as A
 from hexgraph.engine.graph.authoring import create_edge, create_node
 from hexgraph.engine.findings.findings import persist_finding
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph.engine.graph.nodes import get_or_create_node
 from hexgraph.engine.findings.reachability import (argue_reachability_for_finding,
                                           find_source_to_sink_path, is_source)

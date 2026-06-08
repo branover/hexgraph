@@ -6,10 +6,10 @@ import os
 
 from hexgraph.db.models import Edge, EdgeType, Target
 from hexgraph.db.session import session_scope
-from hexgraph.engine.filesystem import (
+from hexgraph.engine.targets.filesystem import (
     FilesystemError, promote_file, list_filesystem, persistent_base, record_manifest,
 )
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 
 from conftest import fixture_path
 

@@ -20,7 +20,7 @@ from hexgraph.db.session import session_scope
 from hexgraph.engine.re import enrichment as E
 from hexgraph.engine.re import binutils as BU
 from hexgraph.engine.re.binutils import apply_mitigations_to_target, collect_binutils_facts
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph.engine.graph.nodes import materialize_symbol
 
 from conftest import fixture_path

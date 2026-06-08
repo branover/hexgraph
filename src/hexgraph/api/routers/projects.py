@@ -19,7 +19,7 @@ from hexgraph.db.session import session_scope
 from hexgraph.engine.graph.crosstarget import link_same_code
 from hexgraph.engine.graph.dedup import dedupe_findings
 from hexgraph.engine.graph.graph import build_graph
-from hexgraph.engine.ingest import create_project
+from hexgraph.engine.targets.ingest import create_project
 from hexgraph.engine.graph.nodemerge import merge_duplicates
 from hexgraph.engine.graph.removal import delete_project
 from hexgraph.engine.findings.report import build_report_md

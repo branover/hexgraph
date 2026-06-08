@@ -20,7 +20,7 @@ import pytest
 from hexgraph.db.models import Edge, Node, Observation
 from hexgraph.db.session import session_scope
 from hexgraph.engine.re.floss import collect_floss_strings
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 
 from conftest import fixture_path
 

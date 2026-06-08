@@ -62,7 +62,7 @@ def ingest_file(
     # Content hash at ingest time (not just from recon) so target identity —
     # archive/restore matching and cross-target dedup — works even when recon
     # hasn't run (no Docker, or --no-recon). Recon later rewrites the same value.
-    from hexgraph.engine.targets import file_sha256
+    from hexgraph.engine.targets.targets import file_sha256
 
     # Create the row first so its UUID is assigned, then copy into a per-target
     # subdir keyed on that id and record the final path. The dir is unique per

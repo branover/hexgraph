@@ -7,9 +7,9 @@ import pytest
 from hexgraph.db.models import Edge, EdgeType, Node, NodeType, Target, TargetKind
 from hexgraph.db.session import session_scope
 from hexgraph.agent import mcp_tools as M
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph.engine.graph.nodes import materialize_function
-from hexgraph.engine.surfaces import register_web_surface, run_surface_recon
+from hexgraph.engine.targets.surfaces import register_web_surface, run_surface_recon
 from hexgraph.engine.tasks import create_task
 from hexgraph.engine.worker import run_task_sync
 from hexgraph import policy
@@ -121,7 +121,7 @@ def test_generic_recon_on_socket_surface_fails_cleanly(hg_home):
     """A `service`/`remote` surface has no offline recon probe — the generic `recon` task
     must fail with a CLEAR error (not byte recon's confusing artifact-not-found)."""
     from hexgraph.db.models import Project, Task, TaskStatus
-    from hexgraph.engine.surfaces import register_service_target
+    from hexgraph.engine.targets.surfaces import register_service_target
     from hexgraph.engine.worker import _dispatch
 
     with session_scope() as s:

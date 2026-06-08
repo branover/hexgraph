@@ -122,7 +122,7 @@ def _run() -> int:
     from hexgraph import settings as st
     from hexgraph.db.session import init_db, reset_engine_for_tests, session_scope
     from hexgraph.engine.graph.graph import build_graph
-    from hexgraph.engine.ingest import create_project
+    from hexgraph.engine.targets.ingest import create_project
     from hexgraph.engine.pipeline import ingest_and_analyze
 
     reset_engine_for_tests()

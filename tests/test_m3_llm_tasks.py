@@ -4,7 +4,7 @@ import pytest
 
 from hexgraph.db.models import Edge, EdgeType, Finding, Project, Target, TaskStatus
 from hexgraph.db.session import session_scope
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph.engine.tasks import create_task
 from hexgraph.engine.worker import run_task_sync
 

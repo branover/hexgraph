@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from hexgraph.api.app import create_app
 from hexgraph.db.session import session_scope
 from hexgraph.engine.findings.findings import persist_finding
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph.engine.graph.nodes import materialize_function
 from hexgraph.engine.tasks import create_task
 from hexgraph.models.finding import Evidence, Finding as FModel
@@ -115,7 +115,7 @@ def test_read_firmware_file_and_traversal_guard(hg_home, tmp_path):
     from pathlib import Path
 
     from hexgraph.db.models import TargetKind
-    from hexgraph.engine.filesystem import persistent_base, read_file, FilesystemError
+    from hexgraph.engine.targets.filesystem import persistent_base, read_file, FilesystemError
 
     with session_scope() as s:
         p = create_project(s, name="fw")

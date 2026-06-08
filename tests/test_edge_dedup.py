@@ -5,7 +5,7 @@ from hexgraph.db.models import Edge, EdgeType
 from hexgraph.db.session import session_scope
 from hexgraph.engine.graph.edges import add_edge
 from hexgraph.engine.graph.graph import build_graph
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 
 from conftest import fixture_path
 

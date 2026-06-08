@@ -17,7 +17,7 @@ import pytest
 
 from hexgraph.db.session import session_scope
 from hexgraph.engine import observations as O
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph.engine.graph.nodes import get_or_create_node
 from hexgraph.sandbox.probes import decompile_probe as DP
 

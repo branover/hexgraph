@@ -11,7 +11,7 @@ from hexgraph.db.session import session_scope
 from hexgraph.agent import mcp_tools as M
 from hexgraph.engine import observations as O
 from hexgraph.agent.agent_tools import ToolContext, run_tool
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 
 from conftest import fixture_path
 

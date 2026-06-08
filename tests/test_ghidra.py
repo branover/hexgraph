@@ -10,7 +10,7 @@ from pathlib import Path
 from hexgraph import settings as st
 from hexgraph.db.models import EdgeType, Node, NodeType
 from hexgraph.db.session import session_scope
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph.sandbox.decompiler import GhidraDecompiler, R2Decompiler, get_decompiler
 
 from conftest import fixture_path

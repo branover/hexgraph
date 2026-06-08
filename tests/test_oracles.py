@@ -13,9 +13,9 @@ import threading
 import pytest
 
 from hexgraph.db.session import session_scope
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph.engine.findings.poc import verify_poc
-from hexgraph.engine.surfaces import register_web_surface
+from hexgraph.engine.targets.surfaces import register_web_surface
 from hexgraph.policy import PolicyViolation
 from hexgraph import settings as st
 
@@ -114,7 +114,7 @@ def test_oob_write_fails_when_nonce_absent(hg_home, monkeypatch):
 def test_oob_write_rootfs_read_is_traversal_safe(hg_home, tmp_path):
     """The read-back path must stay within the firmware's extracted rootfs."""
     from hexgraph.engine.findings import oracles
-    from hexgraph.engine.filesystem import persistent_base
+    from hexgraph.engine.targets.filesystem import persistent_base
 
     with session_scope() as s:
         p = create_project(s, name="oobfs")
@@ -430,7 +430,7 @@ def test_callback_listener_real_loopback_roundtrip(hg_home):
     Proves the listener MECHANISM end-to-end (no Docker needed)."""
     _enable_net()
     from hexgraph.engine.audit import list_egress
-    from hexgraph.engine.callback_listener import CallbackListener
+    from hexgraph.engine.targets.callback_listener import CallbackListener
 
     with session_scope() as s:
         p = create_project(s, name="cbreal")
@@ -462,13 +462,13 @@ def test_callback_listener_real_loopback_roundtrip(hg_home):
 def test_callback_listener_refuses_non_local_bind(hg_home):
     """The listener is the ingress mirror of bounded egress — it MUST refuse a non-loopback/
     private bind, the same structural containment as local_network_scope."""
-    from hexgraph.engine.callback_listener import CallbackListener
+    from hexgraph.engine.targets.callback_listener import CallbackListener
     with pytest.raises(PolicyViolation):
         CallbackListener(host="8.8.8.8")
 
 
 def test_callback_listener_binds_loopback_and_mints_token(hg_home):
-    from hexgraph.engine.callback_listener import CallbackListener
+    from hexgraph.engine.targets.callback_listener import CallbackListener
     with CallbackListener(host="127.0.0.1") as cb:
         assert cb.bound_host == "127.0.0.1" and cb.bound_port > 0
         tok = cb.token()

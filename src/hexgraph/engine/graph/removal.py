@@ -4,7 +4,7 @@ Two flavours, matching how each entity behaves:
 - **Soft (archive/restore)** for nodes and targets — reversible: an archived node and
   the edges touching it are hidden from the graph/search, and re-adding the same node
   (`get_or_create_node`) un-archives it so its edges reappear (edges are never deleted).
-  Targets archive their whole subtree (see `engine/targets.py`).
+  Targets archive their whole subtree (see `engine/targets/targets.py`).
 - **Hard delete** for a specific edge (cheap to recreate), for a single finding
   (the irreversible counterpart to *dismissing* it — `delete_finding` removes the
   row plus everything that polymorphically references it), and for a whole project

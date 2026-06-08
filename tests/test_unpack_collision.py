@@ -14,8 +14,8 @@ from pathlib import Path
 
 from hexgraph.db.models import Target
 from hexgraph.db.session import session_scope
-from hexgraph.engine.ingest import create_project, ingest_file
-from hexgraph.engine.unpack import unpack_firmware
+from hexgraph.engine.targets.ingest import create_project, ingest_file
+from hexgraph.engine.targets.unpack import unpack_firmware
 
 ELF_A = b"\x7fELF\x01\x01\x01" + b"AAAA distinct child one" + b"\x00" * 8
 ELF_B = b"\x7fELF\x01\x01\x01" + b"BB different bytes, child two, longer" + b"\x00" * 8

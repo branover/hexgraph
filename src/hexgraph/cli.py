@@ -38,7 +38,7 @@ def _cmd_db_upgrade(args: argparse.Namespace) -> int:
 
 
 def _cmd_ingest(args: argparse.Namespace) -> int:
-    from hexgraph.engine.ingest import create_project
+    from hexgraph.engine.targets.ingest import create_project
     from hexgraph.engine.pipeline import ingest_and_analyze
     from hexgraph.sandbox.runner import SandboxRunner, docker_available
 
@@ -66,7 +66,7 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
         project_id = project.id
 
         if args.no_recon:
-            from hexgraph.engine.ingest import ingest_file
+            from hexgraph.engine.targets.ingest import ingest_file
 
             target = ingest_file(session, project, args.path, name=args.name)
             print(f"project {project_id}")
@@ -101,7 +101,7 @@ def _cmd_targets(args: argparse.Namespace) -> int:
 
 
 def _cmd_rehost(args: argparse.Namespace) -> int:
-    from hexgraph.engine.rehost import RehostError, rehost_firmware
+    from hexgraph.engine.targets.rehost import RehostError, rehost_firmware
     from hexgraph.policy import PolicyViolation
 
     init_db()

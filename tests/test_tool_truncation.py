@@ -23,7 +23,7 @@ from hexgraph.agent.agent_tools import (
     ToolContext,
     run_tool,
 )
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 
 from conftest import fixture_path
 

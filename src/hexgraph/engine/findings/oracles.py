@@ -9,8 +9,8 @@ tcp) + the new bounded callback listener, and all still behind the policy seam:
 
   - **oob_write** (write primitives) — the exploit writes `{{NONCE}}` to a target-controlled
     location; HexGraph then INDEPENDENTLY reads that location back and checks the nonce landed.
-    Read-back channel: `rootfs` (engine.filesystem.read_file), `remote`
-    (engine.remote.run_remote read_file), or `http` (a follow-up GET). Unforgeable because the
+    Read-back channel: `rootfs` (engine.targets.filesystem.read_file), `remote`
+    (engine.targets.remote.run_remote read_file), or `http` (a follow-up GET). Unforgeable because the
     verifier observes the side-effect location out-of-band.
   - **canary_read** (read primitives — traversal / file or info disclosure) — BEFORE running the
     exploit, HexGraph PLANTS a random `{{NONCE}}` canary at a known path on the target via the
@@ -22,7 +22,7 @@ tcp) + the new bounded callback listener, and all still behind the policy seam:
     listener, substitutes a `{{CALLBACK}}` token (host:port + per-run nonce path) into the spec
     like `{{NONCE}}`, runs the exploit, and verifies the listener received a hit carrying the
     nonce. The listener is the audited INGRESS mirror of the bounded-egress tier
-    (engine.callback_listener).
+    (engine.targets.callback_listener).
   - **liveness** / **unavailable** (denial of service — Phase 2) — proves DoS by an unforgeable
     LIVENESS TRANSITION HexGraph observes out-of-band: probe the live service is UP (a baseline
     response on its own, independent channel) BEFORE the exploit, send the DoS input, then
@@ -172,9 +172,9 @@ def _read_back(session: Session, project: Project, target: Target, *, channel: s
 
 
 def _rootfs_read(session: Session, project: Project, target: Target, rel: str | None) -> str:
-    """Read a file from the firmware's extracted rootfs (engine.filesystem). The target is the
+    """Read a file from the firmware's extracted rootfs (engine.targets.filesystem). The target is the
     firmware (or a child whose parent is the firmware); `rel` is relative to the rootfs root."""
-    from hexgraph.engine.filesystem import host_root
+    from hexgraph.engine.targets.filesystem import host_root
 
     if not rel:
         raise ValueError("oob channel 'rootfs' needs a `path` (relative to the rootfs)")
@@ -205,8 +205,8 @@ def _firmware_for(session: Session, target: Target):
 
 def _remote_read(session: Session, project: Project, target: Target, path: str | None, runner) -> str:
     """Read a file from a LIVE remote/rehosted device over the read-only remote channel
-    (engine.remote.run_remote), which asserts features.remote + audits the egress."""
-    from hexgraph.engine.remote import run_remote
+    (engine.targets.remote.run_remote), which asserts features.remote + audits the egress."""
+    from hexgraph.engine.targets.remote import run_remote
 
     if not path:
         raise ValueError("oob channel 'remote' needs a `path`")
@@ -218,7 +218,7 @@ def _http_read(session: Session, project: Project, target: Target, request: dict
     """Independently GET a location over HTTP (a follow-up request the exploit did not make) —
     e.g. read back a file the write primitive dropped into the webroot. Gated + audited by
     run_http_request."""
-    from hexgraph.engine.surfaces import run_http_request
+    from hexgraph.engine.targets.surfaces import run_http_request
 
     if not request:
         raise ValueError("oob channel 'http' needs a `request` (e.g. {method:'GET', path:'/x'})")
@@ -243,7 +243,7 @@ def _plant(session: Session, project: Project, target: Target, *, channel: str, 
 
 
 def _rootfs_plant(session: Session, project: Project, target: Target, rel: str | None, value: str) -> None:
-    from hexgraph.engine.filesystem import host_root
+    from hexgraph.engine.targets.filesystem import host_root
 
     if not rel:
         raise ValueError("plant channel 'rootfs' needs a `path`")
@@ -381,7 +381,7 @@ def verify_callback(session, project, target, spec, runner, nonce, *, is_web, is
     `spec.oracle = {type:'callback', timeout?, bind_host?}`. The listener is the audited ingress
     mirror of the bounded-egress tier (loopback/private only, features.network-gated)."""
     from hexgraph.engine.audit import record_egress
-    from hexgraph.engine.callback_listener import CallbackListener
+    from hexgraph.engine.targets.callback_listener import CallbackListener
     from hexgraph.policy import (PolicyViolation, assert_allows_egress, current_policy,
                                  local_tcp_scope)
 
@@ -457,7 +457,7 @@ def _liveness_probe_web(session, project, target, request: dict | None, runner) 
     non-5xx status; DOWN = connection refused/timeout/error OR a 5xx (per the spec). The request
     is a benign liveness GET (default `GET /`); it goes through run_http_request, which is policy-
     gated + audits the egress, so every probe is logged. Returns (up?, detail)."""
-    from hexgraph.engine.surfaces import run_http_request
+    from hexgraph.engine.targets.surfaces import run_http_request
 
     req = dict(request or {"method": "GET", "path": "/"})
     req.setdefault("method", "GET")
@@ -479,7 +479,7 @@ def _liveness_probe_tcp(session, project, target, port: int, runner) -> tuple[bo
     """Probe a live raw-TCP service ONCE: UP = the connect succeeds (we got `ok`), DOWN = the
     connect is refused/times out. A bare connect (no payload, no oracle) through run_tcp_probe,
     which is policy-gated + audits the egress. Returns (up?, detail)."""
-    from hexgraph.engine.surfaces import run_tcp_probe
+    from hexgraph.engine.targets.surfaces import run_tcp_probe
 
     resp = run_tcp_probe(session, project, target, port=int(port), payload=None, oracle=None,
                          read_bytes=1, runner=runner) or {}

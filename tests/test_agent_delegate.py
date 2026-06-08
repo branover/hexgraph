@@ -9,7 +9,7 @@ from hexgraph.agent.agent_delegate import (
     DelegateError, build_command, delegate_prompt, execute_delegate,
 )
 from hexgraph.agent.record_keeping import RECORD_KEEPING
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph.engine.tasks import create_task
 from hexgraph import settings as st
 

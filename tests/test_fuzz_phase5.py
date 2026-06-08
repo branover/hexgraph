@@ -19,7 +19,7 @@ from hexgraph.engine.fuzzers.base import FuzzCampaignSpec
 from hexgraph.engine.fuzzers.binary_only import BinaryOnlyFuzzer, FridaFuzzer
 from hexgraph.engine.fuzzers.network import BoofuzzFuzzer, DesockAflFuzzer
 from hexgraph.engine.fuzzing import crash_finding
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph.policy import PolicyViolation
 from hexgraph import settings as st
 

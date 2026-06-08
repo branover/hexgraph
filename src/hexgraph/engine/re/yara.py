@@ -500,7 +500,7 @@ def _firmware_files(project: Project, firmware: Target, *, limit: int):
     targets). Bounded by `limit` and a per-file size cap; path-traversal safe (the
     resolved path must stay within the firmware's extracted root). A non-firmware target
     (no `metadata_json['filesystem']`) yields nothing."""
-    from hexgraph.engine import filesystem as FS
+    from hexgraph.engine.targets import filesystem as FS
 
     fs = (firmware.metadata_json or {}).get("filesystem")
     if not fs:
@@ -539,7 +539,7 @@ def _rel_for(target: Target, path: str) -> str | None:
     try:
         from sqlalchemy.orm import object_session
 
-        from hexgraph.engine import filesystem as FS
+        from hexgraph.engine.targets import filesystem as FS
 
         sess = object_session(target)
         if sess is not None:
