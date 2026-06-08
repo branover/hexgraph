@@ -26,6 +26,7 @@ This module is the store + the two disciplines the design locks down:
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -363,6 +364,23 @@ def _resolve_mentions_batch(
     return resolved
 
 
+def _iso(dt: datetime | None) -> str | None:
+    """Serialize a timestamp as a UTC-AWARE ISO 8601 string (ending in `+00:00`).
+
+    `utcnow()` stores `datetime.now(timezone.utc)`, but SQLite drops the tzinfo and
+    hands back a NAIVE datetime even though the column is `DateTime(timezone=True)`.
+    A naive `.isoformat()` has no offset, so the browser parses it as LOCAL time — in
+    a behind-UTC timezone that lands in the future and the relative-time `ago()` clamps
+    to "just now" for hours. Attaching `timezone.utc` to a naive value (the stored times
+    are always UTC) before `.isoformat()` makes the offset explicit and the relative
+    time correct. Returns None for None."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
+
+
 def _entry_dict(entry: JournalEntry, mentions: list[dict[str, Any]]) -> dict[str, Any]:
     """Assemble the JSON-able entry dict from an entry row + its resolved mentions."""
     return {
@@ -372,8 +390,8 @@ def _entry_dict(entry: JournalEntry, mentions: list[dict[str, Any]]) -> dict[str
         "body": entry.body,
         "origin_task_id": entry.origin_task_id,
         "edited": bool(entry.edited),
-        "created_at": entry.created_at.isoformat() if entry.created_at else None,
-        "updated_at": entry.updated_at.isoformat() if entry.updated_at else None,
+        "created_at": _iso(entry.created_at),
+        "updated_at": _iso(entry.updated_at),
         "mentions": mentions,
     }
 

@@ -45,6 +45,23 @@ def test_add_and_get_entry(hg_home):
         assert out["mentions"] == []
 
 
+def test_serialized_timestamps_are_utc_aware(hg_home):
+    # SQLite hands back naive datetimes even though the column is DateTime(timezone=True),
+    # so the serializer must attach +00:00 — otherwise the browser parses the bare ISO
+    # string as LOCAL time and the relative-time "ago()" clamps to "just now" for hours.
+    with session_scope() as s:
+        p, _ = _project_target(s)
+        e = J.add_journal_entry(s, p, body="check the timestamps", author="agent")
+        # single-entry path (get-by-id)
+        out = J.get_journal_entry(s, e.id)
+        assert out["created_at"].endswith("+00:00")
+        assert out["updated_at"].endswith("+00:00")
+        # batched path (list/search)
+        rows = J.list_journal_entries(s, p.id)
+        assert rows and rows[0]["created_at"].endswith("+00:00")
+        assert rows[0]["updated_at"].endswith("+00:00")
+
+
 def test_add_rejects_blank_body_and_bad_author(hg_home):
     with session_scope() as s:
         p, _ = _project_target(s)
