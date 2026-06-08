@@ -303,3 +303,48 @@ def test_afl_stats_sums_execs_across_instances(tmp_path):
     execs, edges = _afl_stats(str(tmp_path))
     assert execs == 3000        # summed across master + secondary
     assert edges == 60          # max edges across instances (shared bitmap)
+
+
+# ── AFL++ hard-abort detection (the map-inconsistency PROGRAM ABORT on AFL++ drift) ──
+
+# The exact abort an UNPINNED AFL++ (5.x dev line) emits: a few dry-run calibration execs
+# run, then it hard-aborts on the first fuzz iteration because the runtime hits more edges
+# than the statically sized map (cvg>100%). Pre-pin, the probe missed this (it only checked
+# for failures at 0 execs) and passed it off as a clean "0 crashes" run.
+_BROKEN_AFL_LOG = (
+    "[*] Spinning up the fork server...\n"
+    "[+] All right - new fork server model v1 is up.\n"
+    "[*] Attempting dry run with 'id:000000'...\n"
+    "[*] Fuzzing test case #0 (... cvg=102.13%) ...\n"
+    "\n[-] PROGRAM ABORT : Incorrect fuzzing setup detected. Your target seems to have "
+    "loaded incorrectly instrumented shared libraries (48 of 47/64). ... set "
+    "'AFL_IGNORE_PROBLEMS=1'.\n         Location : show_stats_normal(), afl-fuzz-stats.c:823\n"
+)
+_CLEAN_AFL_LOG = (
+    "[+] All right - new fork server model v1 is up.\n"
+    "[*] Fuzzing test case #0 (... cvg=53.19%) ...\n"
+    "[*] Statistics: 5 new corpus items found, 53.19% coverage achieved, 2 crashes saved\n"
+)
+
+
+def test_afl_hard_abort_flags_map_inconsistency(tmp_path):
+    from hexgraph.sandbox.probes.afl_probe import _afl_failure_note, _afl_hard_abort
+
+    log = tmp_path / "afl.log"
+    log.write_text(_BROKEN_AFL_LOG)
+    # The specific map-inconsistency message must win over the generic "PROGRAM ABORT" one
+    # (both substrings are present), and it must point at the re-pin remedy.
+    note = _afl_failure_note(str(log))
+    assert note and "coverage map is inconsistent" in note and "AFLPP_REF" in note
+    # A hard abort is flagged regardless of exec count — the bug was a few dry-run execs
+    # masking it as a clean "0 crashes" run.
+    assert _afl_hard_abort(str(log)) is True
+
+
+def test_afl_hard_abort_clean_log_is_silent(tmp_path):
+    from hexgraph.sandbox.probes.afl_probe import _afl_failure_note, _afl_hard_abort
+
+    log = tmp_path / "afl.log"
+    log.write_text(_CLEAN_AFL_LOG)
+    assert _afl_failure_note(str(log)) is None
+    assert _afl_hard_abort(str(log)) is False

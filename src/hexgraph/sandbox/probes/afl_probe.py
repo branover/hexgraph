@@ -287,19 +287,23 @@ def main() -> int:
     logfh.close()
 
     final = _collect(outdir, work, fuzzer, max_crashes, done=True, coverage_instrumented=True)
-    # If afl-fuzz never managed a single exec (the forkserver handshake failed or the
-    # dry-run calibration aborted), say so LOUDLY rather than passing off "0 crashes" as a
-    # clean run. NOTE: the historical 0-exec cause on high-ASLR kernels (the ASan
-    # MAP_FIXED-shadow SIGSEGV) is FIXED by the `setarch -R` ASLR-off launch above, and the
-    # persistent-mode dry-run hang is FIXED by the classic-forkserver harness — so a
-    # 0-exec result now signals a GENUINE residual problem (a real build/forkserver fault),
-    # not the old known-host-kernel case. The campaign stays a real result (compiled=true,
-    # coverage_instrumented=true) but carries an explicit diagnostic the engine/UI surface.
-    if final.get("executions", 0) == 0:
-        note = _afl_failure_note(afl_log)
-        if note:
-            final["afl_note"] = note
-            final["ran"] = False
+    # Say LOUDLY when afl-fuzz didn't actually fuzz, rather than passing "0 crashes" off as
+    # a clean run. Two cases: (1) it never managed a single exec (the forkserver handshake
+    # failed or the dry-run calibration aborted); (2) it hard-aborted on the FIRST fuzz
+    # iteration AFTER counting a few dry-run calibration execs — notably the AFL++
+    # map-inconsistency PROGRAM ABORT ("Incorrect fuzzing setup detected" / cvg>100%) seen
+    # when the image's AFL++ drifts off its pin (see docker/fuzz.Dockerfile AFLPP_REF). A
+    # hard abort therefore flags the run regardless of exec count; the softer
+    # handshake/timeout signatures only matter when nothing ran at all. (The historical
+    # 0-exec causes — the ASan MAP_FIXED-shadow SIGSEGV on high-ASLR kernels, the
+    # persistent-mode dry-run hang — are fixed by the `setarch -R` launch + classic
+    # forkserver, so these now flag a GENUINE fault, not a host-kernel limitation.) The
+    # campaign stays a real result (compiled=true, coverage_instrumented=true) but carries
+    # an explicit diagnostic the engine/UI surface as `engine_note`.
+    note = _afl_failure_note(afl_log)
+    if note and (final.get("executions", 0) == 0 or _afl_hard_abort(afl_log)):
+        final["afl_note"] = note
+        final["ran"] = False
     _write_status(outdir, final)
     with open(os.path.join(outdir, "DONE"), "w") as fh:
         fh.write("afl")
@@ -313,6 +317,12 @@ def main() -> int:
 # fault (e.g. a target that legitimately crashes on the seed, or a real forkserver bug) —
 # NOT a "host kernel limitation" to be shrugged off.
 _AFL_FAIL_SIGNATURES = (
+    # Most specific first: "Incorrect fuzzing setup detected" is itself printed under a
+    # "PROGRAM ABORT" header, so it must win over the generic PROGRAM ABORT message below.
+    ("Incorrect fuzzing setup detected",
+     "afl-fuzz aborted: the instrumented build's coverage map is inconsistent "
+     "(cvg>100%, 'incorrectly instrumented shared libraries') — an AFL++ version/"
+     "toolchain drift; re-pin the fuzz image (docker/fuzz.Dockerfile AFLPP_REF)"),
     ("Fork server crashed", "afl-fuzz forkserver crashed during the handshake "
                             "(the instrumented target faulted before fuzzing began)"),
     ("Unable to communicate with fork server", "afl-fuzz forkserver did not come up"),
@@ -323,19 +333,36 @@ _AFL_FAIL_SIGNATURES = (
     ("PROGRAM ABORT", "afl-fuzz aborted before fuzzing began"),
 )
 
+# afl-fuzz hard-abort markers: these mean afl exited FATALLY, so they invalidate the
+# campaign even if a few dry-run calibration execs were counted first (unlike the softer
+# handshake/timeout signatures above, which only matter when nothing ran at all).
+_AFL_HARD_ABORT = ("PROGRAM ABORT", "Incorrect fuzzing setup detected")
 
-def _afl_failure_note(afl_log: str) -> str | None:
-    """Extract a human-readable reason from afl-fuzz's captured output when no exec ran.
-    Returns None if the log doesn't match a known early-abort signature."""
+
+def _afl_log_text(afl_log: str) -> str | None:
     try:
         with open(afl_log, "rb") as fh:
-            text = fh.read().decode("utf-8", "replace")
+            return fh.read().decode("utf-8", "replace")
     except OSError:
+        return None
+
+
+def _afl_failure_note(afl_log: str) -> str | None:
+    """Extract a human-readable reason from afl-fuzz's captured output when it failed to
+    fuzz. Returns None if the log doesn't match a known early-abort signature."""
+    text = _afl_log_text(afl_log)
+    if text is None:
         return None
     for needle, msg in _AFL_FAIL_SIGNATURES:
         if needle in text:
             return msg
     return None
+
+
+def _afl_hard_abort(afl_log: str) -> bool:
+    """True if afl-fuzz hard-aborted (fatal exit) — flag the run regardless of exec count."""
+    text = _afl_log_text(afl_log)
+    return bool(text) and any(s in text for s in _AFL_HARD_ABORT)
 
 
 def _afl_crash_files(work):
