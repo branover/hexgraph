@@ -675,10 +675,13 @@ def test_resume_fuzz_campaign_guards(hg_home):
 
 
 def test_skill_documents_fs_browsing_and_new_tools():
-    """The agent only knows what the SKILL tells it: the firmware-FS workflow, the new tools,
-    and the strict 'surface, don't prune' stance must all be present."""
-    from hexgraph.agent_setup import SKILL
+    """The agent only knows what the deployed skill BUNDLE tells it (the spine + its
+    capability sub-files): the firmware-FS workflow, the build/fuzz tools, and the strict
+    'surface, don't prune' stance must each be present somewhere in it. The spine routes to
+    the sub-files, so checking the whole bundle is the honest contract after the split."""
+    from hexgraph.agent_setup import full_skill_markdown
+    bundle = full_skill_markdown()
     for token in ("fs_list", "target_promote_file", "src_build_log",
                   "fuzz_resume", "proj_list",
                   "You SURFACE for the analyst to TRIAGE"):
-        assert token in SKILL, token
+        assert token in bundle, token

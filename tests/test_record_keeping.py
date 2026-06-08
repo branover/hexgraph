@@ -50,17 +50,21 @@ def test_compact_states_the_core_rule_and_authorship():
     assert "observation" in c
 
 
-def test_write_skill_emits_both_files_and_subfile_is_the_rubric():
+def test_write_skill_emits_spine_and_subfiles():
     from hexgraph.agent_setup import write_skill
+    from hexgraph.vr_skill import SUBFILES
 
     with tempfile.TemporaryDirectory() as d:
         skill_path = write_skill(d)
         skill_dir = os.path.dirname(skill_path)
-        sub = os.path.join(skill_dir, "record-keeping.md")
         assert os.path.isfile(skill_path) and skill_path.endswith("hexgraph-vr/SKILL.md")
-        assert os.path.isfile(sub)
-        # the sub-file IS the rubric — no drift, no second copy
-        assert open(sub).read() == RECORD_KEEPING
+        # every capability sub-file lands next to the spine, byte-identical to its constant
+        for name, body in SUBFILES.items():
+            sub = os.path.join(skill_dir, name)
+            assert os.path.isfile(sub), name
+            assert open(sub).read() == body, name
+        # the record-keeping sub-file IS the shared rubric — no drift, no second copy
+        assert open(os.path.join(skill_dir, "record-keeping.md")).read() == RECORD_KEEPING
 
 
 def test_skill_body_points_to_the_subfile():
