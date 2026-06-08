@@ -4,6 +4,7 @@ import { Icon } from "./Icon";
 import Annotations from "./Annotations";
 import Provenance from "./Provenance";
 import Mitigations, { hasKnownMitigations } from "./Mitigations";
+import { JournalBackrefs } from "./JournalPanel";
 
 const LIFECYCLE = ["new", "triaging", "confirmed", "reported"];
 function Lifecycle({ status }: { status: string }) {
@@ -94,12 +95,13 @@ function PocSteps({ poc }: { poc: any }) {
 }
 
 // Detail + triage + follow-on launch + provenance for a selected finding.
-export default function Inspector({ finding, projectId, hypotheses = [], onChanged, onDeleted, onLaunch, onOpenLaunch, onViewTask, onHighlight, fuzzingEnabled, onOpenSource }: {
+export default function Inspector({ finding, projectId, hypotheses = [], onChanged, onDeleted, onLaunch, onOpenLaunch, onViewTask, onHighlight, fuzzingEnabled, onOpenSource, onSelectMention }: {
   finding: Finding | null; projectId?: string; hypotheses?: { id: string; statement: string }[];
   onChanged: () => void; onDeleted?: () => void; onLaunch: (taskId: string) => void;
   onOpenLaunch?: (type: string, opts?: { objective?: string; params?: any }) => void;
   onViewTask?: (taskId: string) => void; onHighlight?: (ids: string[]) => void; fuzzingEnabled?: boolean;
   onOpenSource?: (ref: { tree_id?: string; rel?: string; line?: number }) => void;
+  onSelectMention?: (kind: string, id: string) => void;
 }) {
   const [sugg, setSugg] = useState<any[]>([]);
   const [copied, setCopied] = useState(false);
@@ -521,6 +523,9 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
       </div>
 
       {projectId && <Annotations projectId={projectId} nodeKind="finding" nodeId={finding.id} onChanged={onChanged} />}
+
+      {/* The narrative trail — journal entries that @-mention this finding (design §5.5). */}
+      {projectId && <JournalBackrefs projectId={projectId} refKind="finding" refId={finding.id} onSelectMention={onSelectMention} />}
     </div>
   );
 }

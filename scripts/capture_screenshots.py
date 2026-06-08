@@ -334,6 +334,14 @@ async def _capture(base: str, pid: str) -> None:
         except Exception as e:
             print(f"  ! egress-audit: {e}")
 
+        # ── Feature — the research journal (timeline + @-mention chips) ──────────────
+        await pg.goto(proj + "?tab=journal", wait_until="networkidle")
+        await pg.wait_for_timeout(SETTLE)
+        try:
+            await _shoot(pg, "journal.png")
+        except Exception as e:
+            print(f"  ! journal: {e}")
+
         await b.close()
 
 

@@ -8,13 +8,15 @@ import FilesystemBrowser from "./FilesystemBrowser";
 import ToolResults from "./ToolResults";
 import Provenance from "./Provenance";
 import Mitigations, { hasKnownMitigations } from "./Mitigations";
+import { JournalBackrefs } from "./JournalPanel";
 
 // Node-type-aware detail shown when a target/function/symbol/string node is
 // selected in the graph (findings use the richer Inspector instead).
-export default function NodeInspector({ node, target, allowed, projectId, onLaunch, onFuzz, onChanged, onViewFinding, onOpenSourceViewer }: {
+export default function NodeInspector({ node, target, allowed, projectId, onLaunch, onFuzz, onChanged, onViewFinding, onOpenSourceViewer, onSelectMention }: {
   node: GraphNode; target?: TargetNode; allowed: string[]; isMock?: boolean; projectId?: string;
   onLaunch: (type: string) => void; onFuzz?: () => void; onChanged?: () => void; onViewFinding?: (fid: string) => void;
   onOpenSourceViewer?: (node: GraphNode) => void;
+  onSelectMention?: (kind: string, id: string) => void;
 }) {
   const isHypothesis = node.type === "node" && node.node_type === "hypothesis";
   const isFunction = node.type === "node" && node.node_type === "function";
@@ -242,6 +244,13 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
       {projectId && !isHypothesis && (
         <Annotations projectId={projectId} nodeKind={node.type === "target" ? "target" : "node"} nodeId={node.id}
                      allowRename={node.type === "node" && node.node_type === "function"} onChanged={onChanged} />
+      )}
+
+      {/* The narrative trail — journal entries that @-mention this object (design §5.5). */}
+      {projectId && (
+        <JournalBackrefs projectId={projectId}
+                         refKind={node.type === "target" ? "target" : isHypothesis ? "hypothesis" : "node"}
+                         refId={node.id} onSelectMention={onSelectMention} />
       )}
     </div>
   );

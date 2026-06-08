@@ -922,6 +922,95 @@ confirmed/rejected verdicts) and the **work-state** (investigating / parked / do
 
 ---
 
+## SURFACE 4e — Journal (right pane, "Journal" tab)
+
+The research notebook (design-working-memory.md §5): the interpreted-narrative half of the working-memory
+layer, paired with the Hypotheses worklist under one "notebook" mental model. A right-pane tab beside
+Findings/Hypotheses/Tasks/Campaigns. A timeline of freeform markdown entries (newest first), each attributed
+to a **human** or an **agent**, plus a lean composer that appears only when writing. Entries can `@`-mention
+any graph object as a clickable chip. All entry markdown is rendered **sanitized** (no raw HTML) — agent
+entries may quote attacker-derived strings from a hostile target, so this is a security boundary, not just
+hygiene.
+
+**JRN-01 — Journal tab: render the timeline**
+- Steps: open the **Journal** tab in the right pane.
+- Functional: a card per entry, newest first — an author badge (human/agent, distinct colour + icon), a
+  relative timestamp, an "edited" marker when the entry was edited, and the entry body rendered as sanitized
+  markdown (headings, lists, code, blockquotes, tables, task-lists). A staleness line ("last agent note N ago")
+  sits above the list. An empty project shows a "capture an idea / dead end / what you learned" hint, not a
+  blank panel.
+- 🔌 Backend: `GET /api/projects/{id}/journal` (entries newest-first, each with resolved mentions).
+- Qualitative: reads like a notebook — calm, skimmable, one entry per card; human vs agent is legible at a
+  glance; markdown is tastefully styled, never a wall of raw source (Aesthetics, Overall).
+- Prereq: ≥1 journal entry (human-written via JRN-04, or agent-written via a completed LLM task / `journal_add`).
+
+**JRN-02 — Filter by author / full-text search**
+- Steps: type in the search box; use the author select (all / human / agent).
+- Functional: search hits `GET …/journal/search?q=` (substring over bodies, newest first); the author select
+  filters the list; the two compose. Counts show per author in the select. A no-match search shows a clear
+  "no entries match", not an empty void.
+- 🔌 Backend: `GET /api/projects/{id}/journal/search?q=` (search) / `GET …/journal?author=` (filter).
+- Qualitative: search is the cross-session "what did I try on X" memory verb — fast, debounced, obvious
+  (Feedback, Efficiency).
+- Prereq: entries spanning both authors / varied bodies.
+
+**JRN-03 — `@`-mention chips: navigate / dangling**
+- Steps: in a rendered entry, click an `@`-mention chip.
+- Functional: a live chip (a kind glyph + the object's current label, in accent colour) selects the referenced
+  object via the SAME plumbing as elsewhere — a finding opens its Inspector; a node/target/hypothesis focuses
+  in the graph. A **dangling** mention (the object was archived, merged away, or deleted) renders greyed +
+  struck-through and does **not** navigate (never an error).
+- 🔌 Backend: mentions are resolved server-side through the merge keeper; each carries `resolved_id` + a
+  `dangling` flag. Clicking selects `resolved_id`.
+- Qualitative: chips read as first-class links, not raw `@[…](…)` syntax; the dangling state is unmistakable
+  yet unalarming (Consistency, Forgiveness). Link stability survives a merge/archive.
+- Prereq: an entry mentioning ≥1 live object and (ideally) ≥1 dangling reference.
+
+**JRN-04 — Compose a new entry (markdown + live preview)**
+- Steps: click **Write**; type markdown in the textarea; toggle **Preview**; **Add entry** (or ⌘/Ctrl+Enter).
+- Functional: the composer appears only while writing (not an always-on editor). Write shows the markdown
+  source; Preview renders it sanitized (with mention chips). Posting creates a **human** entry — this REST
+  surface is the researcher's own workbench. The new entry appears at the top of the timeline; Cancel discards.
+- 🔌 Backend: `POST /api/projects/{id}/journal` (`body`, `author:"human"`). Verify a new `journal_entry` row.
+- Qualitative: lean and unintimidating — a source box + preview, no WYSIWYG chrome; the editor doesn't eat
+  panel space when idle (Aesthetics — anti-bloat).
+- Prereq: a project.
+
+**JRN-05 — `@`-typeahead at the caret**
+- Steps: while composing, type `@` followed by a query.
+- Functional: an inline popover opens **at the caret** and searches targets / graph nodes / findings /
+  hypotheses live (reusing the header search resolver, extended to hypotheses); arrow keys move the highlight,
+  Enter/Tab/click inserts `@[label](kind:id)` and restores the caret after the token; Escape or a space
+  dismisses.
+- 🔌 Backend: `GET /api/projects/{id}/search` + `GET …/hypotheses` (the candidate set).
+- Qualitative: the popover sits on the `@`, not floating elsewhere; picking a result feels instant; this is
+  the most novel surface and should feel delightful (Efficiency, Aesthetics).
+- Prereq: a project with objects to mention.
+
+**JRN-06 — Edit / delete an entry**
+- Steps: hover an entry → click the pencil (edit) or × (delete) action.
+- Functional: edit reopens the composer inline seeded with the body; saving marks the entry **edited** and
+  re-parses its mentions. Delete confirms, then removes the entry. From this human workbench, ANY entry
+  (human or agent) is editable/deletable (the agent-only-own rule is enforced on the MCP path, not here).
+- 🔌 Backend: `PATCH /api/journal/{eid}` (edit, sets `edited`) / `DELETE /api/journal/{eid}` (delete).
+- Qualitative: actions reveal on hover (calm by default); editing is in-place, never a modal; the "edited"
+  marker is honest without being noisy (Forgiveness, Consistency).
+- Prereq: ≥1 entry.
+
+**JRN-07 — Back-references ("the narrative trail") in a detail pane**
+- Steps: select a finding (Inspector) or a node / target / hypothesis (NodeInspector) that journal entries
+  mention; scroll to the **In the journal** section.
+- Functional: a compact list of the entries that `@`-mention this object, each rendered as sanitized markdown
+  with its author badge + time; mention chips inside still navigate. The section is **absent** (not an empty
+  header) when nothing mentions the object.
+- 🔌 Backend: `GET /api/projects/{id}/journal?mentions_kind=…&mentions_id=…` (resolved through the merge
+  keeper, so a mention of a now-merged duplicate still matches the keeper).
+- Qualitative: closes the loop — read a hypothesis/finding, see the story that worked it without hunting the
+  journal (Overall, Discoverable); it sits naturally below the existing detail, not bolted on.
+- Prereq: an object mentioned by ≥1 entry.
+
+---
+
 ## SURFACE 4b — Tool Results panel + provenance (Phase O Observations)
 
 The Observation store (design §5.6) surfaced for the user: every deterministic tool call on a

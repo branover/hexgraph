@@ -678,6 +678,48 @@ def seed(session, *, reset: bool) -> dict:
     C.reap_campaign(session, session.get(FuzzCampaign, row.id))
     session.flush()
 
+    # ── Journal + a hypothesis (the working-memory layer — design-working-memory.md §5) ──
+    # A short narrative trail across both authors, with @-mentions of the findings/functions
+    # seeded above (one deliberately dangling), so the Journal tab + mention chips + the
+    # back-reference "narrative trail" all have real content to render and capture.
+    _step("Seed the research journal + a hypothesis (working-memory layer)")
+    from hexgraph.engine import hypotheses as _H
+    from hexgraph.engine import journal as _J
+    hyp = _H.create_hypothesis(
+        session, project,
+        statement="The /cgi-bin/ping handler trusts the host param without sanitization",
+        rationale="get_param() feeds straight into a system() call path with no escaping.")
+    session.flush()
+    n_cgi, n_diag, n_param = fns["cgi_handler"].id, fns["diagnostics"].id, fns["get_param"].id
+    journal_entries = [
+        ("human",
+         "## Kicking off the R7000 engagement\n\n"
+         "Starting from the unpacked rootfs. The web surface is the obvious first target — the CGI "
+         f"handler @[cgi_handler](node:{n_cgi}) parses request params and I want to know where the "
+         f"`host` value ends up. Tracking this as @[ping handler trusts host](hypothesis:{hyp.id}).\n\n"
+         "- [x] unpack firmware\n- [ ] trace `host` to a sink\n- [ ] confirm injection"),
+        ("agent",
+         "**Session log — recon on the admin web surface.**\n\n"
+         f"*Tried:* decompiled @[cgi_handler](node:{n_cgi}) and followed @[get_param](node:{n_param}). "
+         "The `host` parameter reaches a `system()` call with no escaping — classic command injection.\n\n"
+         f"*Worked:* recorded @[Unauthenticated command injection in /cgi-bin/ping](finding:{f_poc.id}).\n\n"
+         "*Learned:* the same `get_param` helper is reused across handlers, so other params are likely "
+         "tainted too — worth a sweep."),
+        ("human",
+         "Dead end on the auth-bypass idea — the session cookie is actually validated server-side, I "
+         f"misread the decompilation. Refocusing on the overflow in @[diagnostics](node:{n_diag}) "
+         "instead; the `strcpy` there looks reachable from the same CGI path."),
+        ("agent",
+         f"Confirmed the stack overflow: @[Stack buffer overflow in diagnostics() via strcpy](finding:{f_static.id}) "
+         "is reachable with a 600-byte `host`. Cross-referencing with the command injection — same entry "
+         "point, two bugs.\n\n> Next: try a PoC that chains both."),
+        ("human",
+         "Note to self: the firmware ships an old BusyBox. Keeping a stale reference here "
+         "@[removed_node](node:does-not-exist) just to confirm dangling links stay readable."),
+    ]
+    for _author, _body in journal_entries:
+        _J.add_journal_entry(session, project, body=_body, author=_author)
+
     # ── Egress audit (a few allowed + one denied) ────────────────────────────────────
     _step("Record egress audit events (allowed + denied)")
     poc_task_id = f_poc.task_id
@@ -705,6 +747,7 @@ def seed(session, *, reset: bool) -> dict:
         "edges": session.query(Edge).filter(Edge.project_id == pid).count(),
         "findings": session.query(FRow).filter(FRow.project_id == pid).count(),
         "campaigns": session.query(FuzzCampaign).filter(FuzzCampaign.project_id == pid).count(),
+        "journal": len(journal_entries),
         "edge_types": sorted({e.type for e in
                               session.query(Edge).filter(Edge.project_id == pid).all()}),
     }
@@ -741,7 +784,8 @@ def main() -> int:
     else:
         print("\033[32m✓ showcase seeded\033[0m — "
               f"{info['targets']} targets · {info['nodes']} nodes · {info['edges']} edges · "
-              f"{info['findings']} findings · {info['campaigns']} campaign(s)")
+              f"{info['findings']} findings · {info['campaigns']} campaign(s) · "
+              f"{info.get('journal', 0)} journal entries")
         print(f"  edge types: {', '.join(info['edge_types'])}")
     print(f"  project id: {info['project_id']}")
     print("  serve it:   just serve   →  open the project in the UI")

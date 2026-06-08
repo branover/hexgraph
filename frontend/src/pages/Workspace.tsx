@@ -10,6 +10,7 @@ import {
 } from "../components/graphLayers";
 import FindingsPanel from "../components/FindingsPanel";
 import HypothesesPanel from "../components/HypothesesPanel";
+import JournalPanel from "../components/JournalPanel";
 import Inspector from "../components/Inspector";
 import NodeInspector from "../components/NodeInspector";
 import { TasksPanel, TaskDetail } from "../components/TasksPanel";
@@ -53,9 +54,10 @@ export default function Workspace() {
   const [hoverType, setHoverType] = useState<string | null>(null);
   const [pinType, setPinType] = useState<string | null>(null);
   const [busy, setBusy] = useState<string>();
-  const [tab, setTab] = useState<"findings" | "tasks" | "campaigns" | "hypotheses">(
+  const [tab, setTab] = useState<"findings" | "tasks" | "campaigns" | "hypotheses" | "journal">(
     new URLSearchParams(window.location.search).get("tab") === "campaigns" ? "campaigns"
-      : new URLSearchParams(window.location.search).get("tab") === "hypotheses" ? "hypotheses" : "findings");
+      : new URLSearchParams(window.location.search).get("tab") === "hypotheses" ? "hypotheses"
+      : new URLSearchParams(window.location.search).get("tab") === "journal" ? "journal" : "findings");
   // Bumped after a hypothesis worklist mutation so the panel re-fetches and the graph reloads
   // (a pin toggle changes canvas visibility).
   const [hypReload, setHypReload] = useState(0);
@@ -434,6 +436,13 @@ export default function Workspace() {
     const n = graph?.nodes.find((x) => x.id === hid);
     if (n) { setSelNode(n); setSelGraphId(hid); }
   };
+  // A journal @-mention chip was clicked → select the referenced object via the SAME plumbing
+  // every other navigation uses: a finding opens in the Inspector; a node/target/hypothesis
+  // focuses in the graph (focusOn already selects + serializes). Danglers never call this.
+  const selectMention = (kind: string, id: string) => {
+    if (kind === "finding") viewFinding(id);
+    else focusOn(id);  // node / target / hypothesis — the node lives in graph.nodes regardless of pin
+  };
 
   // Finding → source jump: open the file in Source mode at the line (design §6.3).
   const revealSource = (ref: { tree_id?: string; rel?: string; line?: number }) => {
@@ -711,6 +720,10 @@ export default function Workspace() {
               title="Hypotheses — the research-question worklist">
         <Icon name="bulb" size={12} /> Hypotheses
       </button>
+      <button className={"btn sm" + (tab === "journal" ? " primary" : " ghost")} onClick={() => { setTab("journal"); setUrl({ tab: "journal" }); }}
+              title="Journal — the research notebook (ideas, attempts, dead ends, lessons)">
+        <Icon name="book" size={12} /> Journal
+      </button>
       <button className={"btn sm" + (tab === "tasks" ? " primary" : " ghost")} onClick={() => { setTab("tasks"); setUrl({ tab: undefined }); }}>
         <Icon name="task" size={12} /> Tasks · {tasks.length}
       </button>
@@ -738,6 +751,8 @@ export default function Workspace() {
                      selectedId={selNode?.node_type === "hypothesis" ? selNode.id : undefined}
                      onSelect={(h) => viewHypothesis(h.id)}
                      onChanged={() => { setHypReload((k) => k + 1); load(); }} />
+  ) : tab === "journal" ? (
+    <JournalPanel projectId={projectId!} onSelectMention={selectMention} />
   ) : tab === "campaigns" ? (
     <CampaignsPanel projectId={projectId!} selectedId={selCampaign} onSelect={(id) => selectCampaign(id)}
                     onStartCampaign={bestFuzzTarget() ? () => setFuzzFor(bestFuzzTarget()!) : undefined} />
@@ -803,12 +818,12 @@ export default function Workspace() {
         ? () => setFuzzFor(fuzzTarget) : undefined;
       return <NodeInspector node={selNode} target={tgt} allowed={allowed} isMock={isMock} projectId={projectId}
                             onChanged={load} onViewFinding={viewFinding} onLaunch={onLaunch} onFuzz={onFuzz}
-                            onOpenSourceViewer={openFunctionViewer} />;
+                            onOpenSourceViewer={openFunctionViewer} onSelectMention={selectMention} />;
     }
     return <Inspector finding={selFinding} projectId={projectId} hypotheses={hypotheses} onChanged={load}
                       onDeleted={() => { setSelFinding(null); setSelGraphId(undefined); load(); }}
                       onLaunch={pollThenReload} onOpenLaunch={openLaunchForFinding} onViewTask={viewTask}
-                      fuzzingEnabled={fuzzingEnabled} onOpenSource={revealSource}
+                      fuzzingEnabled={fuzzingEnabled} onOpenSource={revealSource} onSelectMention={selectMention}
                       onHighlight={(ids) => ids[0] && setSelGraphId(ids[0])} />;
   };
 
