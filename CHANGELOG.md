@@ -5,6 +5,29 @@ All notable changes to HexGraph are recorded here. The format loosely follows
 [semantic versioning](https://semver.org/) properly once it reaches 1.0. Until then,
 expect breaking changes between minor versions.
 
+## [0.7.0](https://github.com/branover/hexgraph/compare/hexgraph-v0.6.0...hexgraph-v0.7.0) (2026-06-08)
+
+
+### Features
+
+* byte-faithful argv for a solver argv PoC reproducer ([#196](https://github.com/branover/hexgraph/issues/196)) ([19369c9](https://github.com/branover/hexgraph/commit/19369c9b6b6b69552b304c6e3952ee83fe74219f))
+* graph aesthetics + friction polish (single-binary fit, matches_rule edge, search Enter, grid + wheel-warn) ([#198](https://github.com/branover/hexgraph/issues/198)) ([8e2f8f0](https://github.com/branover/hexgraph/commit/8e2f8f09c1b71a549ae2775741339903333ab0d7))
+* hypotheses task list (working-memory layer) ([#203](https://github.com/branover/hexgraph/issues/203)) ([5f1b3f3](https://github.com/branover/hexgraph/commit/5f1b3f3c4ad7bb3bdddb4548988cf3925085fd57))
+* journal backend — the working-memory narrative layer (store + MCP + API + discipline loop) ([#202](https://github.com/branover/hexgraph/issues/202)) ([d312dd1](https://github.com/branover/hexgraph/commit/d312dd1ce256ba0bde877cb1b9d8cfad74f21938))
+* journal frontend — completes the working-memory layer ([#205](https://github.com/branover/hexgraph/issues/205)) ([1df989a](https://github.com/branover/hexgraph/commit/1df989ac8529f0cbe3d48c2740bf16c260801de7))
+* proactively warn when the sandbox image is stale (older than its Dockerfile) ([#195](https://github.com/branover/hexgraph/issues/195)) ([a5d8644](https://github.com/branover/hexgraph/commit/a5d864431c8cef92664ed5c71592fa8c8254700c))
+* record-keeping guidance source-of-truth (working-memory Phase 0) ([#201](https://github.com/branover/hexgraph/issues/201)) ([017d998](https://github.com/branover/hexgraph/commit/017d9986cd558395972433fcda4c598ba966d1bb))
+
+
+### Performance Improvements
+
+* batch journal mention resolution to kill the list/search N+1 ([#204](https://github.com/branover/hexgraph/issues/204)) ([9bf666b](https://github.com/branover/hexgraph/commit/9bf666b523ac33737956e019645c4db111b83080))
+
+
+### Documentation
+
+* surface meta_check_features `image_stale` in the SKILL + mcp.md ([#199](https://github.com/branover/hexgraph/issues/199)) ([484086c](https://github.com/branover/hexgraph/commit/484086c79cfdcdbf84be48b3e42fa17a4793c76d))
+
 ## [0.6.0](https://github.com/branover/hexgraph/compare/hexgraph-v0.5.0...hexgraph-v0.6.0) (2026-06-07)
 
 
