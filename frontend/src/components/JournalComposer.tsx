@@ -98,7 +98,7 @@ export default function JournalComposer({ projectId, initialBody, onSave, onCanc
   const pick = (c: Cand) => {
     const ta = taRef.current; if (ta == null || trigger == null) return;
     const pos = ta.selectionStart;
-    const label = c.label.replace(/[[\]()]/g, " ").trim().slice(0, 80) || c.kind;
+    const label = (c.label ?? "").replace(/[[\]()]/g, " ").trim().slice(0, 80) || c.kind;
     const token = `@[${label}](${c.kind}:${c.id})`;
     const next = body.slice(0, trigger) + token + body.slice(pos);
     setBody(next);

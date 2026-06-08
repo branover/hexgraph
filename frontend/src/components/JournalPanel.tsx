@@ -26,6 +26,9 @@ export default function JournalPanel({ projectId, onSelectMention }: {
   onSelectMention?: (kind: string, id: string) => void;
 }) {
   const [entries, setEntries] = useState<JournalEntry[]>([]);
+  // Counts/staleness reflect the current SEARCH across BOTH authors, independent of the
+  // author filter, so the dropdown tallies and the "last agent entry" line stay accurate.
+  const [countBasis, setCountBasis] = useState<JournalEntry[]>([]);
   const [author, setAuthor] = useState<"all" | "human" | "agent">("all");
   const [q, setQ] = useState("");
   const [composing, setComposing] = useState(false);
@@ -33,17 +36,22 @@ export default function JournalPanel({ projectId, onSelectMention }: {
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const searchTimer = useRef<any>();
+  const seq = useRef(0);  // liveness guard: only the newest load() may set state
 
   const load = useCallback(async () => {
+    const my = ++seq.current;
     try {
+      // Fetch BOTH authors (a server-side author filter would skew the per-author counts);
+      // filter for display client-side instead.
       const r = q.trim()
         ? await api.searchJournal(projectId, q.trim())
-        : await api.journal(projectId, { author: author === "all" ? undefined : author });
-      // Search has no author filter server-side; apply it client-side for a consistent UI.
-      const rows = q.trim() && author !== "all" ? r.entries.filter((e) => e.author === author) : r.entries;
-      setEntries(rows);
-    } catch { setEntries([]); }
-    finally { setLoaded(true); }
+        : await api.journal(projectId, {});
+      if (my !== seq.current) return;  // a newer load() already landed — drop this stale one
+      const all = r.entries;
+      setCountBasis(all);
+      setEntries(author === "all" ? all : all.filter((e) => e.author === author));
+    } catch { if (my === seq.current) { setCountBasis([]); setEntries([]); } }
+    finally { if (my === seq.current) setLoaded(true); }
   }, [projectId, author, q]);
 
   // Debounce the search; reload immediately on author/project change.
@@ -56,11 +64,11 @@ export default function JournalPanel({ projectId, onSelectMention }: {
 
   const counts = useMemo(() => {
     const c = { human: 0, agent: 0 };
-    entries.forEach((e) => { c[e.author]++; });
+    countBasis.forEach((e) => { c[e.author]++; });
     return c;
-  }, [entries]);
+  }, [countBasis]);
 
-  const lastAgent = useMemo(() => entries.find((e) => e.author === "agent"), [entries]);
+  const lastAgent = useMemo(() => countBasis.find((e) => e.author === "agent"), [countBasis]);
 
   const create = async (body: string) => {
     setBusy(true);
