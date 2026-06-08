@@ -10,7 +10,7 @@ from hexgraph.db.models import EdgeType, FindingStatus, NodeType, TargetKind
 from hexgraph.db.session import session_scope
 from hexgraph.engine.graph.authoring import create_socket
 from hexgraph.engine.graph.edges import add_edge
-from hexgraph.engine.findings import persist_finding
+from hexgraph.engine.findings.findings import persist_finding
 from hexgraph.engine.graph.graph import (
     SKELETON_THRESHOLD,
     build_graph,

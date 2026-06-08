@@ -80,7 +80,7 @@ class MockLLMBackend:
                                tool_calls=calls, stop_reason="tool_use")
 
         # PoC-spec fixtures (the `poc` task): return the spec JSON as-is rather than
-        # the {"findings": …} envelope, so engine.poc._generate_spec can read it.
+        # the {"findings": …} envelope, so engine.findings.poc._generate_spec can read it.
         if "poc" in fixture:
             return LLMResponse(text=json.dumps(self._fill_templates(fixture, req.template_vars)),
                                usage=_DEFAULT_USAGE)

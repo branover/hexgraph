@@ -44,7 +44,7 @@ def _dispatch(session: Session, project: Project, target: Target, task: Task) ->
         execute_delegate(session, project, target, task)
         return
     if task.type == "poc":
-        from hexgraph.engine.poc import execute_poc
+        from hexgraph.engine.findings.poc import execute_poc
 
         execute_poc(session, project, target, task, get_executor())
         return

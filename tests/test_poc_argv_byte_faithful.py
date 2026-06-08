@@ -106,7 +106,7 @@ def test_build_cmd_text_argv_unchanged_when_no_argv_b64():
 def test_substitute_leaves_raw_byte_fields_verbatim():
     """{{NONCE}} substitution must NOT touch the raw base64 byte fields (argv_b64/stdin_b64) —
     rewriting them would corrupt the encoded bytes."""
-    from hexgraph.engine.poc import _substitute
+    from hexgraph.engine.findings.poc import _substitute
 
     b64 = base64.b64encode(SERIAL).decode()
     spec = {"argv_b64": [b64], "stdin_b64": b64,
@@ -195,7 +195,7 @@ def _solver_finding(input_model="argv", minimal=SERIAL_HEX, concrete=SERIAL_HEX 
 def test_spec_from_solver_finding_builds_argv_b64(hg_home):
     """The handoff: an argv-model solver finding yields a byte-faithful `argv_b64` spec carrying
     the MINIMAL recovered input (the part that matters), with a sensible default oracle."""
-    from hexgraph.engine.poc import spec_from_solver_finding
+    from hexgraph.engine.findings.poc import spec_from_solver_finding
 
     with session_scope() as s:
         p = create_project(s, name="handoff")
@@ -212,7 +212,7 @@ def test_spec_from_solver_finding_builds_argv_b64(hg_home):
 
 def test_spec_from_solver_finding_stdin_model(hg_home):
     """An stdin-model solver finding yields `stdin_b64`, not `argv_b64`."""
-    from hexgraph.engine.poc import spec_from_solver_finding
+    from hexgraph.engine.findings.poc import spec_from_solver_finding
 
     with session_scope() as s:
         p = create_project(s, name="handoff-stdin")
@@ -226,7 +226,7 @@ def test_spec_from_solver_finding_stdin_model(hg_home):
 
 def test_spec_from_solver_finding_preserves_caller_oracle(hg_home):
     """A caller-supplied base_spec (its oracle) is preserved; only the input is filled in."""
-    from hexgraph.engine.poc import spec_from_solver_finding
+    from hexgraph.engine.findings.poc import spec_from_solver_finding
 
     with session_scope() as s:
         p = create_project(s, name="handoff-oracle")
@@ -240,7 +240,7 @@ def test_spec_from_solver_finding_preserves_caller_oracle(hg_home):
 
 def test_spec_from_solver_finding_none_without_solver_evidence(hg_home):
     """A non-solver finding (no evidence.extra.solver) yields None — nothing to hand off."""
-    from hexgraph.engine.poc import spec_from_solver_finding
+    from hexgraph.engine.findings.poc import spec_from_solver_finding
 
     with session_scope() as s:
         p = create_project(s, name="no-solver")
@@ -253,7 +253,7 @@ def test_spec_from_solver_finding_none_without_solver_evidence(hg_home):
 
 
 def _persist(s, p, t, fmodel):
-    from hexgraph.engine.findings import persist_finding
+    from hexgraph.engine.findings.findings import persist_finding
     from hexgraph.engine.tasks import create_task
 
     task = create_task(s, project=p, target_id=t.id, type="solve", backend="agent")
@@ -266,7 +266,7 @@ def _persist(s, p, t, fmodel):
 def test_repro_command_renders_argv_b64_as_ansi_c(hg_home):
     """`repro_command` renders an argv_b64 element as a $'\\xNN…' literal so a human pastes the
     exact non-printable serial — not a mangled string."""
-    from hexgraph.engine.poc_repro import repro_command
+    from hexgraph.engine.findings.poc_repro import repro_command
 
     with session_scope() as s:
         p = create_project(s, name="repro-b64")
@@ -289,7 +289,7 @@ def test_verify_solved_argv_in_sandbox_end_to_end(hg_home):
     """THE proof end to end: the SOLVED serial, fed byte-faithfully via `argv_b64`, reaches the
     licensegate success path WHEN RUN IN THE REAL SANDBOX — the capability the eval flagged.
     Goes through the real engine `verify_poc` (policy-gated, real executor)."""
-    from hexgraph.engine.poc import verify_poc
+    from hexgraph.engine.findings.poc import verify_poc
 
     st.update_settings({"features.poc.enabled": True})  # opt-in exec gate
     with session_scope() as s:

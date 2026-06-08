@@ -6,10 +6,10 @@ from hexgraph.api.app import create_app
 from hexgraph.db.models import Edge, EdgeType, FindingStatus
 from hexgraph.db.session import session_scope
 from hexgraph.engine.graph.crosstarget import link_same_code
-from hexgraph.engine.findings import persist_finding
+from hexgraph.engine.findings.findings import persist_finding
 from hexgraph.engine.ingest import create_project, ingest_file
 from hexgraph.engine.graph.nodes import materialize_function
-from hexgraph.engine.report import build_report_md
+from hexgraph.engine.findings.report import build_report_md
 from hexgraph.engine.tasks import create_task
 from hexgraph.models.finding import Evidence, Finding as FModel
 

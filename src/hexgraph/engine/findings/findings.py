@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from hexgraph.db.models import EdgeType
 from hexgraph.db.models import Finding as FindingRow
 from hexgraph.db.models import FindingStatus, Task
-from hexgraph.engine.assurance import assurance_of, default_for
+from hexgraph.engine.findings.assurance import assurance_of, default_for
 from hexgraph.engine.graph.edges import add_edge
 from hexgraph.engine.graph.nodes import materialize_function
 from hexgraph.models.finding import Finding

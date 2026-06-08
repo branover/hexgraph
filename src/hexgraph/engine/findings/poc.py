@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Project, Target, Task, TaskStatus
 from hexgraph.engine import cas
-from hexgraph.engine.findings import persist_finding
+from hexgraph.engine.findings.findings import persist_finding
 from hexgraph.engine.tasks import write_trace
 from hexgraph.models.finding import Evidence, Finding, FollowupSuggestion
 from hexgraph.sandbox.executor import Executor, get_executor
@@ -143,7 +143,7 @@ def verify_poc(session: Session, project: Project, target: Target, spec: dict,
       policy-gated by `assert_allows_execution` (PoC/fuzzing enabled).
     Beyond the in-band `{{NONCE}}`-in-output oracle (best for reflected cmdi), extra oracles
     prove broader vuln classes by observing a side effect on an INDEPENDENT channel
-    (engine.oracles, docs/design/design-verification-oracles.md): **oob_write** (the exploit writes
+    (engine.findings.oracles, docs/design/design-verification-oracles.md): **oob_write** (the exploit writes
     `{{NONCE}}`, HexGraph reads it back out-of-band), **canary_read** (HexGraph plants a random
     canary out-of-band, the exploit must read it back), **callback** (a bounded local
     listener the target dials back, substituted as `{{CALLBACK}}` — proves blind cmdi/SSRF/RCE),
@@ -153,7 +153,7 @@ def verify_poc(session: Session, project: Project, target: Target, spec: dict,
     Every result also carries an **`assurance`** triple ({standard, method, precondition},
     docs/design/design-verification-oracles.md) the engine computes — so the two standards of "verified"
     (code-present vs input-reachable) are differentiated by code, not prose."""
-    from hexgraph.engine import oracles
+    from hexgraph.engine.findings import oracles
 
     nonce = "HEXGRAPH_PWNED_" + secrets.token_hex(6)
     live = _substitute(copy.deepcopy(spec or {}), nonce)
@@ -185,7 +185,7 @@ def verify_poc(session: Session, project: Project, target: Target, spec: dict,
     # DYNAMIC method, but the SCOPE decides the standard — a verified live web/tcp surface PoC
     # establishes `input_reachable`, while a verified isolated binary exec is `code_present`
     # (lab-confirmed); see derive_poc_assurance / docs/design/design-verification-oracles.md.
-    from hexgraph.engine.assurance import derive_poc_assurance
+    from hexgraph.engine.findings.assurance import derive_poc_assurance
     result["assurance"] = derive_poc_assurance(result, live, is_web=is_web, is_tcp=is_tcp)
     return result
 
@@ -232,7 +232,7 @@ def _assurance_str(a: dict | None) -> str:
 def _repro(spec: dict, target: Target | None):
     """The human-facing reproduction command; never let rendering break a finding."""
     try:
-        from hexgraph.engine.poc_repro import repro_command
+        from hexgraph.engine.findings.poc_repro import repro_command
         return repro_command(spec, target)
     except Exception:  # noqa: BLE001
         return None

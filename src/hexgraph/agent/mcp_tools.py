@@ -17,7 +17,7 @@ import json
 
 from hexgraph.db.models import Finding, Node, Project, Target
 from hexgraph.db.session import session_scope
-from hexgraph.engine.findings import is_verified
+from hexgraph.engine.findings.findings import is_verified
 from hexgraph.models.finding import Finding as FModel
 
 
@@ -405,7 +405,7 @@ def build_target(project_id: str, source_tree_id: str, system: str | None = None
                     try:
                         from pathlib import Path as _P
                         from hexgraph.engine.filesystem import host_root as _fs
-                        from hexgraph.engine.poc import _find_sysroot
+                        from hexgraph.engine.findings.poc import _find_sysroot
                         r = _find_sysroot(_fs(p, fw))
                         sysroot = str(r) if r and _P(str(r)).is_dir() else None
                     except Exception:  # noqa: BLE001
@@ -942,7 +942,7 @@ def list_findings(project_id: str) -> list[dict]:
     {exploitability, coverage_instrumented, dupe_count} so you can triage at a glance —
     call get_finding(id) for the full evidence (incl. the PoC/fuzz detail in
     evidence.extra)."""
-    from hexgraph.engine.assurance import assurance_of, compact_assurance
+    from hexgraph.engine.findings.assurance import assurance_of, compact_assurance
 
     with session_scope() as s:
         rows = s.query(Finding).filter(Finding.project_id == project_id).all()
@@ -1001,7 +1001,7 @@ def record_finding(project_id: str, target_id: str, finding: dict, task_id: str 
     evidence.extra.assurance = {standard, method, precondition} (e.g. input_reachable/static/
     unauthenticated) — state requires_credentials honestly; don't claim what you didn't show."""
     from hexgraph.db.models import Task
-    from hexgraph.engine.findings import FINDING_TYPES, persist_finding
+    from hexgraph.engine.findings.findings import FINDING_TYPES, persist_finding
     from hexgraph.engine.tasks import create_task
 
     if finding_type is not None and finding_type not in FINDING_TYPES:
@@ -1034,7 +1034,7 @@ def propagate_finding(finding_id: str, target_id: str, function: str | None = No
     function name. Returns the new finding id."""
     from hexgraph.db.models import EdgeType, Finding, Task
     from hexgraph.engine.graph.edges import add_edge
-    from hexgraph.engine.findings import persist_finding
+    from hexgraph.engine.findings.findings import persist_finding
     from hexgraph.engine.tasks import create_task
     from hexgraph.models.finding import Finding as FModelCls
 
@@ -1278,7 +1278,7 @@ def update_finding(finding_id: str, status: str | None = None, severity: str | N
     confidence/severity and set status='confirmed' after a PoC verifies, 'dismissed'
     if it's a false positive, or set/correct the triage `cwe`."""
     from hexgraph.db.models import Finding, FindingStatus
-    from hexgraph.engine.findings import normalize_cwe
+    from hexgraph.engine.findings.findings import normalize_cwe
 
     with session_scope() as s:
         f = s.get(Finding, finding_id)
@@ -1751,12 +1751,12 @@ def get_schemas() -> dict:
 
     from hexgraph.db.models import EdgeType, FindingStatus, NodeType
     from hexgraph.engine.graph.annotations import KINDS as ANN_KINDS, NODE_KINDS as ANN_NODE_KINDS
-    from hexgraph.engine.assurance import LADDER as _ASSURANCE_LADDER, PRECONDITIONS as _PRECONDITIONS
+    from hexgraph.engine.findings.assurance import LADDER as _ASSURANCE_LADDER, PRECONDITIONS as _PRECONDITIONS
     from hexgraph.engine.graph.edge_schemas import SOCKET_KINDS, describe_edges
     from hexgraph.engine.journal import AUTHORS as _JOURNAL_AUTHORS, REF_KINDS as _JOURNAL_REF_KINDS
     from hexgraph.engine.graph.hypotheses import STATUSES as HYP_STATUSES, WORK_STATES as HYP_WORK_STATES
     from hexgraph.engine.graph.node_schemas import describe_nodes
-    from hexgraph.engine.findings import FINDING_TYPES
+    from hexgraph.engine.findings.findings import FINDING_TYPES
     from hexgraph.models.finding import Finding as FModelCls
 
     cats = list(typing.get_args(FModelCls.model_fields["category"].annotation))
@@ -2337,7 +2337,7 @@ def verify_poc(target_id: str, poc: dict, finding_id: str | None = None) -> dict
     .verification + .assurance) so it shows as `verified` in list_findings — the typed home for a
     confirmed exploit. ALWAYS attach: a confirmed vuln finding must carry its verified PoC."""
     from hexgraph.db.models import Finding
-    from hexgraph.engine.poc import (
+    from hexgraph.engine.findings.poc import (
         _spec_has_input,
         spec_from_solver_finding,
         verify_poc as _verify,
@@ -2362,7 +2362,7 @@ def verify_poc(target_id: str, poc: dict, finding_id: str | None = None) -> dict
         try:
             r = _verify(s, s.get(Project, t.project_id), t, poc)
         except PolicyViolation:
-            from hexgraph.engine.poc import _is_web
+            from hexgraph.engine.findings.poc import _is_web
             return {"error": ("egress not permitted — enable features.network in Settings to verify a web PoC"
                               if _is_web(t) else
                               "execution not permitted — enable features.poc in Settings to verify PoCs")}
@@ -2389,7 +2389,7 @@ def verify_poc(target_id: str, poc: dict, finding_id: str | None = None) -> dict
                 # partial order so a write NEVER downgrades an already-stronger stored rung — a
                 # failed/weaker re-verify keeps the prior assurance; a real re-confirmation at the
                 # same/higher rung is fine. The triple is engine-computed and cannot be faked.
-                from hexgraph.engine.assurance import assurance_of, merge_assurance
+                from hexgraph.engine.findings.assurance import assurance_of, merge_assurance
                 out_assurance = merge_assurance(assurance_of(ev), r.get("assurance"))
                 extra["assurance"] = out_assurance
                 extra["verification"] = {"verified": bool(r.get("verified")), "detail": r.get("detail"),
@@ -2397,7 +2397,7 @@ def verify_poc(target_id: str, poc: dict, finding_id: str | None = None) -> dict
                                          "output": (r.get("output") or "")[:2000],
                                          "assurance": out_assurance}
                 # A human copy-paste reproduction command (display only; verify uses the spec).
-                from hexgraph.engine.poc_repro import repro_command
+                from hexgraph.engine.findings.poc_repro import repro_command
                 repro = None
                 try:
                     repro = extra["repro_command"] = repro_command(poc, t)
@@ -2410,7 +2410,7 @@ def verify_poc(target_id: str, poc: dict, finding_id: str | None = None) -> dict
                 f.evidence_json = ev
         # Surface the engine-computed assurance triple {standard, method, precondition} in the
         # return so the agent sees the rung WITHOUT a follow-up get_finding.
-        from hexgraph.engine.assurance import compact_assurance
+        from hexgraph.engine.findings.assurance import compact_assurance
         return {"verified": bool(r.get("verified")), "detail": r.get("detail"),
                 "exit_code": r.get("exit_code"), "output": (r.get("output") or "")[:4000],
                 "assurance": compact_assurance(out_assurance),
@@ -2508,13 +2508,13 @@ def reachability(finding_id: str | None = None, sink_node_id: str | None = None,
     unauthenticated; else unspecified. It is an ARGUMENT, not a trigger: it only UPGRADES a
     code_present/static floor and NEVER downgrades a dynamic claim. Build the graph first
     (create_node the input/sink + create_edge the taints/calls path), then call this."""
-    from hexgraph.engine.reachability import (ReachabilityError,
+    from hexgraph.engine.findings.reachability import (ReachabilityError,
                                               argue_reachability_for_finding,
                                               find_source_to_sink_path)
 
     if not finding_id and not sink_node_id:
         return {"error": "pass finding_id and/or sink_node_id"}
-    from hexgraph.engine.assurance import PRECONDITIONS
+    from hexgraph.engine.findings.assurance import PRECONDITIONS
 
     if precondition is not None and precondition not in PRECONDITIONS:
         return {"error": f"precondition must be one of {PRECONDITIONS}"}

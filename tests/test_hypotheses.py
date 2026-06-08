@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from hexgraph.api.app import create_app
 from hexgraph.db.models import NodeType
 from hexgraph.db.session import session_scope
-from hexgraph.engine.findings import persist_finding
+from hexgraph.engine.findings.findings import persist_finding
 from hexgraph.engine.graph.hypotheses import (
     DEFAULT_WORK_STATE, WORK_STATES, create_hypothesis, link_evidence, list_hypotheses,
     recompute_status, set_pinned, set_status, set_work_state, summary,

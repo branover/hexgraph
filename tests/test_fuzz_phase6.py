@@ -23,7 +23,7 @@ from hexgraph.engine import campaigns as C
 from hexgraph.engine import fuzz_env as FE
 from hexgraph.engine.fuzzers.base import FuzzCampaignSpec
 from hexgraph.engine.ingest import create_project, ingest_file
-from hexgraph.engine.findings import persist_finding
+from hexgraph.engine.findings.findings import persist_finding
 from hexgraph.engine.tasks import create_task
 from hexgraph.models.finding import Evidence, Finding as FModel
 from hexgraph.policy import PolicyViolation, assert_allows_fuzz_remote, current_policy

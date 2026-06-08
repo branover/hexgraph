@@ -9,7 +9,7 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from hexgraph.db.models import Finding, Project, Target, Task
-from hexgraph.engine.findings import is_verified, row_to_payload
+from hexgraph.engine.findings.findings import is_verified, row_to_payload
 
 
 # --- Request bodies ---

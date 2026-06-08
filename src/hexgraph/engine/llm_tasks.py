@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from hexgraph.db.models import EdgeType, Project, Target, TargetKind, Task, TaskStatus
 from hexgraph.engine.graph.edges import add_edge
-from hexgraph.engine.findings import persist_finding
+from hexgraph.engine.findings.findings import persist_finding
 from hexgraph.engine.graph.nodes import materialize_function
 from hexgraph.engine.re.recon import RISKY_SINKS
 from hexgraph.engine.graph.refs import pick_sibling, resolve_target_ref
@@ -360,7 +360,7 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
     # not fail the task (the findings are already persisted).
     all_finding_ids = core_finding_ids + persisted_ids
     if all_finding_ids:
-        from hexgraph.engine.reachability import argue_reachability_for_finding
+        from hexgraph.engine.findings.reachability import argue_reachability_for_finding
 
         for fid in all_finding_ids:
             try:

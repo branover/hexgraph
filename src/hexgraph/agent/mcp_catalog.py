@@ -34,11 +34,11 @@ import typing as _typing
 from hexgraph.db.models import EdgeType, FindingStatus, NodeType
 from hexgraph.agent import mcp_tools as _t
 from hexgraph.agent.agent_tools import MAX_CHARS_DESC as _MAX_CHARS_DESC
-from hexgraph.engine.assurance import PRECONDITIONS as _PRECONDITIONS
+from hexgraph.engine.findings.assurance import PRECONDITIONS as _PRECONDITIONS
 from hexgraph.engine.graph.annotations import KINDS as _ANN_KINDS, NODE_KINDS as _ANN_NODE_KINDS
 from hexgraph.engine.build.build import BUILD_SYSTEMS as _BUILD_SYSTEMS
 from hexgraph.engine.graph.edge_schemas import SOCKET_KINDS as _SOCKET_KINDS
-from hexgraph.engine.findings import FINDING_TYPES as _FINDING_TYPES
+from hexgraph.engine.findings.findings import FINDING_TYPES as _FINDING_TYPES
 from hexgraph.engine.fuzzers.base import SURFACE_ENGINES as _SURFACE_ENGINES, SURFACES as _FUZZ_SURFACES
 from hexgraph.engine.graph.hypotheses import (
     RELATIONS as _RELATIONS,
@@ -86,7 +86,7 @@ EVIDENCE_RELATIONS = sorted(_RELATIONS)  # engine.graph.hypotheses.RELATIONS: su
 HYPOTHESIS_STATUSES = list(_HYP_STATUSES)  # engine.graph.hypotheses.STATUSES: derived (open/supported/refuted/contested) + verdicts
 JOURNAL_AUTHORS = list(_JOURNAL_AUTHORS)  # engine.journal.AUTHORS: human | agent
 HYPOTHESIS_WORK_STATES = list(_HYP_WORK_STATES)  # engine.graph.hypotheses.WORK_STATES: investigating/parked/done (the worklist axis)
-REACHABILITY_PRECONDITIONS = list(_PRECONDITIONS)  # engine.assurance.PRECONDITIONS: unauthenticated/requires_credentials/unspecified
+REACHABILITY_PRECONDITIONS = list(_PRECONDITIONS)  # engine.findings.assurance.PRECONDITIONS: unauthenticated/requires_credentials/unspecified
 
 # Tool groups let a user expose only what they need so an agent's context isn't
 # polluted with tools they won't use:

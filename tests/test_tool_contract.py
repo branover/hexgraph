@@ -136,7 +136,7 @@ def test_closed_value_set_params_carry_a_schema_enum():
     assert set(by_name["fuzz_start"]["surface"]["enum"]) == set(SURFACES)
     assert set(by_name["fuzz_start"]["engine"]["enum"]) == {e for es in SURFACE_ENGINES.values() for e in es}
     # the reachability precondition enum is the engine's PRECONDITIONS authority (no drift).
-    from hexgraph.engine.assurance import PRECONDITIONS
+    from hexgraph.engine.findings.assurance import PRECONDITIONS
     assert set(by_name["finding_reachability"]["precondition"]["enum"]) == set(PRECONDITIONS)
     # the journal author enum is the engine's AUTHORS authority (no drift).
     from hexgraph.engine.journal import AUTHORS

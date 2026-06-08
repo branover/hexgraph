@@ -20,8 +20,8 @@ from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Finding as FindingRow
 from hexgraph.db.models import Project, Target, TargetKind, Task, TaskStatus
-from hexgraph.engine.assurance import derive_fuzz_assurance, derive_network_fuzz_assurance
-from hexgraph.engine.findings import persist_finding
+from hexgraph.engine.findings.assurance import derive_fuzz_assurance, derive_network_fuzz_assurance
+from hexgraph.engine.findings.findings import persist_finding
 from hexgraph.engine.tasks import write_trace
 from hexgraph.models.finding import Evidence, Finding, FollowupSuggestion
 from hexgraph.sandbox.executor import Executor, get_executor

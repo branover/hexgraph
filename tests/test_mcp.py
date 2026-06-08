@@ -515,7 +515,7 @@ def test_target_facts_dangerous_imports(hg_home):
 def test_update_finding_and_hypothesis_lifecycle(hg_home):
     from hexgraph.agent import mcp_tools
     from hexgraph.engine.tasks import create_task
-    from hexgraph.engine.findings import persist_finding
+    from hexgraph.engine.findings.findings import persist_finding
     from hexgraph.models.finding import Evidence, Finding as FModel
     with session_scope() as s:
         p = create_project(s, name="life")
@@ -539,7 +539,7 @@ def test_verify_poc_attaches_to_finding(hg_home, monkeypatch):
     from hexgraph.agent import mcp_tools
     from hexgraph.db.models import Finding
     from hexgraph.engine.tasks import create_task
-    from hexgraph.engine.findings import persist_finding
+    from hexgraph.engine.findings.findings import persist_finding
     from hexgraph.models.finding import Evidence, Finding as FModel
 
     def fake_verify(session, project, target, spec, runner=None):
@@ -549,7 +549,7 @@ def test_verify_poc_attaches_to_finding(hg_home, monkeypatch):
         substituted = {"oracle": {"type": "output_contains", "value": "HEXGRAPH_PWNED_x"}}
         return {"verified": True, "detail": "nonce in output", "exit_code": 0,
                 "nonce": "HEXGRAPH_PWNED_x", "output": "...HEXGRAPH_PWNED_x...", "spec": substituted}
-    monkeypatch.setattr("hexgraph.engine.poc.verify_poc", fake_verify)
+    monkeypatch.setattr("hexgraph.engine.findings.poc.verify_poc", fake_verify)
 
     with session_scope() as s:
         p = create_project(s, name="vp")

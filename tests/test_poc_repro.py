@@ -9,8 +9,8 @@ from hexgraph.api.app import create_app
 from hexgraph.db.models import Finding
 from hexgraph.db.session import session_scope
 from hexgraph.engine.ingest import create_project, ingest_file
-from hexgraph.engine.poc import execute_poc, verify_poc
-from hexgraph.engine.poc_repro import repro_command
+from hexgraph.engine.findings.poc import execute_poc, verify_poc
+from hexgraph.engine.findings.poc_repro import repro_command
 from hexgraph.engine.surfaces import register_web_surface
 from hexgraph.engine.tasks import create_task
 from hexgraph import settings as st
@@ -146,7 +146,7 @@ def test_api_reverify_preserves_assurance(hg_home, monkeypatch):
 
     # Re-verify goes through the real engine; stub the sandbox runner via verify_poc's
     # get_executor so no Docker is needed.
-    from hexgraph.engine import poc as poc_mod
+    from hexgraph.engine.findings import poc as poc_mod
     monkeypatch.setattr(poc_mod, "get_executor", lambda: FakeRunner())
 
     client = TestClient(create_app())

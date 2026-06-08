@@ -70,7 +70,7 @@ def test_confirmed_facts_feed_context(hg_home):
 
 
 def test_tag_on_finding_via_api(hg_home):
-    from hexgraph.engine.findings import persist_finding
+    from hexgraph.engine.findings.findings import persist_finding
     from hexgraph.engine.tasks import create_task
     from hexgraph.models.finding import Evidence, Finding as FModel
 

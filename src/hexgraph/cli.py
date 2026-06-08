@@ -172,7 +172,7 @@ def _cmd_findings(args: argparse.Namespace) -> int:
         if args.export:
             import json
 
-            from hexgraph.engine.findings import row_to_payload
+            from hexgraph.engine.findings.findings import row_to_payload
 
             payloads = [
                 {

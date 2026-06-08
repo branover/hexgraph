@@ -39,7 +39,7 @@ from hexgraph.db.models import (
 )
 from hexgraph.engine import cas
 from hexgraph.engine.graph.edges import add_edge
-from hexgraph.engine.findings import persist_finding
+from hexgraph.engine.findings.findings import persist_finding
 from hexgraph.engine.fuzzers import FuzzCampaignSpec, get_fuzzer, resolve_engine
 from hexgraph.engine.fuzzers.mock import MOCK_PROBE
 from hexgraph.engine.fuzzers.shared import derive_dictionary
@@ -93,7 +93,7 @@ def resolve_surface_inputs(session, project, target, spec) -> None:
         if not spec.sysroot and target.parent_id:
             try:
                 from hexgraph.engine.filesystem import host_root
-                from hexgraph.engine.poc import _find_sysroot
+                from hexgraph.engine.findings.poc import _find_sysroot
                 fw = session.get(Target, target.parent_id)
                 if fw is not None and (fw.metadata_json or {}).get("filesystem"):
                     root = _find_sysroot(host_root(project, fw))
@@ -132,7 +132,7 @@ def resolve_surface_inputs(session, project, target, spec) -> None:
         if spec.launch_binary and not spec.sysroot and target.parent_id:
             try:
                 from hexgraph.engine.filesystem import host_root
-                from hexgraph.engine.poc import _find_sysroot
+                from hexgraph.engine.findings.poc import _find_sysroot
                 fw = session.get(Target, target.parent_id)
                 if fw is not None and (fw.metadata_json or {}).get("filesystem"):
                     root = _find_sysroot(host_root(project, fw))
@@ -1250,13 +1250,13 @@ def verify_artifact(session: Session, artifact: FuzzArtifact, *, executor=None) 
     if not fuzzer_cas:
         # No preserved harness binary — fall back to running the reproducer as stdin
         # against the target (works when the target IS a runnable binary).
-        from hexgraph.engine.poc import verify_reproducer
+        from hexgraph.engine.findings.poc import verify_reproducer
         return verify_reproducer(session, project, target, reproducer_ref=artifact.content_cas,
                                  function=artifact.faulting_function, runner=executor)
 
     fuzzer_bytes = cas.get(project, fuzzer_cas)
     if fuzzer_bytes is None:
-        from hexgraph.engine.poc import verify_reproducer
+        from hexgraph.engine.findings.poc import verify_reproducer
         return verify_reproducer(session, project, target, reproducer_ref=artifact.content_cas,
                                  function=artifact.faulting_function, runner=executor)
 
@@ -1284,7 +1284,7 @@ def verify_artifact(session: Session, artifact: FuzzArtifact, *, executor=None) 
         extra_args=["--spec", json.dumps(spec)], requires_execution=True,
         extra_ro_mounts=[(repro_path, "/repro/reproducer")],
     )
-    from hexgraph.engine.assurance import assurance, CODE_PRESENT, DYNAMIC, UNSPECIFIED
+    from hexgraph.engine.findings.assurance import assurance, CODE_PRESENT, DYNAMIC, UNSPECIFIED
     result["assurance"] = (assurance(CODE_PRESENT, DYNAMIC, UNSPECIFIED,
                                      detail="lab-confirmed: the stored reproducer re-crashed the "
                                             "instrumented harness binary")
@@ -1380,7 +1380,7 @@ def _network_replay(session, project, target, port, payload, *, executor=None,
     only fall back to the TCP re-probe (mapping the netns-join exit-125 failure to DOWN) when
     the executor can't report the exit. The already-live path (`launched_container=None`)
     keeps the pure TCP re-probe as its oracle (the service keeps running)."""
-    from hexgraph.engine.assurance import (assurance, DYNAMIC, INPUT_REACHABLE, UNCONFIRMED,
+    from hexgraph.engine.findings.assurance import (assurance, DYNAMIC, INPUT_REACHABLE, UNCONFIRMED,
                                            UNSPECIFIED)
     from hexgraph.engine.surfaces import run_tcp_probe
     from hexgraph.sandbox.runner import SandboxError

@@ -284,9 +284,9 @@ def _promote_and_emit(
     emit the high-confidence `vulnerability` finding carrying the concrete reaching input. Returns
     the finding id. Deliberately mints only the few grounded nodes the solve justifies, never the
     whole explored path."""
-    from hexgraph.engine.assurance import INPUT_REACHABLE, STATIC, UNSPECIFIED, assurance
+    from hexgraph.engine.findings.assurance import INPUT_REACHABLE, STATIC, UNSPECIFIED, assurance
     from hexgraph.engine.graph.edges import add_edge
-    from hexgraph.engine.findings import persist_finding
+    from hexgraph.engine.findings.findings import persist_finding
     from hexgraph.engine.graph.nodes import materialize_function, materialize_symbol
     from hexgraph.engine.tasks import create_task
     from hexgraph.models.finding import Evidence, Finding, FollowupSuggestion

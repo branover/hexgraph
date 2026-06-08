@@ -205,7 +205,7 @@ def test_verify_fuzz_artifact_tool_registered_and_byte_faithful():
     # The byte-faithful path: verify_reproducer builds a spec with stdin_b64 (raw bytes),
     # NEVER the text `stdin` (which the subprocess UTF-8-re-encodes, corrupting 0x00/0xff).
     import inspect
-    from hexgraph.engine import poc
+    from hexgraph.engine.findings import poc
     src = inspect.getsource(poc.verify_reproducer)
     assert "stdin_b64" in src and "decode(\"latin-1\")" not in src
 
