@@ -467,6 +467,11 @@ the **build** (turn source into an instrumented, coverage-friendly target) and t
 ## The headline loop: source → instrumented build → coverage-guided fuzz
 The high-value path when you have (or can author) the target's source:
 `src_import_tree` → `src_build` → `fuzz_start` on the instrumented derived target.
+- **src_list_trees(project_id)** / **src_read_file(tree_id[, rel])** — first see what managed
+  source trees ALREADY exist and browse one (id/name/origin/file_count + the `target_ids` each is
+  `built_from`; with `rel`, read one file's text). This is TRUSTED source text — distinct from the
+  firmware's hostile `fs_read_file` bytes. Check here before importing, in case the source you need
+  (an imported library, a harness from a prior run) is already in the project.
 - **src_import_tree(project_id, name, files=[{rel, content, role?}])** — create a managed
   SOURCE tree from trusted text (a small library's source, a harness you wrote). Role-tag a
   harness `role:"harness"`. This is trusted source, NOT target bytes — never ingest hostile
@@ -661,6 +666,12 @@ the vulnerability to higher confidence/severity and status `confirmed` and
 `graph_link_evidence(hypothesis, finding, "supports")` so the hypothesis flips to supported; on
 failure, lower the confidence and link `"refutes"`. Then `graph_close_hypothesis` once the
 question is settled either way — a documented dead end is as valuable as a hit.
+
+When the vulnerability corresponds to KNOWN MANAGED SOURCE (an imported library, a harness — a
+`src_*` tree, never the target's hostile bytes), **finding_link_to_source(finding_id, tree_id,
+rel, line?)** records a `located_in` edge + `evidence.extra.source_ref`, the workbench's "Open in
+source" link, so the analyst jumps from the finding straight to the exact line. Do this whenever
+the link exists — it's the source↔graph tie the workbench is built on.
 """
 
 
