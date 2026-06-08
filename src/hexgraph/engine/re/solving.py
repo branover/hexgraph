@@ -7,11 +7,15 @@ the taint seam and `engine/re/emulation` consumes the decompiler seam:
 
   * `solve_reaching_input` — solve for a concrete input that REACHES a sink, record a `solver`
     Observation, promote the few GROUNDED path nodes/edges (the sink + the enclosing function +
-    the `calls` edge — never a flood), and emit a high-confidence `vulnerability` finding that
-    carries the concrete reaching input in its envelope (`evidence.reproducer` + the solver
-    detail under `evidence.extra.solver`). The assurance is `input_reachable / static`: angr
-    PROVED an input exists reaching the sink (and produced it), but the target was never run —
-    the strongest static claim short of a live PoC.
+    the `calls` edge — never a flood), and emit a `vulnerability` finding that carries the concrete
+    reaching input in its envelope (`evidence.reproducer` + the solver detail under
+    `evidence.extra.solver`). The assurance is `input_reachable / static` at high/high confidence
+    ONLY when the solved path genuinely DEPENDS on the input (`SolverResult.is_input_constrained`):
+    angr PROVED a crafted input exists reaching the sink (and produced it), but the target was
+    never run — the strongest static claim short of a live PoC. When the sink is reachable on ANY
+    input (an input-INDEPENDENT solve — empty reproducer or zero constrained bytes), the finding is
+    DOWNGRADED to `code_present / static` at medium confidence with an honest note, so HexGraph
+    never confidently over-claims "reachable via a crafted input" when the input plays no role.
   * `solve_constraint` — recover the value that SATISFIES a single check, record a `solver`
     Observation, and annotate the function node with the recovered value (the angr analogue of
     `engine/re/emulation`'s constant recovery). Single-check solving only — NOT whole-program
@@ -206,6 +210,7 @@ def solve_reaching_input(
         session, project, target, result,
         sink_func=sink_func, sink_addr=sink_addr, function=function,
         function_addr=function_addr, observation_id=obs.id if obs else None,
+        input_constrained=result.is_input_constrained(),
     )
     return {
         "solved": True,
@@ -279,12 +284,22 @@ def _promote_and_emit(
     session: Session, project: Project, target: Target, result: SolverResult,
     *, sink_func: str | None, sink_addr: str | None = None, function: str | None,
     function_addr: str | None = None, observation_id: str | None,
+    input_constrained: bool = True,
 ) -> str:
     """Promote the GROUNDED path (the sink symbol + the enclosing function + a `calls` edge) and
-    emit the high-confidence `vulnerability` finding carrying the concrete reaching input. Returns
-    the finding id. Deliberately mints only the few grounded nodes the solve justifies, never the
-    whole explored path."""
-    from hexgraph.engine.findings.assurance import INPUT_REACHABLE, STATIC, UNSPECIFIED, assurance
+    emit the `vulnerability` finding carrying the concrete reaching input. Returns the finding id.
+    Deliberately mints only the few grounded nodes the solve justifies, never the whole explored path.
+
+    `input_constrained` is the integrity gate (see `SolverResult.is_input_constrained`): a solve
+    where the path genuinely depends on the input earns the strong `input_reachable / static`
+    assurance at high/high confidence (angr PROVED a crafted input reaches the sink, and produced
+    it). When the solve is input-INDEPENDENT (the sink is reachable on any input — an empty
+    reproducer, or zero measured constrained bytes), we must NOT over-claim: the finding is
+    DOWNGRADED to `code_present / static` at medium confidence with an honest note, because all we
+    truly know is the sink is reachable in code, not that a user input can steer execution to it."""
+    from hexgraph.engine.findings.assurance import (
+        CODE_PRESENT, INPUT_REACHABLE, STATIC, UNSPECIFIED, assurance,
+    )
     from hexgraph.engine.graph.edges import add_edge
     from hexgraph.engine.findings.findings import persist_finding
     from hexgraph.engine.graph.nodes import materialize_function, materialize_symbol
@@ -321,16 +336,64 @@ def _promote_and_emit(
             merge=True,
         )
 
-    asr = assurance(
-        INPUT_REACHABLE, STATIC, UNSPECIFIED,
-        detail=f"angr symbolically solved a concrete input that drives execution to {sink_label}",
-    )
     # The faithful reproducer: angr's full `concrete_input` includes unconstrained filler bytes, so
     # `minimal_input` (the leading `constrained_len` bytes the path actually constrains) is the part
     # that matters — what a human should copy. Fall back to the full input when the probe couldn't
     # determine it (older payload / introspection unavailable).
     minimal_input = result.minimal_input
     constrained_len = result.constrained_len
+
+    # The integrity gate: only an INPUT-CONSTRAINED solve earns the strong input_reachable claim.
+    # An input-independent solve (the sink is reachable on any input — empty reproducer or zero
+    # measured constrained bytes) is downgraded to code_present / static at medium confidence, with
+    # an honest note, so we never confidently claim "reachable via a crafted input" when the input
+    # plays no role. The reproducer is still recorded (it's a concrete witness), just not promoted
+    # to the input_reachable rung.
+    if input_constrained:
+        asr = assurance(
+            INPUT_REACHABLE, STATIC, UNSPECIFIED,
+            detail=f"angr symbolically solved a concrete input that drives execution to {sink_label}",
+        )
+        confidence = "high"  # a concrete, input-constrained reaching input is concrete evidence
+        title = (f"Solver-reachable sink: {sink_label} reachable with a crafted input on "
+                 f"{target.name}")
+        summary = (f"angr symbolic execution solved a concrete input that drives execution all the "
+                   f"way to {sink_label} in {target.name}. A privileged/dangerous sink is reachable, "
+                   f"and the exact reaching input has been recovered (recorded as the reproducer).")
+        reasoning = (
+            f"angr explored {target.name} symbolically and the SMT solver produced an input that "
+            f"satisfies every branch constraint on a path to {sink_label}"
+            + (f" (reached at {reached_addr})" if reached_addr else "")
+            + ". The input was SOLVED, not guessed or read from the binary — it is a witness that "
+            "the sink is genuinely reachable. Assurance: input_reachable / static (proved an input "
+            "exists and produced it, but the target was not executed). Verify dynamically with "
+            "verify_poc to raise this to input_reachable / dynamic."
+        )
+    else:
+        asr = assurance(
+            CODE_PRESENT, STATIC, UNSPECIFIED,
+            detail=(f"angr reached {sink_label} but the path is input-independent (the sink is "
+                    f"reachable regardless of input — no input bytes were constrained), so this is "
+                    f"only code_present / static, NOT input_reachable"),
+        )
+        confidence = "medium"  # the sink is present + reachable, but a user input does not steer it
+        title = f"Sink {sink_label} reachable (input-independent) on {target.name}"
+        summary = (f"angr symbolic execution reached {sink_label} in {target.name}, but on a path "
+                   f"that does NOT depend on the input (no input bytes were constrained). The sink "
+                   f"is present and reachable, yet there is no evidence a crafted user input can "
+                   f"steer execution to it.")
+        reasoning = (
+            f"angr explored {target.name} symbolically and a state reached {sink_label}"
+            + (f" (at {reached_addr})" if reached_addr else "")
+            + ", but the path imposed no constraints on the symbolic input (constrained_len="
+            f"{constrained_len if constrained_len is not None else 'unknown'}, reproducer "
+            f"{'empty' if not (result.concrete_input or minimal_input) else 'present but input-independent'}). "
+            "A sink reachable on every input is not 'reachable via a crafted input' — claiming "
+            "input_reachable here would be a false positive, so this is recorded as code_present / "
+            "static (the flaw exists in code; the input path is NOT established). Root-cause the "
+            "call site to determine whether any input boundary actually feeds this sink."
+        )
+
     solver_extra = {
         "backend": "angr",
         # The sink identity (func + addr) — the dedup key `_existing_solver_finding` matches on,
@@ -341,6 +404,8 @@ def _promote_and_emit(
         # The minimal reproducer (the constrained-byte prefix) + its length — "the part that matters".
         "minimal_input_hex": minimal_input,
         "constrained_len": constrained_len,
+        # Whether the path genuinely depended on the input (drives the assurance rung above).
+        "input_constrained": input_constrained,
         "concrete_input_repr": prov.get("input_repr"),
         "input_model": prov.get("input_model"),
         "path_addrs": list(result.path_addrs or []),
@@ -349,22 +414,12 @@ def _promote_and_emit(
         "observation_id": observation_id,
     }
     finding = Finding(
-        title=f"Solver-reachable sink: {sink_label} reachable with a crafted input on {target.name}",
+        title=title,
         severity="high",
-        confidence="high",  # a concrete reaching input is concrete evidence, not a guess
+        confidence=confidence,
         category=_classify_solver_category(sink_func),
-        summary=(f"angr symbolic execution solved a concrete input that drives execution all the "
-                 f"way to {sink_label} in {target.name}. A privileged/dangerous sink is reachable, "
-                 f"and the exact reaching input has been recovered (recorded as the reproducer)."),
-        reasoning=(
-            f"angr explored {target.name} symbolically and the SMT solver produced an input that "
-            f"satisfies every branch constraint on a path to {sink_label}"
-            + (f" (reached at {reached_addr})" if reached_addr else "")
-            + ". The input was SOLVED, not guessed or read from the binary — it is a witness that "
-            "the sink is genuinely reachable. Assurance: input_reachable / static (proved an input "
-            "exists and produced it, but the target was not executed). Verify dynamically with "
-            "verify_poc to raise this to input_reachable / dynamic."
-        ),
+        summary=summary,
+        reasoning=reasoning,
         evidence=Evidence(
             function=function,
             sink=sink_func,

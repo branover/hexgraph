@@ -109,6 +109,27 @@ class SolverResult:
     constraints: list[str] = field(default_factory=list)  # human-readable path constraints, if any
     provenance: dict[str, Any] = field(default_factory=dict)
 
+    def is_input_constrained(self) -> bool:
+        """True iff this reaching-input solve genuinely DEPENDS on the input — i.e. the path to
+        the sink actually constrains some input bytes.
+
+        This is the integrity guard against a confident false positive: angr returns a
+        `SolverResult` whenever the sink is *reachable*, but a sink reachable on EVERY input
+        (an empty buffer satisfies it, or the probe found zero constrained bytes) is NOT
+        "reachable via a crafted input" — it is input-INDEPENDENT, and emitting it as
+        high/high `input_reachable / static` over-claims. We require positive evidence that
+        the input matters: a measured `constrained_len > 0`, OR — when the probe couldn't
+        introspect that (older payload) — a non-empty `minimal_input`/`concrete_input` so we
+        at least have a concrete witness. An empty reproducer with no constrained length is
+        the input-independent case and returns False (the caller must NOT promote high/high)."""
+        if self.constrained_len is not None:
+            # The authoritative signal: the probe measured how many leading input bytes the
+            # path actually restricts. Zero ⇒ the sink does not depend on the input.
+            return self.constrained_len > 0
+        # Fall back to a concrete-witness check only when the probe couldn't measure the
+        # constrained length (an older payload): a genuinely empty reproducer is suppressed.
+        return bool((self.minimal_input or "").strip()) or bool((self.concrete_input or "").strip())
+
 
 class Solver(ABC):
     """Symbolic-execution-backed input/constraint solving over a target's real code.
