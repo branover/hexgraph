@@ -9,6 +9,7 @@ import {
   LayerState, FilterState, defaultLayers, defaultFilters, anyFilterActive,
 } from "../components/graphLayers";
 import FindingsPanel from "../components/FindingsPanel";
+import HypothesesPanel from "../components/HypothesesPanel";
 import Inspector from "../components/Inspector";
 import NodeInspector from "../components/NodeInspector";
 import { TasksPanel, TaskDetail } from "../components/TasksPanel";
@@ -52,8 +53,12 @@ export default function Workspace() {
   const [hoverType, setHoverType] = useState<string | null>(null);
   const [pinType, setPinType] = useState<string | null>(null);
   const [busy, setBusy] = useState<string>();
-  const [tab, setTab] = useState<"findings" | "tasks" | "campaigns">(
-    new URLSearchParams(window.location.search).get("tab") === "campaigns" ? "campaigns" : "findings");
+  const [tab, setTab] = useState<"findings" | "tasks" | "campaigns" | "hypotheses">(
+    new URLSearchParams(window.location.search).get("tab") === "campaigns" ? "campaigns"
+      : new URLSearchParams(window.location.search).get("tab") === "hypotheses" ? "hypotheses" : "findings");
+  // Bumped after a hypothesis worklist mutation so the panel re-fetches and the graph reloads
+  // (a pin toggle changes canvas visibility).
+  const [hypReload, setHypReload] = useState(0);
   const [tasks, setTasks] = useState<any[]>([]);
   const [selTask, setSelTask] = useState<string>();
   const [selCampaign, setSelCampaign] = useState<string | undefined>(
@@ -421,6 +426,14 @@ export default function Workspace() {
   };
   const viewTask = (tid: string) => { setSelTask(tid); setTab("tasks"); setUrl({ tab: undefined }); };
   const viewFinding = (fid: string) => { setSelTask(undefined); setSelNode(null); setSelCampaign(undefined); api.finding(fid).then((f) => { setSelFinding(f); setSelGraphId(f.id); }); setUrl({ tab: undefined, campaign: undefined }); };
+  // Select a hypothesis from the worklist → render the existing (singular) HypothesisPanel in
+  // the detail split (NodeInspector already routes a hypothesis node to it). The hypothesis node
+  // is in `graph.nodes` whether or not it's pinned to the canvas, so a plain node-select works.
+  const viewHypothesis = (hid: string) => {
+    setSelTask(undefined); setSelFinding(null); setSelCampaign(undefined); setSelEdge(null);
+    const n = graph?.nodes.find((x) => x.id === hid);
+    if (n) { setSelNode(n); setSelGraphId(hid); }
+  };
 
   // Finding → source jump: open the file in Source mode at the line (design §6.3).
   const revealSource = (ref: { tree_id?: string; rel?: string; line?: number }) => {
@@ -694,6 +707,10 @@ export default function Workspace() {
       <button className={"btn sm" + (tab === "findings" ? " primary" : " ghost")} onClick={() => { setTab("findings"); setUrl({ tab: undefined }); }}>
         <Icon name="bug" size={12} /> Findings · {detail.findings.length}
       </button>
+      <button className={"btn sm" + (tab === "hypotheses" ? " primary" : " ghost")} onClick={() => { setTab("hypotheses"); setUrl({ tab: "hypotheses" }); }}
+              title="Hypotheses — the research-question worklist">
+        <Icon name="bulb" size={12} /> Hypotheses
+      </button>
       <button className={"btn sm" + (tab === "tasks" ? " primary" : " ghost")} onClick={() => { setTab("tasks"); setUrl({ tab: undefined }); }}>
         <Icon name="task" size={12} /> Tasks · {tasks.length}
       </button>
@@ -716,6 +733,11 @@ export default function Workspace() {
   const renderList = () => tab === "findings" ? (
     <FindingsPanel findings={detail.findings} targets={detail.targets} selectedId={selFinding?.id} onBulk={bulk}
                    onSelect={(f) => { setSelTask(undefined); setSelNode(null); setSelCampaign(undefined); setSelFinding(f); setSelGraphId(f.id); }} />
+  ) : tab === "hypotheses" ? (
+    <HypothesesPanel projectId={projectId!} reloadKey={hypReload}
+                     selectedId={selNode?.node_type === "hypothesis" ? selNode.id : undefined}
+                     onSelect={(h) => viewHypothesis(h.id)}
+                     onChanged={() => { setHypReload((k) => k + 1); load(); }} />
   ) : tab === "campaigns" ? (
     <CampaignsPanel projectId={projectId!} selectedId={selCampaign} onSelect={(id) => selectCampaign(id)}
                     onStartCampaign={bestFuzzTarget() ? () => setFuzzFor(bestFuzzTarget()!) : undefined} />

@@ -283,6 +283,9 @@ loud only where you are looking; every node/edge/color kept, mute never deletes.
   zoom so the curated content *fills* the canvas with readable leaf labels — it must NOT open as a lone room
   card up top with huge dead vertical space below (the issue-5.1 failure). A `target_id`-less node that is
   `about` a target (e.g. a hypothesis) nests INSIDE that target's room rather than floating loose far below it.
+  **Hypotheses are OFF-CANVAS by default** (`attrs.pinned_to_graph` false) — they live in the Hypotheses
+  worklist tab and draw on the canvas only when explicitly pinned (HYP-04), a deliberate net reduction in
+  clutter. A pinned hypothesis nests in its target's room exactly as above; an unpinned one never renders.
 - 🔌 Backend: `GET /graph/{id}/size` decides skeleton vs full; skeleton mode uses `GET /graph/{id}/skeleton`.
 - Qualitative (the headline metric): within ~3 seconds the eye should *land* on the firmware root and the
   red/orange high-severity rollups; the frame feels as calm as a MEDIUM graph regardless of DB size
@@ -796,7 +799,8 @@ loud only where you are looking; every node/edge/color kept, mute never deletes.
 **FIND-16 — Hypotheses: new from finding / link existing**
 - Steps: click **New from finding** (prompt for a statement) → it's created with the finding as supporting
   evidence; or pick an existing hypothesis and **supports** / **refutes**.
-- Functional: a hypothesis node is created/linked; the graph gains it.
+- Functional: a hypothesis is created/linked; it appears on the Hypotheses worklist (HYP-01) as
+  `investigating` and OFF the canvas (pin it via HYP-04 to draw it).
 - 🔌 Backend: create-hypothesis + link-evidence; verify the hypothesis node + the evidence edge.
 - Principle: findings feed hypotheses.
 - Prereq: a finding; (for link) an existing hypothesis.
@@ -856,6 +860,65 @@ loud only where you are looking; every node/edge/color kept, mute never deletes.
   value (`hasKnownMitigations` guards both the Inspector and NodeInspector rows).
 - Principle: weak mitigations are conspicuous, never hidden in a blob.
 - Prereq: a finding (or target node) carrying mitigations.
+
+---
+
+## SURFACE 4d — Hypotheses worklist (right pane, "Hypotheses" tab)
+
+The research-question worklist (design-working-memory.md §4): the elevated hypothesis surface. A
+right-pane tab beside Findings/Tasks/Campaigns, mirroring the Findings list pattern. Two orthogonal
+axes per hypothesis: the evidence **status** (open/supported/refuted/contested + the pinned
+confirmed/rejected verdicts) and the **work-state** (investigating / parked / done — "am I on this?").
+
+**HYP-01 — Hypotheses tab: render the worklist**
+- Steps: open the **Hypotheses** tab in the right pane.
+- Functional: a row per hypothesis — statement, evidence-status tag, work-state tag (with icon), and the
+  supporting/refuting evidence counts; a check-off control on the left, a pin-to-graph toggle on the right.
+  Done hypotheses read struck-through + dimmed. An empty project shows a clear "record an open question"
+  hint, not a blank panel.
+- 🔌 Backend: `GET /api/projects/{id}/hypotheses` (the worklist rows with counts).
+- Qualitative: scannable and calm at tens–hundreds of rows; the eye separates "what I'm chasing" from
+  "settled" at a glance; one thought per row (Aesthetics, Overall).
+- Prereq: hypotheses exist (create via FIND-16 or graph_create_hypothesis).
+
+**HYP-02 — Filter by work-state / evidence status + sort**
+- Steps: use the work-state select, the evidence-status select, the sort select (recent / work-state /
+  evidence), and the text filter.
+- Functional: the list filters live and composes across all four; the work-state select shows per-state
+  counts; sort reorders without refetching.
+- Qualitative: filters compose predictably; counts give feedback (Feedback, Consistency).
+- Prereq: hypotheses spanning work-states / statuses.
+
+**HYP-03 — Check off (done + verdict) / reopen**
+- Steps: click the left checkbox on an open row to mark it **done**; click it again on a done row to reopen
+  (→ investigating). (The detail pane offers explicit Mark-done / Park / Resume + Confirm/Reject verdict.)
+- Functional: the row's work-state flips; a done row dims + strikes through; the change persists.
+- 🔌 Backend: `POST /api/hypotheses/{id}/work-state` (`work_state`, optional `verdict`). Verify the
+  hypothesis node's `attrs.work_state`.
+- Qualitative: closing a question feels like ticking a box — light, reversible, never a modal (Forgiveness).
+- Principle: a checked-off hypothesis is "I stopped looking", separate from the evidence verdict.
+- Prereq: an open (investigating/parked) hypothesis.
+
+**HYP-04 — Pin / unpin to the graph canvas**
+- Steps: click the hex pin toggle on a row (or in the hypothesis detail).
+- Functional: pinning sets `attrs.pinned_to_graph` true and the hypothesis now DRAWS on the canvas (nested
+  in its target's room); unpinning removes it from the canvas. The toggle reflects the current state.
+- 🔌 Backend: `POST /api/hypotheses/{id}/pin` (`pinned`). After the graph reloads, a pinned hypothesis node
+  is visible on the canvas, an unpinned one is not.
+- Qualitative: the canvas stays calm by default; pinning is the deliberate "anchor this beside its evidence"
+  gesture, not the norm (Aesthetics — net declutter).
+- Principle: existence (a node, always) is decoupled from canvas visibility (opt-in).
+- Prereq: at least one hypothesis.
+
+**HYP-05 — Select a hypothesis → detail (singular HypothesisPanel)**
+- Steps: click a worklist row.
+- Functional: the Detail split shows the existing hypothesis detail — status + origin chips, the work-state
+  tag, the pin toggle, the rationale, Confirm/Reject/Reopen + Mark-done/Park/Resume actions, and the
+  supporting/refuting evidence lists (each finding clickable → its Inspector).
+- 🔌 Backend: `GET /api/hypotheses/{id}`.
+- Qualitative: the worklist row and the detail agree on both axes; reusing the existing detail view keeps
+  the vocabulary consistent (Consistency).
+- Prereq: a hypothesis with linked evidence.
 
 ---
 

@@ -397,6 +397,28 @@ select.sel:focus, .settings select.sel:focus { outline: none; border-color: var(
 .group-h { font-size: 11px; text-transform: uppercase; color: var(--muted); margin: 12px 4px 8px; letter-spacing: .06em; display: flex; align-items: center; gap: 7px; }
 .group-h .ln { flex: 1; height: 1px; background: var(--border); }
 
+/* hypotheses worklist (the plural HypothesesPanel) */
+.hyp-row { display: flex; align-items: flex-start; gap: 9px; padding: 9px 11px; margin-bottom: 8px;
+  border: 1px solid var(--border); border-radius: 9px; cursor: pointer; background: var(--surface-2);
+  transition: border-color .12s, transform .1s; }
+.hyp-row:hover { border-color: var(--border-strong); transform: translateX(1px); }
+.hyp-row.sel { border-color: var(--accent); box-shadow: var(--ring); }
+.hyp-row.done { opacity: .62; }
+.hyp-row.done .hyp-stmt { text-decoration: line-through; text-decoration-color: var(--muted); }
+.hyp-check { flex: none; width: 19px; height: 19px; margin-top: 1px; display: inline-flex; align-items: center;
+  justify-content: center; border: 1.5px solid var(--border-strong); border-radius: 6px; background: transparent;
+  color: transparent; cursor: pointer; transition: border-color .12s, background .12s, color .12s; }
+.hyp-check:hover { border-color: var(--accent); color: var(--muted); }
+.hyp-check.on { background: #2ea043; border-color: #2ea043; color: #fff; }
+.hyp-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.hyp-stmt { font-weight: 600; line-height: 1.35; word-break: break-word; }
+.hyp-meta { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 11px; }
+.hyp-meta .ws { display: inline-flex; align-items: center; gap: 3px; color: var(--fg-dim); }
+.hyp-ev { display: inline-flex; align-items: center; gap: 2px; color: var(--muted); font-size: 10.5px; }
+.hyp-pin { flex: none; opacity: .6; transition: opacity .12s, color .12s; }
+.hyp-row:hover .hyp-pin { opacity: .9; }
+.hyp-pin.on { opacity: 1; color: var(--accent); }
+
 /* inspector */
 .insp { padding: 14px; }
 .insp .head { display: flex; align-items: flex-start; gap: 9px; }

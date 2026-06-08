@@ -101,7 +101,10 @@ def _gather_items(session: Session, project: Project, target: Target, task, ctx)
                            "ANALYST-CONFIRMED (authoritative): " + "; ".join(ann_facts[:15]),
                            96, "target", target.id))
 
-    from hexgraph.engine.hypotheses import open_for_target
+    from hexgraph.engine.hypotheses import (
+        open_for_target,
+        unevidenced_investigating_for_target,
+    )
     hyps = open_for_target(session, project.id, target.id)
     if hyps:
         items.append(_Item("open_hypotheses",
@@ -116,6 +119,17 @@ def _gather_items(session: Session, project: Project, target: Target, task, ctx)
     nudge = staleness_nudge(session, project.id)
     if nudge:
         items.append(_Item("journal_nudge", nudge, 62, "target", target.id))
+
+    # Layer-2 record-keeping nudge (design-working-memory.md §6): surface hypotheses you're
+    # still actively investigating but have left with NO linked evidence, so you wire evidence
+    # or close them as you work rather than letting the worklist go stale. Short + additive.
+    stale_hyps = unevidenced_investigating_for_target(session, project.id, target.id)
+    if stale_hyps:
+        items.append(_Item("stale_hypotheses",
+                           "Worklist upkeep — these hypotheses are still 'investigating' with NO "
+                           "evidence linked yet; link a supporting/refuting finding or close them: "
+                           + "; ".join(stale_hyps[:6]),
+                           62, "target", target.id))
 
     # The observation index (design §5.6.1): tell the agent what deterministic
     # analysis already exists on this target so it reuses it instead of re-running.

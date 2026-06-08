@@ -13,8 +13,16 @@ export interface Finding {
 export interface EvidenceRef { finding_id: string; title: string; severity: string; status: string; origin: string; }
 export interface Hypothesis {
   id: string; statement: string; rationale?: string | null; status: string; status_origin: string;
+  work_state: string; pinned_to_graph: boolean;
   supports: EvidenceRef[]; refutes: EvidenceRef[];
 }
+// A worklist row (the plural Hypotheses panel) — lighter than the full detail Hypothesis.
+export interface HypothesisRow {
+  id: string; statement: string; rationale?: string | null; status: string; status_origin: string;
+  work_state: string; pinned_to_graph: boolean;
+  supports_count: number; refutes_count: number; created_at?: string | null;
+}
+export const HYPOTHESIS_WORK_STATES = ["investigating", "parked", "done"] as const;
 export interface AnalysisRunRow {
   id: string; task_id: string; task_type: string; backend: string; model?: string | null;
   bundle_sha?: string | null; finding_count: number; created_at: string;
@@ -303,11 +311,20 @@ export const api = {
   createAnnotation: (pid: string, body: any) => postJSON<any>(`/api/projects/${pid}/annotations`, body),
   annotations: (nodeKind: string, nodeId: string) => getJSON<any[]>(`/api/annotations/${nodeKind}/${nodeId}`),
   setAnnotationStatus: (id: string, status: string) => postJSON<any>(`/api/annotations/${id}/status`, { status }),
-  // Hypotheses (research questions evidenced by findings)
+  // Hypotheses (the research-question worklist — design-working-memory.md §4)
   createHypothesis: (pid: string, body: any) => postJSON<Hypothesis>(`/api/projects/${pid}/hypotheses`, body),
+  hypotheses: (pid: string, opts: { work_state?: string; status?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (opts.work_state) qs.set("work_state", opts.work_state);
+    if (opts.status) qs.set("status", opts.status);
+    return getJSON<{ hypotheses: HypothesisRow[] }>(`/api/projects/${pid}/hypotheses${qs.toString() ? "?" + qs.toString() : ""}`);
+  },
   hypothesis: (hid: string) => getJSON<Hypothesis>(`/api/hypotheses/${hid}`),
   linkEvidence: (hid: string, finding_id: string, relation: string) => postJSON<Hypothesis>(`/api/hypotheses/${hid}/evidence`, { finding_id, relation }),
   setHypothesisStatus: (hid: string, status: string) => postJSON<Hypothesis>(`/api/hypotheses/${hid}/status`, { status }),
+  setHypothesisWorkState: (hid: string, work_state: string, verdict?: string) =>
+    postJSON<Hypothesis>(`/api/hypotheses/${hid}/work-state`, { work_state, verdict }),
+  pinHypothesis: (hid: string, pinned: boolean) => postJSON<Hypothesis>(`/api/hypotheses/${hid}/pin`, { pinned }),
   // Settings (optional features + non-secret prefs; secrets are status-only)
   getSettings: () => getJSON<SettingsView>("/api/settings"),
   async patchSettings(patch: Record<string, any>): Promise<SettingsView> {
