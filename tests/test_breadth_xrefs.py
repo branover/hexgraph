@@ -77,6 +77,108 @@ def test_function_xrefs_requires_function(hg_home):
         assert "required" in run_tool(ctx, "function_xrefs", {})
 
 
+def test_function_xrefs_falls_back_to_recon_substrate_when_probe_empty(hg_home, monkeypatch):
+    """The r2 xrefs probe can come up empty (function absent from r2's inventory, or it found
+    no callers/callees) on a binary recon already mapped with Ghidra. function_xrefs then derives
+    BOTH directions from the program call graph recon in the Observation substrate (the same
+    fallback call_graph uses) instead of a false `(none)/(none)`."""
+    # An empty probe result both ways.
+    _wire(monkeypatch, {"tool": "xrefs_probe", "mode": "function", "subject": "parse",
+                        "callers": [], "callees": [], "total_callers": 0, "total_callees": 0})
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        _seed_recon_call_graph(s, p, t)  # main → {parse, dispatch}; parse → helper
+        nb, eb = s.query(Node).count(), s.query(Edge).count()
+        out = run_tool(ctx, "function_xrefs", {"function": "parse"})
+        # caller (main, who calls parse) AND callee (helper, what parse calls) both derived.
+        assert "main" in out and "helper" in out
+        assert "recon substrate" in out          # the source is labelled honestly
+        assert "(none)" not in out               # NOT the false empty neighbourhood
+        # QUERY: no graph mutation.
+        assert s.query(Node).count() == nb and s.query(Edge).count() == eb
+
+
+def test_function_xrefs_recon_fallback_normalizes_symbol_names(hg_home, monkeypatch):
+    """The fallback matches by NORMALIZED name so a `sym.`-prefixed recon entry and a bare
+    requested name resolve to one identity (normalize_symbol_name strips the namespace)."""
+    from hexgraph.engine import observations as O
+
+    _wire(monkeypatch, {"tool": "xrefs_probe", "mode": "function", "callers": [], "callees": [],
+                        "total_callers": 0, "total_callees": 0})
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        O.record_observation(
+            s, project_id=p.id, target_id=t.id, source="ghidra-enrich", tool="enrich_recon",
+            args={}, result_kind="call_graph",
+            payload={"functions": [{"name": "sym.main", "callees": ["sym.parse"]}]},
+            summary="1 call edge", content_hash="abc123")
+        out = run_tool(ctx, "function_xrefs", {"function": "parse"})  # bare name
+        assert "sym.main" in out                 # caller resolved across the sym. prefix
+        assert "recon substrate" in out
+
+
+def test_function_xrefs_prefers_probe_over_recon_substrate(hg_home, monkeypatch):
+    """When the probe DOES return a neighbourhood, it wins — recon is only the fallback."""
+    _wire(monkeypatch, {"tool": "xrefs_probe", "mode": "function", "subject": "cgi_handler",
+                        "callers": [{"caller": "router", "caller_addr": "0x400100",
+                                     "at": "0x400120"}],
+                        "callees": [{"name": "system", "addr": "0x400500"}],
+                        "total_callers": 1, "total_callees": 1})
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        _seed_recon_call_graph(s, p, t)
+        out = run_tool(ctx, "function_xrefs", {"function": "cgi_handler"})
+        assert "router" in out and "system" in out
+        assert "recon substrate" not in out and "main" not in out
+
+
+# --- decompilation Observation stores a FOCUS-ONLY payload -------------------
+
+
+class _FakeDecompiler:
+    """A Ghidra-style decompiler whose dict carries the whole-program calls/structs the
+    enriched-recon pass uses, alongside the per-function focus."""
+
+    name = "ghidra"
+
+    def decompile(self, artifact, function=None, *, address=None, reanalyze=False, project=None):
+        return {
+            "functions": ["cgi_handler", "helper", "system"],
+            "focus": {"name": function or "cgi_handler", "address": "0x401200",
+                      "pseudocode": "int cgi_handler(){ helper(); }",
+                      "callees": [{"name": "helper", "address": "0x401300"}], "disasm": ""},
+            # whole-program facts that must NOT bloat THIS per-function observation:
+            "calls": [["cgi_handler", "helper"], ["main", "cgi_handler"]],
+            "structs": [{"name": "cfg_t", "fields": []}],
+        }
+
+
+def test_decompilation_observation_payload_is_focus_only(hg_home, monkeypatch):
+    """obs_get of a per-function decompilation must not return whole-program calls/structs
+    noise — the recorded decompilation Observation stores {functions, focus} only. The
+    decompilation extractor + search_decompiled read only `focus`; whole-program calls/structs
+    enrich from SEPARATE call_graph/structs Observations, so dropping them here loses nothing."""
+    from hexgraph.engine import observations as O
+
+    monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
+    monkeypatch.setattr("hexgraph.sandbox.decompiler.get_decompiler",
+                        lambda *a, **k: _FakeDecompiler())
+    with session_scope() as s:
+        ctx, _p, t = _ctx(s)
+        run_tool(ctx, "decompile_function", {"function": "cgi_handler"})
+        rows = s.query(Observation).filter(Observation.target_id == t.id,
+                                           Observation.result_kind == "decompilation").all()
+        assert len(rows) == 1
+        payload = O.get_observation(s, rows[0].id)["payload"]
+        # The per-function facts are preserved …
+        assert payload["focus"]["name"] == "cgi_handler"
+        assert payload["focus"]["callees"]            # the focus's OWN callees stay
+        assert "functions" in payload
+        # … but the whole-program noise is gone from THIS observation.
+        assert "calls" not in payload
+        assert "structs" not in payload
+
+
 # --- data_xrefs: refs to an address, a QUERY ---------------------------------
 
 def test_data_xrefs_records_observation_and_mutates_no_graph(hg_home, monkeypatch):
