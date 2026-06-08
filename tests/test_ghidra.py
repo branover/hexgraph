@@ -48,7 +48,9 @@ def test_env_override_beats_settings(hg_home, monkeypatch):
 
 
 def test_ghidra_decompiler_uses_ghidra_probe(hg_home):
-    fake = FakeExecutor({"tool": "ghidra_probe", "functions": ["main"], "focus": None})
+    # Ghidra resolves the focus → no r2 fallback; assert the pure ghidra_probe call.
+    fake = FakeExecutor({"tool": "ghidra_probe", "functions": ["main"],
+                         "focus": {"name": "main", "address": "0x1000", "pseudocode": "x"}})
     out = GhidraDecompiler(runner=fake).decompile("/artifact", "main")
     # No project ⇒ no persistent-project mount (the throwaway path), still uses ghidra_probe.
     assert fake.calls == [("ghidra_probe.py", ["main"], None)]

@@ -326,7 +326,16 @@ def _format_decomp(out: dict, label: str, *, limit: int = _MAX) -> str:
     the marker names both the max_chars re-call and the get_observation full-body path."""
     focus = out.get("focus")
     if not focus:
-        return f"{label} not found among: {', '.join(out.get('functions', [])[:40])}"
+        defined = out.get("functions", []) or []
+        # "defined functions" (not "imports") — the list is the decompiler's DEFINED set, which
+        # for a stripped binary or a Ghidra/r2 inventory mismatch may not include the requested
+        # focus even though it exists. If the label is a function-NAME miss, point at the
+        # address-based path (decompile_at resolves the function CONTAINING a hex address from
+        # xrefs/strings, and r2 backs Ghidra when their inventories disagree).
+        hint = ("" if label.startswith("address ")
+                else " — if you have its address, try re_decompile_at(<addr>)")
+        return (f"{label} not found among the {len(defined)} defined functions"
+                + (f": {', '.join(defined[:40])}" if defined else "") + hint)
     addr = f" @ {focus['address']}" if focus.get("address") else ""
     name = focus.get("name") or label
     promo = out.get("promotable_callees") or []
@@ -430,9 +439,17 @@ def _decomp(ctx: ToolContext, function: str | None, *,
         # function. result_kind="decompilation" so the enrichment extractor distills the
         # focus's whitelisted facts (prototype/address/callees) into the index.
         focus = out["focus"]
+        # Store a FOCUS-ONLY payload: the decompilation Observation is about THIS one function,
+        # but the Ghidra decompiler dict also carries the whole-program `calls` (≤2000) and
+        # `structs` (≤200) used by enriched recon — ~33 KB of unrelated noise on every obs_get
+        # of a per-function decompile. The decompilation extractor (_extract_functions) and
+        # search_decompiled read only `focus` (whole-program calls/structs are enriched from
+        # SEPARATE call_graph/structs Observations recorded by enrich_recon), so dropping them
+        # here loses nothing — the focus's own callees stay inside `focus`.
+        decomp_payload = {"functions": out.get("functions", []), "focus": focus}
         obs, _cached = _record_obs(
             ctx, tool=req_tool, args=req_args,
-            result_kind="decompilation", payload=out,
+            result_kind="decompilation", payload=decomp_payload,
             summary=f"decompiled {focus.get('name') or function or address}",
             node_refs=[focus.get("name")] if focus.get("name") else [])
         promotable = _materialize(ctx, focus)
@@ -946,28 +963,66 @@ def _run_xrefs_probe(ctx: ToolContext, subject: str | None, mode: str):
         return None, f"{mode} xrefs failed: {exc}"
 
 
+def _recon_function_xrefs(ctx: ToolContext, function: str) -> tuple[list[str], list[str]]:
+    """Callers and callees of `function` derived from the program call graph recon already in
+    the Observation substrate (the same source `_call_graph_tool` falls back to). Matches by
+    NORMALIZED function name (decompiler prefixes stripped) so `sym.foo`/`fcn.foo`/`foo` resolve
+    to one identity. Returns `(caller_names, callee_names)`; read-only, promotes nothing."""
+    from hexgraph.engine.graph.nodes import normalize_symbol_name as _norm
+
+    key = _norm(function)
+    callers: list[str] = []
+    callees: list[str] = []
+    for caller, callee in _recon_call_graph_edges(ctx):
+        if _norm(callee) == key and caller not in callers:
+            callers.append(caller)
+        if _norm(caller) == key and callee not in callees:
+            callees.append(callee)
+    return callers, callees
+
+
 def _function_xrefs(ctx: ToolContext, function: str) -> str:
-    """Callers AND callees of one function (the bidirectional neighbourhood). QUERY."""
+    """Callers AND callees of one function (the bidirectional neighbourhood). QUERY.
+
+    Falls back to the program call graph recon in the Observation substrate when the r2 xrefs
+    probe errors or comes up empty in BOTH directions — Ghidra's `enrich_recon` may have mapped
+    the graph the r2 probe missed (the same fallback `call_graph` uses), so the neighbourhood
+    isn't a false `(none)/(none)`."""
     key = f"fxrefs:{function}"
     if key in ctx.cache:
         return ctx.cache[key]
     out, err = _run_xrefs_probe(ctx, function, "function")
-    if err:
-        return err
-    if out.get("error"):
-        return f"function {function!r} not found"
-    callers = out.get("callers") or []
-    callees = out.get("callees") or []
+    callers = (out.get("callers") or []) if (not err and not out.get("error")) else []
+    callees = (out.get("callees") or []) if (not err and not out.get("error")) else []
+    source_note = ""
+    if not callers and not callees:
+        # The probe errored, the function wasn't in r2's inventory, or it found nothing both
+        # ways — surface the recon-substrate neighbourhood instead of a false empty.
+        r_callers, r_callees = _recon_function_xrefs(ctx, function)
+        if r_callers or r_callees:
+            callers = [{"caller": c} for c in r_callers]
+            callees = [{"name": c} for c in r_callees]
+            out = {"callers": callers, "callees": callees,
+                   "total_callers": len(callers), "total_callees": len(callees)}
+            source_note = " (from recon substrate)"
+        elif err:
+            return err
+        elif (out or {}).get("error"):
+            return f"function {function!r} not found"
     _record_obs(ctx, tool="function_xrefs", args={"function": function},
                 result_kind="function_xrefs", payload=out,
                 summary=f"{function}: {len(callers)} callers, {len(callees)} callees")
-    lines = [f"// {function}: callers (who calls it) and callees (what it calls)", "callers:"]
-    lines += [f"- {c['caller']} (@ {c.get('caller_addr')}) at {c.get('at')}" for c in callers] or ["  (none)"]
+    lines = [f"// {function}: callers (who calls it) and callees (what it calls){source_note}",
+             "callers:"]
+    lines += [f"- {c['caller']}"
+              + (f" (@ {c['caller_addr']})" if c.get("caller_addr") else "")
+              + (f" at {c['at']}" if c.get("at") else "") for c in callers] or ["  (none)"]
     more_c = out.get("total_callers", len(callers)) - len(callers)
     if more_c > 0:
         lines.append(f"  … and {more_c} more callers")
     lines.append("callees:")
-    lines += [f"- {c.get('name')} (@ {c.get('addr')})" for c in callees] or ["  (none)"]
+    lines += [f"- {c.get('name')}"
+              + (f" (@ {c['addr']})" if c.get("addr") else "") for c in callees] or ["  (none)"]
     more_e = out.get("total_callees", len(callees)) - len(callees)
     if more_e > 0:
         lines.append(f"  … and {more_e} more callees")

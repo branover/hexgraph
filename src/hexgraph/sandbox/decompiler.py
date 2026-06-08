@@ -79,6 +79,26 @@ class GhidraDecompiler(Decompiler):
 
     def decompile(self, artifact: str, function: str | None = None, *,
                   address: str | None = None, reanalyze: bool = False, project=None) -> dict:
+        out = self._decompile_ghidra(artifact, function, address=address,
+                                     reanalyze=reanalyze, project=project)
+        # Function-inventory mismatch fallback: Ghidra and the r2 probes do NOT share a
+        # function inventory, so an EXPLICIT focus (a function name or address) that r2/recon
+        # surfaced can be absent from Ghidra's defined set → Ghidra returns focus=null and the
+        # focus is silently rejected. radare2 ALWAYS runs in the sandbox image and resolves a
+        # bare hex address / `fcn.ADDR` / a containing function, so fall back to it ONCE for the
+        # focus while keeping Ghidra's richer whole-program inventory (functions/calls/structs).
+        # Only for an explicit focus Ghidra missed — never on a plain list_functions, on an
+        # error, or on a focus Ghidra already resolved.
+        if (function or address) and isinstance(out, dict) and not out.get("error") \
+                and out.get("focus") is None:
+            r2 = R2Decompiler(self.runner).decompile(
+                artifact, function, address=address, reanalyze=reanalyze, project=project)
+            if isinstance(r2, dict) and r2.get("focus"):
+                out["focus"] = r2["focus"]
+        return out
+
+    def _decompile_ghidra(self, artifact: str, function: str | None = None, *,
+                          address: str | None = None, reanalyze: bool = False, project=None) -> dict:
         args = _focus_args(function, address, reanalyze=False)  # the probe focus only; see below
         slot = self._resolve_slot(artifact, project)
         if slot is None:

@@ -208,7 +208,14 @@ class _RecordingExecutor:
                 marker.write_text(json.dumps({"program_name": "hexgraph"}))
         self.calls.append({"probe": probe, "extra_args": extra_args,
                            "project_mount": project_mount, "cached": warm})
-        return {"tool": "ghidra_probe", "functions": ["main", "other"], "focus": None,
+        # Return a focus matching the requested function (mirrors Ghidra finding it) so the
+        # decompiler's r2-fallback (Ghidra-missed-focus) does NOT fire and add a probe call —
+        # these tests assert the pure ghidra_probe mount/cold-warm behaviour.
+        focus = None
+        fn = (extra_args or [None])[0]
+        if fn:
+            focus = {"name": fn, "address": "0x1000", "pseudocode": "x"}
+        return {"tool": "ghidra_probe", "functions": ["main", "other"], "focus": focus,
                 "cached": warm}
 
 
