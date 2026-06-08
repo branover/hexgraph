@@ -137,6 +137,16 @@ entries reference them by name.
 - Principle: a triage-focused mode.
 - Prereq: any project open.
 
+**SHELL-04b — Right-pane tab bar wraps on a narrow pane**
+- Steps: narrow the right pane (drag the center/right splitter toward its ~280px minimum).
+- Functional: the primary tab buttons (Findings / Hypotheses / Journal / Tasks / Campaigns) **wrap onto a
+  second line** rather than overflowing or hiding behind a horizontal scroll; every tab stays visible and
+  clickable, and the expand/collapse controls stay reachable at the top-right.
+- Qualitative: primary navigation is never clipped — a researcher can always see that "Journal" exists, even
+  at minimum width (Discoverable, Consistency).
+- Principle: primary nav is never hidden behind a scroll.
+- Prereq: a project open with the right pane narrowed.
+
 **SHELL-05 — Detail section drag / expand within the right pane**
 - Steps: drag the horizontal splitter between the findings list and the Detail section; or click the
   Detail expand toggle.

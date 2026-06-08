@@ -713,26 +713,27 @@ export default function Workspace() {
   const fuzzingFeature = !!caps.features?.fuzzing;
   const renderTabs = (collapsible = false) => (
     <div className="pane-h">
-      <button className={"btn sm" + (tab === "findings" ? " primary" : " ghost")} onClick={() => { setTab("findings"); setUrl({ tab: undefined }); }}>
-        <Icon name="bug" size={12} /> Findings · {detail.findings.length}
-      </button>
-      <button className={"btn sm" + (tab === "hypotheses" ? " primary" : " ghost")} onClick={() => { setTab("hypotheses"); setUrl({ tab: "hypotheses" }); }}
-              title="Hypotheses — the research-question worklist">
-        <Icon name="bulb" size={12} /> Hypotheses
-      </button>
-      <button className={"btn sm" + (tab === "journal" ? " primary" : " ghost")} onClick={() => { setTab("journal"); setUrl({ tab: "journal" }); }}
-              title="Journal — the research notebook (ideas, attempts, dead ends, lessons)">
-        <Icon name="book" size={12} /> Journal
-      </button>
-      <button className={"btn sm" + (tab === "tasks" ? " primary" : " ghost")} onClick={() => { setTab("tasks"); setUrl({ tab: undefined }); }}>
-        <Icon name="task" size={12} /> Tasks · {tasks.length}
-      </button>
-      {fuzzingFeature && (
-        <button className={"btn sm" + (tab === "campaigns" ? " primary" : " ghost")} onClick={() => { setTab("campaigns"); setUrl({ tab: "campaigns" }); }}>
-          <Icon name="bug" size={12} /> Campaigns
+      <div className="rp-tabs">
+        <button className={"btn sm" + (tab === "findings" ? " primary" : " ghost")} onClick={() => { setTab("findings"); setUrl({ tab: undefined }); }}>
+          <Icon name="bug" size={12} /> Findings · {detail.findings.length}
         </button>
-      )}
-      <span className="grow" />
+        <button className={"btn sm" + (tab === "hypotheses" ? " primary" : " ghost")} onClick={() => { setTab("hypotheses"); setUrl({ tab: "hypotheses" }); }}
+                title="Hypotheses — the research-question worklist">
+          <Icon name="bulb" size={12} /> Hypotheses
+        </button>
+        <button className={"btn sm" + (tab === "journal" ? " primary" : " ghost")} onClick={() => { setTab("journal"); setUrl({ tab: "journal" }); }}
+                title="Journal — the research notebook (ideas, attempts, dead ends, lessons)">
+          <Icon name="book" size={12} /> Journal
+        </button>
+        <button className={"btn sm" + (tab === "tasks" ? " primary" : " ghost")} onClick={() => { setTab("tasks"); setUrl({ tab: undefined }); }}>
+          <Icon name="task" size={12} /> Tasks · {tasks.length}
+        </button>
+        {fuzzingFeature && (
+          <button className={"btn sm" + (tab === "campaigns" ? " primary" : " ghost")} onClick={() => { setTab("campaigns"); setUrl({ tab: "campaigns" }); }}>
+            <Icon name="bug" size={12} /> Campaigns
+          </button>
+        )}
+      </div>
       <button className="btn sm icon" title={maxed ? "Restore" : "Expand to full screen"} onClick={() => setMaxed((m) => !m)}>
         <Icon name={maxed ? "minus" : "fit"} size={13} />
       </button>
