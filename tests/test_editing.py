@@ -70,6 +70,41 @@ def test_patch_node_rename_and_attrs(hg_home):
     assert c.patch(f"/api/projects/{pid}/nodes/nope", json={"name": "x"}).status_code == 404
 
 
+def test_get_node_by_id(hg_home):
+    """GET /api/projects/{pid}/nodes/{nid} returns ONE node in the graph-node shape
+    (the client's fallback when a node isn't in the skeleton/LOD-limited loaded graph,
+    e.g. a journal @-mention click). Includes the archived flag; missing → 404."""
+    with session_scope() as s:
+        p = create_project(s, name="gn")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        n = materialize_function(s, project_id=p.id, target_id=t.id, name="handler")
+        pid, tid, nid = p.id, t.id, n.id
+
+    c = TestClient(create_app())
+    r = c.get(f"/api/projects/{pid}/nodes/{nid}")
+    assert r.status_code == 200, r.text
+    d = r.json()
+    # The graph-node shape: type:"node", node_type, label, target_id, plus the archived flag.
+    assert d["id"] == nid and d["type"] == "node" and d["node_type"] == "function"
+    assert d["label"] == "handler" and d["target_id"] == tid
+    assert d["archived"] is False
+
+    # An archived node is still returned (the flag lets the caller decide what to do).
+    from hexgraph.engine.graph.removal import archive_node
+    with session_scope() as s:
+        archive_node(s, pid, nid)
+    r = c.get(f"/api/projects/{pid}/nodes/{nid}")
+    assert r.status_code == 200, r.text
+    assert r.json()["archived"] is True
+
+    # A missing node 404s; a node id under the wrong project 404s too.
+    assert c.get(f"/api/projects/{pid}/nodes/nope").status_code == 404
+    with session_scope() as s:
+        p2 = create_project(s, name="other")
+        pid2 = p2.id
+    assert c.get(f"/api/projects/{pid2}/nodes/{nid}").status_code == 404
+
+
 def test_verify_finding_without_spec_400(hg_home):
     with session_scope() as s:
         p, t, f = _seed_finding(s)

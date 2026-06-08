@@ -967,14 +967,22 @@ hygiene.
 **JRN-03 — `@`-mention chips: navigate / dangling**
 - Steps: in a rendered entry, click an `@`-mention chip.
 - Functional: a live chip (a kind glyph + the object's current label, in accent colour) selects the referenced
-  object via the SAME plumbing as elsewhere — a finding opens its Inspector; a node/target/hypothesis focuses
-  in the graph. A **dangling** mention (the object was archived, merged away, or deleted) renders greyed +
-  struck-through and does **not** navigate (never an error).
+  object via the SAME plumbing as elsewhere — a finding opens its Inspector; a node/target/hypothesis opens in
+  the **Detail/Inspector pane** (and focuses in the graph when loaded). This holds **even when the object isn't
+  currently loaded in the graph** — on a large project the graph loads skeleton-first / a node subset, so the
+  mentioned node may not be rendered; the click then **fetches it by id** so the inspector still opens (a
+  hypothesis node routes to the HypothesisPanel; an unloaded target falls back to the loaded targets list).
+  A **dangling** mention (the object was archived, merged away, or deleted) renders greyed + struck-through and
+  does **not** navigate (never an error).
 - 🔌 Backend: mentions are resolved server-side through the merge keeper; each carries `resolved_id` + a
-  `dangling` flag. Clicking selects `resolved_id`.
+  `dangling` flag. Clicking selects `resolved_id`. When the node isn't in the loaded graph, the client calls
+  `GET /api/projects/{id}/nodes/{node_id}` (the single-node graph-node shape, incl. an `archived` flag; 404 if
+  missing) and opens the inspector from that.
 - Qualitative: chips read as first-class links, not raw `@[…](…)` syntax; the dangling state is unmistakable
-  yet unalarming (Consistency, Forgiveness). Link stability survives a merge/archive.
-- Prereq: an entry mentioning ≥1 live object and (ideally) ≥1 dangling reference.
+  yet unalarming (Consistency, Forgiveness). Link stability survives a merge/archive, and a click reliably
+  opens the object regardless of graph level-of-detail.
+- Prereq: an entry mentioning ≥1 live object and (ideally) ≥1 dangling reference; ideally also a mention of a
+  node that isn't in the loaded subset (large project / skeleton mode) to exercise the fetch-by-id fallback.
 
 **JRN-04 — Compose a new entry (markdown + live preview)**
 - Steps: click **Write**; type markdown in the textarea; toggle **Preview**; **Add entry** (or ⌘/Ctrl+Enter).
