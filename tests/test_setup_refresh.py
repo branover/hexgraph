@@ -135,3 +135,34 @@ def test_detect_and_refresh_registrations(tmp_path, monkeypatch):
 def test_refresh_registrations_noop_when_none(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     assert agent_setup.refresh_registrations(project_dir=str(tmp_path / "proj")) == []
+
+
+# ---------------------------------------------------------------------------
+# run_refresh — a FAILED sandbox rebuild must still surface the staleness hint
+# (regression: the staleness warning must not be suppressed unless a sandbox image
+# was rebuilt SUCCESSFULLY this run)
+# ---------------------------------------------------------------------------
+
+
+def test_run_refresh_failed_sandbox_build_still_warns(monkeypatch):
+    st = _state(docker=True, built_images={"sandbox": True})
+    monkeypatch.setattr(wiz, "detect_state", lambda: st)
+    monkeypatch.setattr(wiz, "_repo_root", lambda: "/x")
+    monkeypatch.setattr(wiz, "refresh_build_keys", lambda state, root: ["sandbox"])
+    monkeypatch.setattr(wiz, "run_build_step", lambda b: 1)  # the rebuild FAILS
+
+    monkeypatch.setattr(agent_setup, "refresh_registrations", lambda project_dir=None: [])
+    monkeypatch.setattr(agent_setup, "detect_skill_dirs", lambda project_dir=None: [])
+    import hexgraph.db.migrate as mig
+
+    monkeypatch.setattr(mig, "prepare_database", lambda: None)
+
+    seen: dict = {}
+    monkeypatch.setattr(
+        wiz, "_sandbox_staleness_warning",
+        lambda *, will_rebuild=False: (seen.update(will_rebuild=will_rebuild), None)[1],
+    )
+
+    rc = wiz.run_refresh()
+    assert rc == 1                       # a CORE (sandbox) build failure → non-zero exit
+    assert seen["will_rebuild"] is False  # failed rebuild must NOT suppress the staleness warning

@@ -484,10 +484,11 @@ def run_refresh(*, project_dir: str | None = None) -> int:
     rc = 0
 
     # --- docker images: rebuild missing/stale, preserving the Ghidra choice -------------
+    built_ok: set[str] = set()  # build steps that actually SUCCEEDED (drives the staleness hint)
     if not state.docker:
         print("  images: Docker unavailable — skipping image checks.")
     else:
-        build_keys = refresh_build_keys(state, root=root)
+        build_keys = refresh_build_keys(state, root=root)  # computed ONCE (the probes are not cheap)
         if not build_keys:
             print("  images: all current.")
         for b in build_keys:
@@ -495,6 +496,7 @@ def run_refresh(*, project_dir: str | None = None) -> int:
             print(f"  images: rebuilding {step.label} [{step.cost}] …")
             code = run_build_step(b)
             if code == 0:
+                built_ok.add(b)
                 print(f"  images: ✓ {step.label}")
             else:
                 fatal = b in _CORE_BUILDS
@@ -545,10 +547,11 @@ def run_refresh(*, project_dir: str | None = None) -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"  db: (!) migration note: {exc}")
 
-    # If a sandbox rebuild was somehow skipped yet it's stale, surface the proactive hint.
-    rebuilt_sandbox = state.docker and any(
-        k in ("sandbox", "sandbox_ghidra") for k in (refresh_build_keys(state, root=root)))
-    stale = _sandbox_staleness_warning(will_rebuild=rebuilt_sandbox)
+    # If the sandbox is still stale (we didn't rebuild it, OR a rebuild FAILED), surface the
+    # proactive hint. Suppress it ONLY when a sandbox image was rebuilt SUCCESSFULLY this run —
+    # a failed rebuild must still warn. (Reuse `built_ok`; never re-run the probes.)
+    sandbox_rebuilt_ok = bool({"sandbox", "sandbox_ghidra"} & built_ok)
+    stale = _sandbox_staleness_warning(will_rebuild=sandbox_rebuilt_ok)
     if stale:
         print(f"  (!) {stale}")
     print("✓ refresh complete — start with: just serve")

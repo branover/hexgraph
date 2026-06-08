@@ -310,8 +310,6 @@ def refresh_registrations(project_dir: str | None = None) -> list[dict]:
     Returns [{agent, scope, path, action}] where action ∈ {unchanged, updated, manual}."""
     import os
 
-    import os
-
     want = mcp_server_entry()
     proj = os.path.abspath(project_dir or os.getcwd())
     results: list[dict] = []
