@@ -12,7 +12,7 @@ the corrected root cause is what the plan targets.
 | **F11** | `database is locked`; fix = add WAL + busy_timeout | 🟡 **partially real, misdiagnosed** | WAL **and** `busy_timeout=5000` are **already set** (`db/session.py:40-66`). Real gaps: no **retry/backoff** on `OperationalError`; `worker.run_task_sync` holds **one transaction across a multi-minute task** (a late lock rolls back all of it → "lost analysis"); raw SQL **leaks** at `agent/mcp_server.py:_call_tool`. The "poisons serial MCP calls" claim is mostly false (each MCP call gets a fresh short-lived session). |
 | **F21** | mock task writes FP findings + constant `content_hash` (amplifies F11) | 🟡 **partially real, misattributed** | The HIGH/HIGH FPs come from the **backend-independent taint core** (`engine/re/static_core.py`), not the mock. The `content_hash` amplifier is **structurally impossible**: `Finding` has no `content_hash` column; the only UNIQUE hash is `fuzz_artifact.dedup_key`. Real kernel = taint core over-promotes intra-procedural/input-independent flows at high/high (overlaps F17). |
 | **F04** | `target_ingest` returns 114 KB blob | ✅ real | `ingest` inlines one `{id,name}` per child (`agent/mcp_tools.py:2057`, `engine/pipeline.py:55`); 765 rows overflow. |
-| **F06** | `finding_list` overflow, no filters | ✅ real | `list_findings` is uncapped/unfiltered (`mcp_tools.py:958`); ingest mints **one recon finding per child** (`pipeline.py:53`). |
+| **F06** | `finding_list` overflow, no filters | ✅ real | `list_findings` is uncapped/unfiltered (`mcp_tools.py:958`); ingest mints **one recon finding per child** (`pipeline.py:53`). **Deeper fix (PR 8):** recon should enrich the target + record an Observation, not mint a finding — findings are for vulnerabilities, not ordinary recon. |
 | **F08** | decompiler misses stripped-ARM fns, no fallback | ✅ real | Ghidra-active installs have **no radare2 fallback** at the `get_decompiler()` seam (`sandbox/decompiler.py:80`); the r2 path already handles `fcn.ADDR`/addresses. (The error lists Ghidra's defined functions, not "only imports.") |
 | **F09** | `re_function_xrefs` false "(none)" | ✅ real | No recon-substrate fallback, unlike `re_call_graph` (`agent/agent_tools.py:949` vs `:1063`). |
 | **F10** | `obs_get` decompile = 33 KB noise | ✅ real | Per-function decompile stores the whole Ghidra dict (calls+structs) (`agent_tools.py:433`); no body-only view. |
@@ -54,12 +54,13 @@ worktree/PR per the merge gate. **Wave 1 is four PRs with disjoint file sets** (
 | **5** | **String visibility** | F13 + F15 | back `re_list_strings`/new `re_grep_strings` with the full table + server-side filter + pagination |
 | **6** | **Raw-range disassembly** | F16 | new `re_disassemble_range` tool (+ probe, catalog/SKILL/`docs/mcp.md`, guard test) |
 | **7** | **Long-write-window restructure** | F11 (1b) | commit Observations incrementally in `worker.run_task_sync` so a late lock doesn't discard completed analysis (riskier — its own PR) |
+| **8** | **Recon → target enrichment + Observation, NOT a finding** | F06 (deeper fix) | Stop minting one `recon` finding per child (`engine/re/recon.py` `build_recon_finding`/`execute_recon`). Keep `apply_facts_to_target` enrichment + node materialization; **record the raw recon facts as an Observation** instead; **relocate the risky-sink→`static_analysis` followup to the suggester seam** (`engine/suggester.py`, target-level) so the target→task spawn loop survives. Keep `finding_type='recon'` in the enum (back-compat; envelope-only, no migration). Updates ~6 tests that assert recon findings. **Sequence AFTER PR 3** (it owns the `finding_list` recon-default-exclude + recon-dependent tests). Rationale: findings should point at vulnerabilities, not ordinary recon. |
 
 ### Wave 3 — papercuts & docs (batchable)
 
 | PR | Findings |
 |---|---|
-| **8** | F12 (thread `sink_node_id` + better error), F20 (inline `finding_record` schema), F14 (YARA rule), F18 (`re_recover_constant` pre-check), F05 (ingest progress), F01 (PATH/venv doc), F02 (project-dir doctor) |
+| **9** | F12 (thread `sink_node_id` + better error), F20 (inline `finding_record` schema), F14 (YARA rule), F18 (`re_recover_constant` pre-check), F05 (ingest progress), F01 (PATH/venv doc), F02 (project-dir doctor) |
 
 ## Status
 
