@@ -266,14 +266,18 @@ def _cmd_config(args: argparse.Namespace) -> int:
 
 def _cmd_mcp(args: argparse.Namespace) -> int:
     if args._mcpcmd == "install":
-        from hexgraph.agent_setup import install_help, skill_markdown, write_skill
+        from hexgraph.agent_setup import (
+            SUBFILES, full_skill_markdown, install_help, write_skill,
+        )
 
         if getattr(args, "print_skill", False):
-            print(skill_markdown())
+            # The WHOLE bundle (spine + sub-files) so a Codex/gemini system prompt that
+            # can't read on-demand sub-files still gets the complete field manual.
+            print(full_skill_markdown())
             return 0
         if getattr(args, "write_skill", None):
             path = write_skill(args.write_skill)
-            print(f"wrote VR skill to {path}")
+            print(f"wrote VR skill to {path} (+ {len(SUBFILES)} sub-files)")
             return 0
         print(install_help(args.agent))
         return 0

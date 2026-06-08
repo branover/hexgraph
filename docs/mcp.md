@@ -99,6 +99,15 @@ hexgraph mcp install --write-skill .claude/skills    # also install the VR skill
 hexgraph mcp --tools read,write                      # serve a restricted tool set
 ```
 
+The VR skill is a small always-loaded spine (`SKILL.md`) plus a set of capability sub-files —
+`static-analysis.md`, `dynamic-analysis.md`, `fuzzing.md`, `proving.md`, and `record-keeping.md`.
+The spine teaches the whole engagement arc (ingest a path, orient, decompose the attack surface
+across parallel sub-agents, prove, and synthesize) and routes the agent to the matching sub-file
+when it enters a phase, so the deep methodology for fuzzing or live-surface assessment only costs
+context when it is actually being used. `--write-skill` emits the whole set into the skill
+directory; `--print-skill` prints the entire bundle as one document for a Codex or gemini system
+prompt that cannot read the sub-files on demand.
+
 ### Tool results, the substrate, and the curation contract
 
 There are two stores behind the tools, and it helps to keep them apart from the start. Every

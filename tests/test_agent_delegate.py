@@ -40,9 +40,12 @@ def test_delegate_prompt_carries_ids_and_rules(hg_home):
         assert "task-123" in prompt and t.id in prompt and p.id in prompt
         assert "Never execute" in prompt and "finding_record" in prompt
         assert "look at cgi_handler" in prompt
-        # delegate mode inlines the record-keeping rubric (no sub-file is materialized,
-        # so the SKILL's "read record-keeping.md" pointer must resolve to inlined content)
+        # delegate mode inlines the WHOLE skill bundle (no sub-files are materialized, so
+        # every "read X.md" pointer in the spine must resolve to inlined content)
         assert RECORD_KEEPING in prompt
+        from hexgraph.vr_skill import SUBFILES
+        for name, body in SUBFILES.items():
+            assert body in prompt, name
 
 
 def test_execute_delegate_disabled_raises(hg_home):
