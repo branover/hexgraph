@@ -368,6 +368,24 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
             except Exception:  # noqa: BLE001 — reachability is advisory, never fatal
                 pass
 
+    # Discipline loop, Layer 1 (design-working-memory.md §6): auto-draft the closing
+    # AGENT journal entry from the tool-call trace + the findings, so journaling is a
+    # STRUCTURAL step of finishing a task — deterministic, never dependent on the model
+    # remembering to call a tool, and offline/mock-safe (zero-token). Best-effort: a
+    # failure here must never fail the task (the findings are already persisted).
+    from hexgraph.engine import journal as _journal
+    from hexgraph.db.models import Finding as _FindingRow
+
+    finding_titles = [f.title for f in findings]
+    for fid in core_finding_ids:
+        row = session.get(_FindingRow, fid)
+        if row is not None:
+            finding_titles.append(row.title)
+    _journal.auto_log_task(
+        session, project, task_id=task.id, task_type=task.type, target_name=target.name,
+        transcript=transcript, finding_titles=finding_titles,
+    )
+
     # Group this execution as an analysis_run for run-to-run comparison.
     from hexgraph.engine.runs import record_run
 

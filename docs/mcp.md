@@ -31,8 +31,9 @@ Every tool is named `<domain>_<verb>`, so an agent can route to the right one fr
 without fetching its schema. The domains are `proj` (projects), `target` (the target lifecycle and
 every tool that creates a target, including rehosting), `re` (static reverse engineering), `fs` (a
 target's unpacked filesystem), `obs` (the Observation store), `graph` (the curated node/edge/hypothesis
-graph), `finding` (findings, n-day, and proving), `src` (source trees and builds), `fuzz` (campaigns),
-`net` (live network interaction and the egress log), `task` (the task runner), and `meta` (schemas and
+graph), `journal` (the freeform research notebook), `finding` (findings, n-day, and proving), `src`
+(source trees and builds), `fuzz` (campaigns), `net` (live network interaction and the egress log),
+`task` (the task runner), and `meta` (schemas and
 health). Closed value sets — node and edge types, finding severities, task types, the socket kinds,
 and so on — are real schema `enum`s generated from the codebase's own definitions, so an
 agent can't pass a value the engine doesn't understand.
@@ -45,11 +46,14 @@ agent's context small:
   `graph_stats` (per-type node/edge tallies — a cheap before/after count without listing every node),
   `fs_list`/`fs_read_file`, `src_list_trees`/`src_read_file`, `fuzz_status`,
   `src_list_builds`/`src_build_log`/`fuzz_coverage_diff`, the observation read verbs
-  `obs_list`/`obs_get`/`obs_search` (see the next section), and the `meta` health checks
+  `obs_list`/`obs_get`/`obs_search` (see the next section), the journal read verbs
+  `journal_list`/`journal_get`/`journal_search` (see the working-memory section below), and the
+  `meta` health checks
   `meta_check_decompiler` and `meta_check_features` (preflight the optional features before you lean on one).
 - **write** covers `proj_create` (start an empty, source-first project), `finding_record`,
   `finding_update`, `graph_create_node`, `graph_set_node_attr` (set one attr — e.g. `is_sink` — on an existing node), `graph_create_edge`, `graph_create_socket`,
-  `graph_create_hypothesis`, `finding_link_same_code`, `finding_propagate`, `src_import_tree`,
+  `graph_create_hypothesis`, the journal authoring verbs `journal_add`/`journal_update`/`journal_delete`,
+  `finding_link_same_code`, `finding_propagate`, `src_import_tree`,
   `finding_link_to_source`, `src_save_revision`, `src_import_oss_fuzz`, and more. It also
   holds the graph-removal tools — the reversible `graph_archive_node`/`graph_restore_node`/`target_archive`/`target_restore`
   and the hard `graph_delete_edge` — plus `finding_delete` for clearing a junk finding outright
@@ -137,6 +141,33 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
   hide a sink in its tail — raise `max_chars` rather than guessing from the head.
 
 The fuller, user-facing tour of all this lives in [observations.md](observations.md).
+
+### The research journal: a working memory shared with the human
+
+The `journal_*` tools back a freeform, markdown research notebook that the agent and the human share.
+It is the place for the *story* the graph and findings don't capture: the idea you had, what you tried,
+what worked or didn't, and what you learned. Keep it apart from the two stores it is easy to confuse
+with. It is not the Observation store, which holds raw tool output recorded automatically; if you catch
+yourself pasting a decompilation or a strings dump into a journal entry, stop, because that output
+already lives as an Observation and the entry should say what it *meant*. And it is not a finding, which
+is a substantiated result; a journal entry is interpreted narrative, not a structured claim.
+
+The most valuable thing the journal buys you is cross-session memory. A later session re-orients in a
+single call with `journal_search("what did I try on the CGI handler")` or `journal_list(project_id)`,
+instead of re-deriving everything from the graph. `journal_get(entry_id)` reads one entry in full, with
+its `@`-mentions resolved. An entry's body can `@[label](kind:id)`-mention any node, finding, target, or
+hypothesis, which renders as a clickable link in the UI and survives a later merge or archive of the
+object it points at, greying out rather than breaking.
+
+Two rules shape how an agent writes to it. First, authorship: `journal_add` always records the entry as
+the agent (you cannot post as the human), and `journal_update` and `journal_delete` refuse a
+human-authored entry outright. The journal is a trust artifact, so the human's words stay exactly as
+they wrote them, while you remain free to add and revise your own. Second, cadence: write a short,
+skimmable line at each meaningful pivot or dead end and at task close, not one dump at the end. HexGraph
+backs that up structurally rather than relying on you to remember. When an LLM or agent task finishes it
+auto-drafts a closing session-log entry from the tool-call trace and the findings, and the task context
+carries a running nudge when the journal has gone stale, so journaling is part of finishing a task the
+way emitting findings is, not an optional courtesy call.
 
 ### Annotations are proposals; renaming a real name is confirmed by a human
 

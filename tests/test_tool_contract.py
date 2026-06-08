@@ -82,8 +82,8 @@ def test_authoring_tools_state_expectations():
 
 # --- discoverability guards (the tool surface stays routable + safe-by-name) ---------
 
-_DOMAINS = {"proj", "target", "re", "fs", "obs", "graph", "finding", "src", "fuzz",
-            "net", "task", "meta"}
+_DOMAINS = {"proj", "target", "re", "fs", "obs", "graph", "journal", "finding", "src",
+            "fuzz", "net", "task", "meta"}
 
 
 def test_every_tool_name_is_domain_namespaced():
@@ -109,7 +109,7 @@ def test_closed_value_set_params_carry_a_schema_enum():
         ("task_run", "type"), ("net_remote_run", "tool"), ("target_rehost", "brand"),
         ("target_register_service", "transport"), ("src_build", "system"),
         ("fuzz_start", "surface"), ("proj_create", "backend"),
-        ("finding_reachability", "precondition"),
+        ("finding_reachability", "precondition"), ("journal_list", "author"),
     }
     for tool, param in must_enum:
         prop = by_name[tool].get(param, {})
@@ -138,6 +138,9 @@ def test_closed_value_set_params_carry_a_schema_enum():
     # the reachability precondition enum is the engine's PRECONDITIONS authority (no drift).
     from hexgraph.engine.assurance import PRECONDITIONS
     assert set(by_name["finding_reachability"]["precondition"]["enum"]) == set(PRECONDITIONS)
+    # the journal author enum is the engine's AUTHORS authority (no drift).
+    from hexgraph.engine.journal import AUTHORS
+    assert set(by_name["journal_list"]["author"]["enum"]) == set(AUTHORS)
 
 
 def test_gated_tools_name_their_feature_in_the_description():

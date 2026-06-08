@@ -41,6 +41,7 @@ from hexgraph.engine.edge_schemas import SOCKET_KINDS as _SOCKET_KINDS
 from hexgraph.engine.findings import FINDING_TYPES as _FINDING_TYPES
 from hexgraph.engine.fuzzers.base import SURFACE_ENGINES as _SURFACE_ENGINES, SURFACES as _FUZZ_SURFACES
 from hexgraph.engine.hypotheses import RELATIONS as _RELATIONS, STATUSES as _HYP_STATUSES
+from hexgraph.engine.journal import AUTHORS as _JOURNAL_AUTHORS
 from hexgraph.engine.llm_tasks import LLM_TASK_TYPES as _LLM_TASK_TYPES
 from hexgraph.models.finding import Finding as _Finding
 
@@ -79,6 +80,7 @@ FUZZ_SURFACES = list(_FUZZ_SURFACES)  # engine/fuzzers/base.py:SURFACES
 FUZZ_ENGINES = sorted({e for es in _SURFACE_ENGINES.values() for e in es})  # engine/fuzzers/base.py:SURFACE_ENGINES
 EVIDENCE_RELATIONS = sorted(_RELATIONS)  # engine.hypotheses.RELATIONS: supports/refutes + confirms/contradicts aliases
 HYPOTHESIS_STATUSES = list(_HYP_STATUSES)  # engine.hypotheses.STATUSES: derived (open/supported/refuted/contested) + verdicts
+JOURNAL_AUTHORS = list(_JOURNAL_AUTHORS)  # engine.journal.AUTHORS: human | agent
 REACHABILITY_PRECONDITIONS = list(_PRECONDITIONS)  # engine.assurance.PRECONDITIONS: unauthenticated/requires_credentials/unspecified
 
 # Tool groups let a user expose only what they need so an agent's context isn't
@@ -210,6 +212,20 @@ _CATALOG = [
      {"type": "object", "properties": {"project_id": {"type": "string"}, "node_id": {"type": "string"}}, "required": ["project_id", "node_id"]}),
     ("write", "graph_delete_edge", _t.delete_edge, "Permanently delete ONE edge by id (hard delete — recreate with graph_create_edge to restore). To remove a node's edges reversibly, graph_archive_node instead.",
      {"type": "object", "properties": {"edge_id": {"type": "string"}}, "required": ["edge_id"]}),
+
+    # ---- journal: the freeform research notebook (interpreted narrative) -------------
+    ("write", "journal_add", _t.add_journal_entry, "Add an entry to the freeform research JOURNAL — the INTERPRETED-NARRATIVE notebook shared with the human (the idea you had, what you TRIED, what worked/didn't, what you LEARNED), NOT the Observation store (raw tool output — recorded automatically) or findings (substantiated results, finding_record). Always posts as the AGENT (you can't author as the human). Write a short line at each meaningful pivot or dead end and at task close, not one dump at the end. @[label](kind:id) mentions (kind = node|finding|target|hypothesis) become clickable links — mention objects instead of re-describing them. Keep it skimmable.",
+     {"type": "object", "properties": {"project_id": {"type": "string"}, "body": {"type": "string", "description": "markdown body; @[label](kind:id) to mention a graph object"}, "origin_task_id": {"type": "string", "description": "optional: the task/session this entry came from"}}, "required": ["project_id", "body"]}),
+    ("read", "journal_list", _t.list_journal_entries, "List a project's JOURNAL entries (interpreted narrative notes) newest-first, optionally filtered by author — your running log of what you tried and learned, distinct from obs_list (raw tool output) and finding_list (substantiated results). Use to re-orient at the start of a session.",
+     {"type": "object", "properties": {"project_id": {"type": "string"}, "author": {"type": "string", "enum": JOURNAL_AUTHORS, "description": "optional filter: human | agent"}, "limit": {"type": "integer"}}, "required": ["project_id"]}),
+    ("read", "journal_get", _t.get_journal_entry, "Read ONE journal entry in full, with its @-mentions resolved (a merged/archived target is flagged dangling) — the journal analog of finding_get / graph_get_node.",
+     {"type": "object", "properties": {"entry_id": {"type": "string"}}, "required": ["entry_id"]}),
+    ("read", "journal_search", _t.search_journal, "Search the freeform research JOURNAL (interpreted narrative notes) — NOT Observations (raw tool output, obs_search) or findings (finding_list). Substring over entry bodies, newest first. Your highest-value cross-session memory: journal_search('what did I try on the CGI handler') re-orients a fresh session in one call.",
+     {"type": "object", "properties": {"query": {"type": "string"}, "project_id": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["query", "project_id"]}),
+    ("write", "journal_update", _t.update_journal_entry, "Edit one of YOUR OWN journal entries by id (refuses a HUMAN-authored entry — the journal is a trust artifact, the human's words stay theirs). Marks the entry edited and re-parses its @-mentions.",
+     {"type": "object", "properties": {"entry_id": {"type": "string"}, "body": {"type": "string", "description": "the new markdown body"}}, "required": ["entry_id", "body"]}),
+    ("write", "journal_delete", _t.delete_journal_entry, "Delete one of YOUR OWN journal entries by id (refuses a HUMAN-authored entry). Hard delete — re-add with journal_add if needed.",
+     {"type": "object", "properties": {"entry_id": {"type": "string"}}, "required": ["entry_id"]}),
 
     # ---- finding: findings, n-day, proving ------------------------------------------
     ("read", "finding_list", _t.list_findings, "Existing findings in a project (with finding_type + verified flag + the compact assurance triple).",

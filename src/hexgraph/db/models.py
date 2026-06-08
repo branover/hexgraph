@@ -720,6 +720,64 @@ class EnrichmentFact(Base):
     )
 
 
+class JournalEntry(Base):
+    """One entry in the freeform research JOURNAL — the working-memory layer's
+    interpreted-narrative half (design-working-memory.md §5). Distinct from the
+    five other stores: it holds *story* (the idea you had, what you tried, what
+    worked, what you learned), never raw tool output (that's an Observation) or a
+    substantiated result (that's a Finding). Markdown body, attributed to a human
+    or an agent, scoped per project like a hypothesis.
+
+    NOT a graph node — journal entries don't participate in the edge algebra, so
+    making them nodes would pollute dedup/canvas/task-context for zero benefit.
+    `@`-mentions (`@[label](kind:id)`) are parsed out of `body` into JournalMention
+    rows so back-references ("entries mentioning hypothesis H") are queryable
+    without scanning every entry's markdown — a lightweight reference, NOT an edge.
+
+    `origin_task_id` records which agent task/session produced an entry (powers the
+    staleness counter + the "what has the agent been doing" story). Edit history is
+    an `edited` MARKER only (design §12, decision 5 — no full versioning yet)."""
+
+    __tablename__ = "journal_entry"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("project.id"), index=True)
+    # human | agent — a plain String column (zero-migration vocab), the authorship
+    # axis the permission rule keys on: an agent may touch only its OWN (agent) entries.
+    author: Mapped[str] = mapped_column(String(16), default="agent", index=True)
+    body: Mapped[str] = mapped_column(Text, default="")
+    # The agent task/session that produced this entry (nullable — human entries have none).
+    origin_task_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    # Set True the first time an entry is updated after creation (the lightweight
+    # "edited" marker; full version history is deferred — design §12).
+    edited: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class JournalMention(Base):
+    """A lightweight, queryable reference from a journal entry to a graph object —
+    one row per `@[label](kind:id)` parsed out of the entry body (design §5.1/§5.3).
+    Deliberately NOT a graph edge (design §12, decision 4): it's a navigation aid,
+    not part of the typed-edge algebra. Polymorphic string refs (no FK), like every
+    other reference in this schema. `(ref_kind, ref_id)` is resolved through the
+    merge keeper at read time, and a dead/archived target degrades to a `dangling`
+    flag rather than an error — so a merged/archived object never crashes a render."""
+
+    __tablename__ = "journal_mention"
+    __table_args__ = (
+        Index("ix_journal_mention_ref", "ref_kind", "ref_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    entry_id: Mapped[str] = mapped_column(String(36), index=True)
+    # node | finding | target | hypothesis — the kind of object mentioned (String vocab).
+    ref_kind: Mapped[str] = mapped_column(String(16))
+    ref_id: Mapped[str] = mapped_column(String(36))
+    # The label text the author wrote inside @[…] (display only; resolution uses ref_id).
+    label: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
+
 class EgressEvent(Base):
     """Audit record for every outbound network action against a live target. Mandatory
     once the bounded-egress (local-network) tier is enabled — a durable, queryable log
