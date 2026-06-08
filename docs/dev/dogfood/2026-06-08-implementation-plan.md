@@ -68,10 +68,13 @@ worktree/PR per the merge gate. **Wave 1 is four PRs with disjoint file sets** (
 
 | PR | Branch | State |
 |---|---|---|
-| plan doc | `docs/dogfood-plan` | open |
-| 1 write-path | `fix/write-path-resilience` | — |
-| 2 assurance | `fix/assurance-integrity` | — |
-| 3 read-apis | `build/read-api-filters` | — |
-| 4 re-fallbacks | `fix/re-decompiler-fallbacks` | — |
+| plan doc **#223** | `docs/dogfood-plan` | open |
+| **#224** write-path (F11) | `fix/write-path-resilience` | review fixes pushed (retry now wired into the MCP write-group seam; SQLITE_LOCKED; server-side log) → re-review |
+| **#227** assurance (F17 + real-F21) | `fix/assurance-integrity` | in review |
+| **#225** read-apis (F04/F06) | `build/read-api-filters` | in review |
+| **#226** re-fallbacks (F08/F09/F10) | `fix/re-decompiler-fallbacks` | in review |
+| **journal-mention inspector** (UI, user-raised) | `fix/journal-mention-inspector` | implementing — mention-click no-ops when the node isn't in the loaded (skeleton) graph; add a single-node GET endpoint + fetch-on-miss so the Inspector opens regardless of graph LOD; + ux-contract update |
+
+Post-PR3 items (sequence after **#225** merges; share `mcp_catalog.py`/`mcp_tools.py`): **#6b** UDP live-surface primitive (F22), **#8** hidden-by-default child targets + recon-as-enrichment (F06 deeper + visibility regression).
 
 (Update as PRs open / merge.)
