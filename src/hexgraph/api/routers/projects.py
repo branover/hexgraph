@@ -22,7 +22,7 @@ from hexgraph.engine.graph.graph import build_graph
 from hexgraph.engine.ingest import create_project
 from hexgraph.engine.graph.nodemerge import merge_duplicates
 from hexgraph.engine.graph.removal import delete_project
-from hexgraph.engine.report import build_report_md
+from hexgraph.engine.findings.report import build_report_md
 from hexgraph.engine.graph.search import search_project
 
 from ._shared import ProjectCreate, finding_dict, project_dict, target_dict

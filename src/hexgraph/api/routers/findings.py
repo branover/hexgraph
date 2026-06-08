@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException
 
 from hexgraph.db.models import Edge, Finding, FindingStatus, Node, Project, Target, Task
 from hexgraph.db.session import session_scope
-from hexgraph.engine.followups import spawn_followup
+from hexgraph.engine.findings.followups import spawn_followup
 from hexgraph.engine.suggester import suggest_followups
 from hexgraph.entitlements import require
 
@@ -104,7 +104,7 @@ def api_verify_finding(finding_id: str):
     """Re-run a PoC finding's stored spec (evidence.extra.poc) against its target and
     update the finding's verification in place. Lets an analyst confirm a PoC with one
     click — binary PoCs need features.poc, web PoCs need features.network."""
-    from hexgraph.engine.poc import verify_poc as _verify
+    from hexgraph.engine.findings.poc import verify_poc as _verify
     from hexgraph.policy import PolicyViolation
 
     with session_scope() as s:
@@ -133,7 +133,7 @@ def api_verify_finding(finding_id: str):
             t = s.get(Target, f.target_id)
         try:
             if use_reproducer:
-                from hexgraph.engine.poc import verify_finding_reproducer
+                from hexgraph.engine.findings.poc import verify_finding_reproducer
                 r = verify_finding_reproducer(s, s.get(Project, f.project_id), f)
             else:
                 r = _verify(s, s.get(Project, f.project_id), t, spec)
@@ -153,7 +153,7 @@ def api_verify_finding(finding_id: str):
         # input_reachable/dynamic claim. A genuine re-confirmation at the same/higher rung is
         # fine. (An earlier fix kept assurance from being DROPPED on re-verify; this guards the
         # related DOWNGRADE.) The triple is engine-derived, not caller-supplied.
-        from hexgraph.engine.assurance import assurance_of, merge_assurance
+        from hexgraph.engine.findings.assurance import assurance_of, merge_assurance
         merged = merge_assurance(assurance_of(f.evidence_json), r.get("assurance"))
         extra["assurance"] = merged
         extra["verification"] = {"verified": bool(r.get("verified")), "detail": r.get("detail"),
@@ -163,7 +163,7 @@ def api_verify_finding(finding_id: str):
         # Refresh the human-facing reproduction command (the structured spec stays the
         # re-verify source of truth; this is a display rendering only).
         if spec:
-            from hexgraph.engine.poc_repro import repro_command
+            from hexgraph.engine.findings.poc_repro import repro_command
             try:
                 extra["repro_command"] = repro_command(spec, t)
             except Exception:  # noqa: BLE001

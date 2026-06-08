@@ -14,7 +14,7 @@ import pytest
 
 from hexgraph.db.session import session_scope
 from hexgraph.engine.ingest import create_project, ingest_file
-from hexgraph.engine.poc import verify_poc
+from hexgraph.engine.findings.poc import verify_poc
 from hexgraph.engine.surfaces import register_web_surface
 from hexgraph.policy import PolicyViolation
 from hexgraph import settings as st
@@ -62,7 +62,7 @@ def test_oob_write_verified_via_independent_rootfs_read(hg_home, monkeypatch):
     """oob_write: the exploit writes {{NONCE}}; HexGraph reads the location back over the rootfs
     channel and confirms the nonce landed. Unforgeable: the read is independent of the request."""
     _enable_net()
-    from hexgraph.engine import oracles
+    from hexgraph.engine.findings import oracles
 
     landed = {}
 
@@ -98,7 +98,7 @@ def test_oob_write_fails_when_nonce_absent(hg_home, monkeypatch):
     """If the independent read-back does NOT contain the run nonce, the oracle is NOT verified —
     a model can't claim a write it didn't perform."""
     _enable_net()
-    from hexgraph.engine import oracles
+    from hexgraph.engine.findings import oracles
     monkeypatch.setattr(oracles, "_read_back",
                         lambda *a, **k: "unrelated file content, no nonce here")
     with session_scope() as s:
@@ -113,7 +113,7 @@ def test_oob_write_fails_when_nonce_absent(hg_home, monkeypatch):
 
 def test_oob_write_rootfs_read_is_traversal_safe(hg_home, tmp_path):
     """The read-back path must stay within the firmware's extracted rootfs."""
-    from hexgraph.engine import oracles
+    from hexgraph.engine.findings import oracles
     from hexgraph.engine.filesystem import persistent_base
 
     with session_scope() as s:
@@ -198,7 +198,7 @@ def test_canary_read_verified_with_planted_canary(hg_home, monkeypatch):
     """canary_read: HexGraph plants a random canary out-of-band BEFORE the exploit; the read
     primitive must return it. Unforgeable: the model cannot know a freshly-planted random value."""
     _enable_net()
-    from hexgraph.engine import oracles
+    from hexgraph.engine.findings import oracles
 
     planted = {"value": None}
 
@@ -223,7 +223,7 @@ def test_canary_read_not_forgeable_with_wrong_value(hg_home, monkeypatch):
     """If the read primitive returns something OTHER than the planted canary, it does not
     verify — a model echoing a guess can't satisfy it."""
     _enable_net()
-    from hexgraph.engine import oracles
+    from hexgraph.engine.findings import oracles
     monkeypatch.setattr(oracles, "_plant", lambda *a, **k: None)
 
     class WrongRunner:
@@ -263,7 +263,7 @@ def test_canary_read_known_secret_read_out_of_band(hg_home, monkeypatch):
     (rootfs/remote — an actual stored secret it reads itself), then the exploit must return it. The
     agent never sees the value and there is no request to reflect."""
     _enable_net()
-    from hexgraph.engine import oracles
+    from hexgraph.engine.findings import oracles
     SECRET = "S3cr3t_FROM_DEVICE_ABC123"
     # the known-read is a real file read (rootfs/remote); the exploit then returns the secret
     monkeypatch.setattr(oracles, "_read_back",
@@ -306,7 +306,7 @@ def test_request_echoes_covers_all_surfaces_but_skips_short():
     """The reflection stripper reaches EVERY submitted surface (verb/path/param+header KEYS and
     values/nested body) for tokens long enough to carry the secret, AND skips short structural
     tokens so it can't over-strip a legitimate secret."""
-    from hexgraph.engine import oracles
+    from hexgraph.engine.findings import oracles
     echoes = oracles._request_echoes(
         {"method": "GET", "path": "/longpath/secretishvalue",
          "params": {"id": "x", "LONGPARAMKEY": "LONGPARAMVALUE1"},
@@ -326,7 +326,7 @@ def test_canary_read_not_forgeable_by_reflection(hg_home, monkeypatch):
     (echoing the request back) cannot produce it → must NOT verify. This is the forgery the
     previous {{CANARY}}-into-the-request design allowed."""
     _enable_net()
-    from hexgraph.engine import oracles
+    from hexgraph.engine.findings import oracles
     planted = {"value": None}
     monkeypatch.setattr(oracles, "_plant",
                         lambda session, project, target, *, channel, path, value: planted.__setitem__("value", value))
@@ -490,7 +490,7 @@ def test_new_oracles_gated_by_network_tier(hg_home):
 
 
 def test_is_new_oracle_recognizes_phase1_types():
-    from hexgraph.engine import oracles
+    from hexgraph.engine.findings import oracles
     assert oracles.is_new_oracle({"oracle": {"type": "oob_write"}})
     assert oracles.is_new_oracle({"oracle": {"type": "canary_read"}})
     assert oracles.is_new_oracle({"oracle": {"type": "callback"}})

@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from hexgraph.api.app import create_app
 from hexgraph.db.session import session_scope
-from hexgraph.engine.findings import persist_finding
+from hexgraph.engine.findings.findings import persist_finding
 from hexgraph.engine.ingest import create_project, ingest_file
 from hexgraph.engine.graph.nodes import materialize_function
 from hexgraph.engine.tasks import create_task
@@ -97,7 +97,7 @@ def test_verify_finding_preserves_original_spec(hg_home, monkeypatch):
         # The real verify_poc returns the substituted spec; the endpoint must NOT store it.
         return {"verified": True, "detail": "ok", "exit_code": 0, "nonce": "HEXGRAPH_PWNED_x",
                 "output": "...", "spec": {"oracle": {"type": "output_contains", "value": "HEXGRAPH_PWNED_x"}}}
-    monkeypatch.setattr("hexgraph.engine.poc.verify_poc", fake_verify)
+    monkeypatch.setattr("hexgraph.engine.findings.poc.verify_poc", fake_verify)
 
     c = TestClient(create_app())
     r = c.post(f"/api/findings/{fid}/verify")

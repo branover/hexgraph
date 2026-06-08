@@ -85,7 +85,7 @@ def run_static_core(session: Session, project: Any, target: Any, *, task: Any = 
     Best-effort and honest: with no Ghidra backend `analyze_taint` reports unavailable and this
     returns no findings — nothing is fabricated."""
     from hexgraph.engine.graph.edges import add_edge
-    from hexgraph.engine.findings import persist_finding
+    from hexgraph.engine.findings.findings import persist_finding
     from hexgraph.engine.graph.nodes import get_or_create_node
     from hexgraph.engine.re.taint import analyze_taint
 
@@ -103,7 +103,7 @@ def run_static_core(session: Session, project: Any, target: Any, *, task: Any = 
                               task_id=task_id, finding=finding, finding_type="vulnerability")
         ids.append(row.id)
         # persist_finding wires about→ the FUNCTION node; also wire about→ the SINK node that
-        # analyze_taint promoted, so engine.reachability has the sink candidate to argue from.
+        # analyze_taint promoted, so engine.findings.reachability has the sink candidate to argue from.
         sink = flow.get("sink") or {}
         snode = get_or_create_node(
             session, project_id=project.id, node_type="sink",

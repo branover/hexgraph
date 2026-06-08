@@ -92,9 +92,8 @@ src/hexgraph/
   llm/                         # backend seam: base, mock, anthropic_api, claude_code, registry, cassette
   sandbox/                     # runner (docker boundary), executor, decompiler; probes/ mounted from the install
                                #   (http_probe = live web assessment + session cookie jar)
-  engine/                      # ingest, pipeline, unpack, worker, context, runs, findings, poc, fuzzing,
-                               #   tasks, followups, report, filesystem, targets, surfaces, rehost,
-                               #   suggester, capabilities, cas
+  engine/                      # ingest, pipeline, unpack, worker, context, runs, fuzzing, tasks,
+                               #   filesystem, targets, surfaces, rehost, suggester, capabilities, cas
                                # (being sub-packaged by responsibility; see engine/<pkg>/ below)
   engine/build/                #   build-as-API: build, builds, source, revisions, oss_fuzz
   engine/re/                   #   static RE: binutils, floss, yara, taint, static_core, recon, enrichment,
@@ -102,6 +101,8 @@ src/hexgraph/
   engine/graph/                #   the curated typed graph: nodes, edges, edge_schemas, node_schemas,
                                #     nodemerge, dedup, authoring, annotations, hypotheses, crosstarget,
                                #     removal, refs, search, graph
+  engine/findings/             #   findings + proving: findings, poc, poc_repro, assurance, oracles,
+                               #     reachability, followups, report
   agent/                       # agent-integration layer (the INTERFACE engine/ implements): mcp_server +
                                #   mcp_catalog + mcp_tools (the MCP tool surface external agents drive),
                                #   agent_tools (the in-process LLM agent-loop tools), agent_delegate (delegate
@@ -130,7 +131,7 @@ Key disciplines: **probes are mounted from the install at runtime** (`sandbox/ru
 `settings.json` (managed; written via `PATCH /api/settings` or `hexgraph config set`) holds non-secret prefs + optional-feature toggles, layered **env > settings.json > config.toml > defaults**. Secrets are never written there (presence-only). Optional features:
 - **Ghidra** (`features.ghidra`): `headless` (analyzeHeadless in the sandbox, needs `just sandbox-build with_ghidra=1`), `bridge` (connect to a running Ghidra via `ghidra_bridge`), `enrich_recon` (materialize functions/call-graph/structs). Degrades to radare2 when off.
 - **Fuzzing** (`features.fuzzing`, default off): the `fuzzing` task type; enabling it (or PoC) flips `policy.current_policy()` to a dynamic profile (`allow_execution=True`) — the only place the static-only invariant relaxes — while the sandbox stays `--network none`, capped, timed. Compiles a `harness_generation` harness with libFuzzer+ASan and auto-creates a finding per crash. `engine/fuzzing.py`, `sandbox/probes/fuzz_probe.py`.
-- **PoC verification** (`features.poc`, default off): the `poc` task + `finding_verify_poc` MCP tool **execute the target** in the sandbox with an attacker input and confirm exploitation via an unforgeable `{{NONCE}}` oracle (engine substitutes a random token; "verified" = the injected behaviour really happened). Also policy-gated. `engine/poc.py`, `sandbox/probes/poc_probe.py`. **Foreign-arch targets run under qemu-user** — `poc_probe` picks `qemu-<arch>` from the ELF header and `verify_poc` mounts the parent firmware's extracted rootfs as the qemu sysroot (`-L`) so a dynamically-linked MIPS/ARM/… binary finds its libs (verified end-to-end on real MIPS firmware).
+- **PoC verification** (`features.poc`, default off): the `poc` task + `finding_verify_poc` MCP tool **execute the target** in the sandbox with an attacker input and confirm exploitation via an unforgeable `{{NONCE}}` oracle (engine substitutes a random token; "verified" = the injected behaviour really happened). Also policy-gated. `engine/findings/poc.py`, `sandbox/probes/poc_probe.py`. **Foreign-arch targets run under qemu-user** — `poc_probe` picks `qemu-<arch>` from the ELF header and `verify_poc` mounts the parent firmware's extracted rootfs as the qemu sysroot (`-L`) so a dynamically-linked MIPS/ARM/… binary finds its libs (verified end-to-end on real MIPS firmware).
 
 **Firmware extraction** (`sandbox/probes/unpack_probe.py`): bare squashfs → **sasquatch** (patched unsquashfs for vendor/LZMA squashfs; falls back to `unsquashfs`); cpio → `cpio`; **partitioned full-OS disk images** (MBR/GPT — recon detects these via `_is_disk_image` → `format=disk_image`) → **The Sleuth Kit** (`mmls` + `tsk_recover`, unprivileged, no loop-mount) pulls the rootfs from the largest Linux/ext partition, falling back to binwalk (which also handles a squashfs-on-a-partition rootfs like OpenWrt-x86); wrapped vendor firmware (TRX/uImage → squashfs/jffs2/ubifs/cramfs, often nested) → **binwalk recursive** (`-eM`), driving sasquatch / jefferson (JFFS2) / ubi_reader (UBIFS). All in the default sandbox image (sleuthkit + e2tools included); rebuild after a toolchain change.
 
@@ -138,7 +139,7 @@ Key disciplines: **probes are mounted from the install at runtime** (`sandbox/ru
 
 **Remote live devices** (`features.remote`, default off): the **live-remote tier** (`TIER_LIVE_REMOTE`, `policy.assert_allows_remote()` + `remote_scope(host,port)`). A `remote` target reached over **SSH/telnet** (a physical box on the bench, no firmware in hand) on which the agent runs the SAME read-only analysis as on a rootfs — `remote_list_files` / `remote_read_file` / `remote_run` (a fixed read-only allowlist; no arbitrary shell). Egress is pinned to the one operator-authorized host (any host — operator's responsibility, unlike the loopback/private web tier) and audited. **Credentials are secrets** — read at connect from env (`HEXGRAPH_REMOTE_PASSWORD`/`_KEY`) or `config.toml [remote]`, never stored in the DB. `engine/remote.py`, `sandbox/probes/remote_probe.py` (paramiko/telnetlib in the sandbox image).
 
-**Findings are typed** (`finding.finding_type`, migration 0008 — DB envelope, not the frozen JSON schema): `vulnerability | recon | harness | fuzz_crash | poc | annotation | other`, classified from the producing task (`engine.findings.classify_finding`), used for sort/filter in the findings panel. A verified PoC surfaces as `verified` (from `evidence.extra.verification`).
+**Findings are typed** (`finding.finding_type`, migration 0008 — DB envelope, not the frozen JSON schema): `vulnerability | recon | harness | fuzz_crash | poc | annotation | other`, classified from the producing task (`engine.findings.findings.classify_finding`), used for sort/filter in the findings panel. A verified PoC surfaces as `verified` (from `evidence.extra.verification`).
 
 **Entity removal** is graduated and mostly reversible (`engine/graph/removal.py`, via API + MCP + UI). Targets **soft-remove** from the Targets pane (`target.archived`, migration 0007): archives the parent_id subtree, hiding its nodes/findings from graph/detail/search/report without deleting; re-adding the same bytes (sha256) restores them. **Nodes** archive/restore the same way (`node.archived`, migration 0011 — also hides the edges touching the node) via `archive_node`/`restore_node` (MCP), plus `archive_target`/`restore_target` for subtrees. Hard deletes: `delete_edge` (recreate to restore) and `delete_project` (operator-only, not an MCP tool). Firmware targets persist their **unpacked filesystem** (`metadata_json["filesystem"]`, files under `<data_dir>/unpacked/<id>/`) — browsable in the detail panel, any file addable as a child target (`engine/filesystem.py`).
 

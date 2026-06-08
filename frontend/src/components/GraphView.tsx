@@ -282,7 +282,7 @@ export default function GraphView({
     const byId = new Map(graph.nodes.map((n) => [n.id, n] as const));
     // map a finding to the node/target(s) it is `about` (for target-grouping placement: nest a
     // finding under the room of the FINEST node it concerns). `about` edges are emitted
-    // src=finding → dst=node/target (engine/findings.py), so the finding is e.source. (Hypothesis
+    // src=finding → dst=node/target (engine/findings/findings.py), so the finding is e.source. (Hypothesis
     // `about` edges go node→target — guard on the source being a finding so they don't pollute.)
     const findingAbout = new Map<string, string[]>(); // findingId → [nodeId/targetId]
     // A hypothesis/pattern node carries no `target_id` of its own, but a hypothesis is `about`

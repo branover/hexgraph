@@ -8,9 +8,9 @@ import pytest
 
 from hexgraph.db.models import Finding, TaskStatus
 from hexgraph.db.session import session_scope
-from hexgraph.engine.findings import classify_finding, persist_finding
+from hexgraph.engine.findings.findings import classify_finding, persist_finding
 from hexgraph.engine.ingest import create_project, ingest_file
-from hexgraph.engine.poc import execute_poc, verify_poc
+from hexgraph.engine.findings.poc import execute_poc, verify_poc
 from hexgraph.engine.tasks import create_task
 from hexgraph.models.finding import Evidence, Finding as FModel
 from hexgraph.policy import PolicyViolation
@@ -110,7 +110,7 @@ def test_persist_finding_auto_classifies(hg_home):
 def test_is_tcp_requires_marker_and_port():
     """_is_tcp must require BOTH a tcp marker AND a port, so an incidental/stray `tcp`-looking
     field can't misroute a web/binary spec into the raw-TCP path (review #9)."""
-    from hexgraph.engine.poc import _is_tcp
+    from hexgraph.engine.findings.poc import _is_tcp
 
     assert _is_tcp({"transport": "tcp", "port": 1337}) is True
     assert _is_tcp({"tcp": {"port": 1337}}) is True
@@ -127,7 +127,7 @@ def test_verify_poc_web_spec_routes_to_web_not_tcp(hg_home, monkeypatch):
     """A web_app target with a normal {steps, oracle} spec must hit the WEB path, never the
     raw-TCP path — even though both are network-tier (review #9)."""
     from hexgraph.engine.ingest import create_project
-    from hexgraph.engine import poc as poc_mod
+    from hexgraph.engine.findings import poc as poc_mod
     from hexgraph.engine.surfaces import register_web_surface
 
     st.update_settings({"features": {"network": {"enabled": True}}})

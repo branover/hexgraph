@@ -263,7 +263,7 @@ def _run() -> int:
     run_task_sync(poc_task_id)
     with session_scope() as s:
         from hexgraph.db.models import Finding
-        from hexgraph.engine import assurance as A
+        from hexgraph.engine.findings import assurance as A
 
         f = s.query(Finding).filter(Finding.task_id == poc_task_id).one()
         ev = f.evidence_json or {}
@@ -284,7 +284,7 @@ def _run() -> int:
 
     # ── 5) Spawn a suggested follow-up (target → task → finding → graph → spawn-next) ─
     _step("Spawn the PoC's suggested follow-up → a new task anchored to the seed finding")
-    from hexgraph.engine.followups import spawn_followup
+    from hexgraph.engine.findings.followups import spawn_followup
 
     with session_scope() as s:
         from hexgraph.db.models import Finding

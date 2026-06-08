@@ -75,7 +75,7 @@ def seed_small(session, project) -> None:
     from hexgraph.db.models import EdgeType, FindingStatus, NodeType
     from hexgraph.engine.graph.authoring import create_socket
     from hexgraph.engine.graph.edges import add_edge
-    from hexgraph.engine.findings import persist_finding
+    from hexgraph.engine.findings.findings import persist_finding
     from hexgraph.engine.ingest import ingest_file
     from hexgraph.engine.graph.nodes import get_or_create_node, materialize_function
     from hexgraph.engine.tasks import create_task
@@ -140,7 +140,7 @@ def _seed_firmware(session, project, *, n_bins: int, fns_per_bin: int,
     from hexgraph.db.models import EdgeType, FindingStatus, NodeType
     from hexgraph.engine.graph.authoring import create_socket
     from hexgraph.engine.graph.edges import add_edge
-    from hexgraph.engine.findings import persist_finding
+    from hexgraph.engine.findings.findings import persist_finding
     from hexgraph.engine.ingest import ingest_file
     from hexgraph.engine.graph.nodes import get_or_create_node, materialize_function
     from hexgraph.engine.tasks import create_task
@@ -279,7 +279,7 @@ def seed_real(session, project) -> None:
     from hexgraph.db.models import EdgeType, FindingStatus, NodeType, Target, TargetKind
     from hexgraph.engine.graph.authoring import create_socket
     from hexgraph.engine.graph.edges import add_edge
-    from hexgraph.engine.findings import persist_finding
+    from hexgraph.engine.findings.findings import persist_finding
     from hexgraph.engine.ingest import ingest_file
     from hexgraph.engine.graph.nodes import get_or_create_node, materialize_function
     from hexgraph.engine.tasks import create_task

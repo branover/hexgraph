@@ -60,7 +60,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Edge, Finding, Node
-from hexgraph.engine import assurance as A
+from hexgraph.engine.findings import assurance as A
 
 # Edge types we traverse FORWARD (src→dst), with whether the edge is a taint (dataflow) signal.
 # A `taints` edge is the strongest argument; the rest argue control/structural reachability.

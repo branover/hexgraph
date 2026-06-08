@@ -183,7 +183,7 @@ def run_surface_recon(session: Session, project: Project, target: Target, task=N
     routes, linked = _materialize_endpoints(session, project, target, spec, "surface_recon")
 
     if task is not None:
-        from hexgraph.engine.findings import persist_finding
+        from hexgraph.engine.findings.findings import persist_finding
         from hexgraph.models.finding import Evidence, Finding
 
         base = (target.metadata_json or {}).get("channel", {}).get("base_url", target.name)
@@ -444,7 +444,7 @@ def run_web_recon(session: Session, project: Project, target: Target, task=None,
         if pr.get("alive"):
             alive += 1
     if task is not None:
-        from hexgraph.engine.findings import persist_finding
+        from hexgraph.engine.findings.findings import persist_finding
         from hexgraph.models.finding import Evidence, Finding
 
         persist_finding(
@@ -484,7 +484,7 @@ def run_web_discover(session: Session, project: Project, target: Target, task=No
     routes, linked = _materialize_endpoints(session, project, target, discovered, "web_discover")
 
     if task is not None:
-        from hexgraph.engine.findings import persist_finding
+        from hexgraph.engine.findings.findings import persist_finding
         from hexgraph.models.finding import Evidence, Finding
 
         live = sum(1 for e in discovered if isinstance(e.get("status"), int) and e["status"] < 400)

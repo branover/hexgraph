@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from hexgraph.db.models import Project, Target, TargetKind
 from hexgraph.db.models import Finding as FindingRow
 from hexgraph.db.models import Task
-from hexgraph.engine.findings import persist_finding
+from hexgraph.engine.findings.findings import persist_finding
 from hexgraph.engine.tasks import create_task, mark_running, mark_succeeded, write_trace
 from hexgraph.models.finding import Evidence, Finding, FollowupSuggestion
 from hexgraph.sandbox.executor import Executor, get_executor

@@ -8,7 +8,7 @@ import pytest
 from hexgraph.db.models import JournalEntry, JournalMention, NodeType
 from hexgraph.db.session import session_scope
 from hexgraph.engine import journal as J
-from hexgraph.engine.findings import persist_finding
+from hexgraph.engine.findings.findings import persist_finding
 from hexgraph.engine.graph.hypotheses import create_hypothesis
 from hexgraph.engine.ingest import create_project, ingest_file
 from hexgraph.engine.graph.nodes import get_or_create_node

@@ -11,10 +11,10 @@ from fastapi.testclient import TestClient
 from hexgraph.api.app import create_app
 from hexgraph.db.models import Finding, Target
 from hexgraph.db.session import session_scope
-from hexgraph.engine import assurance as A
+from hexgraph.engine.findings import assurance as A
 from hexgraph.agent import mcp_tools
-from hexgraph.engine import poc as poc_mod
-from hexgraph.engine.findings import persist_finding
+from hexgraph.engine.findings import poc as poc_mod
+from hexgraph.engine.findings.findings import persist_finding
 from hexgraph.engine.ingest import create_project, ingest_file
 from hexgraph.engine.surfaces import register_web_surface
 from hexgraph.engine.tasks import create_task

@@ -15,7 +15,7 @@ from hexgraph import settings as st
 from hexgraph.db.session import session_scope
 from hexgraph.engine.audit import list_egress
 from hexgraph.engine.ingest import create_project, ingest_file
-from hexgraph.engine.poc import verify_poc
+from hexgraph.engine.findings.poc import verify_poc
 from hexgraph.engine.surfaces import register_web_surface
 from hexgraph.policy import PolicyViolation
 
@@ -199,7 +199,7 @@ def test_liveness_tcp_needs_a_port(hg_home):
     routed as web since there's no tcp marker+port, so the web path needs an explicit oracle.port
     or it can't find a tcp service; we assert the explicit-tcp-but-no-port guard.)"""
     _enable_net()
-    from hexgraph.engine import oracles
+    from hexgraph.engine.findings import oracles
 
     with session_scope() as s:
         p = create_project(s, name="dos_tcp_noport")
@@ -217,7 +217,7 @@ def test_liveness_binary_degrades_to_crash_oracle(hg_home, monkeypatch):
     oracle (process death = the liveness transition) — it must NOT try to network-probe. We
     assert verify_poc routes to the binary path with the oracle rewritten to `crash`."""
     _enable_poc()
-    from hexgraph.engine import poc as poc_mod
+    from hexgraph.engine.findings import poc as poc_mod
 
     seen = {}
 
@@ -258,7 +258,7 @@ def test_liveness_reprobes_clamped_to_sane_range(hg_home):
     unbounded time. With reprobes=100000 the loop must stop at the cap (≤20 re-probes), and a
     DOWN-throughout sequence still verifies."""
     _enable_net()
-    from hexgraph.engine import oracles
+    from hexgraph.engine.findings import oracles
     with session_scope() as s:
         p = create_project(s, name="dos_clamp")
         t = _web(s, p)
@@ -273,7 +273,7 @@ def test_liveness_reprobes_clamped_to_sane_range(hg_home):
 
 
 def test_is_liveness_recognizes_phase2_types(hg_home):
-    from hexgraph.engine import oracles
+    from hexgraph.engine.findings import oracles
     assert oracles.is_new_oracle({"oracle": {"type": "liveness"}})
     assert oracles.is_new_oracle({"oracle": {"type": "unavailable"}})
     assert oracles.is_liveness({"oracle": {"type": "liveness"}})

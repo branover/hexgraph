@@ -10,7 +10,7 @@ from hexgraph.db.models import (
 )
 from hexgraph.db.session import session_scope
 from hexgraph.engine import campaigns as C
-from hexgraph.engine.findings import persist_finding
+from hexgraph.engine.findings.findings import persist_finding
 from hexgraph.engine.fuzzers import FuzzerError, get_fuzzer, resolve_engine
 from hexgraph.engine.fuzzers.base import FuzzCampaignSpec
 from hexgraph.engine.ingest import create_project, ingest_file
@@ -975,7 +975,7 @@ def test_crash_reproducer_reverify(hg_home):
     (the verify_poc path) — LLM-free, the unforgeable `crash` oracle confirms it, and
     the assurance is code_present/dynamic (an isolated reproducer replay)."""
     from hexgraph.engine import cas
-    from hexgraph.engine.poc import verify_reproducer
+    from hexgraph.engine.findings.poc import verify_reproducer
 
     _enable_fuzzing()
     with session_scope() as s:
@@ -1044,7 +1044,7 @@ def test_verify_finding_reproducer_reads_ref(hg_home):
     evidence.extra.fuzz and re-runs it — the one-click re-verify for a fuzz finding."""
     from hexgraph.engine import cas
     from hexgraph.engine.fuzzing import crash_finding
-    from hexgraph.engine.poc import verify_finding_reproducer
+    from hexgraph.engine.findings.poc import verify_finding_reproducer
 
     _enable_fuzzing()
     with session_scope() as s:

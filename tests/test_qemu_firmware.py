@@ -7,7 +7,7 @@ firmware, since the firmware isn't a committed fixture."""
 
 import struct
 
-from hexgraph.engine.poc import _find_sysroot
+from hexgraph.engine.findings.poc import _find_sysroot
 from hexgraph.sandbox.probes import poc_probe
 
 

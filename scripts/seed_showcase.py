@@ -280,14 +280,14 @@ def seed(session, *, reset: bool) -> dict:
         Edge, EdgeType, Finding as FRow, FindingStatus, FuzzCampaign, Node, NodeType,
         Project, Target,
     )
-    from hexgraph.engine import assurance as A
+    from hexgraph.engine.findings import assurance as A
     from hexgraph.engine.build import builds as B
     from hexgraph.engine.audit import record_egress
     from hexgraph.engine.graph.authoring import create_edge, create_socket
     from hexgraph.engine.build.build import BuildSpec
     from hexgraph.engine.graph.edges import add_edge
     from hexgraph.engine.filesystem import persistent_base, record_manifest
-    from hexgraph.engine.findings import persist_finding
+    from hexgraph.engine.findings.findings import persist_finding
     from hexgraph.engine.fuzzers.base import FuzzCampaignSpec
     from hexgraph.engine.ingest import create_project, ingest_file
     from hexgraph.engine.graph.nodes import get_or_create_node, materialize_function

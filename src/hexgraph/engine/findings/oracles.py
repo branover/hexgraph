@@ -269,7 +269,7 @@ def run_exploit(session, project, target, spec, runner, *, is_web, is_tcp):
     """Run the exploit portion of `spec` (already nonce/callback-substituted) and return the
     raw run result, WITHOUT applying any in-band oracle (the new oracle observes an independent
     channel). Mirrors verify_poc's branch selection so the exploit reaches the same boundary."""
-    from hexgraph.engine import poc as poc_mod
+    from hexgraph.engine.findings import poc as poc_mod
 
     sub = dict(spec)
     sub.pop("oracle", None)  # the in-band oracle is irrelevant; we observe out-of-band

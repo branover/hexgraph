@@ -5,7 +5,7 @@ from hexgraph.db.models import Edge, EdgeType, Finding, Node, Target
 from hexgraph.db.session import session_scope
 from hexgraph.engine.graph.annotations import create_annotation
 from hexgraph.engine.graph.edges import add_edge
-from hexgraph.engine.findings import persist_finding
+from hexgraph.engine.findings.findings import persist_finding
 from hexgraph.engine.ingest import create_project, ingest_file
 from hexgraph.engine.graph.nodes import get_or_create_node, materialize_function, normalize_symbol_name
 from hexgraph.engine.graph.nodemerge import merge_duplicate_nodes, merge_duplicate_targets

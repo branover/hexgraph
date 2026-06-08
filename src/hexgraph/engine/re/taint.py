@@ -9,7 +9,7 @@ angr-backed input→sink solving slots in behind this same seam later (Phase 5 T
 `analyze_taint` runs the analyzer over a target, records a `taint` Observation (the full
 flow list lives in the substrate — NOT bulk graph nodes), and PROMOTES only the grounded
 few nodes/edges on each supporting path: the source function, a `sink` node for the
-dangerous call, and a `taints` edge between them that `engine.reachability` already walks.
+dangerous call, and a `taints` edge between them that `engine.findings.reachability` already walks.
 Its graph footprint is bounded by the flows it finds, never the program (design §5.1/§5.3).
 """
 
@@ -108,7 +108,7 @@ def analyze_taint(session: Session, project: Any, target: Any, *,
                   source: str = "agent", analyzer: TaintAnalyzer | None = None) -> dict:
     """Run grounded P-Code taint over `target`, record a `taint` Observation, and promote the
     grounded few nodes/edges on each flow: the source `function` node, a `sink` node for the
-    dangerous call, and a `taints` edge between them (which `engine.reachability` walks).
+    dangerous call, and a `taints` edge between them (which `engine.findings.reachability` walks).
 
     Returns ``{available, flows, analyzed, promoted:{functions,sinks,edges},
     observation_id, cached, error}``. When no analyzer is available, returns availability

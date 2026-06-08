@@ -7,9 +7,9 @@ import pytest
 
 from hexgraph import settings
 from hexgraph.db.session import session_scope
-from hexgraph.engine import assurance as A
+from hexgraph.engine.findings import assurance as A
 from hexgraph.engine.ingest import create_project
-from hexgraph.engine.poc import _poc_finding, verify_poc
+from hexgraph.engine.findings.poc import _poc_finding, verify_poc
 from hexgraph.engine.surfaces import register_web_surface
 
 
@@ -156,7 +156,7 @@ def test_verify_poc_attaches_assurance_web(hg_home):
 # ── persist_finding stamps the FLOOR, never overwrites a stronger claim ─────────────────
 def test_persist_finding_floors_static_vuln_and_preserves_stronger(hg_home):
     from conftest import fixture_path
-    from hexgraph.engine.findings import persist_finding
+    from hexgraph.engine.findings.findings import persist_finding
     from hexgraph.engine.ingest import ingest_file
     from hexgraph.engine.tasks import create_task
     from hexgraph.models.finding import Evidence, Finding as F

@@ -92,7 +92,7 @@ def test_rule_based_suggester():
 
 
 def test_capabilities_and_suggestions_endpoints(hg_home):
-    from hexgraph.engine.findings import persist_finding
+    from hexgraph.engine.findings.findings import persist_finding
     from hexgraph.models.finding import Evidence, Finding as FModel
 
     with session_scope() as s:

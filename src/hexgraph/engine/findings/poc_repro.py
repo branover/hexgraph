@@ -139,7 +139,7 @@ def repro_command(spec: dict, target: Target | None):
     (web_app kind or a channel base_url) ⇒ `curl` per step; otherwise a binary
     `env … ./target argv` (optionally `printf stdin |`). Placeholders ({{NONCE}}…) are
     left verbatim. This is for HUMANS — verify always uses the structured spec."""
-    from hexgraph.engine.poc import _is_tcp, _is_web
+    from hexgraph.engine.findings.poc import _is_tcp, _is_web
 
     spec = spec or {}
     if _is_tcp(spec):
