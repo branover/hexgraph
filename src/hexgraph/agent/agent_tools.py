@@ -608,14 +608,14 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
             fns = out.get("functions", [])
             return _clip(f"re-analyzed ({len(fns)} functions):\n" + "\n".join(fns[:300]))
         if name == "check_decompiler":
-            from hexgraph.engine.mcp_tools import check_decompiler
+            from hexgraph.agent.mcp_tools import check_decompiler
             d = check_decompiler()
             ver = f" {d['version']}" if d.get("version") else ""
             mode = f" ({d['mode']})" if d.get("mode") else ""
             status = "WORKING" if d["working"] else "NOT WORKING"
             return _clip(f"decompiler: {d['active']}{ver}{mode} — {status}\n{d['detail']}")
         if name == "check_features":
-            from hexgraph.engine.mcp_tools import check_features
+            from hexgraph.agent.mcp_tools import check_features
             d = check_features()
             lines = [d["summary"]]
             for r in d["features"]:

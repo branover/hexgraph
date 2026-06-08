@@ -393,7 +393,7 @@ def test_local_campaign_unchanged_no_audit(hg_home, monkeypatch):
 # ── MCP tools ─────────────────────────────────────────────────────────────────────
 
 def test_mcp_list_and_health(hg_home, monkeypatch):
-    from hexgraph.engine import mcp_tools as M
+    from hexgraph.agent import mcp_tools as M
     st.update_settings({"features.fuzz_remote.enabled": True})
     monkeypatch.setenv("HEXGRAPH_FUZZ_REMOTE_FUZZBOX_DOCKER_HOST", SECRET_HOST)
     config._load_toml.cache_clear()
@@ -407,7 +407,7 @@ def test_mcp_list_and_health(hg_home, monkeypatch):
 
 
 def test_mcp_health_gate_off_errors(hg_home, monkeypatch):
-    from hexgraph.engine import mcp_tools as M
+    from hexgraph.agent import mcp_tools as M
     monkeypatch.setenv("HEXGRAPH_FUZZ_REMOTE_FUZZBOX_DOCKER_HOST", SECRET_HOST)
     with session_scope() as s:
         env = FE.register_environment(s, name="fuzzbox")

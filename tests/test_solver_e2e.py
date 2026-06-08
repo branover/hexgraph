@@ -101,8 +101,8 @@ def test_solver_off_refuses_no_observation_no_finding(hg_home):
 def test_solve_verbs_advertised_only_when_enabled(hg_home):
     """The MCP run verbs + the in-loop agent tools appear only when features.angr is on
     (the conditional-advertisement contract, mirroring floss/yara)."""
-    from hexgraph.engine import mcp_tools as M
-    from hexgraph.engine.agent_tools import ToolContext, available_tools
+    from hexgraph.agent import mcp_tools as M
+    from hexgraph.agent.agent_tools import ToolContext, available_tools
 
     def _mcp_present():
         names = {t["name"] for t in M.catalog({"run"})}
@@ -122,7 +122,7 @@ def test_solve_verbs_advertised_only_when_enabled(hg_home):
 def test_mcp_verb_returns_enable_message_when_off(hg_home):
     """The always-callable MCP verb returns a clean enable-message when the feature is off (it
     is advertised only when on, but a delegate could still call it by name)."""
-    from hexgraph.engine import mcp_tools as M
+    from hexgraph.agent import mcp_tools as M
 
     with session_scope() as s:
         p, t = _seed(s)

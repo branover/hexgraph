@@ -420,7 +420,7 @@ def test_non_interactive_setup_prints_staleness_warning(hg_home, monkeypatch, ca
 
 
 def test_register_claude_user_creates_and_is_idempotent(tmp_path, monkeypatch):
-    from hexgraph import agent_setup
+    from hexgraph.agent import agent_setup
 
     monkeypatch.setenv("HOME", str(tmp_path))
     res = agent_setup.register_agent("claude", scope="user")
@@ -435,7 +435,7 @@ def test_register_claude_user_creates_and_is_idempotent(tmp_path, monkeypatch):
 
 
 def test_register_claude_project_writes_dot_mcp_json(tmp_path, monkeypatch):
-    from hexgraph import agent_setup
+    from hexgraph.agent import agent_setup
 
     proj = tmp_path / "proj"
     proj.mkdir()
@@ -447,7 +447,7 @@ def test_register_claude_project_writes_dot_mcp_json(tmp_path, monkeypatch):
 
 
 def test_register_gemini_user(tmp_path, monkeypatch):
-    from hexgraph import agent_setup
+    from hexgraph.agent import agent_setup
 
     monkeypatch.setenv("HOME", str(tmp_path))
     res = agent_setup.register_agent("gemini", scope="user")
@@ -457,7 +457,7 @@ def test_register_gemini_user(tmp_path, monkeypatch):
 
 
 def test_register_preserves_existing_keys(tmp_path, monkeypatch):
-    from hexgraph import agent_setup
+    from hexgraph.agent import agent_setup
 
     monkeypatch.setenv("HOME", str(tmp_path))
     cfg = tmp_path / ".claude.json"
@@ -471,7 +471,7 @@ def test_register_preserves_existing_keys(tmp_path, monkeypatch):
 
 
 def test_register_refuses_unparseable_json(tmp_path, monkeypatch):
-    from hexgraph import agent_setup
+    from hexgraph.agent import agent_setup
 
     monkeypatch.setenv("HOME", str(tmp_path))
     cfg = tmp_path / ".claude.json"
@@ -482,7 +482,7 @@ def test_register_refuses_unparseable_json(tmp_path, monkeypatch):
 
 
 def test_register_codex_user_appends_table_and_is_idempotent(tmp_path, monkeypatch):
-    from hexgraph import agent_setup
+    from hexgraph.agent import agent_setup
 
     monkeypatch.setenv("HOME", str(tmp_path))
     res = agent_setup.register_agent("codex", scope="user")
@@ -496,7 +496,7 @@ def test_register_codex_user_appends_table_and_is_idempotent(tmp_path, monkeypat
 
 
 def test_register_codex_preserves_existing_toml(tmp_path, monkeypatch):
-    from hexgraph import agent_setup
+    from hexgraph.agent import agent_setup
 
     monkeypatch.setenv("HOME", str(tmp_path))
     path = tmp_path / ".codex" / "config.toml"
@@ -511,7 +511,7 @@ def test_register_codex_preserves_existing_toml(tmp_path, monkeypatch):
 
 
 def test_register_codex_project_scope_rejected(monkeypatch, tmp_path):
-    from hexgraph import agent_setup
+    from hexgraph.agent import agent_setup
 
     monkeypatch.setenv("HOME", str(tmp_path))
     with pytest.raises(ValueError):
@@ -519,14 +519,14 @@ def test_register_codex_project_scope_rejected(monkeypatch, tmp_path):
 
 
 def test_register_unknown_agent_rejected():
-    from hexgraph import agent_setup
+    from hexgraph.agent import agent_setup
 
     with pytest.raises(ValueError):
         agent_setup.register_agent("nope", scope="user")
 
 
 def test_default_skill_dir_under_home(tmp_path, monkeypatch):
-    from hexgraph import agent_setup
+    from hexgraph.agent import agent_setup
 
     monkeypatch.setenv("HOME", str(tmp_path))
     assert agent_setup.default_skill_dir() == str(tmp_path / ".claude" / "skills")
@@ -576,7 +576,7 @@ class _FakeConsole:
 
 
 def test_coding_agent_step_registers_and_installs(tmp_path, monkeypatch):
-    from hexgraph import agent_setup
+    from hexgraph.agent import agent_setup
     from hexgraph.setup_wizard import _coding_agent_step
 
     monkeypatch.setenv("HOME", str(tmp_path))

@@ -39,7 +39,7 @@ def _dispatch(session: Session, project: Project, target: Target, task: Task) ->
         execute_fuzzing(session, project, target, task, get_executor())
         return
     if task.type == "agent_delegate":
-        from hexgraph.engine.agent_delegate import execute_delegate
+        from hexgraph.agent.agent_delegate import execute_delegate
 
         execute_delegate(session, project, target, task)
         return

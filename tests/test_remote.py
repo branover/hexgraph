@@ -203,7 +203,7 @@ def sshd():
 def test_live_remote_ssh_ops(hg_home, sshd, monkeypatch):
     from hexgraph import settings
     from hexgraph.db.session import session_scope
-    from hexgraph.engine import mcp_tools as M
+    from hexgraph.agent import mcp_tools as M
     from hexgraph.engine.ingest import create_project
     from hexgraph.engine.remote import register_remote_target
 
@@ -232,7 +232,7 @@ def test_live_remote_ssh_ops(hg_home, sshd, monkeypatch):
 
 def test_live_remote_denied_when_feature_off(hg_home, sshd):
     from hexgraph.db.session import session_scope
-    from hexgraph.engine import mcp_tools as M
+    from hexgraph.agent import mcp_tools as M
     from hexgraph.engine.ingest import create_project
     from hexgraph.engine.remote import register_remote_target
 

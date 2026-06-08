@@ -97,7 +97,7 @@ def test_dest_refuses_off_allowlist_via_crafted_path():
 def test_http_request_denied_and_audited_when_network_off(hg_home):
     from hexgraph.db.models import EgressEvent
     from hexgraph.db.session import session_scope
-    from hexgraph.engine import mcp_tools as M
+    from hexgraph.agent import mcp_tools as M
     from hexgraph.engine.ingest import create_project
     from hexgraph.engine.surfaces import register_web_surface
 
@@ -138,7 +138,7 @@ def vulnrouter():
 def test_live_vulnrouter_auth_bypass_and_rce(hg_home, vulnrouter):
     from hexgraph import settings
     from hexgraph.db.session import session_scope
-    from hexgraph.engine import mcp_tools as M
+    from hexgraph.agent import mcp_tools as M
     from hexgraph.engine.ingest import create_project
     from hexgraph.engine.surfaces import register_web_surface
 
@@ -171,7 +171,7 @@ def test_live_vulnrouter_auth_bypass_and_rce(hg_home, vulnrouter):
 def test_live_http_request_returns_body(hg_home, vulnrouter):
     from hexgraph import settings
     from hexgraph.db.session import session_scope
-    from hexgraph.engine import mcp_tools as M
+    from hexgraph.agent import mcp_tools as M
     from hexgraph.engine.ingest import create_project
     from hexgraph.engine.surfaces import register_web_surface
 

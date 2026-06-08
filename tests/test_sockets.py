@@ -186,7 +186,7 @@ def test_rest_register_service(hg_home):
 
 
 def test_mcp_register_service(hg_home):
-    from hexgraph.engine.mcp_tools import register_service
+    from hexgraph.agent.mcp_tools import register_service
 
     with session_scope() as s:
         pid = create_project(s, name="svc").id
@@ -200,7 +200,7 @@ def test_mcp_register_service(hg_home):
 
 def test_mcp_register_service_in_catalog():
     """register_service is advertised in the MCP catalog (so an agent can discover it)."""
-    from hexgraph.engine.mcp_catalog import _CATALOG
+    from hexgraph.agent.mcp_catalog import _CATALOG
 
     names = {name for _grp, name, *_ in _CATALOG}
     assert "target_register_service" in names

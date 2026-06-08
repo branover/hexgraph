@@ -160,7 +160,7 @@ def test_work_state_is_orthogonal_to_status(hg_home):
 
 
 def test_close_sets_done_and_records_verdict(hg_home):
-    from hexgraph.engine.mcp_tools import close_hypothesis
+    from hexgraph.agent.mcp_tools import close_hypothesis
     with session_scope() as s:
         p = create_project(s, name="ws3")
         h = create_hypothesis(s, p, statement="the bypass is real")
@@ -249,7 +249,7 @@ def test_worklist_api_endpoints(hg_home):
     assert r.status_code == 200 and r.json()["work_state"] == "done" and r.json()["status"] == "confirmed"
 
     # set_hypothesis_status MCP tool now accepts a work_state move too.
-    from hexgraph.engine.mcp_tools import set_hypothesis_status
+    from hexgraph.agent.mcp_tools import set_hypothesis_status
     out = set_hypothesis_status(hid, work_state="parked")
     assert out["work_state"] == "parked"
 

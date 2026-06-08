@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import tempfile
 
-from hexgraph.record_keeping import RECORD_KEEPING, RECORD_KEEPING_COMPACT
+from hexgraph.agent.record_keeping import RECORD_KEEPING, RECORD_KEEPING_COMPACT
 
 
 def test_constants_import_and_are_nonempty():
@@ -51,8 +51,8 @@ def test_compact_states_the_core_rule_and_authorship():
 
 
 def test_write_skill_emits_spine_and_subfiles():
-    from hexgraph.agent_setup import write_skill
-    from hexgraph.vr_skill import SUBFILES
+    from hexgraph.agent.agent_setup import write_skill
+    from hexgraph.agent.vr_skill import SUBFILES
 
     with tempfile.TemporaryDirectory() as d:
         skill_path = write_skill(d)
@@ -70,7 +70,7 @@ def test_write_skill_emits_spine_and_subfiles():
 def test_skill_body_points_to_the_subfile():
     """No duplication: the SKILL body references record-keeping.md instead of restating
     the hypothesis/journal rubric inline."""
-    from hexgraph.agent_setup import SKILL
+    from hexgraph.agent.agent_setup import SKILL
 
     assert "record-keeping.md" in SKILL
 

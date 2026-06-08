@@ -94,7 +94,7 @@ def test_no_yara_gate_in_settings(hg_home):
 def test_verbs_always_advertised(hg_home):
     """The MCP read verb (yara_scan) + write verb (yara_sweep) are ALWAYS in the catalog (no
     gate), typed — always-on contract."""
-    from hexgraph.engine import mcp_tools as M
+    from hexgraph.agent import mcp_tools as M
 
     def _present(group, name):
         return any(t["name"] == name for t in M.catalog({group}))
@@ -108,7 +108,7 @@ def test_verbs_always_advertised(hg_home):
 
 def test_agent_tool_always_advertised(hg_home):
     """The in-process agent loop ALWAYS advertises yara_scan (always-on static tool)."""
-    from hexgraph.engine.agent_tools import ToolContext, available_tools
+    from hexgraph.agent.agent_tools import ToolContext, available_tools
 
     with session_scope() as s:
         p, t = _seed(s)
@@ -415,7 +415,7 @@ def test_user_rule_dir_is_picked_up(hg_home):
 
 def test_agent_tool_renders_matches(hg_home, monkeypatch):
     _wire(monkeypatch)
-    from hexgraph.engine.agent_tools import ToolContext, run_tool
+    from hexgraph.agent.agent_tools import ToolContext, run_tool
 
     with session_scope() as s:
         p, t = _seed(s)

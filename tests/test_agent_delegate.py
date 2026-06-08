@@ -5,10 +5,10 @@ run_cli and test command construction, the prompt, gating, and failure handling.
 import pytest
 
 from hexgraph.db.session import session_scope
-from hexgraph.engine.agent_delegate import (
+from hexgraph.agent.agent_delegate import (
     DelegateError, build_command, delegate_prompt, execute_delegate,
 )
-from hexgraph.record_keeping import RECORD_KEEPING
+from hexgraph.agent.record_keeping import RECORD_KEEPING
 from hexgraph.engine.ingest import create_project, ingest_file
 from hexgraph.engine.tasks import create_task
 from hexgraph import settings as st
@@ -43,7 +43,7 @@ def test_delegate_prompt_carries_ids_and_rules(hg_home):
         # delegate mode inlines the WHOLE skill bundle (no sub-files are materialized, so
         # every "read X.md" pointer in the spine must resolve to inlined content)
         assert RECORD_KEEPING in prompt
-        from hexgraph.vr_skill import SUBFILES
+        from hexgraph.agent.vr_skill import SUBFILES
         for name, body in SUBFILES.items():
             assert body in prompt, name
 
@@ -98,7 +98,7 @@ def test_capability_gating(hg_home):
 
 def test_record_finding_attributes_to_task(hg_home):
     from hexgraph.db.models import Finding
-    from hexgraph.engine import mcp_tools
+    from hexgraph.agent import mcp_tools
 
     with session_scope() as s:
         p = create_project(s, name="d5")

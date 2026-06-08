@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 
-from hexgraph.engine.mcp_tools import GROUPS, catalog
+from hexgraph.agent.mcp_tools import GROUPS, catalog
 
 
 def enabled_groups(override: set[str] | None = None) -> set[str]:

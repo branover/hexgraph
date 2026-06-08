@@ -88,7 +88,7 @@ def test_no_floss_gate_in_settings(hg_home):
 
 def test_verb_always_advertised(hg_home):
     """The MCP read verb is ALWAYS in the catalog (no gate), typed — always-on contract."""
-    from hexgraph.engine import mcp_tools as M
+    from hexgraph.agent import mcp_tools as M
 
     specs = [t for t in M.catalog({"read"}) if t["name"] == "re_floss_strings"]
     assert len(specs) == 1
@@ -99,7 +99,7 @@ def test_verb_always_advertised(hg_home):
 
 def test_agent_tool_always_advertised(hg_home):
     """The in-process agent loop ALWAYS advertises floss_strings (always-on static tool)."""
-    from hexgraph.engine.agent_tools import ToolContext, available_tools
+    from hexgraph.agent.agent_tools import ToolContext, available_tools
 
     with session_scope() as s:
         p, t = _seed(s)
@@ -187,7 +187,7 @@ def test_collect_surfaces_probe_error_json(hg_home, monkeypatch):
 
 def test_agent_tool_renders_floss_strings(hg_home, monkeypatch):
     _wire(monkeypatch)
-    from hexgraph.engine.agent_tools import ToolContext, run_tool
+    from hexgraph.agent.agent_tools import ToolContext, run_tool
 
     with session_scope() as s:
         p, t = _seed(s)

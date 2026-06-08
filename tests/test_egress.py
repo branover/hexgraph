@@ -39,7 +39,7 @@ _EGRESS_PROBES = [
 ]
 from hexgraph.db.models import EgressEvent
 from hexgraph.db.session import session_scope
-from hexgraph.engine import mcp_tools as M
+from hexgraph.agent import mcp_tools as M
 from hexgraph.engine.audit import list_egress, record_egress
 from hexgraph.engine.ingest import create_project
 from hexgraph.engine.surfaces import register_web_surface

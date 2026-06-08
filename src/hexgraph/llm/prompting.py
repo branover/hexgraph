@@ -10,7 +10,7 @@ from __future__ import annotations
 from functools import lru_cache
 
 from hexgraph.paths import finding_schema_path
-from hexgraph.record_keeping import RECORD_KEEPING_COMPACT
+from hexgraph.agent.record_keeping import RECORD_KEEPING_COMPACT
 
 
 @lru_cache(maxsize=1)

@@ -197,7 +197,7 @@ def test_verify_fuzz_artifact_tool_registered_and_byte_faithful():
     """battle-test GAP: a first-class `verify_fuzz_artifact` MCP tool exists (not just the
     misleadingly-named minimize_artifact), and the reproducer replay is byte-faithful
     (stdin_b64 raw bytes, not text-mangled stdin)."""
-    from hexgraph.engine import mcp_catalog, mcp_tools
+    from hexgraph.agent import mcp_catalog, mcp_tools
 
     names = {t[1] for t in mcp_catalog._CATALOG}
     assert "fuzz_verify_artifact" in names, "fuzz_verify_artifact not in the MCP catalog"

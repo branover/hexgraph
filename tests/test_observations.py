@@ -213,7 +213,7 @@ def test_context_includes_observation_index(hg_home):
 # --- MCP verbs + agent-loop round-trip ---------------------------------------
 
 def test_mcp_verbs_registered_and_callable(hg_home):
-    from hexgraph.engine import mcp_tools
+    from hexgraph.agent import mcp_tools
 
     names = {t["name"] for t in mcp_tools.catalog()}
     assert {"obs_list", "obs_get", "obs_search"} <= names
@@ -236,7 +236,7 @@ def test_mcp_verbs_registered_and_callable(hg_home):
 
 
 def test_get_schemas_advertises_observation_contract(hg_home):
-    from hexgraph.engine.mcp_tools import get_schemas
+    from hexgraph.agent.mcp_tools import get_schemas
 
     sch = get_schemas()
     assert "observations" in sch and "substrate_vs_graph" in sch
@@ -247,7 +247,7 @@ def test_get_schemas_advertises_observation_contract(hg_home):
 def test_agent_loop_can_query_observations(hg_home):
     """The in-process agent loop's mirrored verbs reach the same store."""
     from hexgraph.db.models import Project, Target
-    from hexgraph.engine.agent_tools import ToolContext, available_tools, run_tool
+    from hexgraph.agent.agent_tools import ToolContext, available_tools, run_tool
 
     pid, tid = _seed()
     with session_scope() as s:

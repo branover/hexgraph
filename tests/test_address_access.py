@@ -9,7 +9,7 @@ the same query/promote contract as the name path.
 
 from hexgraph.db.models import Edge, Node, Observation
 from hexgraph.db.session import session_scope
-from hexgraph.engine.agent_tools import ToolContext, run_tool
+from hexgraph.agent.agent_tools import ToolContext, run_tool
 from hexgraph.engine.ingest import create_project, ingest_file
 
 from conftest import fixture_path

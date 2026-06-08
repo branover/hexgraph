@@ -3,7 +3,7 @@ The MCP transport (stdio) needs the optional `mcp` SDK; the tool *logic* is test
 directly here."""
 
 from hexgraph.db.session import session_scope
-from hexgraph.engine import mcp_tools
+from hexgraph.agent import mcp_tools
 from hexgraph.engine.ingest import create_project, ingest_file
 
 from conftest import fixture_path
@@ -24,7 +24,7 @@ def test_start_fuzz_campaign_schema_declares_network_and_seed_params():
     schema must now declare every param the function accepts (and CampaignCreate honors)."""
     import inspect
 
-    from hexgraph.engine.mcp_tools import start_fuzz_campaign
+    from hexgraph.agent.mcp_tools import start_fuzz_campaign
 
     tool = next(t for t in mcp_tools.catalog() if t["name"] == "fuzz_start")
     props = tool["schema"]["properties"]
@@ -245,7 +245,7 @@ def test_mcp_register_remote_success_and_port_coercion(hg_home):
 
 def test_enabled_groups_from_settings(hg_home):
     from hexgraph import settings as st
-    from hexgraph.mcp_server import enabled_groups
+    from hexgraph.agent.mcp_server import enabled_groups
 
     assert enabled_groups() == {"read", "write", "run"}  # default all
     st.update_settings({"features.mcp.run": False, "features.mcp.write": False})
@@ -254,7 +254,7 @@ def test_enabled_groups_from_settings(hg_home):
 
 
 def test_install_help_for_each_agent():
-    from hexgraph.agent_setup import install_help
+    from hexgraph.agent.agent_setup import install_help
 
     assert "claude mcp add hexgraph" in install_help("claude")
     assert "mcp_servers.hexgraph" in install_help("codex")
@@ -273,14 +273,14 @@ def test_mcp_server_requires_sdk():
 
     if importlib.util.find_spec("mcp") is not None:
         pytest.skip("mcp SDK installed; absence path not exercisable")
-    from hexgraph.mcp_server import serve_stdio
+    from hexgraph.agent.mcp_server import serve_stdio
 
     with pytest.raises(SystemExit):
         serve_stdio()
 
 
 def test_ingest_tool_offline(hg_home, monkeypatch):
-    from hexgraph.engine import mcp_tools
+    from hexgraph.agent import mcp_tools
     monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: False)
     r = mcp_tools.ingest(fixture_path("vuln_httpd"), name="x")
     assert r.get("project_id") and r.get("recon") is False
@@ -288,7 +288,7 @@ def test_ingest_tool_offline(hg_home, monkeypatch):
 
 
 def test_skill_markdown_is_a_claude_skill():
-    from hexgraph.agent_setup import skill_markdown, write_skill
+    from hexgraph.agent.agent_setup import skill_markdown, write_skill
     import tempfile, os
     md = skill_markdown()
     assert md.startswith("---\n") and "name: hexgraph-vr" in md and "Never execute" in md
@@ -305,13 +305,13 @@ def test_cli_mcp_check_lists_tools(capsys):
 
 
 def test_install_help_includes_sdk_and_check():
-    from hexgraph.agent_setup import install_help
+    from hexgraph.agent.agent_setup import install_help
     h = install_help("claude")
     assert "pip install" in h and "--check" in h and "serve" in h and "same time" in h
 
 
 def test_get_schemas_contract():
-    from hexgraph.engine import mcp_tools
+    from hexgraph.agent import mcp_tools
     sch = mcp_tools.get_schemas()
     assert "command-injection" in sch["finding"]["category"]
     assert "critical" in sch["finding"]["severity"]
@@ -332,7 +332,7 @@ def test_check_decompiler_in_catalog():
 def test_check_decompiler_radare2_working(hg_home, monkeypatch):
     """Default config: radare2 reports working when Docker is up AND the image is built."""
     monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
-    monkeypatch.setattr("hexgraph.engine.mcp_tools._sandbox_image_built", lambda tag: True)
+    monkeypatch.setattr("hexgraph.agent.mcp_tools._sandbox_image_built", lambda tag: True)
     d = mcp_tools.check_decompiler()
     assert d["active"] == "radare2"
     assert d["working"] is True
@@ -351,7 +351,7 @@ def test_check_decompiler_radare2_docker_down(hg_home, monkeypatch):
 def test_check_decompiler_radare2_image_not_built(hg_home, monkeypatch):
     """Docker up but the sandbox image was never built → not working, with a build hint."""
     monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
-    monkeypatch.setattr("hexgraph.engine.mcp_tools._sandbox_image_built", lambda tag: False)
+    monkeypatch.setattr("hexgraph.agent.mcp_tools._sandbox_image_built", lambda tag: False)
     d = mcp_tools.check_decompiler()
     assert d["active"] == "radare2"
     assert d["working"] is False
@@ -391,7 +391,7 @@ def test_check_features_floss_yara_are_availability_only(hg_home, monkeypatch):
     unconditionally and report availability only. With the in-image dep faked PRESENT they read
     `available`; the gated features (angr, ghidra, emulation) still read `disabled` by default."""
     # fake the lightweight in-image dep probe as PRESENT (no Docker needed)
-    monkeypatch.setattr("hexgraph.engine.mcp_tools._image_smoke",
+    monkeypatch.setattr("hexgraph.agent.mcp_tools._image_smoke",
                         lambda image, argv, timeout=30: (True, "3.1.1"))
     out = mcp_tools.check_features()
     by = {r["feature"]: r for r in out["features"]}
@@ -412,7 +412,7 @@ def test_check_features_floss_yara_broken_when_dep_missing(hg_home, monkeypatch)
     """The stale-image trap for the always-on tools: with the in-image dep MISSING they read
     `broken` (NOT disabled) + an actionable rebuild hint — they're always reachable, so a missing
     dep is a silent failure worth catching."""
-    monkeypatch.setattr("hexgraph.engine.mcp_tools._image_smoke",
+    monkeypatch.setattr("hexgraph.agent.mcp_tools._image_smoke",
                         lambda image, argv, timeout=30: (False, "the image 'hexgraph-sandbox:latest' is not built"))
     out = mcp_tools.check_features()
     by = {r["feature"]: r for r in out["features"]}
@@ -426,7 +426,7 @@ def test_check_features_floss_yara_broken_when_dep_missing(hg_home, monkeypatch)
 def test_check_features_image_stale_hint(hg_home, monkeypatch):
     """check_features carries a PROACTIVE `image_stale` hint (tri-state) alongside the
     per-feature REACTIVE dep probes: true when the sandbox image predates its Dockerfile."""
-    monkeypatch.setattr("hexgraph.engine.mcp_tools._image_smoke",
+    monkeypatch.setattr("hexgraph.agent.mcp_tools._image_smoke",
                         lambda image, argv, timeout=30: (True, "ok"))
     monkeypatch.setattr("hexgraph.sandbox.runner.sandbox_image_staleness", lambda *a, **k: True)
     out = mcp_tools.check_features()
@@ -437,7 +437,7 @@ def test_check_features_image_stale_hint(hg_home, monkeypatch):
 def test_check_features_image_stale_tristate_fresh_and_unknown(hg_home, monkeypatch):
     """A fresh (False) or unknown (None) image is reported faithfully and adds NO stale
     line to the summary."""
-    monkeypatch.setattr("hexgraph.engine.mcp_tools._image_smoke",
+    monkeypatch.setattr("hexgraph.agent.mcp_tools._image_smoke",
                         lambda image, argv, timeout=30: (True, "ok"))
     for verdict in (False, None):
         monkeypatch.setattr("hexgraph.sandbox.runner.sandbox_image_staleness", lambda *a, **k: verdict)
@@ -448,7 +448,7 @@ def test_check_features_image_stale_tristate_fresh_and_unknown(hg_home, monkeypa
 
 def test_check_features_image_stale_never_crashes(hg_home, monkeypatch):
     """A blowing-up staleness probe degrades to image_stale=None, never an exception."""
-    monkeypatch.setattr("hexgraph.engine.mcp_tools._image_smoke",
+    monkeypatch.setattr("hexgraph.agent.mcp_tools._image_smoke",
                         lambda image, argv, timeout=30: (True, "ok"))
 
     def _boom(*a, **k):
@@ -464,7 +464,7 @@ def test_check_features_angr_uses_the_angr_image(hg_home, monkeypatch):
     from hexgraph import settings as st
 
     st.update_settings({"features.angr.enabled": True})
-    monkeypatch.setattr("hexgraph.engine.mcp_tools._image_smoke",
+    monkeypatch.setattr("hexgraph.agent.mcp_tools._image_smoke",
                         lambda image, argv, timeout=30: (False, "not built"))
     out = mcp_tools.check_features()
     angr = next(r for r in out["features"] if r["feature"] == "angr")
@@ -490,7 +490,7 @@ def test_check_features_ghidra_defers_to_check_ghidra(hg_home, monkeypatch):
 
 
 def test_create_node_address_and_input_sink(hg_home):
-    from hexgraph.engine import mcp_tools
+    from hexgraph.agent import mcp_tools
     with session_scope() as s:
         p = create_project(s, name="addr")
         t = ingest_file(s, p, fixture_path("vuln_httpd"), name="x")
@@ -503,7 +503,7 @@ def test_create_node_address_and_input_sink(hg_home):
 
 
 def test_target_facts_dangerous_imports(hg_home):
-    from hexgraph.engine import mcp_tools
+    from hexgraph.agent import mcp_tools
     with session_scope() as s:
         p = create_project(s, name="dg")
         t = ingest_file(s, p, fixture_path("vuln_httpd"), name="x")
@@ -513,7 +513,7 @@ def test_target_facts_dangerous_imports(hg_home):
 
 
 def test_update_finding_and_hypothesis_lifecycle(hg_home):
-    from hexgraph.engine import mcp_tools
+    from hexgraph.agent import mcp_tools
     from hexgraph.engine.tasks import create_task
     from hexgraph.engine.findings import persist_finding
     from hexgraph.models.finding import Evidence, Finding as FModel
@@ -536,7 +536,7 @@ def test_update_finding_and_hypothesis_lifecycle(hg_home):
 
 
 def test_verify_poc_attaches_to_finding(hg_home, monkeypatch):
-    from hexgraph.engine import mcp_tools
+    from hexgraph.agent import mcp_tools
     from hexgraph.db.models import Finding
     from hexgraph.engine.tasks import create_task
     from hexgraph.engine.findings import persist_finding
@@ -570,7 +570,7 @@ def test_verify_poc_attaches_to_finding(hg_home, monkeypatch):
 
 
 def test_record_finding_accepts_finding_type(hg_home):
-    from hexgraph.engine import mcp_tools
+    from hexgraph.agent import mcp_tools
     with session_scope() as s:
         p = create_project(s, name="ft")
         t = ingest_file(s, p, fixture_path("vuln_httpd"), name="x")
@@ -586,7 +586,7 @@ def test_record_finding_accepts_finding_type(hg_home):
 
 
 def test_graph_read_tools(hg_home):
-    from hexgraph.engine import mcp_tools
+    from hexgraph.agent import mcp_tools
     with session_scope() as s:
         p = create_project(s, name="rd")
         t = ingest_file(s, p, fixture_path("vuln_httpd"), name="x")
@@ -679,7 +679,7 @@ def test_skill_documents_fs_browsing_and_new_tools():
     capability sub-files): the firmware-FS workflow, the build/fuzz tools, and the strict
     'surface, don't prune' stance must each be present somewhere in it. The spine routes to
     the sub-files, so checking the whole bundle is the honest contract after the split."""
-    from hexgraph.agent_setup import full_skill_markdown
+    from hexgraph.agent.agent_setup import full_skill_markdown
     bundle = full_skill_markdown()
     for token in ("fs_list", "target_promote_file", "src_build_log",
                   "fuzz_resume", "proj_list",

@@ -308,7 +308,7 @@ def test_solver_handoff_verifies_in_sandbox_end_to_end(hg_home):
     """The full headline: a SOLVER finding's reproducer is verified byte-faithfully via the
     handoff — the MCP verify_poc fills argv_b64 from evidence.extra.solver and the solved serial
     reaches the sink in the sandbox."""
-    from hexgraph.engine import mcp_tools as M
+    from hexgraph.agent import mcp_tools as M
 
     st.update_settings({"features.poc.enabled": True})
     with session_scope() as s:

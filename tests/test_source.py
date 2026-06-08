@@ -310,7 +310,7 @@ def test_api_backfill_and_link(hg_home):
 
 
 def test_mcp_read_tools(hg_home):
-    from hexgraph.engine import mcp_tools as mt
+    from hexgraph.agent import mcp_tools as mt
 
     with session_scope() as s:
         p = create_project(s, name="mcp")
@@ -328,7 +328,7 @@ def test_mcp_read_tools(hg_home):
 
 
 def test_mcp_import_and_link_tools(hg_home):
-    from hexgraph.engine import mcp_tools as mt
+    from hexgraph.agent import mcp_tools as mt
 
     with session_scope() as s:
         p = create_project(s, name="mcp")

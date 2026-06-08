@@ -19,7 +19,7 @@ keep `docs/mcp.md` in sync.
 
 from __future__ import annotations
 
-from hexgraph.record_keeping import RECORD_KEEPING
+from hexgraph.agent.record_keeping import RECORD_KEEPING
 
 # ── The spine: SKILL.md, always loaded ──────────────────────────────────────────────
 # Identity, the hard rules, the engagement arc, parallel orchestration, and the

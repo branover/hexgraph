@@ -6,7 +6,7 @@ import pytest
 
 from hexgraph.db.models import Edge, EdgeType, Node, NodeType, Target, TargetKind
 from hexgraph.db.session import session_scope
-from hexgraph.engine import mcp_tools as M
+from hexgraph.agent import mcp_tools as M
 from hexgraph.engine.ingest import create_project, ingest_file
 from hexgraph.engine.nodes import materialize_function
 from hexgraph.engine.surfaces import register_web_surface, run_surface_recon
