@@ -228,6 +228,140 @@ def test_search_substring_over_bodies(hg_home):
         assert J.search_journal(s, p, "nothing-matches") == []
 
 
+# --- batched mention resolution (no N+1 on list/search) -----------------------
+
+import contextlib
+
+from sqlalchemy import event
+
+from hexgraph.db.session import get_engine
+
+
+@contextlib.contextmanager
+def _count_queries():
+    """Count SQL statements emitted on the shared engine inside the block.
+
+    A `before_cursor_execute` listener bumps a counter per statement so a test can
+    assert the query count is BOUNDED (independent of the number of entries/mentions),
+    proving the batched serialization path doesn't fan out into a per-mention point
+    query (the N+1 regression guard)."""
+    counter = {"n": 0}
+    engine = get_engine()
+
+    def _on_exec(conn, cursor, statement, parameters, context, executemany):
+        counter["n"] += 1
+
+    event.listen(engine, "before_cursor_execute", _on_exec)
+    try:
+        yield counter
+    finally:
+        event.remove(engine, "before_cursor_execute", _on_exec)
+
+
+def _entries_with_mentions(s, p, t, *, n_entries, mentions_each):
+    """Make `n_entries` entries each mentioning `mentions_each` distinct real nodes
+    (so resolution actually does work, not just dangling no-ops)."""
+    nodes = [
+        get_or_create_node(s, project_id=p.id, node_type=NodeType.function,
+                           name=f"fn_{i}", target_id=t.id)
+        for i in range(mentions_each)
+    ]
+    for e in range(n_entries):
+        body = " ".join(f"@[{nd.name}](node:{nd.id})" for nd in nodes)
+        J.add_journal_entry(s, p, body=f"entry {e}: {body}", author="agent")
+    return nodes
+
+
+def test_list_query_count_is_bounded_not_n_times_m(hg_home):
+    """Serializing N entries with M mentions each must NOT issue O(N*M) point queries.
+    The batched path resolves all mentions in a bounded number of statements regardless
+    of how many entries/mentions there are — this is the N+1 guard."""
+    with session_scope() as s:
+        p, t = _project_target(s)
+        _entries_with_mentions(s, p, t, n_entries=6, mentions_each=4)
+        s.flush()
+
+        with _count_queries() as small:
+            rows_small = J.list_journal_entries(s, p.id)
+        # sanity: every entry carries its 4 resolved mentions
+        assert len(rows_small) == 6
+        assert all(len(r["mentions"]) == 4 for r in rows_small)
+
+    # A second project with MANY more entries/mentions must not cost proportionally
+    # more queries — the batch is O(kinds), not O(entries*mentions).
+    with session_scope() as s:
+        p2, t2 = _project_target(s, name="jrnl2")
+        _entries_with_mentions(s, p2, t2, n_entries=20, mentions_each=6)
+        s.flush()
+
+        with _count_queries() as big:
+            rows_big = J.list_journal_entries(s, p2.id)
+        assert len(rows_big) == 20
+        assert all(len(r["mentions"]) == 6 for r in rows_big)
+
+    # 6 entries * 4 mentions = 24 vs 20 entries * 6 = 120 mentions. A per-mention path
+    # would balloon (~24 vs ~120 queries); the batched path stays flat (a small constant
+    # apart for the entries query + the mention-rows query + one query per kind present).
+    assert big["n"] <= small["n"] + 3
+    # And the absolute count is tiny — far below "one query per mention".
+    assert big["n"] <= 8
+
+
+def test_batched_serialization_matches_per_mention_resolution(hg_home):
+    """`serialize_entries` (batched) produces output byte-identical to resolving each
+    mention one-by-one with `resolve_mention` — across the live, archived/dangling, and
+    merge-folded-duplicate cases."""
+    from hexgraph.db.models import Node
+
+    with session_scope() as s:
+        p, t = _project_target(s)
+        task = create_task(s, project=p, target_id=t.id, type="static_analysis")
+        f = _finding(s, p, t, task, "the bug")
+        node = get_or_create_node(s, project_id=p.id, node_type=NodeType.function,
+                                  name="parse_cgi", target_id=t.id)
+        h = create_hypothesis(s, p, statement="len field is trusted", target_id=t.id)
+
+        # a merge-fold case: keeper + dup sharing a canonical key
+        keeper = Node(project_id=p.id, node_type="function", name="get_param",
+                      fq_name="get_param", target_id=t.id, content_hash="abc")
+        dup = Node(project_id=p.id, node_type="function", name="sym.get_param",
+                   fq_name="sym.get_param", target_id=t.id)
+        s.add(keeper); s.add(dup); s.flush()
+        kid, did = keeper.id, dup.id
+
+        # one entry exercising live node/finding/target/hypothesis + a missing ref
+        J.add_journal_entry(s, p, body=(
+            f"@[parse_cgi](node:{node.id}) @[the bug](finding:{f.id}) "
+            f"@[httpd](target:{t.id}) @[h](hypothesis:{h.id}) @[gone](node:does-not-exist)"
+        ), author="agent")
+        # entries on the keeper and the soon-to-be-folded dup
+        J.add_journal_entry(s, p, body=f"@[get_param](node:{kid})", author="agent")
+        J.add_journal_entry(s, p, body=f"@[get_param](node:{did})", author="agent")
+
+        merge_duplicate_nodes(s, p.id)  # folds dup → keeper, deleting the dup row
+
+        # archive the target so the target mention degrades to dangling
+        t.archived = True
+        s.flush()
+
+        rows = J.list_journal_entries(s, p.id)
+
+        # Re-derive every mention the SLOW way and compare field-for-field.
+        for r in rows:
+            stored = (
+                s.query(JournalMention)
+                .filter(JournalMention.entry_id == r["id"])
+                .all()
+            )
+            expected = []
+            for mr in stored:
+                d = J.resolve_mention(s, r["project_id"], mr.ref_kind, mr.ref_id)
+                d["stored_label"] = mr.label
+                expected.append(d)
+            key = lambda m: (m["ref_kind"], m["ref_id"])  # order-insensitive compare
+            assert sorted(r["mentions"], key=key) == sorted(expected, key=key), r["id"]
+
+
 # --- Layer 1: auto-entry on a mock task ---------------------------------------
 
 def test_layer1_auto_journal_on_mock_task(hg_home):
