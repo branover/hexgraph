@@ -415,8 +415,8 @@ select.sel:focus, .settings select.sel:focus { outline: none; border-color: var(
 .hyp-meta { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 11px; }
 .hyp-meta .ws { display: inline-flex; align-items: center; gap: 3px; color: var(--fg-dim); }
 .hyp-ev { display: inline-flex; align-items: center; gap: 2px; color: var(--muted); font-size: 10.5px; }
-.hyp-pin { flex: none; opacity: .4; transition: opacity .12s, color .12s; }
-.hyp-row:hover .hyp-pin { opacity: .75; }
+.hyp-pin { flex: none; opacity: .6; transition: opacity .12s, color .12s; }
+.hyp-row:hover .hyp-pin { opacity: .9; }
 .hyp-pin.on { opacity: 1; color: var(--accent); }
 
 /* inspector */

@@ -1336,7 +1336,7 @@ def set_hypothesis_status(hypothesis_id: str, status: str | None = None,
             if status is not None:
                 set_status(s, hypothesis_id, status, rationale=rationale)
             if work_state is not None:
-                set_work_state(s, hypothesis_id, work_state)
+                set_work_state(s, hypothesis_id, work_state, rationale=rationale)
             return summary(s, hypothesis_id)
         except HypothesisError as exc:
             return {"error": str(exc)}
