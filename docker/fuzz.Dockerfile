@@ -69,6 +69,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # CmpLog + persistent mode + afl-cmin / afl-tmin / afl-cov / afl-showmap (Phase 3). Falls
 # back to the apt package if the source build fails (graceful-degrade — libFuzzer/SanCov
 # still work, qemu-mode then depends on the apt package shipping afl-qemu-trace).
+#
+# PIN to a stable release tag (override at build with `--build-arg AFLPP_REF=...`). An
+# UNPINNED clone of `master` is a silent time-bomb: the current 5.x dev line (built as
+# afl-fuzz++5.01a) regressed coverage-map sizing — at runtime the instrumented target
+# hits MORE edges than the statically sized map accounts for (`cvg > 100%`), so afl-fuzz
+# treats the build as mis-instrumented and ABORTS every source-instrumented campaign on
+# the first fuzz iteration with "Incorrect fuzzing setup detected ... loaded incorrectly
+# instrumented shared libraries (N of N-1/64)" (afl-fuzz-stats.c, show_stats_normal) —
+# zero crashes are ever found. v4.40c (last 4.x stable) sizes the map consistently
+# (cvg ≤ 100%, verified: the §5.4 campaign e2e finds its planted crash) and keeps
+# afl-clang-lto/fast + CmpLog + persistent mode + qemu/frida modes that Phases 3/5 rely
+# on. Re-pin deliberately to a newer tag only after verifying a campaign still finds the
+# planted crash with cvg ≤ 100% on it (the afl_probe guard now flags the abort loudly).
+ARG AFLPP_REF=v4.40c
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         git automake bison flex libtool libtool-bin libglib2.0-dev \
@@ -81,7 +95,8 @@ RUN apt-get update \
 # are what Phase 5 binary-only/network fuzzing needs and don't depend on the LLVM passes,
 # so a passes failure (header mismatch) doesn't lose qemu-mode. Falls back to apt.
 RUN ( set -e; \
-      git clone --depth 1 https://github.com/AFLplusplus/AFLplusplus /tmp/aflpp; \
+      git clone --depth 1 --branch "$AFLPP_REF" \
+          https://github.com/AFLplusplus/AFLplusplus /tmp/aflpp; \
       cd /tmp/aflpp; \
       make -j"$(nproc)" afl-fuzz afl-showmap afl-tmin afl-cmin afl-as; \
       ( make -j"$(nproc)" llvm || echo "WARN: AFL++ LLVM passes failed (afl-clang-fast may be absent)" ); \
