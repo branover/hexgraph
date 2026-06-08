@@ -36,6 +36,15 @@ class EvidenceLink(BaseModel):
     relation: str  # supports | refutes
 
 
+class HypothesisWorkState(BaseModel):
+    work_state: str  # investigating | parked | done
+    verdict: str | None = None  # optional evidence status to record on close (e.g. confirmed)
+
+
+class HypothesisPin(BaseModel):
+    pinned: bool
+
+
 class GhidraImport(BaseModel):
     path: str
     name: str | None = None

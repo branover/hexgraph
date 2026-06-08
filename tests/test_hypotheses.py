@@ -8,7 +8,8 @@ from hexgraph.db.models import NodeType
 from hexgraph.db.session import session_scope
 from hexgraph.engine.findings import persist_finding
 from hexgraph.engine.hypotheses import (
-    create_hypothesis, link_evidence, recompute_status, set_status, summary,
+    DEFAULT_WORK_STATE, WORK_STATES, create_hypothesis, link_evidence, list_hypotheses,
+    recompute_status, set_pinned, set_status, set_work_state, summary,
 )
 from hexgraph.engine.ingest import create_project, ingest_file
 from hexgraph.engine.tasks import create_task
@@ -129,3 +130,129 @@ def test_set_status_records_rationale(hg_home):
         h = create_hypothesis(s, p, statement="exploitable as RCE")
         set_status(s, h.id, "confirmed", rationale="verified PoC echoes the nonce")
         assert (h.attrs_json or {})["status_note"] == "verified PoC echoes the nonce"
+
+
+# --- work-state axis + worklist (design-working-memory.md §4) ---------------------------
+
+def test_new_hypothesis_defaults_investigating_unpinned(hg_home):
+    with session_scope() as s:
+        p = create_project(s, name="ws1")
+        h = create_hypothesis(s, p, statement="a fresh open question")
+        attrs = h.attrs_json or {}
+        assert attrs["work_state"] == DEFAULT_WORK_STATE == "investigating"
+        assert attrs["pinned_to_graph"] is False
+        out = summary(s, h.id)
+        assert out["work_state"] == "investigating" and out["pinned_to_graph"] is False
+
+
+def test_work_state_is_orthogonal_to_status(hg_home):
+    with session_scope() as s:
+        p = create_project(s, name="ws2")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        task = create_task(s, project=p, target_id=t.id, type="static_analysis")
+        h = create_hypothesis(s, p, statement="reachable pre-auth", target_id=t.id)
+        f = _finding(s, p, t, task, "taint reaches the sink")
+        link_evidence(s, p, hypothesis_id=h.id, finding_id=f.id, relation="supports")
+        # park while supported — the evidence verdict is untouched by the work-state move.
+        set_work_state(s, h.id, "parked")
+        out = summary(s, h.id)
+        assert out["status"] == "supported" and out["work_state"] == "parked"
+
+
+def test_close_sets_done_and_records_verdict(hg_home):
+    from hexgraph.engine.mcp_tools import close_hypothesis
+    with session_scope() as s:
+        p = create_project(s, name="ws3")
+        h = create_hypothesis(s, p, statement="the bypass is real")
+        hid = h.id
+    r = close_hypothesis(hid, verdict="rejected", rationale="ruled out — auth holds")
+    assert r["work_state"] == "done" and r["status"] == "rejected"
+    assert r["status_origin"] == "human"
+
+
+def test_invalid_work_state_rejected(hg_home):
+    import pytest
+    from hexgraph.engine.hypotheses import HypothesisError
+    with session_scope() as s:
+        p = create_project(s, name="ws4")
+        h = create_hypothesis(s, p, statement="q")
+        with pytest.raises(HypothesisError):
+            set_work_state(s, h.id, "maybe")
+
+
+def test_list_hypotheses_filters_and_counts(hg_home):
+    with session_scope() as s:
+        p = create_project(s, name="ws5")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        task = create_task(s, project=p, target_id=t.id, type="static_analysis")
+        h1 = create_hypothesis(s, p, statement="chasing one", target_id=t.id)
+        f = _finding(s, p, t, task, "supporting evidence")
+        link_evidence(s, p, hypothesis_id=h1.id, finding_id=f.id, relation="supports")
+        h2 = create_hypothesis(s, p, statement="parked one", target_id=t.id)
+        set_work_state(s, h2.id, "parked")
+
+        rows = list_hypotheses(s, p)
+        assert len(rows) == 2
+        by_id = {r["id"]: r for r in rows}
+        assert by_id[h1.id]["supports_count"] == 1 and by_id[h1.id]["work_state"] == "investigating"
+        assert by_id[h2.id]["work_state"] == "parked"
+
+        inv = list_hypotheses(s, p, work_state="investigating")
+        assert [r["id"] for r in inv] == [h1.id]
+        sup = list_hypotheses(s, p, status="supported")
+        assert [r["id"] for r in sup] == [h1.id]
+
+
+def test_set_pinned_toggles_graph_visibility_flag(hg_home):
+    with session_scope() as s:
+        p = create_project(s, name="ws6")
+        h = create_hypothesis(s, p, statement="pin me")
+        set_pinned(s, h.id, True)
+        assert (h.attrs_json or {})["pinned_to_graph"] is True
+        assert summary(s, h.id)["pinned_to_graph"] is True
+        set_pinned(s, h.id, False)
+        assert summary(s, h.id)["pinned_to_graph"] is False
+
+
+def test_stale_investigating_feeds_context_nudge(hg_home):
+    from hexgraph.engine.context import preview_context
+
+    with session_scope() as s:
+        p = create_project(s, name="ws7")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        t.metadata_json = {"imports": ["strcpy"], "mitigations": {"canary": False}}
+        create_hypothesis(s, p, statement="unevidenced lead I'm still chasing", target_id=t.id)
+        prev = preview_context(s, p, t, type("C", (), {
+            "objective": "verify", "tool_outputs": None,
+            "sibling_name": None, "sibling_target_id": None})())
+        kinds = {i["kind"] for i in prev["items"]}
+        assert "stale_hypotheses" in kinds
+
+
+def test_worklist_api_endpoints(hg_home):
+    with session_scope() as s:
+        p = create_project(s, name="ws8")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        pid, tid = p.id, t.id
+
+    c = TestClient(create_app())
+    hid = c.post(f"/api/projects/{pid}/hypotheses",
+                 json={"statement": "live question", "target_id": tid}).json()["id"]
+
+    rows = c.get(f"/api/projects/{pid}/hypotheses").json()["hypotheses"]
+    assert len(rows) == 1 and rows[0]["work_state"] == "investigating"
+
+    r = c.post(f"/api/hypotheses/{hid}/pin", json={"pinned": True})
+    assert r.status_code == 200 and r.json()["pinned_to_graph"] is True
+
+    r = c.post(f"/api/hypotheses/{hid}/work-state", json={"work_state": "done", "verdict": "confirmed"})
+    assert r.status_code == 200 and r.json()["work_state"] == "done" and r.json()["status"] == "confirmed"
+
+    # set_hypothesis_status MCP tool now accepts a work_state move too.
+    from hexgraph.engine.mcp_tools import set_hypothesis_status
+    out = set_hypothesis_status(hid, work_state="parked")
+    assert out["work_state"] == "parked"
+
+
+def test_work_states_constant_shape(hg_home):
+    assert WORK_STATES == ("investigating", "parked", "done")

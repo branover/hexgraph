@@ -546,9 +546,13 @@ before re-deriving anything. You may edit only your OWN entries (`journal_update
      source `attrs.entry=true`) without re-sending it, **`graph_set_node_attr(node_id,
      "is_sink", true)`** sets the one attribute in place.
    Always pass `target_id` for target-bound nodes (else they float as orphans).
-   `graph_create_hypothesis` for the open question, then **`graph_link_evidence(hypothesis_id,
-   finding_id, "supports")`** to connect the finding to it (this also drives the
-   hypothesis's status — it's how you later confirm it).
+   `graph_create_hypothesis` for the open question (it lands on your live worklist as
+   `investigating`; `graph_list_hypotheses` shows what you're chasing), then
+   **`graph_link_evidence(hypothesis_id, finding_id, "supports")`** to connect the finding to
+   it (this also drives the hypothesis's evidence status). Once you've settled a question
+   either way, **`graph_close_hypothesis(hypothesis_id, verdict=…)`** checks it off
+   (work_state→done + the verdict) — a documented dead end is as valuable as a hit. The
+   record-keeping sub-file has the full hypothesis discipline.
 2. **Explore → keep adding.** As you decompile/trace, wire the path with
    `graph_create_edge` (the relationship goes in the required **`type`** param — e.g.
    `type="calls"`, not `edge_type=`): `calls`, `references`, `reads`/`writes`, and
@@ -647,9 +651,10 @@ next agent) can launch follow-up tasks on them.
 you catch a missed attribute or an edge you still owe: `graph_get_node(node_id)` and
 `finding_get(finding_id)` return one entity in full (with the attrs/evidence you set);
 `graph_list_nodes(project_id, target_id?, node_type?)` and `graph_list_edges(project_id, node_id?)` show
-what's already there and where the gaps are. `graph_set_hypothesis_status(hypothesis_id, status,
-rationale?)` pins a verdict (confirmed/rejected/open) directly when you're not driving it
-through `graph_link_evidence`; `graph_update_edge(edge_id, attrs, merge?)` edits an existing edge in
+what's already there and where the gaps are. `graph_set_hypothesis_status(hypothesis_id, status?,
+work_state?, rationale?)` pins a verdict (confirmed/rejected/open) directly when you're not
+driving it through `graph_link_evidence`, or moves the worklist axis (investigating/parked/done);
+`graph_update_edge(edge_id, attrs, merge?)` edits an existing edge in
 place. After any live testing, `net_list_egress(project_id)` is the audit log of every outbound
 network action (allowed/denied) — review it to confirm you stayed in bounds.
 

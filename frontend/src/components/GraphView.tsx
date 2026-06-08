@@ -467,6 +467,10 @@ export default function GraphView({
         else if (findings === "unresolved" && RESOLVED.has(n.status)) baseHidden.add(n.id);
       } else if (n.type === "node") {
         if (!nodeLayerOn(layers, n.node_type as string)) baseHidden.add(n.id);
+        // Hypotheses live in the worklist panel, OFF the canvas by default — they draw only
+        // when explicitly pinned (attrs.pinned_to_graph), a net reduction in clutter
+        // (design-working-memory.md §4.3).
+        else if (n.node_type === "hypothesis" && !(n.attrs && n.attrs.pinned_to_graph)) baseHidden.add(n.id);
       }
     }
     // ── Phase 5: FILTER (value facets), FADE-FIRST. A filtered-OUT element fades to

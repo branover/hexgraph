@@ -38,6 +38,14 @@ DERIVED = ("open", "supported", "refuted", "contested")
 HUMAN_VERDICTS = ("confirmed", "rejected")
 STATUSES = DERIVED + HUMAN_VERDICTS
 
+# The WORK-STATE axis (design-working-memory.md §4.2) — orthogonal to the evidence
+# `status` above. `status` answers "what does the evidence say?"; `work_state` answers
+# "am I on this?". A fresh hypothesis is `investigating`; "checking it off" sets `done`
+# and records the evidence verdict separately. The single source of truth, imported into
+# both the MCP catalog enum and meta_get_schemas so they can't drift.
+WORK_STATES = ("investigating", "parked", "done")
+DEFAULT_WORK_STATE = "investigating"
+
 
 class HypothesisError(ValueError):
     pass
@@ -58,7 +66,8 @@ def create_hypothesis(
         session, project_id=project.id, node_type=NodeType.hypothesis,
         name=statement[:120], fq_name=statement,
         attrs={"statement": statement, "rationale": rationale, "status": "open",
-               "status_origin": "derived"},
+               "status_origin": "derived", "work_state": DEFAULT_WORK_STATE,
+               "pinned_to_graph": False},
         created_by=origin,
     )
     if target_id:
@@ -106,6 +115,34 @@ def set_status(session: Session, hypothesis_id: str, status: str, *, origin: str
     # A human reopening to a derived state hands control back to the evidence.
     if origin == "human" and status in DERIVED:
         recompute_status(session, node)
+    return node
+
+
+def set_work_state(session: Session, hypothesis_id: str, work_state: str, *,
+                   verdict: str | None = None, origin: str = "human",
+                   rationale: str | None = None) -> Node:
+    """Move a hypothesis along the work-state axis (investigating/parked/done) — orthogonal
+    to the evidence `status`. "Checking off" is `work_state="done"`; pass `verdict` to also
+    record what the evidence said on close (confirmed/rejected/… via set_status)."""
+    if work_state not in WORK_STATES:
+        raise HypothesisError(f"invalid work_state {work_state!r} (allowed: {list(WORK_STATES)})")
+    node = _require_hypothesis(session, hypothesis_id)
+    attrs = dict(node.attrs_json or {})
+    attrs["work_state"] = work_state
+    node.attrs_json = attrs
+    # Closing with a verdict records the evidence outcome on the orthogonal status axis.
+    if verdict is not None:
+        set_status(session, hypothesis_id, verdict, origin=origin, rationale=rationale)
+    return node
+
+
+def set_pinned(session: Session, hypothesis_id: str, pinned: bool) -> Node:
+    """Pin/unpin a hypothesis to the graph canvas (attrs.pinned_to_graph). Unpinned (the
+    default) hypotheses live in the worklist panel and stay OFF the canvas to keep it clean."""
+    node = _require_hypothesis(session, hypothesis_id)
+    attrs = dict(node.attrs_json or {})
+    attrs["pinned_to_graph"] = bool(pinned)
+    node.attrs_json = attrs
     return node
 
 
@@ -158,9 +195,58 @@ def summary(session: Session, hypothesis_id: str) -> dict:
         "rationale": attrs.get("rationale"),
         "status": attrs.get("status", "open"),
         "status_origin": attrs.get("status_origin", "derived"),
+        "work_state": attrs.get("work_state", DEFAULT_WORK_STATE),
+        "pinned_to_graph": bool(attrs.get("pinned_to_graph", False)),
         "supports": supports,
         "refutes": refutes,
     }
+
+
+def list_hypotheses(session: Session, project: Project, *, work_state: str | None = None,
+                    status: str | None = None) -> list[dict]:
+    """The hypothesis worklist for a project — a summary row per hypothesis (statement,
+    evidence status, work_state, pinned_to_graph, support/refute counts), newest-first.
+    Optionally filter by `work_state` (investigating/parked/done) and/or evidence `status`.
+    Backs the Hypotheses panel and the agent's "what am I working on" orient."""
+    if work_state is not None and work_state not in WORK_STATES:
+        raise HypothesisError(f"invalid work_state {work_state!r} (allowed: {list(WORK_STATES)})")
+    if status is not None and status not in STATUSES:
+        raise HypothesisError(f"invalid status {status!r} (allowed: {list(STATUSES)})")
+    nodes = (
+        session.query(Node)
+        .filter(Node.project_id == project.id, Node.node_type == NodeType.hypothesis.value,
+                Node.archived.is_(False))
+        .order_by(Node.created_at.desc())
+        .all()
+    )
+    out = []
+    for n in nodes:
+        attrs = n.attrs_json or {}
+        ws = attrs.get("work_state", DEFAULT_WORK_STATE)
+        st = attrs.get("status", "open")
+        if work_state is not None and ws != work_state:
+            continue
+        if status is not None and st != status:
+            continue
+        supports = refutes = 0
+        for e in _evidence_edges(session, n.id):
+            if e.type == EdgeType.supports.value:
+                supports += 1
+            else:
+                refutes += 1
+        out.append({
+            "id": n.id,
+            "statement": attrs.get("statement", n.name),
+            "rationale": attrs.get("rationale"),
+            "status": st,
+            "status_origin": attrs.get("status_origin", "derived"),
+            "work_state": ws,
+            "pinned_to_graph": bool(attrs.get("pinned_to_graph", False)),
+            "supports_count": supports,
+            "refutes_count": refutes,
+            "created_at": n.created_at.isoformat() if n.created_at else None,
+        })
+    return out
 
 
 def open_for_target(session: Session, project_id: str, target_id: str) -> list[dict]:
@@ -180,4 +266,30 @@ def open_for_target(session: Session, project_id: str, target_id: str) -> list[d
         attrs = n.attrs_json or {}
         if attrs.get("status") in ("open", "supported", "contested"):
             out.append({"statement": attrs.get("statement", n.name), "status": attrs.get("status")})
+    return out
+
+
+def unevidenced_investigating_for_target(session: Session, project_id: str,
+                                         target_id: str) -> list[str]:
+    """Statements of hypotheses anchored to this target that are still being actively
+    chased (`work_state="investigating"`) but have NO linked evidence yet — the stale
+    worklist entries the Layer-2 context nudge surfaces so the agent wires evidence or
+    closes them as it works (design-working-memory.md §6)."""
+    edges = (
+        session.query(Edge)
+        .filter(Edge.project_id == project_id, Edge.type == EdgeType.about.value,
+                Edge.src_kind == "node", Edge.dst_kind == "target", Edge.dst_id == target_id)
+        .all()
+    )
+    out: list[str] = []
+    for e in edges:
+        n = session.get(Node, e.src_id)
+        if n is None or n.node_type != NodeType.hypothesis.value or n.archived:
+            continue
+        attrs = n.attrs_json or {}
+        if attrs.get("work_state", DEFAULT_WORK_STATE) != "investigating":
+            continue
+        if _evidence_edges(session, n.id):
+            continue
+        out.append(attrs.get("statement", n.name))
     return out

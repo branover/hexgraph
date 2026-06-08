@@ -1321,15 +1321,57 @@ def link_evidence(hypothesis_id: str, finding_id: str, relation: str) -> dict:
         return summary(s, hypothesis_id)
 
 
-def set_hypothesis_status(hypothesis_id: str, status: str, rationale: str | None = None) -> dict:
-    """Pin a hypothesis verdict: confirmed | rejected | open | supported | refuted.
-    Pass `rationale` to record WHY (kept as the hypothesis's status_note)."""
-    from hexgraph.engine.hypotheses import HypothesisError, set_status, summary
+def set_hypothesis_status(hypothesis_id: str, status: str | None = None,
+                          work_state: str | None = None, rationale: str | None = None) -> dict:
+    """Update a hypothesis along EITHER axis (pass at least one). `status` pins the evidence
+    verdict (confirmed | rejected | open | supported | refuted | contested). `work_state` moves
+    the worklist axis (investigating | parked | done) — orthogonal to the verdict. Pass
+    `rationale` to record WHY (kept as the hypothesis's status_note)."""
+    from hexgraph.engine.hypotheses import HypothesisError, set_status, set_work_state, summary
+
+    if status is None and work_state is None:
+        return {"error": "pass status and/or work_state"}
+    with session_scope() as s:
+        try:
+            if status is not None:
+                set_status(s, hypothesis_id, status, rationale=rationale)
+            if work_state is not None:
+                set_work_state(s, hypothesis_id, work_state)
+            return summary(s, hypothesis_id)
+        except HypothesisError as exc:
+            return {"error": str(exc)}
+
+
+def close_hypothesis(hypothesis_id: str, verdict: str | None = None,
+                     rationale: str | None = None) -> dict:
+    """CHECK OFF a hypothesis: set work_state='done' and optionally record the evidence
+    `verdict` (confirmed | rejected | supported | refuted | …) explaining how it resolved.
+    A proven question closes confirmed/supported; a ruled-out one closes refuted/rejected (a
+    documented dead end). Use when you've settled a hypothesis either way."""
+    from hexgraph.engine.hypotheses import HypothesisError, set_work_state, summary
 
     with session_scope() as s:
         try:
-            set_status(s, hypothesis_id, status, rationale=rationale)
+            set_work_state(s, hypothesis_id, "done", verdict=verdict, rationale=rationale)
             return summary(s, hypothesis_id)
+        except HypothesisError as exc:
+            return {"error": str(exc)}
+
+
+def list_hypotheses(project_id: str, work_state: str | None = None,
+                    status: str | None = None) -> dict:
+    """List the project's hypothesis WORKLIST — a row per hypothesis with its statement,
+    evidence status, work_state, pinned_to_graph, and support/refute counts. Filter by
+    `work_state` (investigating | parked | done) and/or evidence `status`. Your "what am I
+    working on" orient before recording a new hypothesis or resuming a session."""
+    from hexgraph.engine.hypotheses import HypothesisError, list_hypotheses as _list
+
+    with session_scope() as s:
+        project = s.get(Project, project_id)
+        if project is None:
+            return {"error": "project not found"}
+        try:
+            return {"hypotheses": _list(s, project, work_state=work_state, status=status)}
         except HypothesisError as exc:
             return {"error": str(exc)}
 
@@ -1712,6 +1754,7 @@ def get_schemas() -> dict:
     from hexgraph.engine.assurance import LADDER as _ASSURANCE_LADDER, PRECONDITIONS as _PRECONDITIONS
     from hexgraph.engine.edge_schemas import SOCKET_KINDS, describe_edges
     from hexgraph.engine.journal import AUTHORS as _JOURNAL_AUTHORS, REF_KINDS as _JOURNAL_REF_KINDS
+    from hexgraph.engine.hypotheses import STATUSES as HYP_STATUSES, WORK_STATES as HYP_WORK_STATES
     from hexgraph.engine.node_schemas import describe_nodes
     from hexgraph.engine.findings import FINDING_TYPES
     from hexgraph.models.finding import Finding as FModelCls
@@ -1771,6 +1814,16 @@ def get_schemas() -> dict:
         "link_evidence_note": "relation is supports|refutes (confirms→supports, contradicts→refutes are "
                               "accepted aliases). The hypothesis status is then recomputed from its "
                               "evidence; pin a hard verdict with graph_set_hypothesis_status(id,'confirmed').",
+        "hypothesis": {
+            "status": list(HYP_STATUSES),
+            "work_state": list(HYP_WORK_STATES),
+            "note": "A hypothesis carries TWO orthogonal axes. `status` (evidence verdict, derived from "
+                    "linked findings unless a human pins confirmed/rejected) answers 'what does the "
+                    "evidence say?'. `work_state` (investigating/parked/done) is the WORKLIST axis — 'am "
+                    "I on this?'. 'Checking off' = graph_close_hypothesis (work_state='done' + optional "
+                    "verdict); list the worklist with graph_list_hypotheses. attrs.pinned_to_graph (default "
+                    "off) controls whether it draws on the canvas — most live only in the worklist panel.",
+        },
         "create_node_note": "Function/symbol/struct identity is (target, normalized name) — recon "
                             "pre-materializes function nodes (address=null). graph_create_node on an existing "
                             "one MERGES: it fills a missing address and unions attrs (it won't overwrite "
