@@ -364,7 +364,7 @@ def test_check_decompiler_ghidra_broken(hg_home, monkeypatch):
 
     st.update_settings({"features.ghidra.enabled": True, "features.ghidra.mode": "headless"})
     monkeypatch.setattr(
-        "hexgraph.engine.ghidra.check_ghidra",
+        "hexgraph.engine.re.ghidra.check_ghidra",
         lambda: {"enabled": True, "mode": "headless", "ok": False,
                  "detail": "Ghidra not found in sandbox image (build with WITH_GHIDRA=1)."},
     )
@@ -478,7 +478,7 @@ def test_check_features_ghidra_defers_to_check_ghidra(hg_home, monkeypatch):
 
     st.update_settings({"features.ghidra.enabled": True, "features.ghidra.mode": "headless"})
     monkeypatch.setattr(
-        "hexgraph.engine.ghidra.check_ghidra",
+        "hexgraph.engine.re.ghidra.check_ghidra",
         lambda: {"enabled": True, "mode": "headless", "ok": False,
                  "detail": "Ghidra not found in sandbox image (build with WITH_GHIDRA=1)."},
     )

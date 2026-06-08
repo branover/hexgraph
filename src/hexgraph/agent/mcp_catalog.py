@@ -337,7 +337,7 @@ def _solver_advertised() -> bool:
     # angr IS a policy gate (policy.assert_allows_solver) but, like emulation, it raises no tier,
     # so the advertisement reads the plain feature flag.
     try:
-        from hexgraph.engine.solver import solver_enabled
+        from hexgraph.engine.re.solver import solver_enabled
 
         return solver_enabled()
     except Exception:  # noqa: BLE001 — never advertise a tool whose gate can't be read

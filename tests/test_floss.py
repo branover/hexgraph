@@ -19,7 +19,7 @@ import pytest
 
 from hexgraph.db.models import Edge, Node, Observation
 from hexgraph.db.session import session_scope
-from hexgraph.engine.floss import collect_floss_strings
+from hexgraph.engine.re.floss import collect_floss_strings
 from hexgraph.engine.ingest import create_project, ingest_file
 
 from conftest import fixture_path
@@ -127,7 +127,7 @@ def test_collect_records_one_observation_and_mints_no_nodes(hg_home, monkeypatch
         assert obs[0].tool == "floss_strings"
         # NO enrichment extractor registered for floss_strings (FLOSS recovers results,
         # not always-welcome facts) — promotion is the agent's deliberate act.
-        from hexgraph.engine import enrichment as E
+        from hexgraph.engine.re import enrichment as E
         assert E.extractor_for("floss_strings") is None
 
 

@@ -1,4 +1,4 @@
-"""Phase 4 — grounded P-Code data-flow taint (engine.taint + the ghidra_probe --taint pass).
+"""Phase 4 — grounded P-Code data-flow taint (engine.re.taint + the ghidra_probe --taint pass).
 
 Offline tests (no Docker) pin the seam selection, the graceful-degrade contract, and the
 grounded graph promotion with a faked analyzer. The Docker+Ghidra integration test
@@ -15,7 +15,7 @@ import pytest
 from hexgraph.db.models import Edge, Node
 from hexgraph.db.session import session_scope
 from hexgraph.engine import observations as obs
-from hexgraph.engine import taint as T
+from hexgraph.engine.re import taint as T
 from hexgraph.engine.ingest import create_project, ingest_file
 from hexgraph import settings as st
 

@@ -81,7 +81,7 @@ def test_enrich_target_records_substrate_not_bulk_graph(hg_home, monkeypatch):
     monkeypatch.setattr("hexgraph.sandbox.decompiler.get_executor", lambda *a, **k: fake)
 
     from hexgraph.db.models import Edge, EnrichmentFact, Observation
-    from hexgraph.engine.ghidra import enrich_target
+    from hexgraph.engine.re.ghidra import enrich_target
     from hexgraph.engine.nodes import get_or_create_node
 
     with session_scope() as s:
@@ -118,7 +118,7 @@ def test_enrich_target_records_substrate_not_bulk_graph(hg_home, monkeypatch):
 
 
 def test_check_bridge_mode_not_running(hg_home):
-    from hexgraph.engine.ghidra import check_ghidra
+    from hexgraph.engine.re.ghidra import check_ghidra
 
     st.update_settings({"features.ghidra.enabled": True, "features.ghidra.mode": "bridge",
                         "features.ghidra.bridge.port": 4799})

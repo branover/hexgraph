@@ -92,13 +92,14 @@ src/hexgraph/
   llm/                         # backend seam: base, mock, anthropic_api, claude_code, registry, cassette
   sandbox/                     # runner (docker boundary), executor, decompiler; probes/ mounted from the install
                                #   (http_probe = live web assessment + session cookie jar)
-  engine/                      # ingest, pipeline, recon, unpack, worker, nodes, edges, edge_schemas, nodemerge,
+  engine/                      # ingest, pipeline, unpack, worker, nodes, edges, edge_schemas, nodemerge,
                                #   context, runs, findings, poc, fuzzing, tasks, followups, dedup, search, report,
                                #   crosstarget, authoring, annotations, hypotheses, filesystem, targets,
-                               #   removal, surfaces, rehost, node_schemas,
-                               #   ghidra, ghidra_bridge, suggester, capabilities, cas
+                               #   removal, surfaces, rehost, node_schemas, suggester, capabilities, cas
                                # (being sub-packaged by responsibility; see engine/<pkg>/ below)
   engine/build/                #   build-as-API: build, builds, source, revisions, oss_fuzz
+  engine/re/                   #   static RE: binutils, floss, yara, taint, static_core, recon, enrichment,
+                               #     solver, solving, emulation, ghidra (+ ghidra_project, ghidra_bridge)
   agent/                       # agent-integration layer (the INTERFACE engine/ implements): mcp_server +
                                #   mcp_catalog + mcp_tools (the MCP tool surface external agents drive),
                                #   agent_tools (the in-process LLM agent-loop tools), agent_delegate (delegate

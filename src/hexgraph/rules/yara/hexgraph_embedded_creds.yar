@@ -6,7 +6,7 @@
  * that commonly ships baked into embedded firmware binaries and config blobs: the
  * sort of backdoor or default-login string an analyst pivots on immediately.
  *
- * Rule meta is the HexGraph convention read by the matcher (engine/yara.py):
+ * Rule meta is the HexGraph convention read by the matcher (engine/re/yara.py):
  *   severity   one of info|low|medium|high|critical — drives a match's lead
  *              strength WITHOUT the matcher guessing (design §7 open question).
  *   confidence the rule author's own false-positive estimate (0..1).

@@ -29,8 +29,8 @@ DEFAULT_TIMEOUT = 300  # seconds
 PROBES_DIR = Path(__file__).resolve().parent / "probes"
 CONTAINER_PROBES = "/opt/hexgraph"
 # The persistent Ghidra-project bind-mount point inside the container (analyze-once / reuse,
-# engine.ghidra_project). A single bounded WRITABLE volume of HexGraph's own data — must match
-# engine.ghidra_project.CONTAINER_PROJECT_DIR.
+# engine.re.ghidra_project). A single bounded WRITABLE volume of HexGraph's own data — must match
+# engine.re.ghidra_project.CONTAINER_PROJECT_DIR.
 CONTAINER_PROJECT_DIR = "/ghidra-project"
 # The unprivileged uid:gid every sandbox container runs as — UNCONDITIONAL hardening,
 # never root. Kept as a constant (not a bare literal) so the host-side `/out` bind-mount
@@ -442,7 +442,7 @@ class SandboxRunner:
         tmpfs/timeout); `unconstrained` lifts mem/cpu/pids ONLY (never a security flag).
 
         `project_mount` (host dir) is bind-mounted READ-WRITE at /ghidra-project so the
-        persistent Ghidra project (analyze-once / reuse, engine.ghidra_project) survives
+        persistent Ghidra project (analyze-once / reuse, engine.re.ghidra_project) survives
         across container runs. This is HexGraph's OWN data dir, NOT target bytes — the target
         artifact stays read-only at /artifact. It is the single bounded writable volume the
         ghidra path adds; EVERY other hardening flag (`--read-only` rootfs, `--network none`,

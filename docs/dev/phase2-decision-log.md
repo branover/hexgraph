@@ -88,7 +88,7 @@ avoid backend-branching; revisit if Ghidra-faithful call edges are wanted.
 
 ### 3. `call_graph` self-wires edges — the killer property — via the existing extractor
 `call_graph` records `result_kind="call_graph"` in the per-caller shape
-(`_call_graph_records`, reused from `engine/ghidra.py`), so the already-registered
+(`_call_graph_records`, reused from `engine/re/ghidra.py`), so the already-registered
 `call_graph` → `_extract_functions` extractor distills `A calls B` facts that
 `index_facts`/`_draw_pair_edge` materialize as `calls` edges **only between functions
 already promoted** (both-endpoints rule). So `call_graph` is a QUERY that creates no new

@@ -257,7 +257,7 @@ def available_tools(ctx: ToolContext) -> list[ToolSpec]:
     except Exception:  # noqa: BLE001
         pass
     try:
-        from hexgraph.engine.solver import solver_enabled
+        from hexgraph.engine.re.solver import solver_enabled
 
         if solver_enabled():
             specs.append(_SOLVE_INPUT_SPEC)
@@ -688,7 +688,7 @@ def _binutils(ctx: ToolContext) -> str:
     key = "binutils:*"
     if key in ctx.cache:
         return ctx.cache[key]
-    from hexgraph.engine.binutils import collect_binutils_facts
+    from hexgraph.engine.re.binutils import collect_binutils_facts
 
     out = collect_binutils_facts(ctx.session, ctx.project, ctx.target, source="agent")
     if out.get("error"):
@@ -729,7 +729,7 @@ def _floss(ctx: ToolContext, args: dict) -> str:
             min_length = int(raw_len)
         except (TypeError, ValueError):
             return "error: 'min_length' must be an integer"
-    from hexgraph.engine.floss import collect_floss_strings, effective_min_length
+    from hexgraph.engine.re.floss import collect_floss_strings, effective_min_length
 
     key = f"floss:{effective_min_length(min_length)}"
     if key in ctx.cache:
@@ -775,7 +775,7 @@ def _yara(ctx: ToolContext, args: dict) -> str:
     ruleset = args.get("ruleset")
     if ruleset is not None and not isinstance(ruleset, str):
         return "error: 'ruleset' must be a string (a bundled ruleset id, or 'all')"
-    from hexgraph.engine.yara import scan_target
+    from hexgraph.engine.re.yara import scan_target
 
     key = f"yara:{ruleset or 'all'}"
     if key in ctx.cache:
@@ -816,7 +816,7 @@ def _solve_input(ctx: ToolContext, args: dict) -> str:
         return "error: 'sink_func' (the dangerous callee to reach, e.g. 'system') is required"
     function = args.get("function") if isinstance(args.get("function"), str) else None
     budget = args.get("budget") if isinstance(args.get("budget"), str) else None
-    from hexgraph.engine.solving import solve_reaching_input
+    from hexgraph.engine.re.solving import solve_reaching_input
 
     out = solve_reaching_input(ctx.session, ctx.project, ctx.target,
                                sink_func=sink_func, function=function, budget=budget,
@@ -847,7 +847,7 @@ def _solve_constraint(ctx: ToolContext, args: dict) -> str:
     budget = args.get("budget") if isinstance(args.get("budget"), str) else None
     if not (function or check_addr or sink_func):
         return "error: a check selector is required ('function', 'check_addr', or 'sink_func')"
-    from hexgraph.engine.solving import solve_constraint
+    from hexgraph.engine.re.solving import solve_constraint
 
     out = solve_constraint(ctx.session, ctx.project, ctx.target, function=function,
                            check_addr=check_addr, sink_func=sink_func, budget=budget, source="agent")
@@ -1078,7 +1078,7 @@ def _call_graph_tool(ctx: ToolContext, function: str | None, depth) -> str:
     # is the whole-program graph regardless of `function` (the root only shapes the returned
     # TEXT), so record under args={} — it dedups to ONE Observation no matter how many rooted
     # views are requested, instead of re-storing the identical graph per root.
-    from hexgraph.engine.ghidra import _call_graph_records
+    from hexgraph.engine.re.ghidra import _call_graph_records
     _record_obs(ctx, tool="call_graph", args={},
                 result_kind="call_graph", payload={"functions": _call_graph_records(edges)},
                 summary=f"{len(edges)} call edges")

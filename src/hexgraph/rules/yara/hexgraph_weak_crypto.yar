@@ -5,7 +5,7 @@
  * primitives in a target by their well-known constants and banner strings. A hit is
  * a lead ("this firmware ships DES/MD5"), recon context — never an asserted vuln on
  * its own (the matcher records the match and promotes a pattern; it does not guess a
- * severity). See engine/yara.py for the meta convention.
+ * severity). See engine/re/yara.py for the meta convention.
  */
 
 rule hexgraph_weak_hash_md5_sha1_banner

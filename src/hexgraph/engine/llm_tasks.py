@@ -23,7 +23,7 @@ from hexgraph.db.models import EdgeType, Project, Target, TargetKind, Task, Task
 from hexgraph.engine.edges import add_edge
 from hexgraph.engine.findings import persist_finding
 from hexgraph.engine.nodes import materialize_function
-from hexgraph.engine.recon import RISKY_SINKS
+from hexgraph.engine.re.recon import RISKY_SINKS
 from hexgraph.engine.refs import pick_sibling, resolve_target_ref
 from hexgraph.engine.tasks import write_trace
 from hexgraph.llm.registry import get_backend
@@ -228,7 +228,7 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
     core_finding_ids: list[str] = []
     if task.type == "static_analysis":
         try:
-            from hexgraph.engine.static_core import run_static_core
+            from hexgraph.engine.re.static_core import run_static_core
 
             core_finding_ids = run_static_core(session, project, target, task=task)
         except Exception:  # noqa: BLE001 — the deterministic core is best-effort

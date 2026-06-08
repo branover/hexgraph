@@ -23,7 +23,7 @@ from hexgraph.db.models import Edge, EdgeType, Node, NodeType, Observation
 from hexgraph.db.session import session_scope
 from hexgraph.engine.filesystem import persistent_base, record_manifest
 from hexgraph.engine.ingest import create_project, ingest_file
-from hexgraph.engine.yara import available_rulesets, scan_target, sweep_project
+from hexgraph.engine.re.yara import available_rulesets, scan_target, sweep_project
 from hexgraph import config
 
 from conftest import fixture_path
@@ -398,7 +398,7 @@ def test_bundled_rules_compile_and_fire():
 def test_user_rule_dir_is_picked_up(hg_home):
     """A user-supplied .yar in the HEXGRAPH_HOME rules dir is mounted alongside the bundled
     set — the drop-in rules path the design requires."""
-    from hexgraph.engine.yara import _resolve_rule_mounts, _USER_MOUNT
+    from hexgraph.engine.re.yara import _resolve_rule_mounts, _USER_MOUNT
 
     user_dir = config.yara_rules_dir()
     user_dir.mkdir(parents=True, exist_ok=True)

@@ -759,7 +759,7 @@ def yara_sweep(project_id: str, ruleset: str | None = None) -> dict:
     edges. The cross-target n-day complement to link_same_code (exact hash): one rule, swept
     corpus-wide. `ruleset` is a bundled ruleset id (or 'all', default). Always-on static tool
     — it relaxes no boundary. Returns a roll-up of scanned/match/promotion counts + hits."""
-    from hexgraph.engine.yara import sweep_project
+    from hexgraph.engine.re.yara import sweep_project
 
     with session_scope() as s:
         p = s.get(Project, project_id)
@@ -1483,7 +1483,7 @@ def _decompiler_health(active: str) -> dict:
 
         if active in ("ghidra", "ghidra_bridge", "bridge"):
             # Ghidra (headless or bridge) — defer to the real status probe.
-            from hexgraph.engine.ghidra import check_ghidra
+            from hexgraph.engine.re.ghidra import check_ghidra
 
             g = check_ghidra()
             return {
@@ -1629,7 +1629,7 @@ def _feature_health_specs() -> list[dict]:
     missing optional dep never breaks the catalog. floss + yara are always-on (gate=None);
     Ghidra and P-Code emulation share the with-Ghidra sandbox image and both defer to
     check_ghidra for their verdict."""
-    from hexgraph.engine.solver import angr_image
+    from hexgraph.engine.re.solver import angr_image
     from hexgraph.sandbox.runner import sandbox_image
 
     sbx = sandbox_image()
@@ -1651,7 +1651,7 @@ def _feature_health_specs() -> list[dict]:
                     if ok else f"angr won't import in the angr image '{img}' ({detail})")
 
     def _ghidra() -> tuple[bool, str]:
-        from hexgraph.engine.ghidra import check_ghidra
+        from hexgraph.engine.re.ghidra import check_ghidra
 
         g = check_ghidra()
         return bool(g.get("ok")), g.get("detail") or "Ghidra status could not be confirmed."
@@ -1984,7 +1984,7 @@ def _yara_rulesets_for_schema() -> list[str]:
     boundary), so the rulesets are always advertised — only an unreadable bundled dir
     yields an empty list."""
     try:
-        from hexgraph.engine.yara import available_rulesets
+        from hexgraph.engine.re.yara import available_rulesets
 
         return available_rulesets()
     except Exception:  # noqa: BLE001
@@ -2433,7 +2433,7 @@ def recover_constant(target_id: str, function: str) -> dict:
     inputs and usually won't reach a clean `ret`, so it yields no recoverable value
     (`reached_ret=false` / an `error`); don't trust a constant from an argument-dependent routine.
     Returns {available, function, value, value_hex, reached_ret, steps, observation_id, error}."""
-    from hexgraph.engine.emulation import emulate_constant
+    from hexgraph.engine.re.emulation import emulate_constant
     from hexgraph.policy import PolicyViolation
 
     with session_scope() as s:
@@ -2463,7 +2463,7 @@ def solve_reaching_input(target_id: str, sink_func: str, function: str | None = 
     (features.angr — heavy, policy-gated like emulation; relaxes no boundary). `budget` is
     quick|default|deep. Returns {solved, observation_id, finding_id, concrete_input, ...} or
     {solved:false, reason} / {error}."""
-    from hexgraph.engine.solving import solve_reaching_input as _solve
+    from hexgraph.engine.re.solving import solve_reaching_input as _solve
 
     with session_scope() as s:
         t = s.get(Target, target_id)
@@ -2482,7 +2482,7 @@ def solve_constraint(target_id: str, function: str | None = None, check_addr: st
     check solving ONLY. `function` names the routine; optionally `check_addr` pins the pass block,
     or `sink_func` when the check gates a sink. Opt-in (features.angr). `budget` is
     quick|default|deep. Returns {solved, observation_id, recovered_value, ...} / {error}."""
-    from hexgraph.engine.solving import solve_constraint as _solve
+    from hexgraph.engine.re.solving import solve_constraint as _solve
 
     with session_scope() as s:
         t = s.get(Target, target_id)

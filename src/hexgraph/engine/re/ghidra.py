@@ -42,7 +42,7 @@ def _bridge_smoke_decompile(host: str, port: int) -> tuple[bool, str, str | None
     An active program with no functions still counts as ok (nothing to test) so an empty target
     doesn't read as broken. Any failure → (False, "<Error>: …", None)."""
     try:
-        from hexgraph.engine.ghidra_bridge import connect_ops
+        from hexgraph.engine.re.ghidra_bridge import connect_ops
 
         ops = connect_ops(host, port)
         names = (ops.decompile(None, None).get("functions")) or []

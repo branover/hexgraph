@@ -179,7 +179,7 @@ def test_probe_nul_in_argv_is_clean_not_a_crash(tmp_path):
 # ── the solver handoff: spec_from_solver_finding ────────────────────────────────────────────
 
 def _solver_finding(input_model="argv", minimal=SERIAL_HEX, concrete=SERIAL_HEX + "00000000"):
-    """A FModel shaped like an angr-solver finding's evidence (engine.solving._promote_and_emit)."""
+    """A FModel shaped like an angr-solver finding's evidence (engine.re.solving._promote_and_emit)."""
     return FModel(
         title="Solver-reachable sink", severity="high", confidence="high",
         category="command-injection", summary="s", reasoning="r",

@@ -54,7 +54,7 @@ CONTAINER_PROJECT_DIR = "/ghidra-project"
 # Fixed Ghidra project name inside the cache dir — re-used verbatim by `-process` on warm calls.
 PROGRAM_NAME = "hexgraph"
 
-# The committed-marker filename (engine.ghidra_project.GhidraProject.meta_path basename). The
+# The committed-marker filename (engine.re.ghidra_project.GhidraProject.meta_path basename). The
 # probe writes it as the LAST step of a fully successful cold import+analyze, so its presence is
 # the AUTHORITATIVE "this slot is a valid warm project" signal — a half-written / crashed cold
 # run leaves the project dir non-empty but WITHOUT a committed marker, and is re-done as cold.

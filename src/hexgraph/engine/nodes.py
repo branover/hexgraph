@@ -167,7 +167,7 @@ def get_or_create_node(
 def _apply_waiting_facts(session: Session, node: Node) -> None:
     """Pull and apply this node's waiting enrichment facts (deferred import to avoid a
     cycle: enrichment imports nodes for the canonical-key helpers)."""
-    from hexgraph.engine.enrichment import apply_facts_for_node
+    from hexgraph.engine.re.enrichment import apply_facts_for_node
 
     apply_facts_for_node(session, node)
 

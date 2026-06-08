@@ -3,7 +3,7 @@
 A confirmed function rename writes into the warm Ghidra project (so it sticks for every
 future decompile) and re-decompiles, re-recording the result so the graph reflects it.
 
-Offline coverage of the Python orchestration (`engine.ghidra.propagate_function_rename`)
+Offline coverage of the Python orchestration (`engine.re.ghidra.propagate_function_rename`)
 and the `annotate(rename)` wiring with the Ghidra decompiler faked — the actual project
 write (Jython `setName` + analyzeHeadless -process save) runs only inside the sandbox and
 is exercised by the WITH_GHIDRA CI lane. The key behaviours pinned here:
@@ -19,7 +19,7 @@ is exercised by the WITH_GHIDRA CI lane. The key behaviours pinned here:
 from hexgraph.db.models import Observation
 from hexgraph.db.session import session_scope
 from hexgraph.engine import annotations as A
-from hexgraph.engine import ghidra as G
+from hexgraph.engine.re import ghidra as G
 from hexgraph.engine import observations as O
 from hexgraph.engine.ingest import create_project, ingest_file
 from hexgraph.engine.nodes import get_or_create_node

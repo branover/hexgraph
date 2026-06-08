@@ -111,7 +111,7 @@ def _apply_rename(session: Session, node: Node, new_name: str) -> None:
     # Ghidra is the active, project-backed backend (radare2 users pay only a couple of config
     # checks). Never let a Ghidra hiccup break the confirmed graph rename — propagation is gravy.
     try:
-        from hexgraph.engine.ghidra import propagate_function_rename
+        from hexgraph.engine.re.ghidra import propagate_function_rename
 
         propagate_function_rename(session, node, new_name)
     except Exception:  # noqa: BLE001
