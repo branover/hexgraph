@@ -28,20 +28,29 @@ _T = TypeVar("_T")
 # Bounded retry-with-backoff for write contention. WAL + busy_timeout (the pragmas below)
 # already make a writer *wait* for the lock, but under heavy multi-agent fan-out (the web
 # app plus one or more MCP servers, all separate processes) the busy_timeout can still
-# elapse and SQLite raises `OperationalError: database is locked` / `database is busy`.
-# `with_write_retry` re-runs the whole unit of work a few times with a short, growing sleep
-# before giving up. Only lock errors are retried; any other OperationalError (corrupt DB,
-# disk full, schema mismatch, …) re-raises immediately, never masked.
+# elapse and SQLite raises a lock error. `call_with_write_retry` / `with_write_retry`
+# re-run the whole unit of work a few times with a short, growing sleep before giving up.
+# Only lock errors are retried; any other OperationalError (corrupt DB, disk full, schema
+# mismatch, …) re-raises immediately, never masked.
 _WRITE_RETRY_ATTEMPTS = 5          # total tries, including the first
 _WRITE_RETRY_BASE_SLEEP = 0.05     # seconds; doubles each attempt (0.05, 0.1, 0.2, …)
 _WRITE_RETRY_MAX_SLEEP = 0.5       # cap per-attempt sleep so total backoff stays bounded
 
 
 def _is_lock_error(exc: OperationalError) -> bool:
-    """True only for the transient 'busy/locked' family — never for structural errors
-    (corruption, disk full, schema drift) which must surface immediately, unmasked."""
+    """True only for the transient lock/busy family — never for structural errors
+    (corruption, disk full, schema drift) which must surface immediately, unmasked.
+
+    Covers all three SQLite lock messages: SQLITE_BUSY ('database is locked') from a
+    busy_timeout that elapsed; the alternate 'database is busy' wording; and SQLITE_LOCKED
+    ('database table is locked'), a table-level lock that's equally transient under fan-out
+    and must NOT fall through to the generic non-retryable branch."""
     msg = str(getattr(exc, "orig", exc)).lower()
-    return "database is locked" in msg or "database is busy" in msg
+    return (
+        "database is locked" in msg
+        or "database is busy" in msg
+        or "database table is locked" in msg  # SQLITE_LOCKED
+    )
 
 
 def _retry_backoff(attempt: int) -> None:
@@ -126,6 +135,33 @@ def session_scope() -> Iterator[Session]:
         session.close()
 
 
+def call_with_write_retry(fn: Callable[..., _T], *args, **kwargs) -> _T:
+    """Run a SELF-CONTAINED unit of write work — a callable that opens and commits its OWN
+    transaction (e.g. an MCP tool function that uses `session_scope` internally) — with
+    bounded retry-with-backoff on transient SQLite write contention. On a lock/busy
+    `OperationalError` the WHOLE call is retried after a short, growing sleep; after the last
+    attempt the error re-raises, and a non-lock OperationalError (or any other exception)
+    re-raises at once, never retried or masked.
+
+    Unlike `with_write_retry`, this does NOT open a `session_scope` itself, so it can wrap a
+    function that already manages one without nesting transactions.
+
+    Replaying the unit is SAFE against duplicate rows: a retry only fires when the prior
+    attempt's commit FAILED on the lock, which means SQLAlchemy already rolled it back and
+    NOTHING was persisted — so re-running can't double-insert. (The callable should still be
+    free of non-DB side effects that mustn't repeat.)"""
+    for attempt in range(_WRITE_RETRY_ATTEMPTS):
+        try:
+            return fn(*args, **kwargs)
+        except OperationalError as exc:
+            # Only the lock/busy family is transient; everything else propagates now.
+            if not _is_lock_error(exc) or attempt == _WRITE_RETRY_ATTEMPTS - 1:
+                raise
+            _retry_backoff(attempt)
+    # Unreachable: the loop either returns or re-raises on the final attempt.
+    raise RuntimeError("call_with_write_retry exhausted without returning or raising")
+
+
 def with_write_retry(fn: Callable[[Session], _T]) -> _T:
     """Run a unit of write work with bounded retry-with-backoff on transient SQLite write
     contention. `fn(session)` is called inside a fresh `session_scope` (so it commits on
@@ -134,22 +170,17 @@ def with_write_retry(fn: Callable[[Session], _T]) -> _T:
     growing sleep. Re-running (not just re-committing) is mandatory: a rolled-back session
     has dropped its staged objects, so the work must be rebuilt. After the last attempt the
     error re-raises; a non-lock OperationalError (or any other exception) re-raises at once,
-    never retried or masked. `fn` MUST be idempotent/replayable — it may run more than once.
+    never retried or masked. `fn` MUST be idempotent/replayable — it may run more than once
+    (safe by construction: a retry only fires after a FAILED, rolled-back commit, so nothing
+    was persisted on the prior attempt).
 
     Returns whatever `fn` returns (read values back out of `fn`, not detached ORM objects,
     since the session closes when the scope exits)."""
-    for attempt in range(_WRITE_RETRY_ATTEMPTS):
-        try:
-            with session_scope() as session:
-                return fn(session)
-        except OperationalError as exc:
-            # Only the busy/locked family is transient; everything else propagates now.
-            if not _is_lock_error(exc) or attempt == _WRITE_RETRY_ATTEMPTS - 1:
-                raise
-            _retry_backoff(attempt)
-    # Unreachable: the loop either returns or re-raises on the final attempt. (kept for
-    # type-checkers / defensiveness.)
-    raise RuntimeError("with_write_retry exhausted without returning or raising")
+    def _unit() -> _T:
+        with session_scope() as session:
+            return fn(session)
+
+    return call_with_write_retry(_unit)
 
 
 def reset_engine_for_tests() -> None:
