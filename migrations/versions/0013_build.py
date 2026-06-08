@@ -1,6 +1,6 @@
 """build_spec + build — recorded recipe + the build ledger (design §4.5, Phase 2)
 
-The `Builder` seam (engine/build.py) turns a source_tree into an instrumented
+The `Builder` seam (engine/build/build.py) turns a source_tree into an instrumented
 artifact via a recorded, reproducible recipe the API/tool layer runs in the
 sandbox. The recipe is a `build_spec` row (recipe_sha = hash of {phases, env,
 base_image, instrumentation, arch}); every execution is a `build` row — the durable

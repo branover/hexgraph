@@ -36,7 +36,7 @@ from hexgraph.agent import mcp_tools as _t
 from hexgraph.agent.agent_tools import MAX_CHARS_DESC as _MAX_CHARS_DESC
 from hexgraph.engine.assurance import PRECONDITIONS as _PRECONDITIONS
 from hexgraph.engine.annotations import KINDS as _ANN_KINDS, NODE_KINDS as _ANN_NODE_KINDS
-from hexgraph.engine.build import BUILD_SYSTEMS as _BUILD_SYSTEMS
+from hexgraph.engine.build.build import BUILD_SYSTEMS as _BUILD_SYSTEMS
 from hexgraph.engine.edge_schemas import SOCKET_KINDS as _SOCKET_KINDS
 from hexgraph.engine.findings import FINDING_TYPES as _FINDING_TYPES
 from hexgraph.engine.fuzzers.base import SURFACE_ENGINES as _SURFACE_ENGINES, SURFACES as _FUZZ_SURFACES
@@ -79,7 +79,7 @@ REHOST_BRANDS = ["linksys", "netgear", "dlink", "tplink", "tenda", "trendnet", "
                  "actiontec"]  # engine/rehost.py:_VENDOR_BRANDS (FirmAE vendor profiles)
 LLM_BACKENDS = ["mock", "anthropic", "claude_code"]  # llm backend registry
 SOURCE_ROLES = ["code", "harness", "poc", "script", "build_recipe"]
-BUILD_SYSTEMS = list(_BUILD_SYSTEMS)  # engine/build.py:BUILD_SYSTEMS
+BUILD_SYSTEMS = list(_BUILD_SYSTEMS)  # engine/build/build.py:BUILD_SYSTEMS
 FUZZ_SURFACES = list(_FUZZ_SURFACES)  # engine/fuzzers/base.py:SURFACES
 FUZZ_ENGINES = sorted({e for es in _SURFACE_ENGINES.values() for e in es})  # engine/fuzzers/base.py:SURFACE_ENGINES
 EVIDENCE_RELATIONS = sorted(_RELATIONS)  # engine.hypotheses.RELATIONS: supports/refutes + confirms/contradicts aliases

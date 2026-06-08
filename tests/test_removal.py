@@ -197,7 +197,7 @@ def test_delete_finding_removes_finding_and_all_refs(hg_home):
     a `located_in` source-link edge, an annotation keyed to it) are gone, with NO
     dangling references left behind. The endpoints the edges pointed at survive."""
     from hexgraph.engine.annotations import create_annotation
-    from hexgraph.engine.source import create_source_tree, link_finding_to_source
+    from hexgraph.engine.build.source import create_source_tree, link_finding_to_source
 
     with session_scope() as s:
         p, t, caller, callee, edge = _seed(s)
@@ -207,7 +207,7 @@ def test_delete_finding_removes_finding_and_all_refs(hg_home):
         create_annotation(s, p.id, node_kind="finding", node_id=fid, kind="note", value="junk")
         # a source-link (located_in edge + materializes a source_file node)
         tree = create_source_tree(s, p, name="src", origin="scratch")
-        from hexgraph.engine.source import write_source_file
+        from hexgraph.engine.build.source import write_source_file
         write_source_file(s, p, tree, "a.c", "int main(){}\n")
         link_finding_to_source(s, p, finding_id=fid, tree=tree, rel="a.c", line=1)
 

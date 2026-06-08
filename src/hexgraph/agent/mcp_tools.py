@@ -111,7 +111,7 @@ def list_source_trees(project_id: str) -> dict:
     NOT the hostile target; harnesses/PoCs/scripts live here as role-tagged
     source_files). Returns {source_trees:[{id,name,origin,editable,file_count,
     target_ids}]}. Use read_source_file to view one tree's files."""
-    from hexgraph.engine.source import list_source_trees as _ls
+    from hexgraph.engine.build.source import list_source_trees as _ls
 
     with session_scope() as s:
         p = s.get(Project, project_id)
@@ -126,7 +126,7 @@ def read_source_file(tree_id: str, rel: str | None = None) -> dict:
     binary as hex). This is trusted source text (a harness/PoC/build recipe or
     imported library source) — distinct from read_file (a firmware's hostile
     unpacked bytes). Returns the file listing or {rel,size,role,encoding,content}."""
-    from hexgraph.engine.source import (
+    from hexgraph.engine.build.source import (
         SourceError, list_source_files, read_source_file as _read,
     )
     from hexgraph.db.models import SourceTree
@@ -177,7 +177,7 @@ def import_source_tree(project_id: str, name: str, files: list | None = None,
     bytes — those are added as targets). Returns {id, name, written}; a malformed `files`
     entry (not an object, or missing both `rel` and `path`) is reported as an ERROR rather
     than silently skipped, so a wrong-key call never looks like a successful 0-file import."""
-    from hexgraph.engine.source import SourceError, create_source_tree, write_source_file
+    from hexgraph.engine.build.source import SourceError, create_source_tree, write_source_file
 
     with session_scope() as s:
         p = s.get(Project, project_id)
@@ -211,7 +211,7 @@ def link_finding_to_source(finding_id: str, tree_id: str, rel: str,
     opens the file at the line. `tree_id`/`rel` from list_source_trees/read_source_file.
     Use this when a vuln/harness corresponds to known source. Returns {node_id,rel}."""
     from hexgraph.db.models import Finding, SourceTree
-    from hexgraph.engine.source import SourceError, link_finding_to_source as _link
+    from hexgraph.engine.build.source import SourceError, link_finding_to_source as _link
 
     with session_scope() as s:
         f = s.get(Finding, finding_id)
@@ -233,7 +233,7 @@ def list_builds(project_id: str, source_tree_id: str | None = None) -> dict:
     reproducibility triple (recipe_sha/source_content_hash/toolchain_digest),
     artifacts as CAS shas, and the instrumented derived_target_id it registered.
     Optionally filter by source_tree_id. Returns {build_specs, builds}."""
-    from hexgraph.engine import builds as B
+    from hexgraph.engine.build import builds as B
 
     with session_scope() as s:
         p = s.get(Project, project_id)
@@ -270,9 +270,9 @@ def import_oss_fuzz(project_id: str, source_tree_id: str, build_sh: str,
     single shell phase. The tree must be EDITABLE. Returns the build_spec; then build_target
     (or POST builds with the spec id) runs it. Detects the $OUT/<name> fuzz targets to capture."""
     from hexgraph.db.models import SourceTree
-    from hexgraph.engine import builds as B
-    from hexgraph.engine.build import BuildError
-    from hexgraph.engine.source import SourceError
+    from hexgraph.engine.build import builds as B
+    from hexgraph.engine.build.build import BuildError
+    from hexgraph.engine.build.source import SourceError
 
     with session_scope() as s:
         p = s.get(Project, project_id)
@@ -299,7 +299,7 @@ def save_source_revision(tree_id: str, rel: str, content: str, role: str | None 
     extracted/vendor (read-only) tree — editing those would break the build content_hash.
     Returns the revision {id, seq, rel, role, ...}. Use to iterate on a harness/PoC in-place."""
     from hexgraph.db.models import SourceTree
-    from hexgraph.engine import revisions as R
+    from hexgraph.engine.build import revisions as R
     from hexgraph.policy import PolicyViolation
 
     with session_scope() as s:
@@ -370,8 +370,8 @@ def build_target(project_id: str, source_tree_id: str, system: str | None = None
     If the source tree is built_from a target, the rebuild is registered as a DERIVED target
     wired instrumented_build_of→ the original — ready for coverage-guided fuzzing. Requires
     features.build (else error)."""
-    from hexgraph.engine import builds as B
-    from hexgraph.engine.build import BuildError, BuildSpec, CROSS_TRIPLES
+    from hexgraph.engine.build import builds as B
+    from hexgraph.engine.build.build import BuildError, BuildSpec, CROSS_TRIPLES
     from hexgraph.policy import PolicyViolation, assert_allows_build
 
     try:

@@ -14,7 +14,7 @@ from hexgraph.db.models import Edge, EdgeType, Finding, FuzzArtifact, FuzzCampai
 from hexgraph.db.session import session_scope
 from hexgraph.engine import campaigns as C
 from hexgraph.engine.fuzzers.base import FuzzCampaignSpec
-from hexgraph.engine.source import create_source_tree, write_source_file
+from hexgraph.engine.build.source import create_source_tree, write_source_file
 
 from conftest import SANDBOX_READY, fixture_path
 from test_campaigns import HARNESS, _enable_fuzzing, _mock_env, _project_with_target

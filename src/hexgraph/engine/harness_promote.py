@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 from hexgraph.db.models import EdgeType, Finding, NodeType, Project, SourceTree, Task
 from hexgraph.engine.edges import add_edge
 from hexgraph.engine.nodes import get_or_create_node
-from hexgraph.engine.source import (
+from hexgraph.engine.build.source import (
     create_source_tree,
     materialize_source_file,
     write_source_file,
@@ -121,7 +121,7 @@ def resolve_managed_harness(session: Session, project: Project, target_id: str) 
     when no harness has been promoted (the caller then falls back to the legacy
     `evidence.decompiled_snippet` path)."""
     from hexgraph.db.models import Edge, Node
-    from hexgraph.engine.source import read_source_file
+    from hexgraph.engine.build.source import read_source_file
 
     # harness nodes that `harnesses` -> this target, newest first
     edges = (session.query(Edge)

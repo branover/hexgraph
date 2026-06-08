@@ -24,12 +24,12 @@ from hexgraph.db.models import (
     Build, BuildSpec as BuildSpecRow, EdgeType, Project, SourceTree, Target, TargetKind,
 )
 from hexgraph.engine import cas
-from hexgraph.engine.build import (
+from hexgraph.engine.build.build import (
     BUILD_SYSTEMS, BuildError, BuildPhase, BuildSpec, BuildUnavailable, Instrumentation,
     get_builder,
 )
 from hexgraph.engine.edges import add_edge
-from hexgraph.engine.source import host_root, tree_content_sha
+from hexgraph.engine.build.source import host_root, tree_content_sha
 from hexgraph.policy import PolicyViolation
 
 
@@ -112,7 +112,7 @@ def create_build_spec(session: Session, project: Project, spec: BuildSpec) -> Bu
     tree = session.get(SourceTree, spec.source_tree_id)
     if tree is None or tree.project_id != project.id:
         raise BuildError("source tree not found in this project")
-    from hexgraph.engine.build import assert_artifacts_contained, assert_env_nonsecret
+    from hexgraph.engine.build.build import assert_artifacts_contained, assert_env_nonsecret
 
     assert_env_nonsecret(spec.env)
     assert_artifacts_contained(spec.artifacts)
@@ -148,7 +148,7 @@ def run_build(session: Session, project: Project, spec_row: BuildSpecRow, *,
     records a reproducibility BADGE; and a cache-key HIT (same recipe_sha + source
     content_hash + toolchain_digest + lockfile) REUSES a prior CAS artifact and skips the
     rebuild. `source_revision_id` records a rebuild-from-revision launch."""
-    from hexgraph.engine.build import cache_key as _cache_key, is_reproducible
+    from hexgraph.engine.build.build import cache_key as _cache_key, is_reproducible
 
     spec = spec_from_row(spec_row)
     tree = session.get(SourceTree, spec.source_tree_id)
@@ -245,7 +245,7 @@ def _try_cache_reuse(session: Session, project: Project, tree: SourceTree, build
     recipe_sha + the TRUE byte-content hash (`content_sha`, not the size-based manifest
     hash) of a PRIOR build with the SAME recipe + source (same recipe_sha + content_sha ⇒
     same toolchain, since the image is part of recipe_sha) — so a same-size edit MISSES."""
-    from hexgraph.engine.build import cache_key as _cache_key
+    from hexgraph.engine.build.build import cache_key as _cache_key
 
     if not (spec_row.recipe_sha and content_sha):
         return None
@@ -415,7 +415,7 @@ def _promote_build_harness(session, project: Project, tree: SourceTree, derived:
     'no fuzz harness available' honestly instead of false-greening). Picks the first
     harness-role file in the manifest; ignores a read failure."""
     from hexgraph.engine.harness_promote import promote_harness
-    from hexgraph.engine.source import read_source_file
+    from hexgraph.engine.build.source import read_source_file
 
     harness_rel = next((f.get("rel") for f in (tree.manifest_json or {}).get("files") or []
                         if f.get("role") == "harness" and f.get("rel")), None)
@@ -500,7 +500,7 @@ def import_oss_fuzz_build(session: Session, project: Project, tree: SourceTree, 
     """Ingest an OSS-Fuzz `build.sh` into a recorded `build_spec` (stores the script in
     the tree + maps the OSS-Fuzz env contract to ours). Returns the persisted spec row.
     The tree must be editable (the script is written into it as role=script)."""
-    from hexgraph.engine.oss_fuzz import import_oss_fuzz
+    from hexgraph.engine.build.oss_fuzz import import_oss_fuzz
 
     spec = import_oss_fuzz(session, project, tree, build_sh=build_sh,
                            instrumentation=instrumentation, artifacts=artifacts)
@@ -518,7 +518,7 @@ def rebuild_from_revision(session: Session, project: Project, spec_row: BuildSpe
     editable; other authored trees need features.source.edit) + features.build (the build).
     The build is reproducible from {recipe_sha + the reverted source content_hash}."""
     from hexgraph.db.models import SourceRevision
-    from hexgraph.engine import revisions as R
+    from hexgraph.engine.build import revisions as R
 
     rev = session.get(SourceRevision, revision_id)
     if rev is None or rev.project_id != project.id:

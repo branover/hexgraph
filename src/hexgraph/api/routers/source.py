@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from hexgraph.db.models import Project, SourceTree, Target
 from hexgraph.db.session import session_scope
-from hexgraph.engine import source as src
+from hexgraph.engine.build import source as src
 from hexgraph.engine.edges import add_edge
 from hexgraph.db.models import EdgeType
 
@@ -156,7 +156,7 @@ def api_save_source_revision(tree_id: str, body: SourceRevisionSave):
     editable by default; other authored trees need features.source.edit. The per-tree
     editability check still refuses an extracted/vendor/imported (read-only) tree.
     Returns the revision dict."""
-    from hexgraph.engine import revisions as R
+    from hexgraph.engine.build import revisions as R
     from hexgraph.policy import PolicyViolation
 
     with session_scope() as s:
@@ -176,7 +176,7 @@ def api_save_source_revision(tree_id: str, body: SourceRevisionSave):
 @router.get("/api/source-trees/{tree_id}/revisions")
 def api_list_source_revisions(tree_id: str, rel: str | None = None):
     """Revision history for an editable tree (optionally one file), newest first."""
-    from hexgraph.engine import revisions as R
+    from hexgraph.engine.build import revisions as R
 
     with session_scope() as s:
         tree = s.get(SourceTree, tree_id)
@@ -189,7 +189,7 @@ def api_list_source_revisions(tree_id: str, rel: str | None = None):
 def api_get_source_revision(revision_id: str):
     """Read one revision's full content (for a diff/restore view)."""
     from hexgraph.db.models import SourceRevision
-    from hexgraph.engine import revisions as R
+    from hexgraph.engine.build import revisions as R
 
     with session_scope() as s:
         rev = s.get(SourceRevision, revision_id)
@@ -204,7 +204,7 @@ def api_get_source_revision(revision_id: str):
 def api_revert_source_revision(tree_id: str, revision_id: str):
     """Revert a file to a past revision (append-only — the revert is itself a new
     revision). Gated by features.source.edit. Returns the new revision."""
-    from hexgraph.engine import revisions as R
+    from hexgraph.engine.build import revisions as R
     from hexgraph.policy import PolicyViolation
 
     with session_scope() as s:

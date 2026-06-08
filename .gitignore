@@ -3,8 +3,10 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .eggs/
-build/
-dist/
+# Anchored to the repo root so these only ignore top-level build artifacts — a bare
+# `build/`/`dist/` also matches source packages like src/hexgraph/engine/build/.
+/build/
+/dist/
 .venv/
 .pytest_cache/
 .mypy_cache/

@@ -25,7 +25,7 @@ import re
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Project, SourceTree
-from hexgraph.engine.build import BuildPhase, BuildSpec, Instrumentation
+from hexgraph.engine.build.build import BuildPhase, BuildSpec, Instrumentation
 
 # The OSS-Fuzz → HexGraph instrumentation default: ASan + libFuzzer (their most common
 # sanitizer/engine pairing). The recorded recipe is editable; the operator can swap to
@@ -61,7 +61,7 @@ def import_oss_fuzz(session: Session, project: Project, tree: SourceTree, *,
     BuildSpec whose single `shell:true` phase runs the script with the SAME `$CC/$CXX/
     $CFLAGS/$OUT/$SRC` the orchestrator injects. `artifacts` overrides the auto-detected
     `$OUT/<name>` capture list. Returns the spec (not persisted — the caller records it)."""
-    from hexgraph.engine.source import SourceError, write_source_file
+    from hexgraph.engine.build.source import SourceError, write_source_file
 
     if not (build_sh or "").strip():
         raise SourceError("empty build.sh")
