@@ -5,9 +5,13 @@ your own machine. You point it at a binary or a firmware image, and it does the 
 you: it ingests the target, pulls firmware apart into its component binaries, runs analysis tasks
 driven by whatever model access you already have, and writes every result down as a structured
 **finding** in a typed graph backed by SQLite. The graph ties everything together: targets,
-functions, sockets, hypotheses, and findings, joined by typed and attributed edges. You browse all of
-it, launch new tasks, and triage findings from a web UI that only ever listens on localhost, and the
-same operations are available to a coding agent over MCP.
+functions, sockets, hypotheses, and findings, joined by typed and attributed edges. Alongside the
+graph there's a shared working memory that keeps the reasoning, not just the results: a freeform
+**research journal** of timestamped markdown notes, written by you or the agent, where an `@`-mention
+links straight to any object in the graph, plus a **hypothesis worklist** you sort, filter, and check
+off as leads get confirmed or ruled out. You browse all of it, launch new tasks, and triage findings
+from a web UI that only ever listens on localhost, and the same operations are available to a coding
+agent over MCP.
 
 ![The typed knowledge graph of a firmware engagement](docs/images/graph.png)
 
@@ -158,6 +162,7 @@ separate, explicit opt-in.
 | Feature | What it adds | Doc |
 |---|---|---|
 | **Typed graph + findings** | Targets, functions, sockets, endpoints, hypotheses, and findings as typed nodes joined by typed, attributed edges, all browsed, launched, and triaged in a three-pane UI. | [graph-ui.md](docs/graph-ui.md) |
+| **Research journal & hypothesis worklist** | A freeform, timestamped markdown journal, written by you or the agent, whose `@`-mentions link straight to any node or finding, alongside hypotheses promoted into a sortable, checkable worklist. The shared working memory that records what was tried, what was learned, and which leads are worth chasing next. | [journal.md](docs/journal.md) |
 | **External RE tools** | Specialist static-analysis tools beyond radare2 and Ghidra: a GNU binutils quick-facts pass, FLOSS obfuscated-string recovery, corpus-wide YARA pattern sweeps, and angr symbolic execution that solves for a concrete input reaching a sink. All static and sandboxed; angr ships in its own optional image. | [re-external-tools.md](docs/re-external-tools.md) |
 | **Verification & the assurance ladder** | Every finding carries an assurance level (`code_present`/`input_reachable` × `static`/`dynamic`), and opt-in **PoC verification** executes the target against an unforgeable `{{NONCE}}` oracle (foreign-arch via qemu-user). | [verification-assurance.md](docs/verification-assurance.md) |
 | **Fuzzing** | Coverage-guided, surface-aware, campaign-driven fuzzing (AFL++, libFuzzer, qemu-mode, boofuzz, desock), detached and crash-safe, with live triage, dedup, minimization, and one-click re-verification. Campaigns can run on a beefier host you own. | [fuzzing.md](docs/fuzzing.md) |
