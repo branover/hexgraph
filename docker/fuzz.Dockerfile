@@ -70,19 +70,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # back to the apt package if the source build fails (graceful-degrade — libFuzzer/SanCov
 # still work, qemu-mode then depends on the apt package shipping afl-qemu-trace).
 #
-# PIN to a stable release tag (override at build with `--build-arg AFLPP_REF=...`). An
-# UNPINNED clone of `master` is a silent time-bomb: the current 5.x dev line (built as
-# afl-fuzz++5.01a) regressed coverage-map sizing — at runtime the instrumented target
-# hits MORE edges than the statically sized map accounts for (`cvg > 100%`), so afl-fuzz
-# treats the build as mis-instrumented and ABORTS every source-instrumented campaign on
-# the first fuzz iteration with "Incorrect fuzzing setup detected ... loaded incorrectly
-# instrumented shared libraries (N of N-1/64)" (afl-fuzz-stats.c, show_stats_normal) —
-# zero crashes are ever found. v4.40c (last 4.x stable) sizes the map consistently
-# (cvg ≤ 100%, verified: the §5.4 campaign e2e finds its planted crash) and keeps
-# afl-clang-lto/fast + CmpLog + persistent mode + qemu/frida modes that Phases 3/5 rely
-# on. Re-pin deliberately to a newer tag only after verifying a campaign still finds the
-# planted crash with cvg ≤ 100% on it (the afl_probe guard now flags the abort loudly).
-ARG AFLPP_REF=v4.40c
+# PIN to a stable release tag (override at build with `--build-arg AFLPP_REF=...`) — an
+# UNPINNED clone of `master` is a silent time-bomb (a rebuild silently jumps AFL++ versions).
+# v5.00c is the current stable; it adds the bug-detection oracles (afl-llvm-bug-pass) and
+# per-function path coverage that afl_probe exposes as opt-in knobs, plus CmpLog improvements.
+# HISTORY: 5.x first looked broken — every source campaign aborted with "Incorrect fuzzing
+# setup detected ... (N of N-1/64)" / cvg>100%. That was NOT an AFL++ bug: afl_probe set
+# AFL_SKIP_BIN_CHECK=1, which disables afl-fuzz's automatic coverage-map sizing, so afl-fuzz
+# used a wrong map. 4.40c tolerated the mismatch; 5.x correctly rejects it. Removing
+# AFL_SKIP_BIN_CHECK fixed it on 5.x AND improved 4.40c, so we now track stable 5.x. Re-pin
+# to a newer tag only after verifying the §5.4 campaign e2e still finds its planted crash
+# with cvg ≤ 100% (the afl_probe guard flags a recurrence of the abort loudly).
+ARG AFLPP_REF=v5.00c
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         git automake bison flex libtool libtool-bin libglib2.0-dev \
