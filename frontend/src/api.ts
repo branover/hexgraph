@@ -87,7 +87,7 @@ export interface SettingsView {
       // on CPU/memory. (FLOSS + YARA are always-on, so they carry no features.* toggle; the
       // YARA rules dir is exposed under `paths.yara_rules_dir` below.)
       angr?: { enabled: boolean; image?: string };
-      fuzzing: { enabled: boolean; max_total_time: number; max_len: number; max_crashes: number; timeout: number; image?: string };
+      fuzzing: { enabled: boolean; max_total_time: number; max_len: number; max_crashes: number; timeout: number; image?: string; bug_oracles?: boolean; path_coverage?: number; cmplog?: boolean };
       build: { enabled: boolean; image?: string; timeout?: number };
       poc: { enabled: boolean; timeout: number };
       network: { enabled: boolean; timeout: number };
@@ -305,7 +305,7 @@ export const api = {
   // Fuzz campaigns + artifacts (Phase 4 triage)
   campaigns: (pid: string, targetId?: string) => getJSON<{ campaigns: Campaign[] }>(`/api/projects/${pid}/campaigns${targetId ? `?target_id=${targetId}` : ""}`),
   campaign: (cid: string) => getJSON<Campaign>(`/api/campaigns/${cid}`),
-  startCampaign: (pid: string, body: { target_id: string; surface?: string | null; engine?: string | null; function?: string | null; max_total_time?: number; max_len?: number; max_crashes?: number; instances?: number; seeds?: string[]; dictionary?: string[]; build_spec_id?: string | null; net?: { host?: string | null; port?: number | null; protocol?: string | null; proto_spec?: Record<string, any> | null } | null; resources?: Record<string, any>; environment?: string | null }) => postJSON<Campaign>(`/api/projects/${pid}/campaigns`, body),
+  startCampaign: (pid: string, body: { target_id: string; surface?: string | null; engine?: string | null; function?: string | null; max_total_time?: number; max_len?: number; max_crashes?: number; instances?: number; seeds?: string[]; dictionary?: string[]; bug_oracles?: boolean; path_coverage?: number; cmplog?: boolean; build_spec_id?: string | null; net?: { host?: string | null; port?: number | null; protocol?: string | null; proto_spec?: Record<string, any> | null } | null; resources?: Record<string, any>; environment?: string | null }) => postJSON<Campaign>(`/api/projects/${pid}/campaigns`, body),
   stopCampaign: (cid: string) => postJSON<Campaign>(`/api/campaigns/${cid}/stop`, {}),
   resumeCampaign: (cid: string) => postJSON<Campaign>(`/api/campaigns/${cid}/resume`, {}),
   campaignArtifacts: (cid: string) => getJSON<{ artifacts: FuzzArtifact[] }>(`/api/campaigns/${cid}/artifacts`),

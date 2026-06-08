@@ -28,6 +28,13 @@ export default function FuzzModal({ projectId, target: initialTarget, targets, s
   // surface (auto-derived when omitted). Newline/comma separated.
   const [seeds, setSeeds] = useState("");
   const [dictionary, setDictionary] = useState("");
+  // AFL source-fuzz instrumentation knobs (source_lib/file_format) — default from Settings,
+  // overridable per campaign. bug_oracles = AFL++ 5.x bug detectors; pathCov 0..3 = Ball-Larus
+  // path sensitivity; cmplog = the CmpLog `-c` binary (magic-byte/memcmp gating).
+  const fz = settings?.settings.features.fuzzing;
+  const [bugOracles, setBugOracles] = useState(Boolean(fz?.bug_oracles));
+  const [pathCov, setPathCov] = useState(String(fz?.path_coverage ?? 0));
+  const [cmplog, setCmplog] = useState(Boolean(fz?.cmplog));
   // Network-surface inputs (host/port/protocol/proto_spec) — shown only when the selected
   // surface is `network` (a live service / rehosted device). Usually inferred from the
   // target; this lets the user point boofuzz at a specific host:port or supply a binary
@@ -65,6 +72,9 @@ export default function FuzzModal({ projectId, target: initialTarget, targets, s
   }, [fuzzRemoteOn]);
 
   const isNetwork = eng?.surface === "network";
+  // The instrumentation knobs apply to AFL source fuzzing (the target's own sources are
+  // recompiled); not to binary-only (qemu) or live-network campaigns.
+  const isSource = eng?.surface === "source_lib" || eng?.surface === "file_format";
   const splitList = (s: string) => s.split(/[\n,]/).map((x) => x.trim()).filter(Boolean);
 
   const start = async () => {
@@ -102,6 +112,9 @@ export default function FuzzModal({ projectId, target: initialTarget, targets, s
         instances: parseInt(instances) || 1,
         seeds: seedList.length ? seedList : undefined,
         dictionary: dictList.length ? dictList : undefined,
+        bug_oracles: isSource ? bugOracles : undefined,
+        path_coverage: isSource ? (parseInt(pathCov) || 0) : undefined,
+        cmplog: isSource ? cmplog : undefined,
         net,
         resources,
         environment: fuzzRemoteOn && environment !== "local" ? environment : undefined,
@@ -225,6 +238,31 @@ export default function FuzzModal({ projectId, target: initialTarget, targets, s
               <div><label>instances</label><input value={instances} onChange={(e) => setInstances(e.target.value)} /></div>
             </div>
           </div>
+
+          {/* ── Instrumentation (AFL source-fuzz surfaces only) ────────── */}
+          {isSource && (
+            <div className="grp">
+              <div className="grp-h"><Icon name="bug" size={12} /> Instrumentation
+                <span className="note">· AFL++ source-fuzz · defaults from Settings</span></div>
+              <label className="switch" style={{ fontSize: 12, display: "flex", gap: 9, alignItems: "center", marginBottom: 10 }}>
+                <input type="checkbox" checked={bugOracles} onChange={(e) => setBugOracles(e.target.checked)} />
+                <span>Bug-detection oracles <span className="muted" style={{ fontWeight: 400 }}>— AFL++ 5.x SCALAR / BUDGET / SIZEFILL / ALLOCSIZE / SLACK (arithmetic &amp; OOB bugs ASan misses)</span></span>
+              </label>
+              <label className="switch" style={{ fontSize: 12, display: "flex", gap: 9, alignItems: "center", marginBottom: 11 }}>
+                <input type="checkbox" checked={cmplog} onChange={(e) => setCmplog(e.target.checked)} />
+                <span>CmpLog <span className="muted" style={{ fontWeight: 400 }}>— defeat magic-byte / <code>memcmp</code> gates (the <code>-c</code> binary)</span></span>
+              </label>
+              <div className="fld">
+                <label>path coverage <span className="sub">· Ball-Larus per-function path sensitivity — more signal, more overhead</span></label>
+                <select value={pathCov} onChange={(e) => setPathCov(e.target.value)}>
+                  <option value="0">off</option>
+                  <option value="1">1 · relaxed</option>
+                  <option value="2">2 · restricted</option>
+                  <option value="3">3 · strict</option>
+                </select>
+              </div>
+            </div>
+          )}
 
           {/* ── Resources ──────────────────────────────────────────────── */}
           <div className="grp">

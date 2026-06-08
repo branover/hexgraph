@@ -1163,6 +1163,19 @@ later PR).
 - Principle: surface-aware, server-driven, sandbox-honest.
 - Prereq: `features.fuzzing` on; a fuzzable (ideally instrumented) target.
 
+**FUZZ-01b — Instrumentation knobs (source-fuzz surfaces only)**
+- Steps: in the Fuzz modal on a `source_lib`/`file_format` target, find the **Instrumentation** group →
+  toggle **Bug-detection oracles**, set **path coverage** (off/1/2/3), toggle **CmpLog**.
+- Functional: the group appears ONLY for source-fuzz surfaces (not binary-only/network); each control
+  defaults from `features.fuzzing.{bug_oracles,path_coverage,cmplog}` and overrides it for this campaign.
+- 🔌 Backend: the values ride `POST …/campaigns` (`bug_oracles`/`path_coverage`/`cmplog`) → recorded on the
+  campaign's `config_json`; a source campaign with `bug_oracles` on reports `stats_json.instrument_extras.
+  bug_oracles=true` once it runs (the knob really reached the sandbox).
+- Qualitative: the group sits with the other per-campaign overrides (Stop conditions / Resources), same card
+  styling; helper text names what each does (oracles catch arithmetic/OOB bugs ASan misses) without wall-of-text.
+- Principle: per-campaign instrumentation is a first-class, discoverable control — not an env var only an agent can set.
+- Prereq: a `source_lib`/`file_format` target; `features.fuzzing` on.
+
 **FUZZ-02 — Start a campaign (actually launches)**
 - Steps: in the Fuzz modal, click **Start campaign**.
 - Functional: the modal closes; the Campaigns tab opens to the new campaign (status running/building).

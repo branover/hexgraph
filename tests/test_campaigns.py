@@ -1097,6 +1097,39 @@ def test_api_campaign_start_list_get_stop(hg_home, monkeypatch):
         arts = c.get(f"/api/campaigns/{cid}/artifacts").json()["artifacts"]
         assert len(arts) == 1 and arts[0]["dedup_key"]
 
+
+def test_api_campaign_accepts_instrumentation_knobs(hg_home, monkeypatch):
+    """The REST create endpoint (behind the Fuzz modal) accepts the AFL source-fuzz knobs
+    and records them on the campaign — the UI-side leg of the bug_oracles/path_coverage/
+    cmplog wiring (the spec→env→sandbox leg is covered by the prepare/runner tests above)."""
+    from fastapi.testclient import TestClient
+    from hexgraph.api.app import create_app
+    from hexgraph.db.models import FuzzCampaign
+
+    _mock_env(monkeypatch)
+    _enable_fuzzing()
+    app = create_app()
+    with session_scope() as s:
+        p, t = _project_with_target(s)
+        pid, tid = p.id, t.id
+    with TestClient(app) as c:
+        r = c.post(f"/api/projects/{pid}/campaigns",
+                   json={"target_id": tid, "function": "cgi_handler",
+                         "bug_oracles": True, "path_coverage": 2, "cmplog": True,
+                         "resources": {"unconstrained": True}})
+        assert r.status_code == 200, r.text
+        cid = r.json()["id"]
+    with session_scope() as s:
+        cfg = s.get(FuzzCampaign, cid).config_json or {}
+        assert cfg.get("bug_oracles") is True
+        assert cfg.get("path_coverage") == 2
+        assert cfg.get("cmplog") is True
+    with TestClient(app) as c:
+        # Out-of-range path_coverage is rejected (parity with the MCP enum), not silently dropped.
+        bad = c.post(f"/api/projects/{pid}/campaigns",
+                     json={"target_id": tid, "function": "cgi_handler", "path_coverage": 9})
+        assert bad.status_code == 422, bad.text
+
         # stop is idempotent on an already-finalized campaign
         st_r = c.post(f"/api/campaigns/{cid}/stop")
         assert st_r.status_code == 200
