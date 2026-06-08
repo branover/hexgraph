@@ -7,12 +7,14 @@ v1 uses `create_all` (no Alembic). The DB path can be overridden with
 from __future__ import annotations
 
 import os
+import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator, TypeVar
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from hexgraph.config import db_path, ensure_dirs
@@ -20,6 +22,31 @@ from hexgraph.db.models import Base
 
 _engine: Engine | None = None
 _Session: sessionmaker[Session] | None = None
+
+_T = TypeVar("_T")
+
+# Bounded retry-with-backoff for write contention. WAL + busy_timeout (the pragmas below)
+# already make a writer *wait* for the lock, but under heavy multi-agent fan-out (the web
+# app plus one or more MCP servers, all separate processes) the busy_timeout can still
+# elapse and SQLite raises `OperationalError: database is locked` / `database is busy`.
+# `with_write_retry` re-runs the whole unit of work a few times with a short, growing sleep
+# before giving up. Only lock errors are retried; any other OperationalError (corrupt DB,
+# disk full, schema mismatch, …) re-raises immediately, never masked.
+_WRITE_RETRY_ATTEMPTS = 5          # total tries, including the first
+_WRITE_RETRY_BASE_SLEEP = 0.05     # seconds; doubles each attempt (0.05, 0.1, 0.2, …)
+_WRITE_RETRY_MAX_SLEEP = 0.5       # cap per-attempt sleep so total backoff stays bounded
+
+
+def _is_lock_error(exc: OperationalError) -> bool:
+    """True only for the transient 'busy/locked' family — never for structural errors
+    (corruption, disk full, schema drift) which must surface immediately, unmasked."""
+    msg = str(getattr(exc, "orig", exc)).lower()
+    return "database is locked" in msg or "database is busy" in msg
+
+
+def _retry_backoff(attempt: int) -> None:
+    """Sleep a capped, exponentially-growing moment between write-retry attempts."""
+    time.sleep(min(_WRITE_RETRY_BASE_SLEEP * (2 ** attempt), _WRITE_RETRY_MAX_SLEEP))
 
 
 def _resolve_db_path() -> Path:
@@ -80,7 +107,14 @@ def get_session() -> Session:
 
 @contextmanager
 def session_scope() -> Iterator[Session]:
-    """Transactional session: commit on success, rollback on error."""
+    """Transactional session: commit on success, rollback on error.
+
+    The success path is a single `session.commit()`, unchanged. NOTE: a lock that bites
+    at commit can't be retried *here* — once `commit()` raises, SQLAlchemy invalidates the
+    transaction and the only legal next step is `rollback()`, which discards the staged
+    objects, so retrying the commit alone would commit nothing. The unit of work has to be
+    re-run from scratch instead; that's what `with_write_retry` does, and write paths that
+    want resilience under contention should use it (it wraps this scope)."""
     session = get_session()
     try:
         yield session
@@ -90,6 +124,32 @@ def session_scope() -> Iterator[Session]:
         raise
     finally:
         session.close()
+
+
+def with_write_retry(fn: Callable[[Session], _T]) -> _T:
+    """Run a unit of write work with bounded retry-with-backoff on transient SQLite write
+    contention. `fn(session)` is called inside a fresh `session_scope` (so it commits on
+    return, rolls back on error); if the commit — or any statement in `fn` — fails with a
+    lock/busy `OperationalError`, the WHOLE unit is re-run on a fresh session after a short
+    growing sleep. Re-running (not just re-committing) is mandatory: a rolled-back session
+    has dropped its staged objects, so the work must be rebuilt. After the last attempt the
+    error re-raises; a non-lock OperationalError (or any other exception) re-raises at once,
+    never retried or masked. `fn` MUST be idempotent/replayable — it may run more than once.
+
+    Returns whatever `fn` returns (read values back out of `fn`, not detached ORM objects,
+    since the session closes when the scope exits)."""
+    for attempt in range(_WRITE_RETRY_ATTEMPTS):
+        try:
+            with session_scope() as session:
+                return fn(session)
+        except OperationalError as exc:
+            # Only the busy/locked family is transient; everything else propagates now.
+            if not _is_lock_error(exc) or attempt == _WRITE_RETRY_ATTEMPTS - 1:
+                raise
+            _retry_backoff(attempt)
+    # Unreachable: the loop either returns or re-raises on the final attempt. (kept for
+    # type-checkers / defensiveness.)
+    raise RuntimeError("with_write_retry exhausted without returning or raising")
 
 
 def reset_engine_for_tests() -> None:
