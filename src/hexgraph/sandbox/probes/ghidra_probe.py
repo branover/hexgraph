@@ -18,7 +18,7 @@ imported and statically analyzed — NEVER executed. Runs with --network none, a
 read-only rootfs, and /scratch as the only writable area for HOME/temp/user-settings.
 
 **Analyze once, reuse (Phase 1).** When a writable persistent project is bind-mounted
-at /ghidra-project (engine.ghidra_project), the FIRST call imports + analyzes the
+at /ghidra-project (engine.re.ghidra_project), the FIRST call imports + analyzes the
 artifact into that on-disk project (NO -deleteProject — it persists across container
 runs); SUBSEQUENT calls reuse it via `-process <program>` (NO -import, NO re-analysis),
 which is dramatically faster on real firmware. Without that mount it falls back to the
@@ -37,11 +37,11 @@ import time
 
 GHIDRA_DIR = os.environ.get("GHIDRA_INSTALL_DIR", "/opt/ghidra")
 SCRATCH = os.environ.get("TMPDIR", "/scratch")
-# The writable persistent-project bind-mount (engine.ghidra_project.CONTAINER_PROJECT_DIR +
+# The writable persistent-project bind-mount (engine.re.ghidra_project.CONTAINER_PROJECT_DIR +
 # runner.CONTAINER_PROJECT_DIR). Present only when the caller threads a project_mount; absent
 # for --check, for radare2 callers, or when the cache is disabled.
 PROJECT_MOUNT = "/ghidra-project"
-# The COMMITTED warm marker (engine.ghidra_project.META_NAME), written under PROJECT_MOUNT as the
+# The COMMITTED warm marker (engine.re.ghidra_project.META_NAME), written under PROJECT_MOUNT as the
 # LAST step of a successful cold import. Its presence — NOT the raw non-emptiness of the project
 # dir — is the authoritative "this slot is a valid warm project" signal: a crashed/timed-out cold
 # import leaves a non-empty project dir but NO marker, so the next run re-imports cold instead of
@@ -89,7 +89,7 @@ def _clear_partial(proj_dir: str, marker: str | None) -> None:
 def _commit_marker(marker: str, prog: str) -> None:
     """COMMIT the warm marker — the LAST step of a successful cold import, written atomically
     (tmp + os.replace) so a crash never leaves a half-written marker that reads as warm. Mirrors
-    engine.ghidra_project.GhidraProject.write_meta; its presence makes the slot warm next call."""
+    engine.re.ghidra_project.GhidraProject.write_meta; its presence makes the slot warm next call."""
     payload = json.dumps({
         "program_name": prog,
         "version": _version(),

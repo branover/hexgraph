@@ -15,7 +15,7 @@ import sys
 import pytest
 
 from hexgraph import policy, settings as st
-from hexgraph.engine.solver import (
+from hexgraph.engine.re.solver import (
     AngrSolver,
     ConstraintRef,
     NullSolver,
@@ -36,12 +36,12 @@ def test_module_does_not_import_angr_at_load():
     # (not whatever an earlier test may have already pulled into sys.modules), and so reloading
     # never disturbs the class identities the rest of this file's isinstance checks rely on.
     code = (
-        "import sys; import hexgraph.engine.solver as S;"
+        "import sys; import hexgraph.engine.re.solver as S;"
         " assert 'angr' not in sys.modules, sorted(m for m in sys.modules if 'angr' in m)"
     )
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert proc.returncode == 0, (
-        "engine.solver must not import angr at module load; "
+        "engine.re.solver must not import angr at module load; "
         f"stderr={proc.stderr!r}"
     )
 

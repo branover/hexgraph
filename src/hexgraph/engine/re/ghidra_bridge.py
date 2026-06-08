@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from typing import Protocol
 
-from hexgraph.engine.ghidra import ghidra_config
+from hexgraph.engine.re.ghidra import ghidra_config
 from hexgraph.sandbox.decompiler import Decompiler
 
 # A symbol name we're willing to interpolate into a remote_eval string. Mirrors

@@ -4,7 +4,7 @@ wrapper, program listing, and importing a program's real bytes as a target."""
 
 from hexgraph.db.models import Target
 from hexgraph.db.session import session_scope
-from hexgraph.engine.ghidra_bridge import (
+from hexgraph.engine.re.ghidra_bridge import (
     BridgeUnavailable, GhidraBridgeDecompiler, import_program, list_open_programs,
 )
 from hexgraph.engine.ingest import create_project
@@ -85,7 +85,7 @@ def test_remote_decompile_one_inlines_name_and_passes_no_kwarg():
     """The fn-scoping bug fix: the name is INLINED (no bound `fn` kwarg, which jfx_bridge would
     put in eval-locals where the nested lambda can't see it), and the resolved function is passed
     as a bound lambda PARAMETER. Returns (resolved_name, pseudocode)."""
-    from hexgraph.engine.ghidra_bridge import _RemoteOps
+    from hexgraph.engine.re.ghidra_bridge import _RemoteOps
 
     b = _FakeBridge(lambda expr, kw: ("check_password", "bool check_password(char *p){return 0;}"))
     name, pseudo = _RemoteOps(b)._decompile_one("check_password")
@@ -101,7 +101,7 @@ def test_remote_decompile_one_inlines_name_and_passes_no_kwarg():
 def test_remote_decompile_one_address_resolves_containing_function():
     """An address focus resolves to the function CONTAINING it (analyze-at-address), so
     decompile_at works over the bridge — not just decompile_function by name."""
-    from hexgraph.engine.ghidra_bridge import _RemoteOps
+    from hexgraph.engine.re.ghidra_bridge import _RemoteOps
 
     b = _FakeBridge(lambda expr, kw: ("cmd_exec", "void cmd_exec(void){}"))
     name, _pseudo = _RemoteOps(b)._decompile_one("0x40132c")
@@ -116,7 +116,7 @@ def test_remote_decompile_one_address_resolves_containing_function():
 def test_remote_decompile_focus_none_when_not_found():
     """A focus the live program doesn't have (the eval returns the ('', '') sentinel) yields no
     focus rather than a crash — mirrors the headless probe's not-found behavior."""
-    from hexgraph.engine.ghidra_bridge import _RemoteOps
+    from hexgraph.engine.re.ghidra_bridge import _RemoteOps
 
     def responder(expr, _kw):
         return ("", "") if "lambda di, fn" in expr else ["main", "helper"]
@@ -127,7 +127,7 @@ def test_remote_decompile_focus_none_when_not_found():
 
 
 def test_remote_decompile_one_rejects_unsafe_focus():
-    from hexgraph.engine.ghidra_bridge import BridgeUnavailable, _RemoteOps
+    from hexgraph.engine.re.ghidra_bridge import BridgeUnavailable, _RemoteOps
 
     b = _FakeBridge(lambda e, k: None)
     try:
@@ -141,7 +141,7 @@ def test_remote_decompile_one_rejects_unsafe_focus():
 def test_remote_list_programs_falls_back_to_current_program_when_headless():
     """The GUI-only ProgramManager service is absent under a headless bridge server; list_programs
     must fall back to the single active currentProgram instead of erroring."""
-    from hexgraph.engine.ghidra_bridge import _RemoteOps
+    from hexgraph.engine.re.ghidra_bridge import _RemoteOps
 
     def responder(expr, _kw):
         if "getService" in expr:   # the GUI path errors under a headless server
@@ -156,9 +156,9 @@ def test_remote_list_programs_falls_back_to_current_program_when_headless():
 def test_bridge_smoke_decompile_reflects_real_decompile(monkeypatch):
     """check_ghidra's honest health: the smoke decompile reports ok only when a real decompile
     succeeds — a socket check alone would report green while decompilation throws."""
-    from hexgraph.engine import ghidra as G
+    from hexgraph.engine.re import ghidra as G
 
-    monkeypatch.setattr("hexgraph.engine.ghidra_bridge.connect_ops", lambda host, port: FakeOps())
+    monkeypatch.setattr("hexgraph.engine.re.ghidra_bridge.connect_ops", lambda host, port: FakeOps())
     ok, _detail, fn = G._bridge_smoke_decompile("127.0.0.1", 4768)
     assert ok and fn == "main"
 
@@ -168,6 +168,6 @@ def test_bridge_smoke_decompile_reflects_real_decompile(monkeypatch):
                 return {"functions": ["main"], "focus": None, "tool": "ghidra_bridge"}
             raise RuntimeError("NameError: global name 'fn' is not defined")
 
-    monkeypatch.setattr("hexgraph.engine.ghidra_bridge.connect_ops", lambda host, port: _BrokenOps())
+    monkeypatch.setattr("hexgraph.engine.re.ghidra_bridge.connect_ops", lambda host, port: _BrokenOps())
     ok, detail, fn = G._bridge_smoke_decompile("127.0.0.1", 4768)
     assert not ok and "NameError" in detail and fn is None

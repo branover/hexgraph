@@ -182,7 +182,7 @@ def test_ghidra_bridge_rejects_unsafe_function_name():
     kwargs in eval-locals, invisible to the nested lambda, which broke every live decompile)."""
     import pytest
 
-    from hexgraph.engine.ghidra_bridge import BridgeUnavailable, _RemoteOps
+    from hexgraph.engine.re.ghidra_bridge import BridgeUnavailable, _RemoteOps
 
     class _FakeBridge:
         def __init__(self):

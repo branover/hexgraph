@@ -68,7 +68,7 @@ class GhidraDecompiler(Decompiler):
     same {functions, focus} contract (plus calls/structs used by enriched recon).
 
     When a `project` is supplied, the imported+analyzed Ghidra project is PERSISTED on that
-    project's data dir and reused across calls (engine.ghidra_project) — the first decompile
+    project's data dir and reused across calls (engine.re.ghidra_project) — the first decompile
     of an artifact pays the full analysis cost; later decompiles of OTHER functions reuse it.
     Without a `project` it runs the old throwaway-project path (correct, just slower)."""
 
@@ -195,7 +195,7 @@ class GhidraDecompiler(Decompiler):
         if project is None or not getattr(project, "data_dir", None):
             return None
         try:
-            from hexgraph.engine import ghidra_project as gp
+            from hexgraph.engine.re import ghidra_project as gp
             from hexgraph.sandbox.runner import sandbox_image
 
             sha = gp.content_hash(artifact)
@@ -220,7 +220,7 @@ def _resolve_name(explicit: str | None) -> str:
     if env:
         return env.lower()
     try:
-        from hexgraph.engine.ghidra import ghidra_config
+        from hexgraph.engine.re.ghidra import ghidra_config
 
         g = ghidra_config()
         if g.get("enabled"):
@@ -237,7 +237,7 @@ def get_decompiler(name: str | None = None) -> Decompiler:
     if resolved == "ghidra":
         return GhidraDecompiler()
     if resolved in ("ghidra_bridge", "bridge"):
-        from hexgraph.engine.ghidra_bridge import GhidraBridgeDecompiler
+        from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler
 
         return GhidraBridgeDecompiler()
     raise ValueError(f"unknown decompiler {resolved!r}")

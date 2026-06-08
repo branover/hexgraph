@@ -17,9 +17,9 @@ import pytest
 
 from hexgraph.db.models import Edge, Node, Observation, Target
 from hexgraph.db.session import session_scope
-from hexgraph.engine import enrichment as E
-from hexgraph.engine import binutils as BU
-from hexgraph.engine.binutils import apply_mitigations_to_target, collect_binutils_facts
+from hexgraph.engine.re import enrichment as E
+from hexgraph.engine.re import binutils as BU
+from hexgraph.engine.re.binutils import apply_mitigations_to_target, collect_binutils_facts
 from hexgraph.engine.ingest import create_project, ingest_file
 from hexgraph.engine.nodes import materialize_symbol
 

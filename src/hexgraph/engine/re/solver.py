@@ -6,7 +6,7 @@ the value that satisfies it**. It composes with what is already built — reacha
 *path exists*, taint flags the *flow*, and a solver can argue an *input exists* and even
 produce it. It answers the same family of question as `get_taint_analyzer()` (does untrusted
 input reach this sink, and under what constraints), so it earns a real seam, and this module
-**mirrors `engine/taint.py` precisely**: an ABC, a concrete backend, and a `Null*` that
+**mirrors `engine/re/taint.py` precisely**: an ABC, a concrete backend, and a `Null*` that
 degrades gracefully and *fabricates nothing*.
 
 **Phase 5C-A shipped the seam + the Null path; Phase 5C-B (this PR) wires angr end to end.**
@@ -17,7 +17,7 @@ own sibling image, never the base sandbox) and map the probe's JSON to a `Solver
 from every method, fabricating nothing. **angr is never imported in this module** — it lives only
 inside the probe, behind the sandbox boundary, so the host process never depends on it and this
 module imports cleanly offline (a contract test enforces it). The engine layer that turns a
-`SolverResult` into Observations/findings/annotations is `engine/solving.py`.
+`SolverResult` into Observations/findings/annotations is `engine/re/solving.py`.
 
 **Gate (mirrors emulation, NOT the exec tier).** angr is policy-gated via
 `policy.assert_allows_solver()` (`features.angr`), but it is a *heavy-analysis opt-in modeled
@@ -53,7 +53,7 @@ class SinkRef:
     """The sink to solve a reaching input *toward* — a validated reference into the graph,
     resolved by the caller before it reaches the solver. `call_addr` is the address of the
     dangerous call site (the concrete state angr drives toward); `func`/`category`/`arg_index`
-    mirror the `sink` node attributes taint already promotes (`engine/taint.py`), so a solver
+    mirror the `sink` node attributes taint already promotes (`engine/re/taint.py`), so a solver
     run slots naturally after a taint pass nominated the sink. `function`/`function_addr` name
     the enclosing routine to start symbolic execution from."""
 
@@ -91,7 +91,7 @@ class SolverResult:
     faithful reproducer a human should copy (both omitted when the probe couldn't introspect the
     solver). For a constraint
     solve, `recovered_value`/`recovered_value_hex` are the value that satisfies the check (fed to
-    the same function-node annotation path as `engine/emulation.py`). `path_addrs` is the few
+    the same function-node annotation path as `engine/re/emulation.py`). `path_addrs` is the few
     grounded basic-block addresses on the satisfying path (promotable as nodes/edges, never the
     whole program). `provenance` records HOW it was obtained (backend, step/time budget actually
     used) so a finding can cite it.

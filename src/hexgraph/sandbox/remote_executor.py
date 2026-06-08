@@ -232,7 +232,7 @@ class RemoteDockerExecutor(SandboxRunner):
                   net_container=None, secret=None, resources=None, network_gate="network",
                   image=None, project_mount=None) -> RunResult:
         if project_mount is not None:
-            # The persistent Ghidra project cache (engine.ghidra_project) lives on the LOCAL
+            # The persistent Ghidra project cache (engine.re.ghidra_project) lives on the LOCAL
             # data dir; a writable cross-host project mount is not wired for the staged-volume
             # remote path. Fail loud rather than silently re-analyzing every call on the remote.
             raise SandboxError(

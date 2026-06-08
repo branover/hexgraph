@@ -7,9 +7,9 @@ grounded results stand alone instead of a canned, binary-agnostic vuln.
 
 from hexgraph.db.models import Finding
 from hexgraph.db.session import session_scope
-from hexgraph.engine import taint as T
+from hexgraph.engine.re import taint as T
 from hexgraph.engine.ingest import create_project, ingest_file
-from hexgraph.engine.static_core import _grounded_finding, run_static_core
+from hexgraph.engine.re.static_core import _grounded_finding, run_static_core
 from hexgraph.engine.tasks import create_task
 from hexgraph.engine.worker import run_task_sync
 from hexgraph.llm.base import LLMRequest

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Project, Target
 from hexgraph.engine.ingest import ingest_file
-from hexgraph.engine.recon import run_recon
+from hexgraph.engine.re.recon import run_recon
 from hexgraph.engine.unpack import build_links_against, unpack_firmware
 from hexgraph.sandbox.executor import Executor, get_executor
 
@@ -29,7 +29,7 @@ def _maybe_enrich_ghidra(session: Session, project: Project, target: Target, fac
     if facts.get("kind") not in _ENRICHABLE_KINDS:
         return
     try:
-        from hexgraph.engine.ghidra import enrich_enabled, enrich_target
+        from hexgraph.engine.re.ghidra import enrich_enabled, enrich_target
 
         if enrich_enabled():
             enrich_target(session, project, target)

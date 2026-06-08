@@ -114,7 +114,7 @@ def record_observation(
     # any node/edge that already exists. A node added later pulls the rest at create.
     # Only OK results carry trustworthy facts; extraction never breaks the call.
     if status == "ok":
-        from hexgraph.engine import enrichment
+        from hexgraph.engine.re import enrichment
 
         enrichment.extract_and_index(
             session, project_id=project_id, target_id=target_id,

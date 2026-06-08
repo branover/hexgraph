@@ -104,7 +104,7 @@ def collect_binutils_facts(
 
 # --- the always-welcome target-metadata enrichment (design §3.1, §5.4) --------
 # The `is_sink` enrichment for dangerous imports rides the SHARED extractor registered
-# in engine.enrichment ("binutils_facts" → DANGEROUS_IMPORTS path), so it fires
+# in engine.re.enrichment ("binutils_facts" → DANGEROUS_IMPORTS path), so it fires
 # automatically inside record_observation. Mitigation flags describe the TARGET, not a
 # node, so they don't pass through the node-fact index — they're recorded here instead.
 

@@ -1,4 +1,4 @@
-"""Unit tests for the persistent Ghidra project cache (engine.ghidra_project) + the
+"""Unit tests for the persistent Ghidra project cache (engine.re.ghidra_project) + the
 analyze-once / reuse decision in GhidraDecompiler. No Docker / no real Ghidra: the cache
 logic is pure filesystem, and the cold-vs-warm probe invocation is checked with a fake
 executor that records its argv.
@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from hexgraph.engine import ghidra_project as gp
+from hexgraph.engine.re import ghidra_project as gp
 
 
 def _write(path: Path, data: bytes) -> Path:

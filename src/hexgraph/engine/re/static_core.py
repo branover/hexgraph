@@ -2,7 +2,7 @@
 
 `static_analysis` is split into two layers. THIS layer always runs and is
 backend-independent: it computes grounded source→sink taint
-(`engine.taint.analyze_taint`) and emits a finding for each flow that is DERIVED FROM THE
+(`engine.re.taint.analyze_taint`) and emits a finding for each flow that is DERIVED FROM THE
 REAL BYTES — "a <source> reaches <sink> via taint path X" — never an LLM guess. The LLM
 synthesis layer (the agent loop in `engine.llm_tasks`) runs on top, reasoning over the
 now-grounded graph; under the mock backend with no explicit scenario it contributes
@@ -87,7 +87,7 @@ def run_static_core(session: Session, project: Any, target: Any, *, task: Any = 
     from hexgraph.engine.edges import add_edge
     from hexgraph.engine.findings import persist_finding
     from hexgraph.engine.nodes import get_or_create_node
-    from hexgraph.engine.taint import analyze_taint
+    from hexgraph.engine.re.taint import analyze_taint
 
     result = analyze_taint(session, project, target, source="static_core")
     if not result.get("available"):

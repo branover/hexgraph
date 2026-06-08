@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException
 
 from hexgraph.db.models import Project
 from hexgraph.db.session import session_scope
-from hexgraph.engine.ghidra_bridge import BridgeUnavailable, import_program, list_open_programs
+from hexgraph.engine.re.ghidra_bridge import BridgeUnavailable, import_program, list_open_programs
 
 from ._shared import GhidraImport
 

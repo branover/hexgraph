@@ -9,7 +9,7 @@ from hexgraph.db.session import session_scope
 from hexgraph.engine.graph import build_graph
 from hexgraph.engine.ingest import create_project
 from hexgraph.engine.pipeline import ingest_and_analyze
-from hexgraph.engine.recon import build_recon_finding
+from hexgraph.engine.re.recon import build_recon_finding
 from hexgraph.models.finding import Finding as FindingModel
 from hexgraph.paths import finding_schema_path
 

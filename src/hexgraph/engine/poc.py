@@ -378,7 +378,7 @@ def spec_from_solver_finding(finding, base_spec: dict | None = None) -> dict | N
     the handoff that lets `finding_verify_poc` confirm a solved argv reproducer actually
     reaches the sink, byte-for-byte.
 
-    A solver finding (engine.solving) carries `evidence.extra.solver` with `input_model`
+    A solver finding (engine.re.solving) carries `evidence.extra.solver` with `input_model`
     ('argv'|'stdin'), the recovered bytes as `minimal_input_hex` (the constrained prefix —
     "the part that matters", preferred) / `concrete_input_hex`, and `evidence.reproducer`
     (hex). We decode those hex bytes and feed them RAW: for `input_model=='argv'` as a single

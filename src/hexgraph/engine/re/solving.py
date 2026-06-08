@@ -1,9 +1,9 @@
 """angr solving orchestration (design §3.5 / Phase 5C, PRs 5C-3 + 5C-4).
 
-The `get_solver()` seam (`engine/solver.py`) runs the bounded symbolic exploration in the
+The `get_solver()` seam (`engine/re/solver.py`) runs the bounded symbolic exploration in the
 dedicated angr image and returns a pure `SolverResult`. THIS module is the engine layer that
-turns that result into durable HexGraph state, exactly the way `engine/static_core` consumes
-the taint seam and `engine/emulation` consumes the decompiler seam:
+turns that result into durable HexGraph state, exactly the way `engine/re/static_core` consumes
+the taint seam and `engine/re/emulation` consumes the decompiler seam:
 
   * `solve_reaching_input` — solve for a concrete input that REACHES a sink, record a `solver`
     Observation, promote the few GROUNDED path nodes/edges (the sink + the enclosing function +
@@ -14,7 +14,7 @@ the taint seam and `engine/emulation` consumes the decompiler seam:
     the strongest static claim short of a live PoC.
   * `solve_constraint` — recover the value that SATISFIES a single check, record a `solver`
     Observation, and annotate the function node with the recovered value (the angr analogue of
-    `engine/emulation`'s constant recovery). Single-check solving only — NOT whole-program
+    `engine/re/emulation`'s constant recovery). Single-check solving only — NOT whole-program
     exploration (design §7).
 
 Opt-in + gated. Both consult `features.angr` (the seam selects `NullSolver` when off, and the
@@ -33,7 +33,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from hexgraph.db.models import EdgeType, NodeType, Project, Target
 from hexgraph.engine import observations as O
-from hexgraph.engine.solver import (
+from hexgraph.engine.re.solver import (
     ConstraintRef,
     SinkRef,
     SolverResult,

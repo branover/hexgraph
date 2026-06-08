@@ -302,7 +302,7 @@ def _extract_binutils(payload: Any) -> list[Fact]:
     set — never a broadened whitelist). The binutils probe lists imports under
     `imports`; we tag ONLY the unambiguous dangerous ones — a non-dangerous import
     carries no auto-fact (no verdict for the rest). Mitigation flags are NOT here: they
-    describe the TARGET, not a node, so engine.binutils.apply_mitigations_to_target
+    describe the TARGET, not a node, so engine.re.binutils.apply_mitigations_to_target
     records them on the target's metadata, the target analogue of node enrichment."""
     facts: list[Fact] = []
     imports = payload.get("imports") if isinstance(payload, dict) else None

@@ -17,7 +17,7 @@ from hexgraph.db.session import session_scope
 from datetime import datetime, timezone
 
 from hexgraph.engine.llm_tasks import LLM_TASK_TYPES, execute_llm_task
-from hexgraph.engine.recon import execute_recon
+from hexgraph.engine.re.recon import execute_recon
 from hexgraph.engine.tasks import mark_failed, mark_running, mark_succeeded
 from hexgraph.sandbox.executor import get_executor
 

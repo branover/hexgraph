@@ -25,6 +25,6 @@ def api_patch_settings(body: dict):
 @router.post("/api/settings/ghidra/test")
 def api_ghidra_test():
     """Best-effort check of the configured Ghidra integration (no target needed)."""
-    from hexgraph.engine.ghidra import check_ghidra
+    from hexgraph.engine.re.ghidra import check_ghidra
 
     return check_ghidra()

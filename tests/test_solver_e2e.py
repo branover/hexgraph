@@ -24,8 +24,8 @@ from hexgraph import settings as st
 from hexgraph.db.models import Edge, Finding, Node, NodeType, Observation
 from hexgraph.db.session import session_scope
 from hexgraph.engine.ingest import create_project, ingest_file
-from hexgraph.engine.solver import SolverResult
-from hexgraph.engine.solving import solve_constraint, solve_reaching_input
+from hexgraph.engine.re.solver import SolverResult
+from hexgraph.engine.re.solving import solve_constraint, solve_reaching_input
 
 from conftest import ANGR_READY, fixture_path
 
@@ -288,7 +288,7 @@ def test_classify_solver_category_picks_a_meaningful_category():
     always lands in the frozen Finding schema enum. A command-exec sink → command-injection; a
     memory-unsafe copy → memory-safety; anything else (a license/serial/auth gate behind a check)
     → auth (the check was PROVED satisfiable, i.e. bypassable)."""
-    from hexgraph.engine.solving import _classify_solver_category
+    from hexgraph.engine.re.solving import _classify_solver_category
     from hexgraph.models.finding import Category
     from typing import get_args
 
