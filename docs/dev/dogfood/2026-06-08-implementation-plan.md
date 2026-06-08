@@ -62,18 +62,18 @@ worktree/PR per the merge gate. **Wave 1 is four PRs with disjoint file sets** (
 
 | PR | Findings |
 |---|---|
-| **9** | F12 (thread `sink_node_id` + better error), F20 (inline `finding_record` schema), F14 (YARA rule), F18 (`re_recover_constant` pre-check), F05 (ingest progress), F01 (PATH/venv doc), F02 (project-dir doctor) |
+| **9** | F12 (thread `sink_node_id` + better error), F20 (inline `finding_record` schema), F14 (YARA rule), F18 (`re_recover_constant` pre-check), F05 (ingest progress), F01 (PATH/venv doc), F02 (project-dir doctor); **+ #225 review follow-ups**: `finding_list` `verified` filter post-filters the SQL page (a verified finding beyond page 1 is unreachable) → when `verified` is set, fetch-filter-then-slice; and `limit=0` should mean unlimited (or be documented), not "zero rows"; **+ #226 follow-up**: the focus-only Observation trim landed only on the agent-tools path — `engine/llm_tasks.py:194` (`_materialize_decomp_graph`) still records the full decompiler payload under `result_kind="decompilation"`; extract a shared focus-only helper for both sites; **+ #227 follow-ups**: `is_input_constrained` has a NUL-prefix-argv false-negative corner (the probe NUL-truncates argv → `constrained_len 0`); and `argue_reachability_for_finding` upgrades `evidence.extra.assurance` to `input_reachable` but never bumps the finding's `confidence` column (a recovered param flow then shows `input_reachable`+`medium`, which reads contradictory) — bump confidence on the reachability upgrade |
 
 ## Status
 
 | PR | Branch | State |
 |---|---|---|
-| plan doc **#223** | `docs/dogfood-plan` | open |
-| **#224** write-path (F11) | `fix/write-path-resilience` | review fixes pushed (retry now wired into the MCP write-group seam; SQLITE_LOCKED; server-side log) → re-review |
-| **#227** assurance (F17 + real-F21) | `fix/assurance-integrity` | in review |
-| **#225** read-apis (F04/F06) | `build/read-api-filters` | in review |
-| **#226** re-fallbacks (F08/F09/F10) | `fix/re-decompiler-fallbacks` | in review |
-| **journal-mention inspector** (UI, user-raised) | `fix/journal-mention-inspector` | implementing — mention-click no-ops when the node isn't in the loaded (skeleton) graph; add a single-node GET endpoint + fetch-on-miss so the Inspector opens regardless of graph LOD; + ux-contract update |
+| **#225** read-apis (F04/F06) | `build/read-api-filters` | **MERGED ✅** (`552c7d9`) |
+| **#224** write-path (F11) | `fix/write-path-resilience` | **APPROVED ✅** · rebased onto main · CI running → merge |
+| **#226** re-fallbacks (F08/F09/F10) | `fix/re-decompiler-fallbacks` | **APPROVED ✅** · awaiting rebase + merge |
+| **#227** assurance (F17 + real-F21) | `fix/assurance-integrity` | **APPROVED ✅** · awaiting rebase + merge |
+| **#228** journal-mention inspector (UI, user-raised) | `fix/journal-mention-inspector` | in review (Playwright click-through verified) |
+| plan doc **#223** | `docs/dogfood-plan` | open (rebase + merge last) |
 
 Post-PR3 items (sequence after **#225** merges; share `mcp_catalog.py`/`mcp_tools.py`): **#6b** UDP live-surface primitive (F22), **#8** hidden-by-default child targets + recon-as-enrichment (F06 deeper + visibility regression).
 
