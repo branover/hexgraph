@@ -12,8 +12,11 @@ dependency; this module only imports it when the server is actually started.
 from __future__ import annotations
 
 import json
+import logging
 
 from hexgraph.agent.mcp_tools import GROUPS, catalog
+
+logger = logging.getLogger(__name__)
 
 
 def enabled_groups(override: set[str] | None = None) -> set[str]:
@@ -24,6 +27,59 @@ def enabled_groups(override: set[str] | None = None) -> set[str]:
     from hexgraph import settings
 
     return {g for g in GROUPS if settings.get(f"features.mcp.{g}", True)}
+
+
+# Messages returned to the agent on a DB OperationalError. BOTH are deliberately
+# content-free w.r.t. the query: they MUST NOT echo the failing SQL or its bound
+# parameters (which `str(OperationalError)` bakes into the message), only the gist.
+_WRITE_CONTENTION_ERROR = "transient write contention — please retry"
+_DB_ERROR = "database error (the query is withheld for safety) — see the server log"
+
+
+def invoke_tool(spec: dict, arguments: dict | None) -> object:
+    """Run one MCP tool's function and sanitize DB errors at this seam.
+
+    WRITE-GROUP tools are run through `call_with_write_retry`, so a write that loses the
+    SQLite lock under multi-agent fan-out re-runs the whole tool call (bounded backoff)
+    before surfacing — this is where F11's lost-write symptom actually gets fixed, since the
+    db-layer commit-retry alone can't preserve a rolled-back unit. Only `write` tools are
+    wrapped: `read` tools don't mutate, and `run`/task tools can take minutes, so silently
+    re-running one on a lock would be wrong. The write tools manage their OWN `session_scope`,
+    so we retry the CALL (call_with_write_retry doesn't open a scope) — no nested transaction.
+    Re-running is duplicate-safe: a retry only fires after a FAILED, rolled-back commit, so
+    nothing was persisted on the prior attempt.
+
+    A `sqlalchemy.exc.OperationalError` is the one error class whose `str()` bakes in the
+    raw failing SQL *and* its bound parameter values, so returning `str(exc)` to the agent
+    would leak the query (and any values it carries). We never do that. Instead we map it
+    to a structured, content-free `{"error": ...}`:
+      - a transient lock/busy error → a *retryable* message (the agent should retry; the
+        write-group retry above was simply exhausted, or the tool wasn't a write tool);
+      - any other OperationalError (schema drift, corruption, disk full) → a generic
+        "database error" message, and the original exception is LOGGED server-side (so the
+        "see the server log" hint is true) while the SQL text stays out of the response.
+    Every NON-OperationalError propagates unchanged, so genuine bugs still surface their
+    real message. This runs in a worker thread (it does blocking DB work)."""
+    from sqlalchemy.exc import OperationalError
+
+    from hexgraph.db.session import _is_lock_error, call_with_write_retry
+
+    def _run():
+        return spec["fn"](**(arguments or {}))
+
+    try:
+        # Write tools retry on a lock; read/run tools run once.
+        if spec.get("group") == "write":
+            return call_with_write_retry(_run)
+        return _run()
+    except OperationalError as exc:
+        # NB: never include str(exc) / exc.statement / exc.params in the returned payload.
+        if _is_lock_error(exc):
+            return {"error": _WRITE_CONTENTION_ERROR}
+        # Non-transient DB error: log the real exception (with traceback) server-side so the
+        # operator can diagnose it, then return only the content-free message to the agent.
+        logger.exception("MCP tool %r hit a non-transient database error", spec.get("name"))
+        return {"error": _DB_ERROR}
 
 
 def serve_stdio(groups: set[str] | None = None) -> None:
@@ -77,8 +133,9 @@ def serve_stdio(groups: set[str] | None = None) -> None:
         spec = tools.get(name)
         if spec is None:
             return [types.TextContent(type="text", text=f"error: unknown tool {name!r}")]
-        # Tools do blocking DB/sandbox work; run off the event loop.
-        result = await anyio.to_thread.run_sync(lambda: spec["fn"](**(arguments or {})))
+        # Tools do blocking DB/sandbox work; run off the event loop. invoke_tool sanitizes
+        # DB write-contention errors so raw SQL/params never reach the agent.
+        result = await anyio.to_thread.run_sync(invoke_tool, spec, arguments)
         text = result if isinstance(result, str) else json.dumps(result, default=str)
         return [types.TextContent(type="text", text=text)]
 
