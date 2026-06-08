@@ -86,6 +86,7 @@ _BUILD_TAGS = {
     "sandbox_ghidra": "hexgraph-sandbox:latest",
     "fuzz": "hexgraph-fuzz:latest",
     "build": "hexgraph-build:latest",
+    "angr": "hexgraph-angr:latest",
     "firmae": "hexgraph-firmae:latest",
     "qemu": "hexgraph-qemu:latest",
 }
@@ -365,6 +366,196 @@ def _sandbox_staleness_warning(*, will_rebuild: bool = False) -> str | None:
     except Exception:  # noqa: BLE001 — a staleness hint must never derail setup
         return None
     return None
+
+
+# ---------------------------------------------------------------------------
+# `hexgraph setup --refresh` — a quick, non-interactive SANITY-SYNC after a `git pull`.
+#
+# It rebuilds ONLY what is stale versus the current source and KEEPS the existing
+# configuration (it writes no settings, enables no feature, builds no image you didn't
+# already opt into). The venv reinstall (on a version change) and the UI rebuild are done
+# by setup.sh BEFORE this runs — the same division of labour as a normal bootstrap
+# (setup.sh owns venv+deps+SPA; the wizard owns images+DB). Here we cover: stale docker
+# images, the MCP registration, the VR skill, and pending DB migrations.
+# ---------------------------------------------------------------------------
+
+
+def _dockerfile_for(step_key: str) -> str | None:
+    """The `-f <path>` Dockerfile of a build step (relative to the repo root), or None.
+    Parsed from BUILD_STEPS[key].command so it can't drift from what actually builds."""
+    cmd = BUILD_STEPS[step_key].command
+    if "-f" in cmd:
+        i = cmd.index("-f")
+        if i + 1 < len(cmd):
+            return cmd[i + 1]
+    return None
+
+
+def _build_step_stale(step_key: str, root: str) -> bool | None:
+    """Tri-state: is this build step's image OLDER than its Dockerfile's last git COMMIT?
+    Generalises `sandbox.runner.sandbox_image_staleness` to any build step — the git
+    commit time (not filesystem mtime) is used so a fresh clone/worktree doesn't read
+    'stale'. None = unknown (docker/git absent, image unbuilt, date unreadable). Never raises."""
+    from hexgraph.sandbox.runner import _image_created_epoch
+
+    tag = _BUILD_TAGS.get(step_key)
+    dockerfile = _dockerfile_for(step_key)
+    if not tag or not dockerfile:
+        return None
+    created = _image_created_epoch(tag)
+    if created is None:
+        return None
+    try:
+        proc = subprocess.run(
+            ["git", "-C", root, "log", "-1", "--format=%ct", "--", dockerfile],
+            capture_output=True, text=True, timeout=10,
+        )
+        ts = proc.stdout.strip()
+        if proc.returncode != 0 or not ts:
+            return None
+        return created < float(ts)
+    except Exception:  # noqa: BLE001 — staleness is advisory; never crash the refresh
+        return None
+
+
+def _sandbox_has_ghidra() -> bool | None:
+    """Does the CURRENT sandbox image actually contain headless Ghidra? Tri-state:
+    True/False from a one-shot `command -v analyzeHeadless` inside the image; None when
+    Docker is absent or the probe can't run. Lets refresh self-heal the exact trap that
+    motivated it — settings say `ghidra.mode=headless` but the image was built Ghidra-less
+    (e.g. the old `with_ghidra=1` arg bug), which a Dockerfile-commit staleness check alone
+    would miss when the image is otherwise fresh."""
+    import shutil
+
+    from hexgraph.sandbox.runner import sandbox_image
+
+    if not shutil.which("docker"):
+        return None
+    try:
+        proc = subprocess.run(
+            ["docker", "run", "--rm", "--entrypoint", "sh", sandbox_image(),
+             "-c", "command -v analyzeHeadless"],
+            capture_output=True, text=True, timeout=60,
+        )
+        return proc.returncode == 0
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def refresh_build_keys(state: DetectedState, *, root: str) -> list[str]:
+    """Which BUILD_STEPS a refresh should rebuild: the core sandbox when missing/stale (or
+    present-but-missing-the-Ghidra-the-config-wants), plus every OTHER image you ALREADY
+    built that is now stale. Never adds an image you never opted into. Pure decision logic
+    over the injected `state` + the (mockable) staleness/ghidra probes — unit-tested."""
+    ghidra_headless = ("features.ghidra.enabled" in state.enabled_feature_keys
+                       and state.ghidra_mode == "headless")
+    keys: list[str] = []
+
+    # The core analysis sandbox (sandbox / sandbox_ghidra share one tag).
+    sandbox_present = state.built_images.get("sandbox", False)
+    if ghidra_headless:
+        needs = (not sandbox_present
+                 or _build_step_stale("sandbox", root) is True
+                 or _sandbox_has_ghidra() is False)  # present but Ghidra-less → rebuild WITH Ghidra
+        if needs:
+            keys.append("sandbox_ghidra")
+    else:
+        if not sandbox_present or _build_step_stale("sandbox", root) is True:
+            keys.append("sandbox")
+
+    # Every other already-built image, rebuilt only when its Dockerfile moved.
+    for k in ("fuzz", "build", "angr", "firmae", "qemu"):
+        if state.built_images.get(k) and _build_step_stale(k, root) is True:
+            keys.append(k)
+    return keys
+
+
+def run_refresh(*, project_dir: str | None = None) -> int:
+    """Entry point for `hexgraph setup --refresh`: rebuild stale docker images (config
+    preserved), re-affirm the MCP registration, regenerate the VR skill where it's
+    installed, and apply pending DB migrations. No prompts, no settings changes. Returns a
+    non-zero exit only on a CORE (sandbox) image build failure; everything else is
+    best-effort and reported. (setup.sh has already done the venv reinstall + UI rebuild.)"""
+    from hexgraph.agent import agent_setup
+
+    state = detect_state()
+    root = _repo_root()
+    print("hexgraph setup --refresh: syncing to the current source (configuration unchanged).")
+    rc = 0
+
+    # --- docker images: rebuild missing/stale, preserving the Ghidra choice -------------
+    built_ok: set[str] = set()  # build steps that actually SUCCEEDED (drives the staleness hint)
+    if not state.docker:
+        print("  images: Docker unavailable — skipping image checks.")
+    else:
+        build_keys = refresh_build_keys(state, root=root)  # computed ONCE (the probes are not cheap)
+        if not build_keys:
+            print("  images: all current.")
+        for b in build_keys:
+            step = BUILD_STEPS[b]
+            print(f"  images: rebuilding {step.label} [{step.cost}] …")
+            code = run_build_step(b)
+            if code == 0:
+                built_ok.add(b)
+                print(f"  images: ✓ {step.label}")
+            else:
+                fatal = b in _CORE_BUILDS
+                print(f"  images: (!) {step.label} failed (exit {code})"
+                      + ("." if fatal else "; continuing."))
+                if fatal:
+                    rc = code
+
+    # --- MCP server: re-affirm every existing registration to the current command -------
+    try:
+        regs = agent_setup.refresh_registrations(project_dir)
+    except Exception as exc:  # noqa: BLE001
+        regs = []
+        print(f"  MCP: (!) could not refresh registrations: {exc}")
+    if regs:
+        updated = sum(1 for r in regs if r["action"] == "updated")
+        unchanged = sum(1 for r in regs if r["action"] == "unchanged")
+        manual = [r for r in regs if r["action"] == "manual"]
+        print(f"  MCP: {len(regs)} registration(s) — {updated} updated, "
+              f"{unchanged} already current"
+              + (f", {len(manual)} need a manual update" if manual else "") + ".")
+        for r in manual:
+            print(f"       (!) {r['agent']} ({r['scope']}) → {r['path']}: "
+                  "re-add by hand with `hexgraph mcp install`.")
+    else:
+        print("  MCP: no existing registration found "
+              "(add one with `hexgraph mcp install`).")
+
+    # --- VR skill: regenerate wherever it's already installed ----------------------------
+    skill_dirs = agent_setup.detect_skill_dirs(project_dir)
+    if skill_dirs:
+        for base in skill_dirs:
+            try:
+                path = agent_setup.write_skill(base)
+                print(f"  skill: ✓ regenerated → {path}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"  skill: (!) could not write under {base}: {exc}")
+    else:
+        print("  skill: not installed anywhere — add it with "
+              "`hexgraph mcp install --write-skill ~/.claude/skills`.")
+
+    # --- DB: apply any pending migrations to the (unchanged) home ------------------------
+    try:
+        from hexgraph.db.migrate import prepare_database
+
+        prepare_database()
+        print("  db: schema current.")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  db: (!) migration note: {exc}")
+
+    # If the sandbox is still stale (we didn't rebuild it, OR a rebuild FAILED), surface the
+    # proactive hint. Suppress it ONLY when a sandbox image was rebuilt SUCCESSFULLY this run —
+    # a failed rebuild must still warn. (Reuse `built_ok`; never re-run the probes.)
+    sandbox_rebuilt_ok = bool({"sandbox", "sandbox_ghidra"} & built_ok)
+    stale = _sandbox_staleness_warning(will_rebuild=sandbox_rebuilt_ok)
+    if stale:
+        print(f"  (!) {stale}")
+    print("✓ refresh complete — start with: just serve")
+    return rc
 
 
 # ---------------------------------------------------------------------------

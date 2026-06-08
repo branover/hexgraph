@@ -51,11 +51,23 @@ default:
 # also auto-detects a missing TTY, so an unattended `just setup` in CI never hangs anyway.
 # The wizard lets you choose which optional features to enable (each shown with its SECURITY
 # IMPLICATION) + non-secret config, optionally registers the MCP server + VR skill, then builds
-# the chosen images + inits the DB.
+# the chosen images + inits the DB. `just setup --refresh` (or `just refresh`) does the quick
+# sanity-sync below instead of the wizard.
 # ★ Bootstrap venv+deps+SPA, then run the interactive setup wizard (the one command to get running).
 [group('setup')]
 setup *args:
     @./setup.sh {{args}}
+
+# A quick, non-interactive SANITY-SYNC after a `git pull`: rebuild only what's STALE versus
+# the current source and KEEP your existing configuration. Reinstalls the package if its
+# version changed, rebuilds the SPA if stale, rebuilds any already-built image whose
+# Dockerfile moved (preserving your Ghidra choice), re-affirms the MCP registration, and
+# regenerates the VR skill into wherever it's already installed. No prompts, no settings
+# changes, no new features/images. Run this before `just serve` to be sure you're on latest.
+# Quick sanity-sync: rebuild only what's stale vs current source, keep config (use after a pull).
+[group('setup')]
+refresh:
+    @./setup.sh --refresh
 
 # Create the virtualenv (.venv). Rerun only if you delete .venv.
 [group('setup')]
@@ -120,11 +132,20 @@ ui:
 
 # REBUILD WHEN you change docker/sandbox.Dockerfile or the sandbox toolchain — NOT when you
 # edit/add a probe under sandbox/probes/ (probes are mounted from the install at runtime,
-# so probe changes need no rebuild). with_ghidra=1 is an opt-in heavy build.
-# Build the analysis sandbox Docker image (needs Docker; with_ghidra=1 bundles Ghidra headless).
+# so probe changes need no rebuild). Pass `1` to bundle headless Ghidra (opt-in heavy build).
+# Build the analysis sandbox Docker image (needs Docker; pass 1 to bundle Ghidra headless).
+#
+# `with_ghidra` is POSITIONAL — `just sandbox-build 1`. We also accept the legacy
+# `just sandbox-build with_ghidra=1` form and normalise it: just would otherwise pass the
+# literal token through as `--build-arg WITH_GHIDRA=with_ghidra=1`, which the Dockerfile's
+# `if [ "$WITH_GHIDRA" = "1" ]` guard fails — silently producing a Ghidra-LESS image.
 [group('build')]
 sandbox-build with_ghidra="0":
-    docker build -f docker/sandbox.Dockerfile --build-arg WITH_GHIDRA={{with_ghidra}} -t {{sandbox_image}} .
+    #!/usr/bin/env bash
+    set -euo pipefail
+    wg="{{with_ghidra}}"; wg="${wg#with_ghidra=}"   # tolerate the legacy name=value form
+    case "$wg" in 1|true|yes|on) wg=1 ;; *) wg=0 ;; esac
+    docker build -f docker/sandbox.Dockerfile --build-arg WITH_GHIDRA="$wg" -t {{sandbox_image}} .
 
 # OPT-IN, gated by features.build. REBUILD WHEN you change docker/build.Dockerfile or the build
 # toolchain — NOT when you edit build_probe.py (probes are mounted from the install at

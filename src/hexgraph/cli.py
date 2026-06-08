@@ -306,7 +306,13 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
 def _cmd_setup(args: argparse.Namespace) -> int:
     """Interactive setup wizard: choose optional features (with their security
     implications) + non-secret config, then build the chosen images. Falls back to the
-    static-only baseline without prompting when non-interactive (no TTY / --yes / CI)."""
+    static-only baseline without prompting when non-interactive (no TTY / --yes / CI).
+    `--refresh` skips the wizard and runs the non-interactive sanity-sync instead."""
+    if args.refresh:
+        from hexgraph.setup_wizard import run_refresh
+
+        return run_refresh()
+
     from hexgraph.setup_wizard import run_setup
 
     return run_setup(
@@ -341,6 +347,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="apply the default plan without prompting (same as --yes)")
     psw.add_argument("--rebuild", action="store_true",
                      help="rebuild images even if already present")
+    psw.add_argument("--refresh", action="store_true",
+                     help="non-interactive sanity-sync: rebuild only what's stale vs the "
+                          "current source (images, MCP registration, VR skill, DB), keeping "
+                          "your configuration (use `just refresh` for venv+UI too)")
     psw.set_defaults(func=_cmd_setup)
 
     pdb = sub.add_parser("db", help="database maintenance")

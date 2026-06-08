@@ -11,7 +11,12 @@
 # Usage:
 #   ./setup.sh            # build everything, then run the interactive wizard
 #   ./setup.sh --yes      # non-interactive: accept the static-only defaults (CI-safe)
-# Any arguments are passed straight through to `hexgraph setup` (e.g. --yes, --rebuild).
+#   ./setup.sh --refresh  # quick sanity-sync after a `git pull`: rebuild only what's STALE
+#                         #   vs the current source and KEEP your config (reinstall if the
+#                         #   version changed, rebuild the SPA if stale, rebuild stale images,
+#                         #   re-affirm the MCP registration, regenerate the VR skill, migrate
+#                         #   the DB). No prompts, no settings changes, no new features.
+# Any OTHER arguments are passed straight through to `hexgraph setup` (e.g. --yes, --rebuild).
 
 # We use bash-only features below (BASH_SOURCE, the source-vs-exec guard). The shebang
 # already selects bash for `./setup.sh`, but re-exec under bash if someone runs it as
@@ -47,9 +52,71 @@ ensure_venv() {
     [ -x .venv/bin/pip ] || die "created .venv but it has no pip — install your distro's ensurepip/venv support (e.g. 'sudo apt install python3-venv') and re-run."
 }
 
+# --- refresh (sanity-sync) -------------------------------------------------------------
+# A fast, non-interactive re-sync to the current source that KEEPS your configuration. The
+# venv reinstall (only on a version change) and the SPA rebuild (only if stale) live here —
+# the same division of labour as the full bootstrap (this script owns venv+deps+SPA; the
+# wizard owns images+DB+MCP+skill). The heavy lifting after that is `hexgraph setup --refresh`.
+is_refresh() { for a in "$@"; do [ "$a" = "--refresh" ] && return 0; done; return 1; }
+
+_pkg_version_installed() {
+    .venv/bin/python -c "import importlib.metadata as m; print(m.version('hexgraph'))" 2>/dev/null || true
+}
+_pkg_version_source() {
+    # the `version = "X.Y.Z"` line in pyproject.toml (first match)
+    sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' pyproject.toml | head -n1
+}
+
+# Rebuild the SPA only if the built bundle is missing or stale vs frontend sources. Prefer the
+# `just ui-check` recipe (single source of truth) when `just` is present; otherwise inline the
+# same check so the no-`just` path still works.
+_refresh_ui() {
+    if command -v just >/dev/null 2>&1; then
+        just ui-check
+        return
+    fi
+    local dist="src/hexgraph/web/dist/index.html"
+    if [ ! -f "$dist" ] || [ -n "$(find frontend/src -type f -newer "$dist" -print -quit 2>/dev/null)" ]; then
+        say "Rebuilding the web UI (bundle missing or stale)"
+        ( cd frontend && npm install && npm run build )
+    else
+        say "Web UI bundle is current"
+    fi
+}
+
+do_refresh() {
+    say "HexGraph refresh — sanity-syncing to the latest source (configuration unchanged)"
+    ensure_venv
+    local inst src
+    inst="$(_pkg_version_installed)"
+    src="$(_pkg_version_source)"
+    if [ -z "$inst" ] || [ "$inst" != "$src" ]; then
+        say "Reinstalling the package (installed=${inst:-none} → source=${src:-?})"
+        .venv/bin/pip install -q -e ".[server,dev]"
+    else
+        say "Package up to date (v$inst) — skipping reinstall"
+    fi
+    if command -v npm >/dev/null 2>&1; then
+        _refresh_ui
+    else
+        say "npm not found — skipping UI rebuild (install Node.js to refresh the SPA)"
+    fi
+    # Hand off to the wizard's refresh: stale images, MCP registration, VR skill, DB.
+    .venv/bin/python -m hexgraph.cli setup --refresh
+    printf '\n\033[1m✓ Refresh complete.\033[0m  Start HexGraph with:  .venv/bin/hexgraph serve   →  http://127.0.0.1:8765\n'
+    printf '  (or, with just installed:  just serve)\n'
+}
+
 main() {
     # Run from the repo root regardless of where the script was invoked from.
     cd "$(dirname "${BASH_SOURCE[0]}")"
+
+    # Quick sanity-sync path — no prompts, keeps config. (python3 required; npm optional.)
+    if is_refresh "$@"; then
+        command -v python3 >/dev/null 2>&1 || die "python3 not found. Install Python 3.11+ and re-run."
+        do_refresh
+        return 0
+    fi
 
     # --- prerequisites ---------------------------------------------------------
     command -v python3 >/dev/null 2>&1 || die "python3 not found. Install Python 3.11+ and re-run."

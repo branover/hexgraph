@@ -69,8 +69,14 @@ BUILD_STEPS: dict[str, BuildStep] = {
     ),
     "sandbox_ghidra": BuildStep(
         key="sandbox_ghidra",
+        # `with_ghidra` is the recipe's first POSITIONAL parameter, so pass the value bare
+        # (`just sandbox-build 1`). Writing `with_ghidra=1` here makes just treat the whole
+        # token as the positional value and emit `--build-arg WITH_GHIDRA=with_ghidra=1`, which
+        # the Dockerfile's `if [ "$WITH_GHIDRA" = "1" ]` guard fails — silently building a
+        # Ghidra-LESS image with no error. (The justfile recipe now also normalises a stray
+        # `with_ghidra=` prefix defensively, but keep this form canonical.)
         label="Analysis sandbox image WITH headless Ghidra (+JDK, ~400 MB more)",
-        recipe="sandbox-build with_ghidra=1",
+        recipe="sandbox-build 1",
         command=["docker", "build", "-f", "docker/sandbox.Dockerfile",
                  "--build-arg", "WITH_GHIDRA=1", "-t", "hexgraph-sandbox:latest", "."],
         cost="very large (adds a JDK + Ghidra, ~400 MB), slow",
