@@ -289,7 +289,7 @@ def test_apply_mitigations_is_idempotent_and_skips_none(hg_home):
 
 def test_agent_tool_renders_binutils_facts(hg_home, monkeypatch):
     _wire(monkeypatch)
-    from hexgraph.engine.agent_tools import ToolContext, run_tool
+    from hexgraph.agent.agent_tools import ToolContext, run_tool
 
     with session_scope() as s:
         p, t = _seed(s)

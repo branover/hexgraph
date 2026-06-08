@@ -6,7 +6,7 @@ from pathlib import Path
 
 from hexgraph.db.models import Finding, Node, Task
 from hexgraph.db.session import session_scope
-from hexgraph.engine.agent_tools import ToolContext, available_tools, run_tool
+from hexgraph.agent.agent_tools import ToolContext, available_tools, run_tool
 from hexgraph.engine.ingest import create_project, ingest_file
 from hexgraph.engine.tasks import create_task
 from hexgraph.engine.worker import run_task_sync
@@ -158,7 +158,7 @@ def test_read_imports_tool_offline(hg_home):
 
 def test_check_decompiler_tool_offline(hg_home, monkeypatch):
     monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
-    monkeypatch.setattr("hexgraph.engine.mcp_tools._sandbox_image_built", lambda tag: True)
+    monkeypatch.setattr("hexgraph.agent.mcp_tools._sandbox_image_built", lambda tag: True)
     with session_scope() as s:
         p = create_project(s, name="t")
         t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
@@ -172,7 +172,7 @@ def test_check_features_tool_offline(hg_home, monkeypatch):
     """The in-loop agent tool: the always-on static tools (floss/yara) render BROKEN + their
     remediation when the dep is missing (never DISABLED); a gated-off feature (angr) renders
     DISABLED — so the model can plan instead of failing blind."""
-    monkeypatch.setattr("hexgraph.engine.mcp_tools._image_smoke",
+    monkeypatch.setattr("hexgraph.agent.mcp_tools._image_smoke",
                         lambda image, argv, timeout=30: (False, "image not built"))
     with session_scope() as s:
         p = create_project(s, name="t")

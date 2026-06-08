@@ -32,8 +32,8 @@ from __future__ import annotations
 import typing as _typing
 
 from hexgraph.db.models import EdgeType, FindingStatus, NodeType
-from hexgraph.engine import mcp_tools as _t
-from hexgraph.engine.agent_tools import MAX_CHARS_DESC as _MAX_CHARS_DESC
+from hexgraph.agent import mcp_tools as _t
+from hexgraph.agent.agent_tools import MAX_CHARS_DESC as _MAX_CHARS_DESC
 from hexgraph.engine.assurance import PRECONDITIONS as _PRECONDITIONS
 from hexgraph.engine.annotations import KINDS as _ANN_KINDS, NODE_KINDS as _ANN_NODE_KINDS
 from hexgraph.engine.build import BUILD_SYSTEMS as _BUILD_SYSTEMS

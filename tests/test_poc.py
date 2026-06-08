@@ -164,7 +164,7 @@ def test_verify_poc_binary_spec_with_incidental_tcp_field_still_gates(hg_home):
 
 def test_capability_and_mcp_gate(hg_home):
     from hexgraph.engine.capabilities import capabilities_for
-    from hexgraph.engine import mcp_tools
+    from hexgraph.agent import mcp_tools
 
     assert "poc" not in capabilities_for("target", "executable")
     _enable()

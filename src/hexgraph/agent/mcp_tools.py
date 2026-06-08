@@ -682,7 +682,7 @@ def verify_fuzz_artifact(artifact_id: str) -> dict:
 
 def _tool(target_id: str, name: str, args: dict) -> str:
     """Run a sandboxed inspection tool (decompile/strings/…) via the shared registry."""
-    from hexgraph.engine.agent_tools import ToolContext, run_tool
+    from hexgraph.agent.agent_tools import ToolContext, run_tool
 
     with session_scope() as s:
         t = s.get(Target, target_id)
@@ -2621,7 +2621,7 @@ def run_task(target_id: str, type: str, objective: str | None = None, params: di
 # agent-facing prompt copy) lives in the sibling `mcp_catalog` module to keep this
 # file to the tool implementations. `mcp_catalog` imports the tool functions from
 # here, so the dependency runs ONE WAY (catalog -> tools). To keep existing callers
-# of `mcp_tools.catalog` / `from hexgraph.engine.mcp_tools import GROUPS, catalog`
+# of `mcp_tools.catalog` / `from hexgraph.agent.mcp_tools import GROUPS, catalog`
 # working WITHOUT importing `mcp_catalog` at module load (which would close the
 # cycle), re-export lazily via PEP 562 — resolved on first attribute access, after
 # both modules are fully initialized regardless of which was imported first.
@@ -2630,6 +2630,6 @@ _CATALOG_REEXPORTS = ("GROUPS", "_CATALOG", "catalog")
 
 def __getattr__(name: str):  # noqa: D401 — module-level lazy re-export (PEP 562)
     if name in _CATALOG_REEXPORTS:
-        from hexgraph.engine import mcp_catalog
+        from hexgraph.agent import mcp_catalog
         return getattr(mcp_catalog, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -250,7 +250,7 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
     # Agent loop: advertise the sandboxed tools and let the model investigate
     # (decompile/strings/imports/…, fuzz when enabled) before concluding. Strict
     # superset of a single pass — a backend that answers immediately is unchanged.
-    from hexgraph.engine.agent_tools import ToolContext, available_tools, run_tool
+    from hexgraph.agent.agent_tools import ToolContext, available_tools, run_tool
 
     toolctx = ToolContext(session=session, project=project, target=target)
     tools = available_tools(toolctx)

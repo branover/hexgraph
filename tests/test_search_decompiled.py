@@ -8,9 +8,9 @@ the verb) and the curation contract (a search is a QUERY — no graph mutation).
 
 from hexgraph.db.models import Edge, Node, Observation
 from hexgraph.db.session import session_scope
-from hexgraph.engine import mcp_tools as M
+from hexgraph.agent import mcp_tools as M
 from hexgraph.engine import observations as O
-from hexgraph.engine.agent_tools import ToolContext, run_tool
+from hexgraph.agent.agent_tools import ToolContext, run_tool
 from hexgraph.engine.ingest import create_project, ingest_file
 
 from conftest import fixture_path

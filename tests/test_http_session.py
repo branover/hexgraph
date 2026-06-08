@@ -99,7 +99,7 @@ def test_live_session_auth_flow_across_calls(hg_home, vulnrouter):
     SEPARATE call with the same session label — the jar carries the cookie."""
     from hexgraph import settings
     from hexgraph.db.session import session_scope
-    from hexgraph.engine import mcp_tools as M
+    from hexgraph.agent import mcp_tools as M
     from hexgraph.engine.ingest import create_project
     from hexgraph.engine.surfaces import register_web_surface
 

@@ -65,7 +65,7 @@ def derive_dictionary(session, target, *, limit: int = 256) -> list[str]:
     handling. Never raises (a dictionary is an optimization, not a requirement)."""
     tokens: list[str] = []
     try:
-        from hexgraph.engine.agent_tools import ToolContext, run_tool
+        from hexgraph.agent.agent_tools import ToolContext, run_tool
         from hexgraph.db.models import Project
 
         project = session.get(Project, target.project_id)

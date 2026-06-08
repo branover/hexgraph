@@ -7,8 +7,8 @@ stay present. Offline; no backend, no network.
 
 from __future__ import annotations
 
-from hexgraph import vr_skill
-from hexgraph.vr_skill import (
+from hexgraph.agent import vr_skill
+from hexgraph.agent.vr_skill import (
     SPINE, SUBFILES, full_skill_markdown, skill_markdown,
 )
 

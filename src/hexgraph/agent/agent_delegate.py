@@ -19,7 +19,7 @@ import subprocess
 
 from sqlalchemy.orm import Session
 
-from hexgraph.agent_setup import full_skill_markdown, mcp_server_entry
+from hexgraph.agent.agent_setup import full_skill_markdown, mcp_server_entry
 from hexgraph.db.models import Project, Target, Task
 from hexgraph.engine.tasks import write_trace
 

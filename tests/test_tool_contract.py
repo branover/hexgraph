@@ -7,7 +7,7 @@ run twice converges on the same graph.
 """
 
 from hexgraph.db.models import EdgeType, NodeType
-from hexgraph.engine import mcp_tools as M
+from hexgraph.agent import mcp_tools as M
 from hexgraph.engine.edge_schemas import EDGE_ATTRIBUTE_SCHEMAS
 from hexgraph.engine.node_schemas import NODE_ATTRIBUTE_SCHEMAS, describe_nodes
 

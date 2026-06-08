@@ -69,7 +69,7 @@ def test_emulate_constant_unavailable_without_ghidra(hg_home):
 
 def test_recover_constant_advertised_in_catalog():
     """The verb is reachable by a coding agent — advertised in the read group, callable, typed."""
-    from hexgraph.engine import mcp_tools as M
+    from hexgraph.agent import mcp_tools as M
 
     spec = next((t for t in M.catalog({"read"}) if t["name"] == "re_recover_constant"), None)
     assert spec is not None and callable(spec["fn"])
@@ -79,7 +79,7 @@ def test_recover_constant_advertised_in_catalog():
 def test_recover_constant_gate_off_returns_error_not_raise(hg_home):
     """The MCP wrapper turns the opt-in PolicyViolation into a friendly error dict — an agent
     sees a clear message, never an exception, when features.emulation is off (the default)."""
-    from hexgraph.engine.mcp_tools import recover_constant
+    from hexgraph.agent.mcp_tools import recover_constant
 
     with session_scope() as s:
         p = create_project(s, name="ec")
@@ -90,7 +90,7 @@ def test_recover_constant_gate_off_returns_error_not_raise(hg_home):
 
 
 def test_recover_constant_unknown_target(hg_home):
-    from hexgraph.engine.mcp_tools import recover_constant
+    from hexgraph.agent.mcp_tools import recover_constant
 
     assert recover_constant("no-such-target", "f") == {"error": "target not found"}
 

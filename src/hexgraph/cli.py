@@ -266,7 +266,7 @@ def _cmd_config(args: argparse.Namespace) -> int:
 
 def _cmd_mcp(args: argparse.Namespace) -> int:
     if args._mcpcmd == "install":
-        from hexgraph.agent_setup import (
+        from hexgraph.agent.agent_setup import (
             SUBFILES, full_skill_markdown, install_help, write_skill,
         )
 
@@ -287,8 +287,8 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
 
     if getattr(args, "check", False):
         # Human confirmation that the server is wired up, without needing a client.
-        from hexgraph.engine.mcp_tools import catalog
-        from hexgraph.mcp_server import enabled_groups
+        from hexgraph.agent.mcp_tools import catalog
+        from hexgraph.agent.mcp_server import enabled_groups
 
         active = enabled_groups(groups)
         tools = catalog(active)
@@ -297,7 +297,7 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
             print(f"  [{t['group']}] {t['name']}")
         return 0
 
-    from hexgraph.mcp_server import serve_stdio
+    from hexgraph.agent.mcp_server import serve_stdio
 
     serve_stdio(groups)
     return 0

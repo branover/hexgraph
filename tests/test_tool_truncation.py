@@ -12,9 +12,9 @@ search_decompiled mines the recorded Observation store (no decompiler/Docker), s
 the truncation contract fully offline: record one fat decompilation, then grep it.
 """
 
-from hexgraph.engine import mcp_tools as M
+from hexgraph.agent import mcp_tools as M
 from hexgraph.engine import observations as O
-from hexgraph.engine.agent_tools import (
+from hexgraph.agent.agent_tools import (
     _MAX,
     _MAX_CEILING,
     _MAX_FLOOR,
@@ -182,7 +182,7 @@ def test_catalog_advertises_max_chars_on_body_tools(hg_home):
 def test_inprocess_specs_advertise_max_chars(hg_home):
     """The mock fixtures call the agent-loop tools by their bare names; those specs carry
     max_chars too, so a BYOK model can ask for a bigger body on a single pass."""
-    from hexgraph.engine.agent_tools import _STATIC_SPECS
+    from hexgraph.agent.agent_tools import _STATIC_SPECS
     by_name = {s.name: s.input_schema for s in _STATIC_SPECS}
     for name in ("decompile_function", "decompile_at", "disassemble", "search_decompiled"):
         props = by_name[name].get("properties", {})

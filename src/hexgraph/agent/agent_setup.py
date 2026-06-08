@@ -20,7 +20,7 @@ import shutil
 # Re-exported: the VR skill content + the helpers that render/emit it. `SKILL` is the
 # spine body; `write_skill` emits the spine + every sub-file; `full_skill_markdown` is the
 # whole bundle as one document (for consumers that can't read on-demand sub-files).
-from hexgraph.vr_skill import (  # noqa: F401
+from hexgraph.agent.vr_skill import (  # noqa: F401
     SKILL,
     SUBFILES,
     full_skill_markdown,

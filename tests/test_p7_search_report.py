@@ -80,7 +80,7 @@ def test_cross_target_same_code(hg_home):
 def test_nday_propagate_flow(hg_home):
     """The n-day MCP flow: link_same_code flags which side has a finding, and
     propagate_finding clones it onto the bare sibling wired derived_from→ source."""
-    from hexgraph.engine import mcp_tools as M
+    from hexgraph.agent import mcp_tools as M
     from hexgraph.engine.edges import add_edge
 
     with session_scope() as s:

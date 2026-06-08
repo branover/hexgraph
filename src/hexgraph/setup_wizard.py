@@ -484,7 +484,7 @@ def _coding_agent_step(console, questionary) -> None:
     Idempotent throughout: registration and the skill install are no-ops when already
     present, so re-running setup and choosing install again can't corrupt anything.
     """
-    from hexgraph import agent_setup
+    from hexgraph.agent import agent_setup
 
     console.rule("[bold]Coding-agent integration (optional)")
     console.print(

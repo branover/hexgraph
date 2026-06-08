@@ -344,7 +344,7 @@ def test_capability_table_exposes_build_flag(hg_home):
 # ── MCP run-tool ──────────────────────────────────────────────────────────────────
 
 def test_mcp_build_target_fails_closed(hg_home):
-    from hexgraph.engine.mcp_tools import build_target
+    from hexgraph.agent.mcp_tools import build_target
 
     with session_scope() as s:
         p = create_project(s, name="mcpgate")
@@ -357,7 +357,7 @@ def test_mcp_build_target_fails_closed(hg_home):
 def test_mcp_build_target_runs_with_gate(hg_home, monkeypatch):
     monkeypatch.setenv("HEXGRAPH_BUILDER", "mock")
     _enable_build()
-    from hexgraph.engine.mcp_tools import build_target, list_builds
+    from hexgraph.agent.mcp_tools import build_target, list_builds
 
     with session_scope() as s:
         p = create_project(s, name="mcprun")
@@ -372,7 +372,7 @@ def test_mcp_build_target_runs_with_gate(hg_home, monkeypatch):
 def test_mcp_build_target_rejects_secret_env(hg_home, monkeypatch):
     monkeypatch.setenv("HEXGRAPH_BUILDER", "mock")
     _enable_build()
-    from hexgraph.engine.mcp_tools import build_target
+    from hexgraph.agent.mcp_tools import build_target
 
     with session_scope() as s:
         p = create_project(s, name="mcpsecret")
