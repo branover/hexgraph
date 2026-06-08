@@ -65,9 +65,21 @@ class AflPlusPlusFuzzer(Fuzzer):
         if spec.dictionary:
             extra_args.append("--dict=" + json.dumps(spec.dictionary[:256]))
 
+        # Opt-in 5.x instrumentation knobs → the probe's container env (AFL_HG_*). The spec
+        # fields are already resolved to concrete values (None → settings default) by
+        # start_campaign, so here we just translate the enabled ones; afl_probe reads these
+        # and turns them into the AFL_LLVM_* compile flags.
+        probe_env: dict[str, str] = {}
+        if spec.bug_oracles:
+            probe_env["AFL_HG_BUG_ORACLES"] = "1"
+        if spec.path_coverage in (1, 2, 3):
+            probe_env["AFL_HG_PATH_COV"] = str(spec.path_coverage)
+        if spec.cmplog:
+            probe_env["AFL_HG_CMPLOG"] = "1"
+
         return PreparedFuzz(
             probe="afl_probe.py", image=fuzz_image(), artifact=src_path,
-            extra_args=extra_args, extra_ro_mounts=mounts,
+            extra_args=extra_args, extra_ro_mounts=mounts, env=probe_env,
             coverage_instrumented=True, engine="afl",
             # The harness + target are compiled with ASan; on high-ASLR-entropy kernels
             # ASan's MAP_FIXED shadow reservation can collide with a randomized mapping

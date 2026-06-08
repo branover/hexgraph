@@ -147,10 +147,16 @@ def main() -> int:
     # any other but with less ASan detail, so enabling them by default is a separate change:
     #   AFL_HG_BUG_ORACLES=1  → AFL_LLVM_BUG  (SCALAR/BUDGET/SIZEFILL/ALLOCSIZE/SLACK detectors)
     #   AFL_HG_PATH_COV=1|2|3 → AFL_LLVM_PATH (Ball-Larus per-function path coverage; overhead)
+    # Record which extras were actually applied (surfaced in the emitted result as
+    # `instrument_extras` so the engine/UI — and tests — can confirm the per-campaign knobs
+    # really reached the sandbox, not just that the campaign ran).
+    instrument_extras = {"bug_oracles": False, "path_coverage": 0, "cmplog": False}
     if os.environ.get("AFL_HG_BUG_ORACLES") == "1":
         benv["AFL_LLVM_BUG"] = "1"
+        instrument_extras["bug_oracles"] = True
     if os.environ.get("AFL_HG_PATH_COV") in ("1", "2", "3"):
         benv["AFL_LLVM_PATH"] = os.environ["AFL_HG_PATH_COV"]
+        instrument_extras["path_coverage"] = int(os.environ["AFL_HG_PATH_COV"])
     base_cmd = [ccx, "-g", "-O1", "-w", *inc_flags,
                 "-x", "c", src, shim, "-x", "none", *target_sources, "-o", fuzzer]
     build = subprocess.run(base_cmd, capture_output=True, text=True, env=benv)
@@ -172,6 +178,7 @@ def main() -> int:
                             capture_output=True, text=True,
                             env={**os.environ, "AFL_LLVM_CMPLOG": "1"})
         cmplog_ok = cl.returncode == 0
+    instrument_extras["cmplog"] = cmplog_ok
 
     # Seed corpus (AFL++ needs at least one non-empty seed).
     seed_dir = os.path.join(outdir, "seeds")
@@ -316,6 +323,7 @@ def main() -> int:
     logfh.close()
 
     final = _collect(outdir, work, fuzzer, max_crashes, done=True, coverage_instrumented=True)
+    final["instrument_extras"] = instrument_extras   # which opt-in knobs actually applied
     # Say LOUDLY when afl-fuzz didn't actually fuzz, rather than passing "0 crashes" off as
     # a clean run. Two cases: (1) it never managed a single exec (the forkserver handshake
     # failed or the dry-run calibration aborted); (2) it hard-aborted on the FIRST fuzz

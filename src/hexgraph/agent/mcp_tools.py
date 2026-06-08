@@ -447,6 +447,8 @@ def start_fuzz_campaign(target_id: str, surface: str | None = None, engine: str 
                         protocol: str | None = None, proto_spec: dict | None = None,
                         launch: bool | None = None, launch_binary: str | None = None,
                         launch_command: list | None = None,
+                        bug_oracles: bool | None = None, path_coverage: int | None = None,
+                        cmplog: bool | None = None,
                         resources: dict | None = None, environment: str | None = None) -> dict:
     """Start a fuzz CAMPAIGN on a target; returns immediately with {id, status:'running'}.
     HexGraph spawns a DETACHED hardened sandbox container that fuzzes continuously + a
@@ -474,6 +476,13 @@ def start_fuzz_campaign(target_id: str, surface: str | None = None, engine: str 
     input_reachable/dynamic (reached + triggered end-to-end through the live input boundary).
     NOTE: remote blind network-fuzz of a physical bench device is OFF by default (destructive
     — prefer replay/PoC).
+
+    AFL source-fuzz (source_lib/file_format) instrumentation knobs (each defaults to its
+    features.fuzzing.* setting when omitted): `bug_oracles` enables AFL++ 5.x's bug-detection
+    oracles (SCALAR/BUDGET/SIZEFILL/ALLOCSIZE/SLACK — catches arithmetic/OOB bugs ASan alone
+    misses); `path_coverage` (1=relaxed, 2=restricted, 3=strict Ball-Larus) adds per-function
+    path sensitivity (more coverage signal, more overhead); `cmplog` builds the CmpLog `-c`
+    binary to defeat magic-byte/memcmp gates. Ignored by the binary-only/network engines.
 
     `environment` selects WHERE the container runs (design §5.8b): omit / 'local' for the
     host Docker daemon, or a registered remote fuzz-environment id (see
@@ -504,6 +513,7 @@ def start_fuzz_campaign(target_id: str, surface: str | None = None, engine: str 
             host=host, port=port,
             protocol=protocol or "tcp", proto_spec=proto_spec,
             launch=launch, launch_binary=launch_binary, launch_command=launch_command,
+            bug_oracles=bug_oracles, path_coverage=path_coverage, cmplog=cmplog,
             environment_id=environment,
         )
         try:

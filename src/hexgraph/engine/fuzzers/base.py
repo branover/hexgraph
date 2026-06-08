@@ -96,6 +96,15 @@ class FuzzCampaignSpec:
     launch_binary: str | None = None          # host path to the server ELF HexGraph launches
     launch_command: list[str] | None = None   # optional argv override (in-container)
     structured: bool = False             # file_format: enable the structure-aware/grammar hook
+    # ── AFL++ source-fuzz instrumentation knobs (opt-in 5.x extras) ──────────────────
+    # None = inherit the settings default (features.fuzzing.{bug_oracles,path_coverage,
+    # cmplog}); start_campaign resolves None → concrete before recording config_json. The
+    # AFL fuzzer maps these into the probe's container env (AFL_HG_*); only the source path
+    # honours them. bug_oracles → AFL_LLVM_BUG (SCALAR/BUDGET/SIZEFILL/ALLOCSIZE/SLACK);
+    # path_coverage 1|2|3 → AFL_LLVM_PATH (Ball-Larus); cmplog → AFL_LLVM_CMPLOG (`-c`).
+    bug_oracles: bool | None = None
+    path_coverage: int | None = None
+    cmplog: bool | None = None
     # ── remote fuzz environment (Phase 6) — WHERE the container runs ─────────────────
     # The selected fuzz environment id ("local" / None → the host daemon; a remote env →
     # a RemoteDockerExecutor over its secret DOCKER_HOST, gated by features.fuzz_remote).
@@ -117,6 +126,8 @@ class FuzzCampaignSpec:
             "launch": self.launch, "launch_binary": self.launch_binary,
             "launch_command": list(self.launch_command) if self.launch_command else None,
             "structured": self.structured, "environment_id": self.environment_id,
+            "bug_oracles": self.bug_oracles, "path_coverage": self.path_coverage,
+            "cmplog": self.cmplog,
             # harness_source is bytes, not recorded in config_json (it lives on the
             # managed harness node / parent finding; resolved at prepare time).
         }
@@ -132,6 +143,10 @@ class PreparedFuzz:
     artifact: str | None = None                  # the harness/target file mounted at /artifact (ro)
     extra_args: list[str] = field(default_factory=list)
     extra_ro_mounts: list[tuple[str, str]] = field(default_factory=list)
+    # Extra environment variables forwarded INTO the probe container (the runner emits one
+    # `-e K=V` per entry). The seam by which per-campaign probe tuning reaches the sandbox
+    # (e.g. the AFL source-fuzz knobs AFL_HG_BUG_ORACLES / AFL_HG_PATH_COV / AFL_HG_CMPLOG).
+    env: dict[str, str] = field(default_factory=dict)
     coverage_instrumented: bool = False
     engine: str = "libfuzzer"
     # ── ASLR-disable for ASan source fuzzing (the ONLY seccomp relaxation) ───────────

@@ -98,6 +98,69 @@ def test_settings_resources_default_matches_shipped_floor():
     assert DEFAULTS["resources"]["default"] == ResourceSpec().to_dict()
 
 
+# ── opt-in AFL source-fuzz knobs: spec → prepared.env → runner `-e` (the real wiring) ──
+# These prove the previously-missing path end to end OFFLINE: a per-campaign knob reaches
+# the probe container. (Before, afl_probe read AFL_HG_* but nothing forwarded them in.)
+
+def test_apply_knob_defaults_reads_settings(hg_home):
+    st.update_settings({"features.fuzzing.bug_oracles": True, "features.fuzzing.cmplog": True,
+                        "features.fuzzing.path_coverage": 2})
+    spec = FuzzCampaignSpec(target_id="t")                    # all knobs unset (None)
+    C._apply_knob_defaults(spec)
+    assert spec.bug_oracles is True and spec.cmplog is True and spec.path_coverage == 2
+
+
+def test_apply_knob_defaults_explicit_wins(hg_home):
+    st.update_settings({"features.fuzzing.bug_oracles": True})
+    spec = FuzzCampaignSpec(target_id="t", bug_oracles=False)  # explicit off beats the setting
+    C._apply_knob_defaults(spec)
+    assert spec.bug_oracles is False
+    assert spec.cmplog is False and spec.path_coverage == 0    # unset → default off/0
+
+
+def test_spec_to_dict_roundtrips_knobs():
+    d = FuzzCampaignSpec(target_id="t", bug_oracles=True, path_coverage=3, cmplog=True).to_dict()
+    assert d["bug_oracles"] is True and d["path_coverage"] == 3 and d["cmplog"] is True
+
+
+def test_aflplusplus_prepare_maps_knobs_to_env(tmp_path):
+    from hexgraph.engine.fuzzers.aflplusplus import AflPlusPlusFuzzer
+    tc = tmp_path / "target.c"
+    tc.write_text("int target_parse(const unsigned char*d,unsigned long n){return 0;}")
+    spec = FuzzCampaignSpec(target_id="t", harness_source=HARNESS, target_sources=[str(tc)],
+                            bug_oracles=True, path_coverage=2, cmplog=True)
+    prepared = AflPlusPlusFuzzer().prepare(spec, None, None)
+    assert prepared.env == {"AFL_HG_BUG_ORACLES": "1", "AFL_HG_PATH_COV": "2",
+                            "AFL_HG_CMPLOG": "1"}
+
+
+def test_aflplusplus_prepare_no_knobs_empty_env(tmp_path):
+    from hexgraph.engine.fuzzers.aflplusplus import AflPlusPlusFuzzer
+    tc = tmp_path / "target.c"
+    tc.write_text("int target_parse(const unsigned char*d,unsigned long n){return 0;}")
+    spec = FuzzCampaignSpec(target_id="t", harness_source=HARNESS, target_sources=[str(tc)],
+                            bug_oracles=False, path_coverage=0, cmplog=False)
+    assert AflPlusPlusFuzzer().prepare(spec, None, None).env == {}
+
+
+def test_hardening_args_forwards_extra_env():
+    from hexgraph.sandbox.runner import SandboxRunner
+    args = SandboxRunner()._hardening_args(
+        allow_network=False, net_container=None, resources=ResourceSpec(), secret=False,
+        extra_env={"AFL_HG_BUG_ORACLES": "1", "AFL_HG_PATH_COV": "2"})
+    for kv in ("AFL_HG_BUG_ORACLES=1", "AFL_HG_PATH_COV=2"):  # forwarded as a `-e K=V` pair
+        assert kv in args and args[args.index(kv) - 1] == "-e"
+
+
+def test_hardening_args_skips_malformed_env_key():
+    from hexgraph.sandbox.runner import SandboxRunner
+    args = SandboxRunner()._hardening_args(
+        allow_network=False, net_container=None, resources=ResourceSpec(), secret=False,
+        extra_env={"BAD=KEY": "x", "": "y", "OK": "1"})
+    assert "OK=1" in args
+    assert not any("BAD=KEY" in a for a in args)              # a key containing '=' is dropped
+
+
 def test_resource_spec_for_per_container_type(hg_home):
     """resources.default is the shared baseline; resources.<type> diverges only that type's
     overridden keys — the analysis sandbox and build image can differ from each other and

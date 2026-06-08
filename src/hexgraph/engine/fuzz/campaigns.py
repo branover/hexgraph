@@ -233,6 +233,22 @@ def _executor_for(session, row: FuzzCampaign, executor):
 
 # ── Start a campaign (returns immediately) ──────────────────────────────────────
 
+def _apply_knob_defaults(spec: FuzzCampaignSpec) -> None:
+    """Resolve the opt-in AFL source-fuzz knobs in place: an unset (None) field inherits the
+    `features.fuzzing.*` setting; an explicit value wins. Mutates `spec` to concrete values."""
+    from hexgraph import settings as _st
+
+    if spec.bug_oracles is None:
+        spec.bug_oracles = bool(_st.get("features.fuzzing.bug_oracles", False))
+    if spec.cmplog is None:
+        spec.cmplog = bool(_st.get("features.fuzzing.cmplog", False))
+    if spec.path_coverage is None:
+        try:
+            spec.path_coverage = int(_st.get("features.fuzzing.path_coverage", 0) or 0)
+        except (TypeError, ValueError):
+            spec.path_coverage = 0
+
+
 def start_campaign(session: Session, project: Project, target: Target, *,
                    spec: FuzzCampaignSpec, resources: dict | None = None,
                    task: Task | None = None, executor=None) -> FuzzCampaign:
@@ -255,6 +271,11 @@ def start_campaign(session: Session, project: Project, target: Target, *,
                        and os.environ.get("HEXGRAPH_FUZZER") != "mock")
     if not is_live_network:
         assert_allows_execution()  # the existing exec gate — NO new gate for campaigns
+
+    # Resolve the opt-in AFL source-fuzz knobs (None spec field → settings default) to
+    # concrete values HERE — the single chokepoint every entry point (MCP/API/task/demo)
+    # flows through — so config_json records the EFFECTIVE values and resume re-applies them.
+    _apply_knob_defaults(spec)
 
     # Resolve WHERE the container runs (the fuzz-environment seam, design §5.8b). `local`/
     # None → the local executor; a registered remote env → a RemoteDockerExecutor over its
@@ -352,7 +373,7 @@ def start_campaign(session: Session, project: Project, target: Target, *,
                 prepared.probe, prepared.artifact, name=container_name, outdir=outdir,
                 image=prepared.image, extra_args=prepared.extra_args,
                 requires_execution=True, extra_ro_mounts=prepared.extra_ro_mounts,
-                resources=res, disable_aslr=prepared.disable_aslr,
+                resources=res, disable_aslr=prepared.disable_aslr, extra_env=prepared.env,
             )
             row.container_name = handle.name
     except Exception as exc:  # noqa: BLE001 — a failed launch fails the campaign cleanly
@@ -910,6 +931,11 @@ def _update_stats(row: FuzzCampaign, status: dict) -> None:
         stats["peak_rss"] = max(int(stats.get("peak_rss") or 0), int(status["peak_rss"]))
     if status.get("coverage_percent") is not None:
         stats["coverage_percent"] = status["coverage_percent"]
+    # Which opt-in AFL instrumentation knobs actually applied in the sandbox (afl_probe
+    # reports this) — surfaced so the engine/UI/agent can confirm a per-campaign knob really
+    # took effect, not just that the campaign ran.
+    if status.get("instrument_extras") is not None:
+        stats["instrument_extras"] = status["instrument_extras"]
     # A diagnostic from a probe that compiled + instrumented but couldn't reach steady-state
     # fuzzing (e.g. the AFL++ forkserver/dry-run aborted on an unstable host kernel, or a
     # boofuzz engine note). Surfaced so the campaign isn't a silent zero-crash "success" —
@@ -1087,6 +1113,10 @@ def _spec_from_config(session, project, target, row, cfg) -> FuzzCampaignSpec:
         # fresh one is created on resume); just the inputs needed to relaunch.
         launch=cfg.get("launch"), launch_binary=cfg.get("launch_binary"),
         launch_command=cfg.get("launch_command"), sysroot=cfg.get("sysroot"),
+        # Carry the opt-in AFL knobs so a resumed campaign keeps the same instrumentation
+        # (start_campaign re-resolves any None against current settings).
+        bug_oracles=cfg.get("bug_oracles"), path_coverage=cfg.get("path_coverage"),
+        cmplog=cfg.get("cmplog"),
     )
 
 

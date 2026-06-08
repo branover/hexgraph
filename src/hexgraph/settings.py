@@ -110,6 +110,16 @@ DEFAULTS: dict[str, Any] = {
             "max_len": 4096,             # max generated input size (bytes)
             "max_crashes": 10,           # cap on unique-crash findings per run
             "timeout": 300,              # sandbox wall-clock (>= compile + max_total_time)
+            # AFL++ source-fuzz instrumentation defaults (a per-campaign fuzz_start arg
+            # overrides each). bug_oracles = AFL++ 5.x bug-detection oracles (SCALAR/BUDGET/
+            # SIZEFILL/ALLOCSIZE/SLACK — arithmetic/OOB bugs ASan misses); path_coverage =
+            # Ball-Larus per-function path coverage (0=off,1=relaxed,2=restricted,3=strict;
+            # more signal, more overhead); cmplog = the CmpLog `-c` binary (magic-byte gates).
+            # OFF/0 by default — the oracles surface a new "crash" class the triage pipeline
+            # doesn't yet specially classify, so opt in per campaign or flip the default here.
+            "bug_oracles": False,
+            "path_coverage": 0,
+            "cmplog": False,
             # The DEDICATED fuzz image (AFL++/libFuzzer/llvm-symbolizer/afl-cov/gdb +
             # an exploitable-style classifier, design §5.4 D4). NEVER the shared sandbox
             # image; set HEXGRAPH_FUZZ_IMAGE to override (worktree: a private tag).
@@ -292,6 +302,9 @@ ALLOWED: dict[str, tuple[Any, set | None]] = {
     "features.fuzzing.max_crashes": (int, None),
     "features.fuzzing.timeout": (int, None),
     "features.fuzzing.image": (str, None),
+    "features.fuzzing.bug_oracles": (bool, None),
+    "features.fuzzing.path_coverage": (int, {0, 1, 2, 3}),
+    "features.fuzzing.cmplog": (bool, None),
     "features.poc.enabled": (bool, None),
     "features.poc.timeout": (int, None),
     "features.build.enabled": (bool, None),
