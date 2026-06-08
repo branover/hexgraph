@@ -84,6 +84,14 @@ def _code_node(n: Node) -> dict:
     }
 
 
+def to_graph_node(n: Node) -> dict:
+    """The single-node serializer for the GET-by-id endpoint: the same `GraphNode`
+    shape `_code_node` produces (so the client never branches on which endpoint a
+    node came from), plus the `archived` flag — a node fetched by id may be archived
+    (and so absent from the rendered graph), and the caller decides what to do."""
+    return {**_code_node(n), "archived": n.archived}
+
+
 def _finding_node(f: Finding) -> dict:
     return {
         "id": f.id, "type": "finding", "label": f.title, "severity": f.severity,

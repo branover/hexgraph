@@ -339,7 +339,12 @@ export default function Workspace() {
   const focusOn = (id: string, hop = 1) => {
     const h = Math.max(1, Math.min(3, hop));
     setView("graph"); setSelTask(undefined); setSelCampaign(undefined);
-    onGraphSelect(id, (graph?.nodes.find((n) => n.id === id)?.type === "target") ? "target" : "node");
+    // Disambiguate target vs node for onGraphSelect. Prefer the loaded graph; when the id
+    // isn't loaded (skeleton/LOD), fall back to detail.targets so a target still selects as
+    // a target (a node/hypothesis defaults to "node", which onGraphSelect fetches by id).
+    const inGraph = graph?.nodes.find((n) => n.id === id);
+    const isTarget = inGraph ? inGraph.type === "target" : !!detail?.targets.find((t) => t.id === id);
+    onGraphSelect(id, isTarget ? "target" : "node");
     setFocusStack((prev) => {
       const top = prev[prev.length - 1];
       const frame: FocusFrame = { id, hop: h, label: labelFor(id) };
@@ -438,10 +443,13 @@ export default function Workspace() {
   };
   // A journal @-mention chip was clicked → select the referenced object via the SAME plumbing
   // every other navigation uses: a finding opens in the Inspector; a node/target/hypothesis
-  // focuses in the graph (focusOn already selects + serializes). Danglers never call this.
+  // routes through focusOn (selects + serializes + focuses the camera when the object is
+  // loaded). On a large project the graph loads skeleton-first, so the mentioned object may
+  // NOT be in graph.nodes — onGraphSelect then fetches it by id (api.getNode) / falls back to
+  // detail.targets, so the inspector opens regardless of graph LOD. Danglers never call this.
   const selectMention = (kind: string, id: string) => {
     if (kind === "finding") viewFinding(id);
-    else focusOn(id);  // node / target / hypothesis — the node lives in graph.nodes regardless of pin
+    else focusOn(id);  // node / target / hypothesis — fetched by id if not loaded in the graph
   };
 
   // Finding → source jump: open the file in Source mode at the line (design §6.3).
@@ -486,15 +494,34 @@ export default function Workspace() {
   };
   const clearTasks = async () => { if (projectId) { await api.clearTasks(projectId); setSelTask(undefined); await load(); } };
 
-  const onGraphSelect = (id: string, type: string) => {
+  // Open an entity in the detail/inspector pane. The graph loads skeleton-first / a
+  // subset on large projects (graphSkeleton), so `graph.nodes` does NOT contain every
+  // node — when a node is selected (a journal @-mention click, a toolbar-search hit) but
+  // isn't loaded, fall back to fetching it by id (api.getNode) so the inspector still
+  // opens regardless of graph LOD. Async, but every caller is fire-and-forget setState,
+  // so none relies on it resolving synchronously.
+  const onGraphSelect = async (id: string, type: string) => {
     setSelGraphId(id); setSelTask(undefined);
     if (type === "finding") {
       const f = detail!.findings.find((x) => x.id === id);
       if (f) { setSelNode(null); setSelFinding(f); }
-    } else {
-      const n = graph!.nodes.find((x) => x.id === id);
-      if (n) { setSelFinding(null); setSelNode(n); }
+      return;
     }
+    const n = graph?.nodes.find((x) => x.id === id);
+    if (n) { setSelFinding(null); setSelNode(n); return; }
+    // A `target` ref not in the loaded graph: build a GraphNode from the loaded targets.
+    if (type === "target") {
+      const t = detail?.targets.find((x) => x.id === id);
+      if (t) { setSelFinding(null); setSelNode({ id: t.id, type: "target", label: t.name, kind: t.kind, parent_id: t.parent_id }); }
+      return;
+    }
+    // A node (or hypothesis, which is a node_type='hypothesis' node) not in the loaded
+    // graph: fetch it by id so the inspector opens anyway (NodeInspector routes a
+    // hypothesis node to the HypothesisPanel).
+    try {
+      const fetched = await api.getNode(projectId!, id);
+      setSelFinding(null); setSelNode(fetched);
+    } catch { /* node not found / removed — leave the pane as-is */ }
   };
 
   const doSearch = (text: string) => {

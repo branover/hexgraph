@@ -273,6 +273,10 @@ export const api = {
   },
   deleteProject: (pid: string) => delJSON<{ deleted_project: string; rows: Record<string, number> }>(`/api/projects/${pid}`),
   createNode: (pid: string, body: any) => postJSON<any>(`/api/projects/${pid}/nodes`, body),
+  // Fetch ONE node by id in the GraphNode shape — used to open a node in the inspector
+  // when it isn't in the (skeleton/LOD-limited) loaded graph (e.g. a journal @-mention
+  // for a node not currently rendered). Returns the `archived` flag too (404 if missing).
+  getNode: (pid: string, nid: string) => getJSON<GraphNode>(`/api/projects/${pid}/nodes/${nid}`),
   patchNode: (pid: string, nid: string, body: Partial<{ name: string; address: string; attrs: any }>) => patchJSON<any>(`/api/projects/${pid}/nodes/${nid}`, body),
   readFile: (tid: string, rel: string) => getJSON<{ rel: string; size: number; encoding: "text" | "binary"; content: string; truncated: boolean }>(`/api/targets/${tid}/file?rel=${encodeURIComponent(rel)}`),
   removeNode: (pid: string, nid: string) => delJSON<{ archived: boolean; id: string }>(`/api/projects/${pid}/nodes/${nid}`),

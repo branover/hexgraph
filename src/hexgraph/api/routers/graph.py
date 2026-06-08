@@ -13,7 +13,13 @@ from hexgraph.engine.graph.authoring import (
     create_socket,
 )
 from hexgraph.engine.graph.edge_schemas import SOCKET_KINDS, describe_edges, merge_edge_attrs
-from hexgraph.engine.graph.graph import build_graph, build_room, build_skeleton, graph_size
+from hexgraph.engine.graph.graph import (
+    build_graph,
+    build_room,
+    build_skeleton,
+    graph_size,
+    to_graph_node,
+)
 from hexgraph.engine.graph.node_schemas import describe_nodes
 from hexgraph.engine.graph.nodes import normalize_symbol_name
 from hexgraph.engine.graph.removal import archive_node, delete_edge, restore_node
@@ -37,6 +43,20 @@ def api_create_node(project_id: str, body: NodeCreate):
             raise HTTPException(400, str(exc))
         return {"id": n.id, "node_type": n.node_type, "name": n.name, "target_id": n.target_id,
                 "address": n.address, "attrs": n.attrs_json or {}}
+
+
+@router.get("/api/projects/{project_id}/nodes/{node_id}")
+def api_get_node(project_id: str, node_id: str):
+    """Fetch ONE node by id in the graph-node shape (`type:"node"`, `node_type`,
+    `label`, …, plus `archived`). The client falls back to this when a node isn't
+    in the (skeleton/LOD-limited) loaded graph — e.g. clicking a journal @-mention
+    for a node that isn't currently rendered — so the inspector can still open it.
+    Includes archived nodes (the `archived` flag lets the caller decide)."""
+    with session_scope() as s:
+        n = s.get(Node, node_id)
+        if n is None or n.project_id != project_id:
+            raise HTTPException(404, "node not found")
+        return to_graph_node(n)
 
 
 @router.delete("/api/projects/{project_id}/nodes/{node_id}")
