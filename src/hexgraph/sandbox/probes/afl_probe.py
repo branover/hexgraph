@@ -136,9 +136,11 @@ def main() -> int:
     # the historical "Incorrect fuzzing setup detected" / cvg>100% aborts on AFL++ 5.x).
     compiler_dict = os.path.join(outdir, "compiler.dict")
     benv = {**os.environ, "AFL_USE_ASAN": "1",
-            # AFL_LLVM_DICT2FILE (5.x): the compiler records every constant string/int
-            # comparison it sees into a dictionary — a far richer jump-start than the target's
-            # strings alone. Merged into the -x set below; harmless if it stays empty.
+            # AFL_LLVM_DICT2FILE (5.x): the compiler records constant string/memcmp/switch
+            # comparisons it sees into a dictionary — useful extra tokens for real targets
+            # that gate on magic values (firmware parsers etc.), beyond the strings dict.
+            # Merged into the -x set below; often empty for targets with no constant
+            # comparisons (e.g. pure byte checks), which the size>0 guard below handles.
             "AFL_LLVM_DICT2FILE": compiler_dict}
     # Opt-in 5.x instrumentation extras, OFF by default — they add LLVM passes / grow the map
     # and (for the oracles) surface a new class of "crash" the finding pipeline triages like
