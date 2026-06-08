@@ -335,7 +335,8 @@ def test_afl_hard_abort_flags_map_inconsistency(tmp_path):
     # The specific map-inconsistency message must win over the generic "PROGRAM ABORT" one
     # (both substrings are present), and it must point at the re-pin remedy.
     note = _afl_failure_note(str(log))
-    assert note and "coverage map is inconsistent" in note and "AFLPP_REF" in note
+    assert note and "coverage-map size mismatch" in note
+    assert "AFL_SKIP_BIN_CHECK" in note and "AFLPP_REF" in note  # points at both likely causes
     # A hard abort is flagged regardless of exec count — the bug was a few dry-run execs
     # masking it as a clean "0 crashes" run.
     assert _afl_hard_abort(str(log)) is True

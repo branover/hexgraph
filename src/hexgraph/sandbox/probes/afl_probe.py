@@ -127,13 +127,32 @@ def main() -> int:
             "  if (argc > 1) fclose(f);\n"
             "  LLVMFuzzerTestOneInput(buf, n);\n"
             "  return 0;\n}\n")
-    # Build the instrumented classic-forkserver fuzzer: SanitizerCoverage (trace-pc-guard)
-    # for edge feedback + ASan in the harness/shim/target objects. afl-clang-fast adds its
-    # forkserver automatically.
-    cov_flags = ["-fsanitize=address", "-fsanitize-coverage=trace-pc-guard"]
-    base_cmd = [ccx, "-g", "-O1", "-w", *cov_flags, *inc_flags,
+    # Build the instrumented classic-forkserver fuzzer. afl-clang-fast (= afl-cc) injects its
+    # OWN edge coverage (default PCGUARD, collision-free) and — with AFL_USE_ASAN=1 — ASan, so
+    # we deliberately DON'T hand it -fsanitize-coverage / -fsanitize=address ourselves: letting
+    # afl-cc own coverage is the idiomatic usage, and afl-fuzz reads the real coverage-map size
+    # from the binary's metadata (which is exactly why AFL_SKIP_BIN_CHECK — which disables that
+    # auto map-sizing — must NOT be set; passing the sancov flag plus that skip is what produced
+    # the historical "Incorrect fuzzing setup detected" / cvg>100% aborts on AFL++ 5.x).
+    compiler_dict = os.path.join(outdir, "compiler.dict")
+    benv = {**os.environ, "AFL_USE_ASAN": "1",
+            # AFL_LLVM_DICT2FILE (5.x): the compiler records constant string/memcmp/switch
+            # comparisons it sees into a dictionary — useful extra tokens for real targets
+            # that gate on magic values (firmware parsers etc.), beyond the strings dict.
+            # Merged into the -x set below; often empty for targets with no constant
+            # comparisons (e.g. pure byte checks), which the size>0 guard below handles.
+            "AFL_LLVM_DICT2FILE": compiler_dict}
+    # Opt-in 5.x instrumentation extras, OFF by default — they add LLVM passes / grow the map
+    # and (for the oracles) surface a new class of "crash" the finding pipeline triages like
+    # any other but with less ASan detail, so enabling them by default is a separate change:
+    #   AFL_HG_BUG_ORACLES=1  → AFL_LLVM_BUG  (SCALAR/BUDGET/SIZEFILL/ALLOCSIZE/SLACK detectors)
+    #   AFL_HG_PATH_COV=1|2|3 → AFL_LLVM_PATH (Ball-Larus per-function path coverage; overhead)
+    if os.environ.get("AFL_HG_BUG_ORACLES") == "1":
+        benv["AFL_LLVM_BUG"] = "1"
+    if os.environ.get("AFL_HG_PATH_COV") in ("1", "2", "3"):
+        benv["AFL_LLVM_PATH"] = os.environ["AFL_HG_PATH_COV"]
+    base_cmd = [ccx, "-g", "-O1", "-w", *inc_flags,
                 "-x", "c", src, shim, "-x", "none", *target_sources, "-o", fuzzer]
-    benv = {**os.environ, "AFL_USE_ASAN": "1"}
     build = subprocess.run(base_cmd, capture_output=True, text=True, env=benv)
     if build.returncode != 0:
         return _emit({"compiled": False, "ran": False, "coverage_instrumented": False,
@@ -147,7 +166,7 @@ def main() -> int:
     # strong, so we leave it off by default. Best-effort: if it fails to build we skip it.
     cmplog_ok = False
     if os.environ.get("AFL_HG_CMPLOG") == "1":
-        cl = subprocess.run([ccx, "-g", "-O1", "-w", "-fsanitize-coverage=trace-pc-guard",
+        cl = subprocess.run([ccx, "-g", "-O1", "-w",
                              *inc_flags, "-x", "c", src, shim, "-x", "none", *target_sources,
                              "-o", cmplog],
                             capture_output=True, text=True,
@@ -181,6 +200,10 @@ def main() -> int:
             dict_args = ["-x", dpath]
         except Exception:  # noqa: BLE001
             dict_args = []
+    # Add the compiler-extracted dictionary (AFL_LLVM_DICT2FILE) from the instrumented build —
+    # constant comparisons the strings-based token dict misses. afl-fuzz accepts multiple -x.
+    if os.path.exists(compiler_dict) and os.path.getsize(compiler_dict) > 0:
+        dict_args += ["-x", compiler_dict]
 
     afl = shutil.which("afl-fuzz")
     if not afl:
@@ -194,7 +217,13 @@ def main() -> int:
                # miss crashes: ASan aborts the child (abort_on_error=1) so AFL sees the
                # crash via waitpid, and we re-run + symbolize every saved input anyway.
                "AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES": "1",
-               "AFL_SKIP_BIN_CHECK": "1",  # the afl-clang-fast binary isn't afl-cc-shaped to afl's check
+               # NOTE: we deliberately do NOT set AFL_SKIP_BIN_CHECK. It skips afl-fuzz's
+               # binary check AND disables automatic coverage-map sizing (afl-fuzz then keeps a
+               # default map instead of reading the target's real size), which silently
+               # degraded coverage on 4.x and ABORTED every source campaign on 5.x with
+               # "Incorrect fuzzing setup detected" (cvg>100%). It's only for non-instrumented
+               # / -n dumb-mode targets; our afl-clang-fast binary IS instrumented, so the
+               # check passes and auto map-sizing works.
                # Give the forkserver a generous handshake budget. The FIRST instrumented
                # exec under ASan+SanCov is heavy (the sanitizer runtime initialises lazily)
                # and on slow / heavily-constrained hosts can exceed AFL's default forkserver
@@ -321,9 +350,9 @@ _AFL_FAIL_SIGNATURES = (
     # Most specific first: "Incorrect fuzzing setup detected" is itself printed under a
     # "PROGRAM ABORT" header, so it must win over the generic PROGRAM ABORT message below.
     ("Incorrect fuzzing setup detected",
-     "afl-fuzz aborted: the instrumented build's coverage map is inconsistent "
-     "(cvg>100%, 'incorrectly instrumented shared libraries') — an AFL++ version/"
-     "toolchain drift; re-pin the fuzz image (docker/fuzz.Dockerfile AFLPP_REF)"),
+     "afl-fuzz aborted: coverage-map size mismatch (cvg>100%, 'incorrectly instrumented "
+     "shared libraries') — usually a wrong map size (e.g. AFL_SKIP_BIN_CHECK disabling "
+     "auto map-sizing) or an AFL++ version/toolchain drift (docker/fuzz.Dockerfile AFLPP_REF)"),
     ("Fork server crashed", "afl-fuzz forkserver crashed during the handshake "
                             "(the instrumented target faulted before fuzzing began)"),
     ("Unable to communicate with fork server", "afl-fuzz forkserver did not come up"),
