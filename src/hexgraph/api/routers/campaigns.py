@@ -56,6 +56,11 @@ class CampaignCreate(BaseModel):
     # Optional fuzzing dictionary tokens (auto-derived from the target's strings when
     # omitted) — mirrors the MCP start_fuzz_campaign param + the Fuzz modal input.
     dictionary: list[str] | None = None
+    # Opt-in AFL source-fuzz instrumentation knobs (each inherits features.fuzzing.* when
+    # omitted) — mirror the MCP start_fuzz_campaign params + the Fuzz modal toggles.
+    bug_oracles: bool | None = None     # AFL++ 5.x bug-detection oracles (AFL_LLVM_BUG)
+    path_coverage: int | None = None    # Ball-Larus path coverage 0..3 (AFL_LLVM_PATH)
+    cmplog: bool | None = None          # CmpLog -c binary (magic-byte/memcmp gating)
     build_spec_id: str | None = None
     net: CampaignNet | None = None      # network-fuzz overrides (surface=network)
     # Per-campaign ResourceSpec override (mem/cpus/pids/tmpfs/timeout/unconstrained).
@@ -123,6 +128,8 @@ def api_start_campaign(project_id: str, body: CampaignCreate):
             dictionary=body.dictionary or [],
             max_total_time=body.max_total_time or 60, max_len=body.max_len or 4096,
             max_crashes=body.max_crashes or 10, instances=body.instances or 1,
+            bug_oracles=body.bug_oracles, path_coverage=body.path_coverage,
+            cmplog=body.cmplog,
             build_spec_id=body.build_spec_id,
             host=net.host if net else None, port=net.port if net else None,
             protocol=(net.protocol if net and net.protocol else "tcp"),
