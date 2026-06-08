@@ -283,14 +283,14 @@ def seed(session, *, reset: bool) -> dict:
     from hexgraph.engine import assurance as A
     from hexgraph.engine.build import builds as B
     from hexgraph.engine.audit import record_egress
-    from hexgraph.engine.authoring import create_edge, create_socket
+    from hexgraph.engine.graph.authoring import create_edge, create_socket
     from hexgraph.engine.build.build import BuildSpec
-    from hexgraph.engine.edges import add_edge
+    from hexgraph.engine.graph.edges import add_edge
     from hexgraph.engine.filesystem import persistent_base, record_manifest
     from hexgraph.engine.findings import persist_finding
     from hexgraph.engine.fuzzers.base import FuzzCampaignSpec
     from hexgraph.engine.ingest import create_project, ingest_file
-    from hexgraph.engine.nodes import get_or_create_node, materialize_function
+    from hexgraph.engine.graph.nodes import get_or_create_node, materialize_function
     from hexgraph.engine.build.source import (
         create_source_tree, link_finding_to_source, materialize_source_file, write_source_file,
     )
@@ -310,7 +310,7 @@ def seed(session, *, reset: bool) -> dict:
     # Idempotency: optionally wipe a prior showcase project of the same name.
     existing = session.query(Project).filter(Project.name == PROJECT_NAME).all()
     if existing and reset:
-        from hexgraph.engine.removal import delete_project
+        from hexgraph.engine.graph.removal import delete_project
         for p in existing:
             delete_project(session, p.id)
         session.flush()
@@ -683,7 +683,7 @@ def seed(session, *, reset: bool) -> dict:
     # seeded above (one deliberately dangling), so the Journal tab + mention chips + the
     # back-reference "narrative trail" all have real content to render and capture.
     _step("Seed the research journal + a hypothesis (working-memory layer)")
-    from hexgraph.engine import hypotheses as _H
+    from hexgraph.engine.graph import hypotheses as _H
     from hexgraph.engine import journal as _J
     hyp = _H.create_hypothesis(
         session, project,

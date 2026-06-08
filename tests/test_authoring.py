@@ -83,7 +83,7 @@ def test_edge_endpoints_must_exist(hg_home):
         t = ingest_file(s, project, fixture_path("vuln_httpd"), name="httpd")
         a = create_app  # noqa
         pid, tid = project.id, t.id
-        n = __import__("hexgraph.engine.nodes", fromlist=["materialize_function"]).materialize_function(
+        n = __import__("hexgraph.engine.graph.nodes", fromlist=["materialize_function"]).materialize_function(
             s, project_id=pid, target_id=tid, name="f")
         nid = n.id
     c = _client()

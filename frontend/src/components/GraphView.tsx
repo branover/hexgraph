@@ -286,7 +286,7 @@ export default function GraphView({
     // `about` edges go node→target — guard on the source being a finding so they don't pollute.)
     const findingAbout = new Map<string, string[]>(); // findingId → [nodeId/targetId]
     // A hypothesis/pattern node carries no `target_id` of its own, but a hypothesis is `about`
-    // a target (node→target `about` edge, engine/hypotheses.py). Without placing it, it floats
+    // a target (node→target `about` edge, engine/graph/hypotheses.py). Without placing it, it floats
     // as a LOOSE node — on a single-binary graph that stranded the lone hypothesis far below the
     // room, leaving a big dead gap (issue 5.1). Map each non-finding node to the target it's
     // `about` so we can nest it under that target's room instead of letting it float.

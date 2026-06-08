@@ -837,7 +837,7 @@ def list_nodes(project_id: str, target_id: str | None = None, node_type: str | N
 def graph_stats(project_id: str) -> dict:
     """Per-type node/edge tallies for the project's live graph — before/after counts
     without listing (and truncating on) every node."""
-    from hexgraph.engine.graph import graph_stats as _stats
+    from hexgraph.engine.graph.graph import graph_stats as _stats
 
     with session_scope() as s:
         if s.get(Project, project_id) is None:
@@ -876,7 +876,7 @@ def list_edges(project_id: str, node_id: str | None = None) -> list[dict]:
 
 
 def search(project_id: str, q: str) -> dict:
-    from hexgraph.engine.search import search_project
+    from hexgraph.engine.graph.search import search_project
 
     with session_scope() as s:
         if s.get(Project, project_id) is None:
@@ -1033,7 +1033,7 @@ def propagate_finding(finding_id: str, target_id: str, function: str | None = No
     for "the same bug, other binary". Pass `function` to point it at the sibling's
     function name. Returns the new finding id."""
     from hexgraph.db.models import EdgeType, Finding, Task
-    from hexgraph.engine.edges import add_edge
+    from hexgraph.engine.graph.edges import add_edge
     from hexgraph.engine.findings import persist_finding
     from hexgraph.engine.tasks import create_task
     from hexgraph.models.finding import Finding as FModelCls
@@ -1081,7 +1081,7 @@ def create_node(project_id: str, node_type: str, name: str, target_id: str | Non
     a sink wants {"operation","why"}). DON'T create a `sink` node for a known dangerous call
     (system/strcpy/…) — that's a symbol/function node with is_sink=true. Populating the
     recommended attrs is what makes repeated runs of the same analysis converge."""
-    from hexgraph.engine.authoring import InvariantError, create_node as _create
+    from hexgraph.engine.graph.authoring import InvariantError, create_node as _create
 
     with session_scope() as s:
         project = s.get(Project, project_id)
@@ -1107,7 +1107,7 @@ def create_edge(project_id: str, src_kind: str, src_id: str, dst_kind: str, dst_
     `listens_on` edge's `address`). With `merge=True`, a repeat of the same
     (src,dst,type) folds into the existing edge: list attributes like `call_sites`
     accumulate instead of drawing a parallel edge."""
-    from hexgraph.engine.authoring import InvariantError, create_edge as _create
+    from hexgraph.engine.graph.authoring import InvariantError, create_edge as _create
 
     with session_scope() as s:
         project = s.get(Project, project_id)
@@ -1128,7 +1128,7 @@ def update_edge(edge_id: str, attrs: dict, merge: bool = True) -> dict:
     and overwrites scalars; `merge=False` replaces attrs wholesale. See get_schemas
     for the attributes meaningful to each edge type."""
     from hexgraph.db.models import Edge
-    from hexgraph.engine.edge_schemas import merge_edge_attrs
+    from hexgraph.engine.graph.edge_schemas import merge_edge_attrs
 
     with session_scope() as s:
         e = s.get(Edge, edge_id)
@@ -1142,7 +1142,7 @@ def archive_node(project_id: str, node_id: str) -> dict:
     """Soft-remove a node from the graph (reversible). The node and the edges touching
     it are hidden; re-adding the same node (create_node / a task) or restore_node brings
     it and its edges back — nothing is deleted."""
-    from hexgraph.engine.removal import archive_node as _archive
+    from hexgraph.engine.graph.removal import archive_node as _archive
 
     with session_scope() as s:
         try:
@@ -1154,7 +1154,7 @@ def archive_node(project_id: str, node_id: str) -> dict:
 
 def restore_node(project_id: str, node_id: str) -> dict:
     """Un-archive a previously soft-removed node (its hidden edges reappear)."""
-    from hexgraph.engine.removal import restore_node as _restore
+    from hexgraph.engine.graph.removal import restore_node as _restore
 
     with session_scope() as s:
         try:
@@ -1196,7 +1196,7 @@ def restore_target(project_id: str, target_id: str) -> dict:
 def delete_edge(edge_id: str) -> dict:
     """Permanently delete one edge (hard delete — re-create it with create_edge to
     bring it back). To remove a node's edges reversibly, archive the node instead."""
-    from hexgraph.engine.removal import delete_edge as _del
+    from hexgraph.engine.graph.removal import delete_edge as _del
 
     with session_scope() as s:
         return {"deleted": _del(s, edge_id), "edge_id": edge_id}
@@ -1208,7 +1208,7 @@ def delete_finding(finding_id: str) -> dict:
     finding aside reversibly instead (keep the row, greyed, restorable), call
     update_finding(status='dismissed'). Deleting also removes every edge/annotation
     touching the finding, leaving no dangling reference. Safe no-op if already gone."""
-    from hexgraph.engine.removal import delete_finding as _del
+    from hexgraph.engine.graph.removal import delete_finding as _del
 
     with session_scope() as s:
         out = _del(s, finding_id)
@@ -1226,7 +1226,7 @@ def create_socket(project_id: str, kind: str = "tcp", port: int | str | None = N
     client `connects_to` it — both resolve to this ONE node, so you can see which
     binaries talk over the same endpoint. Put the listen/connect code address on
     those edges (create_edge attrs={'address': '0x...'})."""
-    from hexgraph.engine.authoring import InvariantError, create_socket as _create
+    from hexgraph.engine.graph.authoring import InvariantError, create_socket as _create
 
     with session_scope() as s:
         project = s.get(Project, project_id)
@@ -1307,7 +1307,7 @@ def link_evidence(hypothesis_id: str, finding_id: str, relation: str) -> dict:
     (open → supported / refuted / contested). relation = 'supports' | 'refutes'
     ('confirms'→supports and 'contradicts'→refutes are accepted aliases). To pin a
     hard verdict on a verified finding, also call set_hypothesis_status(id,'confirmed')."""
-    from hexgraph.engine.hypotheses import HypothesisError, link_evidence as _le, summary
+    from hexgraph.engine.graph.hypotheses import HypothesisError, link_evidence as _le, summary
 
     with session_scope() as s:
         node = s.get(Node, hypothesis_id)
@@ -1327,7 +1327,7 @@ def set_hypothesis_status(hypothesis_id: str, status: str | None = None,
     verdict (confirmed | rejected | open | supported | refuted | contested). `work_state` moves
     the worklist axis (investigating | parked | done) — orthogonal to the verdict. Pass
     `rationale` to record WHY (kept as the hypothesis's status_note)."""
-    from hexgraph.engine.hypotheses import HypothesisError, set_status, set_work_state, summary
+    from hexgraph.engine.graph.hypotheses import HypothesisError, set_status, set_work_state, summary
 
     if status is None and work_state is None:
         return {"error": "pass status and/or work_state"}
@@ -1348,7 +1348,7 @@ def close_hypothesis(hypothesis_id: str, verdict: str | None = None,
     `verdict` (confirmed | rejected | supported | refuted | …) explaining how it resolved.
     A proven question closes confirmed/supported; a ruled-out one closes refuted/rejected (a
     documented dead end). Use when you've settled a hypothesis either way."""
-    from hexgraph.engine.hypotheses import HypothesisError, set_work_state, summary
+    from hexgraph.engine.graph.hypotheses import HypothesisError, set_work_state, summary
 
     with session_scope() as s:
         try:
@@ -1364,7 +1364,7 @@ def list_hypotheses(project_id: str, work_state: str | None = None,
     evidence status, work_state, pinned_to_graph, and support/refute counts. Filter by
     `work_state` (investigating | parked | done) and/or evidence `status`. Your "what am I
     working on" orient before recording a new hypothesis or resuming a session."""
-    from hexgraph.engine.hypotheses import HypothesisError, list_hypotheses as _list
+    from hexgraph.engine.graph.hypotheses import HypothesisError, list_hypotheses as _list
 
     with session_scope() as s:
         project = s.get(Project, project_id)
@@ -1750,12 +1750,12 @@ def get_schemas() -> dict:
     import typing
 
     from hexgraph.db.models import EdgeType, FindingStatus, NodeType
-    from hexgraph.engine.annotations import KINDS as ANN_KINDS, NODE_KINDS as ANN_NODE_KINDS
+    from hexgraph.engine.graph.annotations import KINDS as ANN_KINDS, NODE_KINDS as ANN_NODE_KINDS
     from hexgraph.engine.assurance import LADDER as _ASSURANCE_LADDER, PRECONDITIONS as _PRECONDITIONS
-    from hexgraph.engine.edge_schemas import SOCKET_KINDS, describe_edges
+    from hexgraph.engine.graph.edge_schemas import SOCKET_KINDS, describe_edges
     from hexgraph.engine.journal import AUTHORS as _JOURNAL_AUTHORS, REF_KINDS as _JOURNAL_REF_KINDS
-    from hexgraph.engine.hypotheses import STATUSES as HYP_STATUSES, WORK_STATES as HYP_WORK_STATES
-    from hexgraph.engine.node_schemas import describe_nodes
+    from hexgraph.engine.graph.hypotheses import STATUSES as HYP_STATUSES, WORK_STATES as HYP_WORK_STATES
+    from hexgraph.engine.graph.node_schemas import describe_nodes
     from hexgraph.engine.findings import FINDING_TYPES
     from hexgraph.models.finding import Finding as FModelCls
 
@@ -1994,7 +1994,7 @@ def _yara_rulesets_for_schema() -> list[str]:
 def create_hypothesis(project_id: str, statement: str, rationale: str | None = None,
                       target_id: str | None = None) -> dict:
     """Record a research hypothesis (findings can later support/refute it)."""
-    from hexgraph.engine.hypotheses import HypothesisError, create_hypothesis as _create, summary
+    from hexgraph.engine.graph.hypotheses import HypothesisError, create_hypothesis as _create, summary
 
     with session_scope() as s:
         project = s.get(Project, project_id)
@@ -2009,7 +2009,7 @@ def create_hypothesis(project_id: str, statement: str, rationale: str | None = N
 
 def annotate(project_id: str, node_kind: str, node_id: str, kind: str, value: str) -> dict:
     """Attach a note/tag/rename to a graph entity (lands as an agent proposal)."""
-    from hexgraph.engine.annotations import AnnotationError, create_annotation
+    from hexgraph.engine.graph.annotations import AnnotationError, create_annotation
 
     with session_scope() as s:
         if s.get(Project, project_id) is None:
@@ -2539,7 +2539,7 @@ def reachability(finding_id: str | None = None, sink_node_id: str | None = None,
 def merge_duplicates(project_id: str) -> dict:
     """Collapse duplicate binaries/nodes (e.g. sym.foo == foo) in a project, moving
     all edges/findings/annotations to the keeper. Safe to call anytime."""
-    from hexgraph.engine.nodemerge import merge_duplicates as _merge
+    from hexgraph.engine.graph.nodemerge import merge_duplicates as _merge
 
     with session_scope() as s:
         if s.get(Project, project_id) is None:
@@ -2553,7 +2553,7 @@ def link_same_code(project_id: str) -> dict:
     confirm a bug in one binary, call this to find the same routine reused in other
     firmware components, then check each for the same flaw. Returns the matched pairs."""
     from hexgraph.db.models import Edge, EdgeType
-    from hexgraph.engine.crosstarget import link_same_code as _link
+    from hexgraph.engine.graph.crosstarget import link_same_code as _link
 
     with session_scope() as s:
         if s.get(Project, project_id) is None:
@@ -2607,7 +2607,7 @@ def run_task(target_id: str, type: str, objective: str | None = None, params: di
     with session_scope() as s:
         # Fold any duplicate function/symbol nodes (e.g. an agent's `foo` colliding with a
         # decompiler-seeded `sym.foo`) so the graph converges instead of accumulating dupes.
-        from hexgraph.engine.nodemerge import merge_duplicate_nodes
+        from hexgraph.engine.graph.nodemerge import merge_duplicate_nodes
         merged = merge_duplicate_nodes(s, project_id)
         findings = s.query(Finding).filter(Finding.task_id == task_id).all()
         out = {"task_id": task_id, "status": status,

@@ -11,7 +11,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Annotation, Finding, Node, Target
-from hexgraph.engine.nodes import is_placeholder_name
+from hexgraph.engine.graph.nodes import is_placeholder_name
 
 KINDS = {"rename", "note", "tag", "type_decl"}
 NODE_KINDS = {"target", "node", "finding"}

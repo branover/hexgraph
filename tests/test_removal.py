@@ -1,4 +1,4 @@
-"""Removal of graph entities (engine/removal.py + API):
+"""Removal of graph entities (engine/graph/removal.py + API):
 - nodes are soft-archived (node + its edges hidden; re-adding the node, or restore,
   brings them back) — reversible, nothing deleted;
 - a single edge is hard-deleted;
@@ -13,12 +13,12 @@ from fastapi.testclient import TestClient
 from hexgraph.api.app import create_app
 from hexgraph.db.models import Annotation, Edge, EdgeType, Finding, Node, Project, Target
 from hexgraph.db.session import session_scope
-from hexgraph.engine.edges import add_edge
+from hexgraph.engine.graph.edges import add_edge
 from hexgraph.engine.findings import persist_finding
-from hexgraph.engine.graph import build_graph
+from hexgraph.engine.graph.graph import build_graph
 from hexgraph.engine.ingest import create_project, ingest_file
-from hexgraph.engine.nodes import get_or_create_node, materialize_function
-from hexgraph.engine.removal import (
+from hexgraph.engine.graph.nodes import get_or_create_node, materialize_function
+from hexgraph.engine.graph.removal import (
     archive_node, delete_edge, delete_finding, delete_project, restore_node,
 )
 from hexgraph.engine.tasks import create_task
@@ -121,7 +121,7 @@ def test_delete_project_removes_rows_and_data_dir(hg_home):
 def test_archive_socket_node_hides_its_edges(hg_home):
     """A socket has target_id=None (shared across binaries); archiving it must still
     hide the listens_on/connects_to edges resolving to it, and restore-on-re-add."""
-    from hexgraph.engine.nodes import materialize_socket
+    from hexgraph.engine.graph.nodes import materialize_socket
 
     with session_scope() as s:
         p, t, caller, callee, edge = _seed(s)
@@ -196,7 +196,7 @@ def test_delete_finding_removes_finding_and_all_refs(hg_home):
     """Hard delete: the finding row + every polymorphic ref (an `about` edge it owns,
     a `located_in` source-link edge, an annotation keyed to it) are gone, with NO
     dangling references left behind. The endpoints the edges pointed at survive."""
-    from hexgraph.engine.annotations import create_annotation
+    from hexgraph.engine.graph.annotations import create_annotation
     from hexgraph.engine.build.source import create_source_tree, link_finding_to_source
 
     with session_scope() as s:

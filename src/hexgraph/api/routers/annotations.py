@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException
 
 from hexgraph.db.models import Annotation, Project
 from hexgraph.db.session import session_scope
-from hexgraph.engine.annotations import AnnotationError, create_annotation, set_status
+from hexgraph.engine.graph.annotations import AnnotationError, create_annotation, set_status
 
 from ._shared import AnnotationCreate, StatusUpdate, ann_dict
 

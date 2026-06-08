@@ -113,7 +113,7 @@ def promote_file(session: Session, project: Project, firmware: Target, rel: str,
     """Ingest a file from the firmware's unpacked tree as a child target (real
     bytes → recon if Docker is up). Idempotent per `rel` (returns the existing
     child if already added)."""
-    from hexgraph.engine.edges import add_edge
+    from hexgraph.engine.graph.edges import add_edge
     from hexgraph.engine.ingest import ingest_file
     from hexgraph.engine.pipeline import analyze_target
     from hexgraph.engine.unpack import build_links_against

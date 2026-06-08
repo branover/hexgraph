@@ -8,8 +8,8 @@ run twice converges on the same graph.
 
 from hexgraph.db.models import EdgeType, NodeType
 from hexgraph.agent import mcp_tools as M
-from hexgraph.engine.edge_schemas import EDGE_ATTRIBUTE_SCHEMAS
-from hexgraph.engine.node_schemas import NODE_ATTRIBUTE_SCHEMAS, describe_nodes
+from hexgraph.engine.graph.edge_schemas import EDGE_ATTRIBUTE_SCHEMAS
+from hexgraph.engine.graph.node_schemas import NODE_ATTRIBUTE_SCHEMAS, describe_nodes
 
 
 def test_every_node_type_has_a_schema_with_guidance():
@@ -118,7 +118,7 @@ def test_closed_value_set_params_carry_a_schema_enum():
     # are the exact authorities the engine validates against, so an enum that omits a value
     # would make a legitimate, engine-accepted call fail a strict client.
     from hexgraph.db.models import EdgeType, NodeType
-    from hexgraph.engine.hypotheses import RELATIONS, STATUSES
+    from hexgraph.engine.graph.hypotheses import RELATIONS, STATUSES
     assert set(by_name["graph_create_node"]["node_type"]["enum"]) == {
         t.value for t in NodeType if t != NodeType.task}
     assert set(by_name["graph_create_edge"]["type"]["enum"]) == {t.value for t in EdgeType}

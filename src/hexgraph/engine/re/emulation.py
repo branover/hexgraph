@@ -50,7 +50,7 @@ def emulate_constant(session: Session, project: Any, target: Any, *, function: s
                 "error": "emulation requires the Ghidra headless decompiler (features.ghidra)"}
 
     from hexgraph.engine import observations as obs
-    from hexgraph.engine.nodes import get_or_create_node
+    from hexgraph.engine.graph.nodes import get_or_create_node
     from hexgraph.sandbox.decompiler import GhidraDecompiler
 
     out = GhidraDecompiler().run_emulate(getattr(target, "path", None), function, project=project) or {}

@@ -12,14 +12,14 @@ from hexgraph.db.models import (
 )
 from hexgraph.db.session import session_scope
 from hexgraph.engine.build import source as src
-from hexgraph.engine.authoring import InvariantError, create_edge
-from hexgraph.engine.edges import add_edge
+from hexgraph.engine.graph.authoring import InvariantError, create_edge
+from hexgraph.engine.graph.edges import add_edge
 from hexgraph.engine.findings import persist_finding
 from hexgraph.engine.harness_promote import (
     backfill_harnesses, get_or_create_harness_tree, promote_harness,
 )
 from hexgraph.engine.ingest import create_project, ingest_file
-from hexgraph.engine.nodemerge import merge_duplicates
+from hexgraph.engine.graph.nodemerge import merge_duplicates
 from hexgraph.engine.tasks import create_task
 from hexgraph.models.finding import Evidence, Finding as FModel
 

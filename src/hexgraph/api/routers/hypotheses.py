@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException
 
 from hexgraph.db.models import Node, Project
 from hexgraph.db.session import session_scope
-from hexgraph.engine.hypotheses import (
+from hexgraph.engine.graph.hypotheses import (
     HypothesisError,
     create_hypothesis,
     link_evidence,

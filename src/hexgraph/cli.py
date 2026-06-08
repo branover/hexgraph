@@ -195,7 +195,7 @@ def _cmd_findings(args: argparse.Namespace) -> int:
 
 
 def _cmd_graph(args: argparse.Namespace) -> int:
-    from hexgraph.engine.graph import export_graph
+    from hexgraph.engine.graph.graph import export_graph
 
     init_db()
     with session_scope() as session:

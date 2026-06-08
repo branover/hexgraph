@@ -16,7 +16,7 @@ against identical data.
                                         findings. The scale that turns the old full-load graph
                                         into an illegible smudge — the skeleton-first A/B target.
 
-All structure is built through the engine/authoring API (no sandbox, no Docker, no LLM),
+All structure is built through the engine/graph/authoring API (no sandbox, no Docker, no LLM),
 seeded with a fixed RNG so a re-seed reproduces the same graph. Each tier is its own
 project (so a tier renders alone). Idempotent on the project name; `--reset` rebuilds.
 
@@ -73,11 +73,11 @@ def _classify(target, *, kind, fmt=None, arch=None, extra=None):
 def seed_small(session, project) -> None:
     """One binary, a handful of functions in a call chain, one finding."""
     from hexgraph.db.models import EdgeType, FindingStatus, NodeType
-    from hexgraph.engine.authoring import create_socket
-    from hexgraph.engine.edges import add_edge
+    from hexgraph.engine.graph.authoring import create_socket
+    from hexgraph.engine.graph.edges import add_edge
     from hexgraph.engine.findings import persist_finding
     from hexgraph.engine.ingest import ingest_file
-    from hexgraph.engine.nodes import get_or_create_node, materialize_function
+    from hexgraph.engine.graph.nodes import get_or_create_node, materialize_function
     from hexgraph.engine.tasks import create_task
     from hexgraph.models.finding import Evidence, Finding
 
@@ -138,11 +138,11 @@ def _seed_firmware(session, project, *, n_bins: int, fns_per_bin: int,
     """A firmware image with N binaries, each a call graph, cross-target links, shared
     sockets (the network bus), high-degree hubs, and findings spread across binaries."""
     from hexgraph.db.models import EdgeType, FindingStatus, NodeType
-    from hexgraph.engine.authoring import create_socket
-    from hexgraph.engine.edges import add_edge
+    from hexgraph.engine.graph.authoring import create_socket
+    from hexgraph.engine.graph.edges import add_edge
     from hexgraph.engine.findings import persist_finding
     from hexgraph.engine.ingest import ingest_file
-    from hexgraph.engine.nodes import get_or_create_node, materialize_function
+    from hexgraph.engine.graph.nodes import get_or_create_node, materialize_function
     from hexgraph.engine.tasks import create_task
     from hexgraph.models.finding import Evidence, Finding
 
@@ -277,11 +277,11 @@ def seed_real(session, project) -> None:
     efficiently (no per-edge fixture re-reads) so a re-seed is bearable.
     """
     from hexgraph.db.models import EdgeType, FindingStatus, NodeType, Target, TargetKind
-    from hexgraph.engine.authoring import create_socket
-    from hexgraph.engine.edges import add_edge
+    from hexgraph.engine.graph.authoring import create_socket
+    from hexgraph.engine.graph.edges import add_edge
     from hexgraph.engine.findings import persist_finding
     from hexgraph.engine.ingest import ingest_file
-    from hexgraph.engine.nodes import get_or_create_node, materialize_function
+    from hexgraph.engine.graph.nodes import get_or_create_node, materialize_function
     from hexgraph.engine.tasks import create_task
     from hexgraph.models.finding import Evidence, Finding
 
@@ -421,7 +421,7 @@ def seed_tier(session, tier: str, *, reset: bool) -> dict:
     name = TIER_NAMES[tier]
     existing = session.query(Project).filter(Project.name == name).all()
     if existing and reset:
-        from hexgraph.engine.removal import delete_project
+        from hexgraph.engine.graph.removal import delete_project
         for p in existing:
             delete_project(session, p.id)
         session.flush()

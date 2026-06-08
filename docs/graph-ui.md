@@ -75,7 +75,7 @@ deliberately off, because edges and annotations are polymorphic string reference
   node, finding, or task): `contains`, `links_against`, `calls`, `reads` and `writes`, `taints`,
   `bypasses`, `listens_on` and `connects_to`, `routes_to` (route to handler), `similar_to`,
   `derived_from`, `about`, and so on. Edges carry type-specific attributes, and
-  `engine/edge_schemas.py` is the registry of what is meaningful for each type (the `call_sites` and
+  `engine/graph/edge_schemas.py` is the registry of what is meaningful for each type (the `call_sites` and
   `arg_constraints` on a `calls` edge, say, or the `address` and `backlog` on a `listens_on` edge).
   That registry is guidance rather than a hard schema: unknown keys pass through, but list attributes
   merge as sets, so repeated edges accumulate `call_sites` instead of clobbering them.

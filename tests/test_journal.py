@@ -9,10 +9,10 @@ from hexgraph.db.models import JournalEntry, JournalMention, NodeType
 from hexgraph.db.session import session_scope
 from hexgraph.engine import journal as J
 from hexgraph.engine.findings import persist_finding
-from hexgraph.engine.hypotheses import create_hypothesis
+from hexgraph.engine.graph.hypotheses import create_hypothesis
 from hexgraph.engine.ingest import create_project, ingest_file
-from hexgraph.engine.nodes import get_or_create_node
-from hexgraph.engine.nodemerge import merge_duplicate_nodes
+from hexgraph.engine.graph.nodes import get_or_create_node
+from hexgraph.engine.graph.nodemerge import merge_duplicate_nodes
 from hexgraph.engine.tasks import create_task
 from hexgraph.models.finding import Evidence, Finding as FModel
 

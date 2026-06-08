@@ -28,7 +28,7 @@ from hexgraph.engine.build.build import (
     BUILD_SYSTEMS, BuildError, BuildPhase, BuildSpec, BuildUnavailable, Instrumentation,
     get_builder,
 )
-from hexgraph.engine.edges import add_edge
+from hexgraph.engine.graph.edges import add_edge
 from hexgraph.engine.build.source import host_root, tree_content_sha
 from hexgraph.policy import PolicyViolation
 

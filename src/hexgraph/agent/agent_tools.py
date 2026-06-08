@@ -373,7 +373,7 @@ def _function_node(ctx: ToolContext, name: str):
     identity (normalized), or None. Used for the both-endpoints-exist rule — we never
     mint a node here, only check whether one is already curated."""
     from hexgraph.db.models import Node
-    from hexgraph.engine.nodes import normalize_symbol_name
+    from hexgraph.engine.graph.nodes import normalize_symbol_name
 
     key = normalize_symbol_name(name)
     if not key:
@@ -471,8 +471,8 @@ def _materialize(ctx: ToolContext, focus: dict) -> list[str]:
     The focus's enrichment (prototype/address/calling_convention) lands automatically:
     _record_obs already indexed the facts, and get_or_create_node pulls them at create."""
     from hexgraph.db.models import EdgeType
-    from hexgraph.engine.edges import add_edge
-    from hexgraph.engine.nodes import materialize_function
+    from hexgraph.engine.graph.edges import add_edge
+    from hexgraph.engine.graph.nodes import materialize_function
 
     if not focus.get("name"):
         return []
@@ -1005,7 +1005,7 @@ def _bfs_subgraph(edges: list, root: str, depth: int) -> list[tuple[str, str]]:
     """Edges reachable from `root` (matched by normalized name) within `depth` hops, deduped."""
     from collections import defaultdict, deque
 
-    from hexgraph.engine.nodes import normalize_symbol_name as _norm
+    from hexgraph.engine.graph.nodes import normalize_symbol_name as _norm
 
     adj: dict[str, list[tuple[str, str]]] = defaultdict(list)
     for pair in edges:

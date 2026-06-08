@@ -26,7 +26,7 @@ from hexgraph.engine.build.build import (
     BuildPhase, BuildSpec, CROSS_TRIPLES, Instrumentation, MockBuilder, cache_key,
     determinism_env, instrumentation_env, is_reproducible,
 )
-from hexgraph.engine.edges import add_edge
+from hexgraph.engine.graph.edges import add_edge
 from hexgraph.engine.ingest import create_project
 from hexgraph.db.models import EdgeType, Target, TargetKind
 from hexgraph.policy import (

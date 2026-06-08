@@ -88,7 +88,7 @@ def _seed_tree_and_build(s, *, builder_mock: bool):
     from hexgraph.db.models import EdgeType, Target, TargetKind
     from hexgraph.engine.build import builds as B, source as src
     from hexgraph.engine.build.build import BuildSpec
-    from hexgraph.engine.edges import add_edge
+    from hexgraph.engine.graph.edges import add_edge
     from hexgraph.engine.ingest import create_project
 
     p = create_project(s, name="buildfuzz-handoff")

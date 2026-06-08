@@ -25,8 +25,8 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import EdgeType, Finding, NodeType, Project, SourceTree, Task
-from hexgraph.engine.edges import add_edge
-from hexgraph.engine.nodes import get_or_create_node
+from hexgraph.engine.graph.edges import add_edge
+from hexgraph.engine.graph.nodes import get_or_create_node
 from hexgraph.engine.build.source import (
     create_source_tree,
     materialize_source_file,

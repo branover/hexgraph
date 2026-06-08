@@ -18,11 +18,11 @@ is exercised by the WITH_GHIDRA CI lane. The key behaviours pinned here:
 
 from hexgraph.db.models import Observation
 from hexgraph.db.session import session_scope
-from hexgraph.engine import annotations as A
+from hexgraph.engine.graph import annotations as A
 from hexgraph.engine.re import ghidra as G
 from hexgraph.engine import observations as O
 from hexgraph.engine.ingest import create_project, ingest_file
-from hexgraph.engine.nodes import get_or_create_node
+from hexgraph.engine.graph.nodes import get_or_create_node
 
 from hexgraph import settings as st
 from conftest import fixture_path

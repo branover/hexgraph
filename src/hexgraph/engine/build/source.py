@@ -7,7 +7,7 @@ each may be linked to a target via a `built_from` edge. This module mirrors
 the project data dir, indexed by a manifest on the `source_tree` row; individual
 `source_file` *graph nodes* are materialized LAZILY on reference (a finding links
 to a line, a harness is promoted), never one row per file — exactly the
-`engine/nodes.py` lazy discipline. The kernel-tree case (70k files) stays a single
+`engine/graph/nodes.py` lazy discipline. The kernel-tree case (70k files) stays a single
 table row + a flat manifest, not 70k nodes.
 
 Phase 1 is read-only browse: NO execution, NO build, NO new policy gate. Source
@@ -283,7 +283,7 @@ def materialize_source_file(
     (and nodemerge's default key folds any dupes by that fq_name). The node carries
     target_id=None (it belongs to a source tree, not a hostile target) and is anchored
     in the graph by its semantic edges (located_in / harnesses), not target→contains."""
-    from hexgraph.engine.nodes import get_or_create_node
+    from hexgraph.engine.graph.nodes import get_or_create_node
 
     entry = next((f for f in _manifest_files(tree) if f["rel"] == rel), None)
     if entry is None:
@@ -311,7 +311,7 @@ def link_finding_to_source(
     "Open in source" without traversing the graph (frozen schema untouched — rides
     evidence.extra)."""
     from hexgraph.db.models import Finding
-    from hexgraph.engine.edges import add_edge
+    from hexgraph.engine.graph.edges import add_edge
 
     f = session.get(Finding, finding_id)
     if f is None or f.project_id != project.id:

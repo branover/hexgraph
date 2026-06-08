@@ -7,7 +7,7 @@ from hexgraph.api.app import create_app
 from hexgraph.db.models import NodeType
 from hexgraph.db.session import session_scope
 from hexgraph.engine.findings import persist_finding
-from hexgraph.engine.hypotheses import (
+from hexgraph.engine.graph.hypotheses import (
     DEFAULT_WORK_STATE, WORK_STATES, create_hypothesis, link_evidence, list_hypotheses,
     recompute_status, set_pinned, set_status, set_work_state, summary,
 )
@@ -103,7 +103,7 @@ def test_invalid_relation_rejected(hg_home):
         t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
         task = create_task(s, project=p, target_id=t.id, type="static_analysis")
         f = _finding(s, p, t, task, "x")
-        from hexgraph.engine.hypotheses import HypothesisError
+        from hexgraph.engine.graph.hypotheses import HypothesisError
         h = create_hypothesis(s, p, statement="q")
         import pytest
         with pytest.raises(HypothesisError):
@@ -172,7 +172,7 @@ def test_close_sets_done_and_records_verdict(hg_home):
 
 def test_invalid_work_state_rejected(hg_home):
     import pytest
-    from hexgraph.engine.hypotheses import HypothesisError
+    from hexgraph.engine.graph.hypotheses import HypothesisError
     with session_scope() as s:
         p = create_project(s, name="ws4")
         h = create_hypothesis(s, p, statement="q")

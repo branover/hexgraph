@@ -10,7 +10,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import EdgeType, Project, Target, TargetKind
-from hexgraph.engine.edges import add_edge
+from hexgraph.engine.graph.edges import add_edge
 from hexgraph.engine.filesystem import persistent_base, record_manifest
 from hexgraph.engine.ingest import ingest_file
 from hexgraph.sandbox.executor import Executor, get_executor

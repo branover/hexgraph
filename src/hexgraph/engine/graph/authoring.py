@@ -24,8 +24,8 @@ from hexgraph.db.models import (
     EDGE_KINDS, BuildSpec, Edge, EdgeType, Finding, FuzzCampaign, Node, NodeType, Project,
     SourceTree, Target, Task,
 )
-from hexgraph.engine.edges import add_edge
-from hexgraph.engine.nodes import get_or_create_node
+from hexgraph.engine.graph.edges import add_edge
+from hexgraph.engine.graph.nodes import get_or_create_node
 
 # Node types a human may hand-author. `task` is not authorable (tasks come from
 # launching analysis); `target` is not a node (it requires uploaded bytes).
@@ -94,8 +94,8 @@ def create_socket(
     """Create (or reuse) a socket node — a network/IPC endpoint shared across the
     firmware's binaries. Identity is (kind, port|name); a server `listens_on` it and
     a client `connects_to` it, both resolving to this one node."""
-    from hexgraph.engine.edge_schemas import SOCKET_KINDS
-    from hexgraph.engine.nodes import materialize_socket
+    from hexgraph.engine.graph.edge_schemas import SOCKET_KINDS
+    from hexgraph.engine.graph.nodes import materialize_socket
 
     if kind not in SOCKET_KINDS:
         raise InvariantError(f"socket kind must be one of {list(SOCKET_KINDS)}")

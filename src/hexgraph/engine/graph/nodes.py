@@ -151,7 +151,7 @@ def get_or_create_node(
     # the ones that genuinely have no single owning target.
     if target_id and nt not in ("hypothesis", "pattern"):
         from hexgraph.db.models import EdgeType
-        from hexgraph.engine.edges import add_edge
+        from hexgraph.engine.graph.edges import add_edge
 
         add_edge(
             session, project_id=project_id, src=("target", target_id), dst=("node", node.id),

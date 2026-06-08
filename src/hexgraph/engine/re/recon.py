@@ -117,7 +117,7 @@ def execute_recon(
 def _materialize_recon_nodes(session: Session, project_id: str, target: Target, facts: dict) -> None:
     """Materialize a bounded set of symbol + string nodes from recon facts
     (design §3.2: filtered, not thousands of rows)."""
-    from hexgraph.engine.nodes import MAX_STRINGS, MAX_SYMBOLS, materialize_string, materialize_symbol
+    from hexgraph.engine.graph.nodes import MAX_STRINGS, MAX_SYMBOLS, materialize_string, materialize_symbol
 
     imports = facts.get("imports", [])[:MAX_SYMBOLS]
     for name in imports:

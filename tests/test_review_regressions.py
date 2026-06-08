@@ -6,7 +6,7 @@ from sqlalchemy import or_
 
 from hexgraph.db.models import Edge, Target
 from hexgraph.db.session import session_scope
-from hexgraph.engine.dedup import dedupe_findings
+from hexgraph.engine.graph.dedup import dedupe_findings
 from hexgraph.engine.findings import persist_finding
 from hexgraph.engine.ingest import create_project, ingest_file
 from hexgraph.engine.targets import archive_target, file_sha256, restore_matching
@@ -75,7 +75,7 @@ def test_dedupe_keeps_earlier_drops_later_edges_and_spares_distinct(hg_home):
     import datetime as _dt
 
     from hexgraph.db.models import Finding
-    from hexgraph.engine.edges import add_edge
+    from hexgraph.engine.graph.edges import add_edge
     from hexgraph.db.models import EdgeType
 
     with session_scope() as s:

@@ -55,7 +55,7 @@ def add_edge(
         if existing is not None:
             # Accumulate contributing finding ids from the EXISTING attrs first (the
             # incoming scalar finding_id would otherwise overwrite the prior one).
-            from hexgraph.engine.edge_schemas import merge_edge_attrs
+            from hexgraph.engine.graph.edge_schemas import merge_edge_attrs
 
             prev = existing.attrs_json or {}
             ids = list(prev.get("finding_ids") or ([prev["finding_id"]] if prev.get("finding_id") else []))

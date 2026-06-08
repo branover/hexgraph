@@ -44,7 +44,7 @@ def api_delete_finding(finding_id: str):
     """Permanently delete a finding (HARD delete — irreversible). Distinct from
     setting status='dismissed', which keeps the row, reversibly greyed. Cleans up
     every polymorphic reference (edges/annotations) so nothing dangles."""
-    from hexgraph.engine.removal import delete_finding
+    from hexgraph.engine.graph.removal import delete_finding
 
     with session_scope() as s:
         if s.get(Finding, finding_id) is None:
