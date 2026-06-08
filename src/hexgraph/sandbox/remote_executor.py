@@ -317,7 +317,8 @@ class RemoteDockerExecutor(SandboxRunner):
     # ── detached, long-lived campaign container ─────────────────────────────────────
     def start_detached(self, probe, artifact, *, name, outdir, image=None, extra_args=None,
                        requires_execution=False, extra_ro_mounts=None, resources=None,
-                       allow_network=False, net_container=None, disable_aslr=False) -> DetachedHandle:
+                       allow_network=False, net_container=None, disable_aslr=False,
+                       extra_env=None) -> DetachedHandle:
         if requires_execution:
             from hexgraph.policy import assert_allows_execution
             assert_allows_execution()
@@ -345,7 +346,8 @@ class RemoteDockerExecutor(SandboxRunner):
                "--label", f"hexgraph_stage_vol={staged.vol}",
                "--label", f"hexgraph_outdir={local_out}",
                *self._hardening_args(allow_network=allow_network, net_container=net_container,
-                                     resources=resources, secret=False, disable_aslr=disable_aslr),
+                                     resources=resources, secret=False, disable_aslr=disable_aslr,
+                                     extra_env=extra_env),
                *self._tmpfs_for_extras(staged.extras),
                "-v", f"{staged.vol}:/stage", image or self.image, *wrap]
         self._docker(cmd, timeout=120)

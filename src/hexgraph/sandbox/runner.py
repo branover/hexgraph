@@ -300,7 +300,8 @@ class SandboxRunner:
     # ── Shared hardening: the docker flags EVERY container gets ────────────────────
     def _hardening_args(self, *, allow_network: bool, net_container: str | None,
                         resources: ResourceSpec, secret: bool,
-                        disable_aslr: bool = False) -> list[str]:
+                        disable_aslr: bool = False,
+                        extra_env: dict[str, str] | None = None) -> list[str]:
         """The security + resource docker flags shared by run_probe and start_detached.
 
         The SECURITY flags (`--network none` unless an already-gated network tier,
@@ -389,6 +390,14 @@ class SandboxRunner:
             # service_launch_probe.py / afl_probe.py.
             *(["-e", "HEXGRAPH_SVC_ASLR_RELAXED=1"] if disable_aslr else []),
             *(["-e", "HG_CHANNEL_SECRET"] if secret else []),
+            # Caller-supplied probe env (e.g. the AFL source-fuzz knobs). NOT a security
+            # relaxation: these are HexGraph-set tuning vars (the engine builds the dict from
+            # the validated campaign spec, never raw user/attacker input), passed as separate
+            # argv (`-e`, `K=V`) so there is no shell interpolation. The hardening flags above
+            # are untouched. Skip any malformed key (a `=` in the name would split wrong).
+            *[arg
+              for k, v in (extra_env or {}).items() if k and "=" not in k
+              for arg in ("-e", f"{k}={v}")],
         ]
 
     def run_probe(
@@ -598,6 +607,7 @@ class SandboxRunner:
         allow_network: bool = False,
         net_container: str | None = None,
         disable_aslr: bool = False,
+        extra_env: dict[str, str] | None = None,
     ) -> DetachedHandle:
         """Launch a probe as a DETACHED, long-lived container (`docker run -d`), same
         hardening as run_probe. `disable_aslr` (the ASan source-fuzz path only) swaps in
@@ -647,7 +657,8 @@ class SandboxRunner:
             # NOT --rm: a detached campaign container is reaped explicitly so its exit
             # status is observable. The reaper `docker rm`s it on finalize.
             *self._hardening_args(allow_network=allow_network, net_container=net_container,
-                                  resources=resources, secret=False, disable_aslr=disable_aslr),
+                                  resources=resources, secret=False, disable_aslr=disable_aslr,
+                                  extra_env=extra_env),
             *(["-v", f"{artifact}:/artifact:ro"] if artifact is not None else []),
             "-v", f"{outdir}:/out:rw",
         ]
