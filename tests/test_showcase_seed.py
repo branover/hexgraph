@@ -108,7 +108,7 @@ def test_seed_showcase_runs_clean_and_is_rich(hg_home, _mock_fuzzer):
         assert len(crashes) >= 3, "the triage hero needs a populated, multi-bucket crash inbox"
         assert any(a.dupe_count for a in crashes), "crashes should carry dupe counts for triage"
 
-        from hexgraph.engine import campaigns as C
+        from hexgraph.engine.fuzz import campaigns as C
         cov = C.coverage_for(s, camp)
         assert cov["available"] and cov["files"]
 
@@ -119,7 +119,7 @@ def test_seed_showcase_runs_clean_and_is_rich(hg_home, _mock_fuzzer):
         import os as _os
 
         from hexgraph.db.models import Task
-        from hexgraph.engine.fuzzing import resolve_harness, resolve_target_sources
+        from hexgraph.engine.fuzz.fuzzing import resolve_harness, resolve_target_sources
 
         instr = next(t for t in targets if "instrumented" in t.name)
         imeta = instr.metadata_json or {}

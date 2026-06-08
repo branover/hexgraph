@@ -13,12 +13,12 @@ from hexgraph.db.models import (
     EgressEvent, Finding, FuzzArtifact, FuzzCampaign, Target, TargetKind,
 )
 from hexgraph.db.session import session_scope
-from hexgraph.engine import campaigns as C
+from hexgraph.engine.fuzz import campaigns as C
 from hexgraph.engine.fuzzers import FuzzerError, get_fuzzer, resolve_engine, SURFACE_ENGINES
 from hexgraph.engine.fuzzers.base import FuzzCampaignSpec
 from hexgraph.engine.fuzzers.binary_only import BinaryOnlyFuzzer, FridaFuzzer
 from hexgraph.engine.fuzzers.network import BoofuzzFuzzer, DesockAflFuzzer
-from hexgraph.engine.fuzzing import crash_finding
+from hexgraph.engine.fuzz.fuzzing import crash_finding
 from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph.policy import PolicyViolation
 from hexgraph import settings as st

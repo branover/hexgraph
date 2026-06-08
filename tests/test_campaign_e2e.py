@@ -49,7 +49,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 def test_aflplusplus_campaign_finds_dedups_classifies_and_reverifies(hg_home, monkeypatch):
     from hexgraph.db.models import FuzzArtifact, FuzzCampaign
     from hexgraph.db.session import session_scope
-    from hexgraph.engine import campaigns as C
+    from hexgraph.engine.fuzz import campaigns as C
     from hexgraph.engine.fuzzers.base import FuzzCampaignSpec
     from hexgraph.engine.targets.ingest import create_project, ingest_file
     from hexgraph import settings as st

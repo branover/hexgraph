@@ -34,7 +34,7 @@ def _dispatch(session: Session, project: Project, target: Target, task: Task) ->
         execute_recon(session, project, target, task, get_executor())
         return
     if task.type == "fuzzing":
-        from hexgraph.engine.fuzzing import execute_fuzzing
+        from hexgraph.engine.fuzz.fuzzing import execute_fuzzing
 
         execute_fuzzing(session, project, target, task, get_executor())
         return
@@ -134,7 +134,7 @@ def reap_campaigns_sync() -> int:
     re-attach lives here — the reaper re-binds to running containers by their durable
     `container_name` from the (durable) fuzz_campaign rows, so campaigns survive a
     `serve` restart. Runs in a thread (the docker poll is blocking)."""
-    from hexgraph.engine import campaigns
+    from hexgraph.engine.fuzz import campaigns
 
     with session_scope() as session:
         # The worker reaper runs in a background thread, so it may take the symbolization

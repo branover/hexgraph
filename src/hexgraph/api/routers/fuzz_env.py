@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from hexgraph.db.models import FuzzEnvironment
 from hexgraph.db.session import session_scope
-from hexgraph.engine import fuzz_env as FE
+from hexgraph.engine.fuzz import fuzz_env as FE
 from hexgraph.policy import PolicyViolation
 
 router = APIRouter()

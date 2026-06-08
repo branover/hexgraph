@@ -1128,7 +1128,7 @@ def _fuzz(ctx: ToolContext, args: dict) -> str:
     import os
     import tempfile
 
-    from hexgraph.engine.fuzzing import resolve_harness
+    from hexgraph.engine.fuzz.fuzzing import resolve_harness
     from hexgraph.sandbox.executor import get_executor
     from hexgraph.sandbox.runner import docker_available
 

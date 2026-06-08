@@ -18,8 +18,8 @@ from pydantic import BaseModel
 
 from hexgraph.db.models import FuzzArtifact, FuzzCampaign, Project, Target
 from hexgraph.db.session import session_scope
-from hexgraph.engine import campaigns as C
-from hexgraph.engine import fuzz_env as FE
+from hexgraph.engine.fuzz import campaigns as C
+from hexgraph.engine.fuzz import fuzz_env as FE
 from hexgraph.engine.fuzzers import FuzzCampaignSpec
 from hexgraph.policy import PolicyViolation
 
@@ -69,7 +69,7 @@ def _resolve_target_inputs(session, project, target):
     """Resolve the harness + target sources for a campaign from the target's metadata /
     a prior harness_generation finding (reuses the fuzzing-task resolvers)."""
     from hexgraph.db.models import Task
-    from hexgraph.engine.fuzzing import resolve_harness, resolve_target_sources
+    from hexgraph.engine.fuzz.fuzzing import resolve_harness, resolve_target_sources
 
     # A throwaway shell task carries no params; the resolvers fall back to the managed
     # harness node / latest harness_generation finding + target.metadata fuzz_target_sources.

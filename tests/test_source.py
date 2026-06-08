@@ -15,7 +15,7 @@ from hexgraph.engine.build import source as src
 from hexgraph.engine.graph.authoring import InvariantError, create_edge
 from hexgraph.engine.graph.edges import add_edge
 from hexgraph.engine.findings.findings import persist_finding
-from hexgraph.engine.harness_promote import (
+from hexgraph.engine.fuzz.harness_promote import (
     backfill_harnesses, get_or_create_harness_tree, promote_harness,
 )
 from hexgraph.engine.targets.ingest import create_project, ingest_file
@@ -254,7 +254,7 @@ def test_backfill_is_idempotent(hg_home):
 
 
 def test_resolve_harness_prefers_managed_then_falls_back(hg_home):
-    from hexgraph.engine.fuzzing import resolve_harness
+    from hexgraph.engine.fuzz.fuzzing import resolve_harness
 
     with session_scope() as s:
         p = create_project(s, name="src")

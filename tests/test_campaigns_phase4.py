@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from hexgraph.api.app import create_app
 from hexgraph.db.models import Edge, EdgeType, Finding, FuzzArtifact, FuzzCampaign
 from hexgraph.db.session import session_scope
-from hexgraph.engine import campaigns as C
+from hexgraph.engine.fuzz import campaigns as C
 from hexgraph.engine.fuzzers.base import FuzzCampaignSpec
 from hexgraph.engine.build.source import create_source_tree, write_source_file
 

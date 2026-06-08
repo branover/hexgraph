@@ -126,9 +126,9 @@ def test_build_populates_fuzz_sources_and_promotes_harness_offline(hg_home):
     planted crash (the full handoff at $0, no Docker)."""
     from hexgraph.db.models import FuzzArtifact, FuzzCampaign, Task
     from hexgraph.db.session import session_scope
-    from hexgraph.engine import campaigns as C
+    from hexgraph.engine.fuzz import campaigns as C
     from hexgraph.engine.fuzzers.base import FuzzCampaignSpec
-    from hexgraph.engine.fuzzing import resolve_harness, resolve_target_sources
+    from hexgraph.engine.fuzz.fuzzing import resolve_harness, resolve_target_sources
     from hexgraph import settings as st
 
     st.update_settings({"features.build.enabled": True, "features.fuzzing.enabled": True})
@@ -219,9 +219,9 @@ def test_build_to_libfuzzer_campaign_finds_crash_with_coverage(hg_home):
     self-including-header lib compiles (include-dir fix) end to end."""
     from hexgraph.db.models import FuzzArtifact, FuzzCampaign, Task
     from hexgraph.db.session import session_scope
-    from hexgraph.engine import campaigns as C
+    from hexgraph.engine.fuzz import campaigns as C
     from hexgraph.engine.fuzzers.base import FuzzCampaignSpec
-    from hexgraph.engine.fuzzing import resolve_harness, resolve_target_sources
+    from hexgraph.engine.fuzz.fuzzing import resolve_harness, resolve_target_sources
     from hexgraph import settings as st
 
     st.update_settings({"features.build.enabled": True, "features.fuzzing.enabled": True,

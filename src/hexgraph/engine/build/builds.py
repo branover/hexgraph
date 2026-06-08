@@ -414,7 +414,7 @@ def _promote_build_harness(session, project: Project, tree: SourceTree, derived:
     Best-effort: a tree with no harness-role file is left as-is (the campaign then reports
     'no fuzz harness available' honestly instead of false-greening). Picks the first
     harness-role file in the manifest; ignores a read failure."""
-    from hexgraph.engine.harness_promote import promote_harness
+    from hexgraph.engine.fuzz.harness_promote import promote_harness
     from hexgraph.engine.build.source import read_source_file
 
     harness_rel = next((f.get("rel") for f in (tree.manifest_json or {}).get("files") or []

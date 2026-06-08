@@ -211,7 +211,7 @@ def _run() -> int:
 
     # ── 3) Coverage-guided fuzz campaign on the instrumented target (MockFuzzer) ─────
     _step("Run a coverage-guided fuzz campaign on the instrumented target (MockFuzzer, offline)")
-    from hexgraph.engine import campaigns as C
+    from hexgraph.engine.fuzz import campaigns as C
     from hexgraph.engine.fuzzers import FuzzCampaignSpec
 
     with session_scope() as s:

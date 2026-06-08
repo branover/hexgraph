@@ -14,7 +14,7 @@ from hexgraph.sandbox.probes.fuzz_probe import (
     parse_libfuzzer_progress,
     worst_rating,
 )
-from hexgraph.engine.fuzzing import _severity_for
+from hexgraph.engine.fuzz.fuzzing import _severity_for
 
 
 # ── ASan report fixtures ────────────────────────────────────────────────────────

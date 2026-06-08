@@ -424,7 +424,7 @@ def _campaign_with_coverage(s, p, tree, target, covered_a, covered_b):
 
 
 def test_coverage_diff_gained_and_lost(hg_home):
-    from hexgraph.engine import campaigns as C
+    from hexgraph.engine.fuzz import campaigns as C
     with session_scope() as s:
         p = create_project(s, name="covdiff")
         tree, target = _src_tree(s, p, with_target=True)
@@ -439,7 +439,7 @@ def test_coverage_diff_gained_and_lost(hg_home):
 
 def test_coverage_diff_unavailable_without_maps(hg_home):
     from hexgraph.db.models import FuzzCampaign
-    from hexgraph.engine import campaigns as C
+    from hexgraph.engine.fuzz import campaigns as C
     with session_scope() as s:
         p = create_project(s, name="nocov")
         tree, target = _src_tree(s, p, with_target=True)

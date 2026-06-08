@@ -19,7 +19,7 @@ import pytest
 from hexgraph import policy, settings as st
 from hexgraph.db.models import Edge, EdgeType, EgressEvent, Node, NodeType, TargetKind
 from hexgraph.db.session import session_scope
-from hexgraph.engine import campaigns as C
+from hexgraph.engine.fuzz import campaigns as C
 from hexgraph.engine.fuzzers.base import FuzzCampaignSpec
 from hexgraph.engine.targets.ingest import create_project
 from hexgraph.engine.targets.surfaces import register_service_target

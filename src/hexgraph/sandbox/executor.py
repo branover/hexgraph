@@ -56,7 +56,7 @@ def get_executor(name: str | None = None) -> Executor:
     if name in ("remote_docker", "remote"):
         # A user-owned remote Docker host via DOCKER_HOST (design §5.8b, Phase 6). Gated
         # by features.fuzz_remote and normally selected PER-CAMPAIGN via a registered fuzz
-        # environment (engine.fuzz_env.get_campaign_executor); this env override is for a
+        # environment (engine.fuzz.fuzz_env.get_campaign_executor); this env override is for a
         # blanket remote executor (e.g. HEXGRAPH_EXECUTOR=remote_docker + the ambient
         # DOCKER_HOST). The SAME sandbox boundary applies on the remote.
         from hexgraph.sandbox.remote_executor import RemoteDockerExecutor
