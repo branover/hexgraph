@@ -46,6 +46,7 @@ def ingest_file(
     *,
     name: str | None = None,
     parent: Target | None = None,
+    visible: bool = True,
 ) -> Target:
     """Copy a file into the project and register it as a target.
 
@@ -54,6 +55,12 @@ def ingest_file(
     that share a basename never overwrite each other on disk. (A flat
     ``artifacts/<basename>`` silently clobbered colliding names, so recon/decompile
     later read the WRONG bytes for one target — undetected graph corruption.)
+
+    ``visible`` controls whether the new target contributes to the curated graph
+    (the default for a lone ingest / a promoted file). ``unpack_firmware`` passes
+    ``visible=False`` so a 765-ELF firmware doesn't flood the graph/Targets pane;
+    those children are still recorded + searchable + addressable, and revealing one
+    flips it visible and materializes its recon nodes from the already-stored facts.
     """
     src = Path(src_path).expanduser().resolve()
     if not src.is_file():
@@ -73,6 +80,7 @@ def ingest_file(
         name=name or src.name,
         path="",  # filled once the id is assigned (see below)
         kind=TargetKind.unknown,  # refined by the sandboxed recon task (M2)
+        visible=visible,
     )
     session.add(target)
     session.flush()  # assign id

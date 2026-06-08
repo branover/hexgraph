@@ -24,7 +24,14 @@ def unpack_firmware(
 ) -> list[Target]:
     """Unpack `parent` into a child target + `contains` edge per ELF, and persist
     the full extracted tree (+ a manifest on the firmware) so any file can be
-    browsed and added as a target later."""
+    browsed and added as a target later.
+
+    Children are registered HIDDEN (`visible=False`): a real firmware unpacks into
+    hundreds of ELFs and a visible child each would flood the Targets pane + graph
+    (and, before, minted a recon finding apiece). They stay recorded, searchable,
+    and addressable; recon still ENRICHES each one, but a hidden target contributes
+    nothing to the curated graph until it's revealed. The root firmware stays visible.
+    """
     runner = runner or get_executor()
     children: list[Target] = []
 
@@ -47,7 +54,7 @@ def unpack_firmware(
         if not host_path.is_file():
             continue
 
-        child = ingest_file(session, project, host_path, name=entry["rel"], parent=parent)
+        child = ingest_file(session, project, host_path, name=entry["rel"], parent=parent, visible=False)
         add_edge(
             session, project_id=project.id,
             src=("target", parent.id), dst=("target", child.id),

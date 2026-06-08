@@ -21,9 +21,15 @@ function buildTree(files: FsEntry[]): TreeNode {
 
 const fmtSize = (n?: number) => (n == null ? "" : n < 1024 ? `${n} B` : n < 1e6 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1e6).toFixed(1)} MB`);
 const looksAddable = (e?: FsEntry) => !!e && (e.is_elf || /\.so(\.\d+)*$/.test(e.rel) || /\.(ko|bin)$/.test(e.rel));
+// A child target exists but is hidden (the default for unpacked ELFs) → it can be REVEALED.
+const isHidden = (e?: FsEntry) => !!e && !!e.added && e.revealed === false;
+// All the leaf entries under a directory path (used for the per-dir "Reveal all" count).
+const leavesUnder = (files: FsEntry[], prefix: string) =>
+  files.filter((f) => f.rel === prefix || f.rel.startsWith(prefix + "/"));
 
-// Traversable unpacked firmware filesystem. Folders collapse; binaries/libraries
-// can be added as child targets on the spot.
+// Traversable unpacked firmware filesystem. Folders collapse; binaries/libraries can be
+// added as child targets, and unpack-registered (hidden) children revealed into the graph —
+// per file or, for a whole directory, in one click.
 export default function FilesystemBrowser({ projectId, targetId, onChanged }: {
   projectId: string; targetId: string; onChanged?: () => void;
 }) {
@@ -41,6 +47,26 @@ export default function FilesystemBrowser({ projectId, targetId, onChanged }: {
     finally { setBusy(""); }
   };
 
+  // Reveal a single hidden child (the ELF unpack already registered) into the graph.
+  const reveal = async (e: FsEntry) => {
+    if (!e.child_target_id) return;
+    setBusy(e.rel);
+    try { await api.setTargetVisible(projectId, e.child_target_id, true); await load(); onChanged?.(); }
+    catch (err: any) { alert(String(err.message || err)); }
+    finally { setBusy(""); }
+  };
+
+  // Reveal every hidden child under a directory prefix in one call.
+  const revealDir = async (prefix: string) => {
+    setBusy("dir:" + prefix);
+    try {
+      const r = await api.revealDir(projectId, targetId, prefix);
+      if (r.revealed === 0) alert("No hidden binaries to reveal under " + (prefix || "/"));
+      await load(); onChanged?.();
+    } catch (e: any) { alert(String(e.message || e)); }
+    finally { setBusy(""); }
+  };
+
   const open = async (rel: string) => {
     setView({ rel, loading: true });
     try {
@@ -54,14 +80,24 @@ export default function FilesystemBrowser({ projectId, targetId, onChanged }: {
     return <><div className="sec">Filesystem</div><div className="muted" style={{ fontSize: 11 }}>Not unpacked yet — run recon/unpack on this firmware.</div></>;
   }
   const tree = buildTree(fs.files);
+  // Does this directory hold any hidden ELF child worth a "Reveal all"? (`""` = whole tree.)
+  const dirHasHidden = (path: string) => leavesUnder(fs.files, path).some(isHidden);
 
   const Row = ({ node, depth }: { node: TreeNode; depth: number }) => {
     const kids = Object.values(node.children).sort((a, b) => Number(b.dir) - Number(a.dir) || a.name.localeCompare(b.name));
     if (node.dir && node.name) {
+      const showRevealAll = dirHasHidden(node.path);
       return (
         <details open={depth < 1}>
-          <summary style={{ paddingLeft: depth * 12, cursor: "pointer", fontSize: 12.5 }}>
-            <Icon name="chip" size={12} /> {node.name}
+          <summary style={{ paddingLeft: depth * 12, cursor: "pointer", fontSize: 12.5, display: "flex", alignItems: "center", gap: 6 }}>
+            <Icon name="chip" size={12} /> <span>{node.name}</span>
+            {showRevealAll && (
+              <button className="btn sm ghost" style={{ marginLeft: "auto" }} title={`Reveal all binaries under ${node.path}/`}
+                      disabled={busy === "dir:" + node.path}
+                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); revealDir(node.path); }}>
+                {busy === "dir:" + node.path ? "…" : <><Icon name="eye" size={10} /> reveal all</>}
+              </button>
+            )}
           </summary>
           {kids.map((k) => <Row key={k.path} node={k} depth={depth + 1} />)}
         </details>
@@ -77,7 +113,12 @@ export default function FilesystemBrowser({ projectId, targetId, onChanged }: {
         <button className="btn sm icon ghost" title="View file contents" onClick={() => open(e.rel)}>
           <Icon name="search" size={11} />
         </button>
-        {e.added ? <span className="tag" style={{ color: "var(--accent)" }}>added</span>
+        {isHidden(e) ? (
+          // unpack registered this ELF but kept it hidden — reveal it into the graph.
+          <button className="btn sm" disabled={busy === e.rel} title="Reveal this binary in the graph + Targets pane" onClick={() => reveal(e)}>
+            {busy === e.rel ? "…" : <><Icon name="eye" size={10} /> reveal</>}
+          </button>
+        ) : e.added ? <span className="tag" style={{ color: "var(--accent)" }}>added</span>
           : looksAddable(e) ? (
             <button className="btn sm" disabled={busy === e.rel} onClick={() => add(e.rel)}>
               {busy === e.rel ? "…" : <><Icon name="plus" size={10} /> add</>}
@@ -112,7 +153,15 @@ export default function FilesystemBrowser({ projectId, targetId, onChanged }: {
 
   return (
     <>
-      <div className="sec">Filesystem <span className="muted">· {fs.method} · {fs.files.length} files</span></div>
+      <div className="sec" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span>Filesystem <span className="muted">· {fs.method} · {fs.files.length} files</span></span>
+        {dirHasHidden("") && (
+          <button className="btn sm ghost" style={{ marginLeft: "auto" }} title="Reveal every hidden binary in this firmware"
+                  disabled={busy === "dir:"} onClick={() => revealDir("")}>
+            {busy === "dir:" ? "…" : <><Icon name="eye" size={10} /> reveal all</>}
+          </button>
+        )}
+      </div>
       <div className="fsbrowser">
         {Object.values(tree.children).sort((a, b) => Number(b.dir) - Number(a.dir) || a.name.localeCompare(b.name))
           .map((k) => <Row key={k.path} node={k} depth={0} />)}

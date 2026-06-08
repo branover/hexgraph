@@ -30,6 +30,14 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
   // a name promoted on one target shows as already-added on another that imports the same name.
   useEffect(() => { setAdded(new Set()); setImportsOpen(false); }, [node.id]);
   const [decomp, setDecomp] = useState<{ loading: boolean; focus?: any; detail?: string } | null>(null);
+  // Target-level follow-up suggestions (e.g. recon found risky-sink imports → static-analyze).
+  // This is where the risky-sink follow-up surfaces now that recon enriches the target rather
+  // than minting a per-target finding.
+  const [targetSugg, setTargetSugg] = useState<any[]>([]);
+  useEffect(() => {
+    if (node.type === "target") api.targetSuggestions(node.id).then(setTargetSugg).catch(() => setTargetSugg([]));
+    else setTargetSugg([]);
+  }, [node.id, node.type]);
   const [editing, setEditing] = useState(false);
   const [eName, setEName] = useState("");
   const [eAddr, setEAddr] = useState("");
@@ -99,6 +107,19 @@ export default function NodeInspector({ node, target, allowed, projectId, onLaun
       {node.type === "target" && target && (
         <>
           <div className="actions"><Launcher allowed={allowed} onChoose={onLaunch} onFuzz={onFuzz} /></div>
+          {targetSugg.length > 0 && (
+            <>
+              <div className="sec">Next steps <span className="muted">· suggested from recon</span></div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {targetSugg.map((s, i) => (
+                  <button key={i} className="btn sm" title={`Launch ${s.task_type} on this target`}
+                          onClick={() => onLaunch(s.task_type)}>
+                    <Icon name="run" size={10} /> {s.label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
           <div className="sec">Recon facts</div>
           <div className="kvs">
             {hasKnownMitigations(target.metadata?.mitigations as any) && <><span className="k">mitigations</span><Mitigations mitigations={target.metadata.mitigations as any} /></>}

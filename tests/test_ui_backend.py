@@ -63,6 +63,55 @@ def test_clear_tasks_keeps_finding_bearing(hg_home):
         assert s.get(Task, keep_id) is not None
 
 
+def test_reveal_endpoints_and_target_suggestions(hg_home):
+    """The REST reveal endpoints flip visibility (and the project listing default-filters
+    to visible); the target suggestions endpoint serves the relocated risky-sink follow-up."""
+    with session_scope() as s:
+        p = create_project(s, name="rev")
+        fw = ingest_file(s, p, fixture_path("synthetic_fw.bin"), name="fw")
+        child = ingest_file(s, p, fixture_path("vuln_httpd"), name="usr/sbin/httpd",
+                            parent=fw, visible=False)
+        # enrich the hidden child as recon would (so the suggester has imports to act on)
+        child.metadata_json = {**(child.metadata_json or {}), "imports": ["strcpy"]}
+        child.kind = __import__("hexgraph.db.models", fromlist=["TargetKind"]).TargetKind.executable
+        pid, fwid, cid = p.id, fw.id, child.id
+
+    c = TestClient(create_app())
+    # default project listing hides the firmware child
+    ids = {t["id"] for t in c.get(f"/api/projects/{pid}").json()["targets"]}
+    assert fwid in ids and cid not in ids
+    # include_hidden surfaces it
+    ids_all = {t["id"] for t in c.get(f"/api/projects/{pid}?include_hidden=true").json()["targets"]}
+    assert cid in ids_all
+
+    # the relocated risky-sink follow-up surfaces at the target level
+    sugg = c.get(f"/api/targets/{cid}/suggestions").json()
+    assert sugg and sugg[0]["task_type"] == "static_analysis"
+
+    # reveal one target → it joins the visible listing
+    r = c.post(f"/api/projects/{pid}/targets/{cid}/visible", json={"visible": True})
+    assert r.status_code == 200 and r.json()["visible"] is True
+    assert cid in {t["id"] for t in c.get(f"/api/projects/{pid}").json()["targets"]}
+
+    # re-hide via the same endpoint
+    r = c.post(f"/api/projects/{pid}/targets/{cid}/visible", json={"visible": False})
+    assert r.json()["visible"] is False
+
+
+def test_reveal_dir_endpoint(hg_home):
+    with session_scope() as s:
+        p = create_project(s, name="revd")
+        fw = ingest_file(s, p, fixture_path("synthetic_fw.bin"), name="fw")
+        a = ingest_file(s, p, fixture_path("vuln_httpd"), name="usr/sbin/httpd", parent=fw, visible=False)
+        ingest_file(s, p, fixture_path("vuln_httpd"), name="bin/busybox", parent=fw, visible=False)
+        pid, fwid, aid = p.id, fw.id, a.id
+
+    c = TestClient(create_app())
+    r = c.post(f"/api/projects/{pid}/targets/{fwid}/reveal-dir", json={"prefix": "usr/sbin"})
+    assert r.status_code == 200 and r.json()["revealed"] == 1
+    assert aid in {t["id"] for t in c.get(f"/api/projects/{pid}").json()["targets"]}
+
+
 def test_decompile_endpoint_degrades_without_docker(hg_home, monkeypatch):
     monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: False)
     with session_scope() as s:

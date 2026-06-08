@@ -52,10 +52,35 @@ def test_promote_file(hg_home, monkeypatch):
         e = s.query(Edge).filter(Edge.type == EdgeType.contains.value, Edge.src_id == fw.id,
                                  Edge.dst_id == child.id).all()
         assert len(e) == 1
-        # manifest now marks it added; idempotent
-        assert list_filesystem(p, fw)["files"][0]["added"] is True
+        # manifest now marks it added; a promoted file is a VISIBLE child (revealed).
+        entry = list_filesystem(p, fw, session=s)["files"][0]
+        assert entry["added"] is True and entry["revealed"] is True
         again = promote_file(s, p, fw, "usr/sbin/httpd")
         assert again.id == child.id
+
+
+def test_list_filesystem_marks_hidden_child_unrevealed(hg_home):
+    """An unpack-registered HIDDEN child reads as added but NOT revealed, so the UI
+    can offer a 'Reveal' affordance instead of just 'added'."""
+    from hexgraph.engine.targets.ingest import ingest_file
+
+    with session_scope() as s:
+        p, fw = _firmware_with_fs(s)
+        # Register the ELF as a hidden child (what unpack does) + mark the manifest entry.
+        child = ingest_file(s, p, fixture_path("vuln_httpd"), name="usr/sbin/httpd",
+                            parent=fw, visible=False)
+        meta = dict(fw.metadata_json)
+        fsmeta = dict(meta["filesystem"])
+        fsmeta["files"] = [{**f, "child_target_id": child.id} if f["rel"] == "usr/sbin/httpd" else f
+                           for f in fsmeta["files"]]
+        meta["filesystem"] = fsmeta
+        fw.metadata_json = meta
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(fw, "metadata_json")
+        s.flush()
+
+        entry = next(f for f in list_filesystem(p, fw, session=s)["files"] if f["rel"] == "usr/sbin/httpd")
+        assert entry["added"] is True and entry["revealed"] is False
 
 
 def test_add_unknown_rel_rejected(hg_home):

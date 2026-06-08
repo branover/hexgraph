@@ -1,8 +1,17 @@
 """The `recon` task (SPEC §5) — deterministic, NO LLM.
 
-Runs the sandboxed recon probe over a target, records the facts on the target
-row, and emits exactly one schema-valid `recon` finding. This alone proves
-ingest → graph → findings with zero model calls.
+Runs the sandboxed recon probe over a target and ENRICHES the target: it writes
+the recovered facts onto the target row (format/arch/mitigations/imports/…) and
+records the raw facts as a durable **Observation** (`result_kind="recon"`), so
+they're queryable via `obs_list`/`obs_get` and re-used (analyze-once).
+
+Recon no longer mints a per-target *finding* — recon is ordinary orientation, not
+a vulnerability, and a 765-ELF firmware minted 765 of them. Node materialization
+is deferred for HIDDEN targets (a hidden target contributes nothing to the curated
+graph until revealed; reveal materializes its nodes from the already-stored facts).
+The risky-sink → static_analysis follow-up moved to the suggester seam
+(`engine/suggester.py::suggest_target_followups`), surfaced per-target via the
+followups API.
 """
 
 from __future__ import annotations
@@ -10,11 +19,9 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Project, Target, TargetKind
-from hexgraph.db.models import Finding as FindingRow
 from hexgraph.db.models import Task
-from hexgraph.engine.findings.findings import persist_finding
+from hexgraph.engine.observations import content_hash_for, record_observation
 from hexgraph.engine.tasks import create_task, mark_running, mark_succeeded, write_trace
-from hexgraph.models.finding import Evidence, Finding, FollowupSuggestion
 from hexgraph.sandbox.executor import Executor, get_executor
 
 # Dangerous libc sinks worth a static-analysis follow-up if imported.
@@ -40,53 +47,37 @@ def apply_facts_to_target(target: Target, facts: dict) -> None:
     target.metadata_json = meta
 
 
-def build_recon_finding(facts: dict, target_name: str) -> Finding:
+def recon_summary(facts: dict, target_name: str) -> str:
+    """A one-line human summary of the recon facts (the Observation summary + the
+    basis for the per-target follow-up label)."""
     mit = facts.get("mitigations", {})
     imports = facts.get("imports", [])
     risky = sorted(set(imports) & RISKY_SINKS)
     fmt = facts.get("format", "unknown")
     arch = facts.get("arch", "unknown")
-
     weak = [k for k in ("canary", "pie") if mit.get(k) is False]
     weak_str = f"weak mitigations ({', '.join(weak)} off)" if weak else "standard mitigations"
-    risky_str = f" Imports risky sinks: {', '.join(risky)}." if risky else ""
+    risky_str = f" Risky sinks: {', '.join(risky)}." if risky else ""
+    return f"{fmt} {arch} {facts.get('kind', 'binary')} with {weak_str}.{risky_str}"
 
-    followups: list[FollowupSuggestion] = []
-    if risky and facts.get("kind") in ("executable", "shared_library"):
-        followups.append(
-            FollowupSuggestion(
-                task_type="static_analysis",
-                label=f"Static-analyze {target_name} for memory safety",
-                params={"sink": risky[0]},
-            )
-        )
 
-    return Finding(
-        title=f"Attack-surface summary for {target_name}",
-        severity="info",
-        confidence="high",
-        category="recon",
-        summary=f"{fmt} {arch} {facts.get('kind', 'binary')} with {weak_str}.{risky_str}",
-        reasoning=(
-            f"Deterministic recon (no LLM). Mitigations: {mit}. "
-            f"Linked libraries: {facts.get('libraries', [])}. "
-            f"{len(imports)} imported symbols; risky sinks present: {risky or 'none'}."
-        ),
-        evidence=Evidence(
-            file=target_name,
-            strings=(facts.get("strings") or [])[:15],
-            extra={
-                "format": fmt,
-                "arch": arch,
-                "kind": facts.get("kind"),
-                "mitigations": mit,
-                "libraries": facts.get("libraries", []),
-                "imports": imports[:40],
-                "hashes": {k: facts.get(k) for k in ("sha256", "md5", "size") if k in facts},
-            },
-        ),
-        suggested_followups=followups or None,
+def record_recon_observation(session: Session, project: Project, target: Target, facts: dict):
+    """Record the raw recon facts as a durable Observation (result_kind 'recon') so
+    they're queryable (obs_list/obs_get) and re-used. Replaces the old per-target
+    recon finding — recon enriches, it isn't a vulnerability."""
+    obs, _cached = record_observation(
+        session,
+        project_id=project.id,
+        target_id=target.id,
+        source="recon",
+        tool="recon_probe",
+        args=None,
+        result_kind="recon",
+        payload=facts,
+        summary=recon_summary(facts, target.name),
+        content_hash=content_hash_for(target) or facts.get("sha256"),
     )
+    return obs
 
 
 def execute_recon(
@@ -95,28 +86,29 @@ def execute_recon(
     target: Target,
     task: Task,
     runner: Executor | None = None,
-) -> tuple[FindingRow, dict]:
-    """Run recon for an existing task row. Returns (finding row, raw facts)."""
+) -> dict:
+    """Run recon for an existing task row: enrich the target's metadata, record a
+    recon Observation, and (for VISIBLE targets only) materialize recon nodes.
+    Hidden targets enrich but add nothing to the graph until revealed. Returns the
+    raw facts."""
     runner = runner or get_executor()
     facts = runner.run_json_probe("recon_probe.py", target.path)
     write_trace(task, "recon_facts.json", facts)
 
     apply_facts_to_target(target, facts)
-    _materialize_recon_nodes(session, project.id, target, facts)
-    finding = build_recon_finding(facts, target.name)
-    row = persist_finding(
-        session,
-        project_id=project.id,
-        target_id=target.id,
-        task_id=task.id,
-        finding=finding,
-    )
-    return row, facts
+    record_recon_observation(session, project, target, facts)
+    # A hidden target contributes nothing to the curated graph — defer node
+    # materialization to reveal (`materialize_recon_nodes` runs then, from the
+    # already-stored facts, no re-run).
+    if target.visible:
+        materialize_recon_nodes(session, project.id, target, facts)
+    return facts
 
 
-def _materialize_recon_nodes(session: Session, project_id: str, target: Target, facts: dict) -> None:
+def materialize_recon_nodes(session: Session, project_id: str, target: Target, facts: dict) -> None:
     """Materialize a bounded set of symbol + string nodes from recon facts
-    (design §3.2: filtered, not thousands of rows)."""
+    (design §3.2: filtered, not thousands of rows). Run for a visible target at
+    recon time, and on reveal for a target that was hidden when recon ran."""
     from hexgraph.engine.graph.nodes import MAX_STRINGS, MAX_SYMBOLS, materialize_string, materialize_symbol
 
     imports = facts.get("imports", [])[:MAX_SYMBOLS]
@@ -134,10 +126,10 @@ def run_recon(
     project: Project,
     target: Target,
     runner: Executor | None = None,
-) -> tuple[FindingRow, dict]:
-    """Create a recon task and run it. Returns (finding row, raw facts)."""
+) -> dict:
+    """Create a recon task and run it. Returns the raw facts."""
     task = create_task(session, project=project, target_id=target.id, type="recon", backend="none")
     mark_running(task)
-    row, facts = execute_recon(session, project, target, task, runner)
+    facts = execute_recon(session, project, target, task, runner)
     mark_succeeded(task)
-    return row, facts
+    return facts
