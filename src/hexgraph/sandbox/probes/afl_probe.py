@@ -300,8 +300,9 @@ def main() -> int:
     # forkserver, so these now flag a GENUINE fault, not a host-kernel limitation.) The
     # campaign stays a real result (compiled=true, coverage_instrumented=true) but carries
     # an explicit diagnostic the engine/UI surface as `engine_note`.
-    note = _afl_failure_note(afl_log)
-    if note and (final.get("executions", 0) == 0 or _afl_hard_abort(afl_log)):
+    afl_text = _afl_log_text(afl_log) or ""
+    note = _failure_note_in(afl_text)
+    if note and (final.get("executions", 0) == 0 or _is_hard_abort(afl_text)):
         final["afl_note"] = note
         final["ran"] = False
     _write_status(outdir, final)
@@ -347,22 +348,32 @@ def _afl_log_text(afl_log: str) -> str | None:
         return None
 
 
-def _afl_failure_note(afl_log: str) -> str | None:
-    """Extract a human-readable reason from afl-fuzz's captured output when it failed to
-    fuzz. Returns None if the log doesn't match a known early-abort signature."""
-    text = _afl_log_text(afl_log)
-    if text is None:
-        return None
+# Core matchers operate on already-read log text so the abort path reads afl.log once;
+# the `_afl_*` wrappers below take a path for callers/tests that don't hold the text.
+def _failure_note_in(text: str) -> str | None:
+    """The human-readable reason matching the first early-abort signature in `text`, else None."""
     for needle, msg in _AFL_FAIL_SIGNATURES:
         if needle in text:
             return msg
     return None
 
 
+def _is_hard_abort(text: str) -> bool:
+    """True if `text` shows afl-fuzz hard-aborted (fatal exit) — flag regardless of exec count."""
+    return any(s in text for s in _AFL_HARD_ABORT)
+
+
+def _afl_failure_note(afl_log: str) -> str | None:
+    """Extract a human-readable reason from afl-fuzz's captured log when it failed to fuzz.
+    Returns None if the log is unreadable or matches no known early-abort signature."""
+    text = _afl_log_text(afl_log)
+    return _failure_note_in(text) if text is not None else None
+
+
 def _afl_hard_abort(afl_log: str) -> bool:
     """True if afl-fuzz hard-aborted (fatal exit) — flag the run regardless of exec count."""
     text = _afl_log_text(afl_log)
-    return bool(text) and any(s in text for s in _AFL_HARD_ABORT)
+    return _is_hard_abort(text) if text is not None else False
 
 
 def _afl_crash_files(work):
