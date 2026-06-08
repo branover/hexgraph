@@ -23,6 +23,28 @@ export interface HypothesisRow {
   supports_count: number; refutes_count: number; created_at?: string | null;
 }
 export const HYPOTHESIS_WORK_STATES = ["investigating", "parked", "done"] as const;
+// A resolved @-mention inside a journal entry. The store keeps the raw `(ref_kind, ref_id)`;
+// the backend resolves it at read time through the merge keeper, so `resolved_id` is what the
+// UI should select and `dangling` greys a mention whose target is archived/missing. `label` is
+// the live object name (falls back to `stored_label`, the text captured when the link was made).
+export interface JournalMention {
+  ref_kind: "node" | "finding" | "target" | "hypothesis";
+  ref_id: string;          // the raw id stored in the markdown
+  resolved_id: string;     // the id to select (the merge keeper's id when different)
+  label: string | null;    // the live object's current name
+  stored_label: string | null;  // the label captured when the mention was authored
+  dangling: boolean;       // archived/missing/cross-project — render greyed, non-navigating
+}
+// One journal entry — freeform markdown attributed to a human or an agent, with its mentions
+// resolved (design-working-memory.md §5). The `edited` marker and timestamps come from the
+// backend; the body is markdown rendered sanitized (target-derived text is untrusted).
+export interface JournalEntry {
+  id: string; project_id: string; author: "human" | "agent"; body: string;
+  origin_task_id?: string | null; edited: boolean;
+  created_at?: string | null; updated_at?: string | null;
+  mentions: JournalMention[];
+}
+export const JOURNAL_AUTHORS = ["human", "agent"] as const;
 export interface AnalysisRunRow {
   id: string; task_id: string; task_type: string; backend: string; model?: string | null;
   bundle_sha?: string | null; finding_count: number; created_at: string;
@@ -325,6 +347,23 @@ export const api = {
   setHypothesisWorkState: (hid: string, work_state: string, verdict?: string) =>
     postJSON<Hypothesis>(`/api/hypotheses/${hid}/work-state`, { work_state, verdict }),
   pinHypothesis: (hid: string, pinned: boolean) => postJSON<Hypothesis>(`/api/hypotheses/${hid}/pin`, { pinned }),
+  // Journal (the freeform research notebook — design-working-memory.md §5). Plain CRUD +
+  // search + a back-reference filter (entries mentioning a given object).
+  journal: (pid: string, opts: { author?: string; mentionsKind?: string; mentionsId?: string; limit?: number } = {}) => {
+    const qs = new URLSearchParams();
+    if (opts.author) qs.set("author", opts.author);
+    if (opts.mentionsKind && opts.mentionsId) { qs.set("mentions_kind", opts.mentionsKind); qs.set("mentions_id", opts.mentionsId); }
+    if (opts.limit) qs.set("limit", String(opts.limit));
+    return getJSON<{ entries: JournalEntry[] }>(`/api/projects/${pid}/journal${qs.toString() ? "?" + qs.toString() : ""}`);
+  },
+  // Compose posts as the HUMAN — this REST surface is the researcher's own workbench (the
+  // agent path forces author="agent" at the MCP layer).
+  createJournalEntry: (pid: string, body: string) => postJSON<JournalEntry>(`/api/projects/${pid}/journal`, { body, author: "human" }),
+  journalEntry: (eid: string) => getJSON<JournalEntry>(`/api/journal/${eid}`),
+  updateJournalEntry: (eid: string, body: string) => patchJSON<JournalEntry>(`/api/journal/${eid}`, { body }),
+  deleteJournalEntry: (eid: string) => delJSON<{ deleted: string }>(`/api/journal/${eid}`),
+  searchJournal: (pid: string, q: string, limit = 100) =>
+    getJSON<{ entries: JournalEntry[] }>(`/api/projects/${pid}/journal/search?q=${encodeURIComponent(q)}&limit=${limit}`),
   // Settings (optional features + non-secret prefs; secrets are status-only)
   getSettings: () => getJSON<SettingsView>("/api/settings"),
   async patchSettings(patch: Record<string, any>): Promise<SettingsView> {
