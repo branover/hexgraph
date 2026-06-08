@@ -42,7 +42,11 @@ The tools are also grouped into **read**, **write**, and **run**, and each group
 `features.mcp.{read,write,run}` (in Settings → Coding-agent tools, or via `--tools`), which keeps the
 agent's context small:
 
-- **read** covers the listing and inspection verbs across the domains, `graph_get_node`, `finding_get`, `re_xrefs`, `graph_list_sockets`,
+- **read** covers the listing and inspection verbs across the domains. `finding_list` returns
+  findings newest-first, paginated (`limit`/`offset`) and filterable
+  (`finding_type`/`status`/`severity`/`target_id`/`verified`); it default-excludes the
+  per-child `recon` findings (ingest mints one per child target — easily hundreds), so pass
+  `include_recon=true` (or `finding_type='recon'`) to see them. Also `graph_get_node`, `finding_get`, `re_xrefs`, `graph_list_sockets`,
   `graph_list_hypotheses` (the hypothesis worklist — statement, evidence status, work_state, evidence counts; your "what am I chasing" orient),
   `graph_stats` (per-type node/edge tallies — a cheap before/after count without listing every node),
   `fs_list`/`fs_read_file`, `src_list_trees`/`src_read_file`, `fuzz_status`,
@@ -65,7 +69,9 @@ agent's context small:
   instead, call `finding_update(status='dismissed')`.
 - **run** covers `target_ingest`, `target_promote_file` (promote a file from an unpacked firmware into
   its own target), `task_run`, `finding_verify_poc`, `fuzz_verify_artifact`,
-  `fuzz_start`/`fuzz_resume`, `src_build`, and more.
+  `fuzz_start`/`fuzz_resume`, `src_build`, and more. `target_ingest` returns a bounded summary
+  (the child count plus a preview of the first ~20 children, since firmware can unpack into
+  hundreds); call `target_list(project_id)` for the full target tree.
 
 When a binary PoC needs to feed raw, non-printable bytes (an angr-solved serial, a binary stdin
 payload), `finding_verify_poc` takes byte-faithful `argv_b64` and `stdin_b64` fields: each is base64

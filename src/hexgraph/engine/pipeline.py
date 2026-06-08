@@ -49,12 +49,14 @@ def analyze_target(
 
     is_firmware = facts.get("kind") == "firmware_image" or facts.get("format") in _FIRMWARE_FORMATS
     if is_firmware:
+        summary["format"] = facts.get("format")
         for child in unpack_firmware(session, project, target, runner):
             _child_finding, child_facts = run_recon(session, project, child, runner)
             _maybe_enrich_ghidra(session, project, child, child_facts)
             summary["children"].append({"target_id": child.id, "name": child.name})
     else:
         _maybe_enrich_ghidra(session, project, target, facts)
+    summary["children_count"] = len(summary["children"])
     return summary
 
 

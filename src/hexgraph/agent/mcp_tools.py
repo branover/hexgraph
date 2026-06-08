@@ -943,26 +943,57 @@ def search_observations(query: str, project_id: str | None = None,
         return {"observations": rows, "count": len(rows), "reuse_hint": _OBS_REUSE}
 
 
-def list_findings(project_id: str) -> list[dict]:
-    """Existing findings, so the agent doesn't re-report what's already known. Each row
-    carries `verified`, the compact `assurance` triple {standard, method, precondition} (the
-    rung — so you see code_present/static vs input_reachable/dynamic at a glance, no
-    per-finding get_finding needed) and, for a PoC that ran, a compact `verification` summary
-    {verified, detail}; a fuzz_crash carries a compact `fuzz` summary
-    {exploitability, coverage_instrumented, dupe_count} so you can triage at a glance —
-    call get_finding(id) for the full evidence (incl. the PoC/fuzz detail in
-    evidence.extra)."""
+def list_findings(project_id: str, limit: int = 100, offset: int = 0,
+                  finding_type: str | None = None, status: str | None = None,
+                  severity: str | None = None, target_id: str | None = None,
+                  verified: bool | None = None,
+                  include_recon: bool = False) -> list[dict]:
+    """Existing findings, NEWEST-FIRST, so the agent doesn't re-report what's already known.
+    Paginated (`limit`/`offset`) and filterable (`finding_type`/`status`/`severity`/
+    `target_id`/`verified`). By DEFAULT excludes the high-volume `recon` findings (ingest
+    mints one per child target — easily hundreds) so the substantive findings aren't drowned;
+    pass include_recon=True (or finding_type='recon') to see them. Each row carries `verified`,
+    the compact `assurance` triple {standard, method, precondition} (the rung — so you see
+    code_present/static vs input_reachable/dynamic at a glance, no per-finding get_finding
+    needed) and, for a PoC that ran, a compact `verification` summary {verified, detail};
+    a fuzz_crash carries a compact `fuzz` summary {exploitability, coverage_instrumented,
+    dupe_count} so you can triage at a glance — call get_finding(id) for the full evidence
+    (incl. the PoC/fuzz detail in evidence.extra)."""
     from hexgraph.engine.findings.assurance import assurance_of, compact_assurance
 
+    try:
+        limit = max(0, int(limit))
+        offset = max(0, int(offset))
+    except (TypeError, ValueError):
+        limit, offset = 100, 0
+
     with session_scope() as s:
-        rows = s.query(Finding).filter(Finding.project_id == project_id).all()
+        q = s.query(Finding).filter(Finding.project_id == project_id)
+        if finding_type:
+            q = q.filter(Finding.finding_type == finding_type)
+        elif not include_recon:
+            # Default: keep the per-child recon flood out of the list.
+            q = q.filter(Finding.finding_type != "recon")
+        if status:
+            q = q.filter(Finding.status == status)
+        if severity:
+            q = q.filter(Finding.severity == severity)
+        if target_id:
+            q = q.filter(Finding.target_id == target_id)
+        q = q.order_by(Finding.created_at.desc()).offset(offset).limit(limit)
+        rows = q.all()
         out = []
         for f in rows:
             ev = f.evidence_json or {}
             extra = ev.get("extra") or {}
+            is_ver = is_verified(ev)
+            # `verified` derives from nested evidence JSON (not a portable SQL column), so
+            # it filters the page after fetch — limit/offset apply to the DB query.
+            if verified is not None and is_ver != bool(verified):
+                continue
             row = {"id": f.id, "title": f.title, "severity": f.severity, "category": f.category,
                    "status": f.status, "finding_type": f.finding_type, "cwe": f.cwe,
-                   "verified": is_verified(ev), "target_id": f.target_id,
+                   "verified": is_ver, "target_id": f.target_id,
                    "function": ev.get("function"),
                    "assurance": compact_assurance(assurance_of(ev))}
             ver = extra.get("verification")
@@ -2032,9 +2063,14 @@ def annotate(project_id: str, node_kind: str, node_id: str, kind: str, value: st
         return {"id": a.id, "kind": a.kind, "status": a.status}
 
 
+_INGEST_CHILD_PREVIEW = 20  # firmware can unpack into 100s of children; preview only
+
+
 def ingest(path: str, name: str | None = None, project_id: str | None = None) -> dict:
     """Ingest a binary/firmware from a local path as a target (firmware unpacks into
-    children), running recon in the sandbox. Creates a project if none is given."""
+    children), running recon in the sandbox. Creates a project if none is given. Returns a
+    bounded summary (children_count + a preview of the first ~20 children); call
+    target_list(project_id) for the full set."""
     import os
 
     from hexgraph.engine.targets.ingest import create_project, ingest_file
@@ -2054,8 +2090,22 @@ def ingest(path: str, name: str | None = None, project_id: str | None = None) ->
             return {"project_id": project.id, "root_target_id": t.id, "recon": False,
                     "note": "Docker not running — registered without recon/unpack"}
         summary = ingest_and_analyze(s, project, path, name=name, runner=get_executor())
-        return {"project_id": project.id, "root_target_id": summary["root_target_id"],
-                "children": summary.get("children", [])}
+        children = summary.get("children", [])
+        result = {
+            "project_id": project.id,
+            "root_target_id": summary["root_target_id"],
+            "children_count": summary.get("children_count", len(children)),
+            "children": children[:_INGEST_CHILD_PREVIEW],
+        }
+        if summary.get("format"):
+            result["format"] = summary["format"]
+        if len(children) > _INGEST_CHILD_PREVIEW:
+            result["note"] = (f"{len(children)} children unpacked; showing the first "
+                              f"{_INGEST_CHILD_PREVIEW}. Use target_list(project_id) for the "
+                              f"full set.")
+        else:
+            result["note"] = "Use target_list(project_id) for the full target tree."
+        return result
 
 
 def register_web_surface(project_id: str, base_url: str, name: str | None = None,

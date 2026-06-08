@@ -102,6 +102,91 @@ def test_record_finding_validates_and_persists(hg_home):
     assert mcp_tools.get_finding("nope").get("error")
 
 
+def test_list_findings_filters_paginates_and_excludes_recon(hg_home):
+    """finding_list honors limit/offset + each filter and DEFAULT-EXCLUDES recon."""
+    from datetime import datetime, timedelta, timezone
+
+    from hexgraph.db.models import Finding
+
+    base = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    with session_scope() as s:
+        p = create_project(s, name="filters")
+        t1 = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        t2 = ingest_file(s, p, fixture_path("vuln_httpd"), name="cgi")
+        pid, tid1, tid2 = p.id, t1.id, t2.id
+
+        def mk(i, *, ftype="vulnerability", status="new", severity="high",
+               target_id=None, verified=False):
+            ev = {"function": "f"}
+            if verified:
+                ev["extra"] = {"verification": {"verified": True, "detail": "ok"}}
+            s.add(Finding(project_id=pid, target_id=target_id or tid1, task_id="task",
+                          title=f"F{i}", severity=severity, confidence="high",
+                          category="memory-safety", summary="s", reasoning="r",
+                          evidence_json=ev, finding_type=ftype, status=status,
+                          created_at=base + timedelta(minutes=i)))
+
+        # 30 recon findings (the flood) + a handful of substantive ones
+        for i in range(30):
+            mk(i, ftype="recon")
+        mk(100, ftype="vulnerability", status="new", severity="high")
+        mk(101, ftype="vulnerability", status="confirmed", severity="critical")
+        mk(102, ftype="fuzz_crash", status="new", severity="medium", target_id=tid2)
+        mk(103, ftype="poc", status="confirmed", severity="high", verified=True)
+
+    # Default excludes recon → only the 4 substantive findings, newest-first.
+    rows = mcp_tools.list_findings(pid)
+    assert [r["finding_type"] for r in rows] == ["poc", "fuzz_crash", "vulnerability", "vulnerability"]
+    assert all(r["finding_type"] != "recon" for r in rows)
+    assert rows[0]["title"] == "F103"  # newest first
+
+    # include_recon surfaces them; finding_type='recon' isolates them.
+    assert len(mcp_tools.list_findings(pid, include_recon=True)) == 34
+    recon = mcp_tools.list_findings(pid, finding_type="recon", limit=1000)
+    assert len(recon) == 30 and all(r["finding_type"] == "recon" for r in recon)
+
+    # limit / offset paginate the (recon-excluded) newest-first list.
+    page = mcp_tools.list_findings(pid, limit=2)
+    assert [r["title"] for r in page] == ["F103", "F102"]
+    page2 = mcp_tools.list_findings(pid, limit=2, offset=2)
+    assert [r["title"] for r in page2] == ["F101", "F100"]
+
+    # filters
+    assert {r["title"] for r in mcp_tools.list_findings(pid, status="confirmed")} == {"F103", "F101"}
+    assert {r["title"] for r in mcp_tools.list_findings(pid, severity="critical")} == {"F101"}
+    assert {r["title"] for r in mcp_tools.list_findings(pid, target_id=tid2)} == {"F102"}
+    assert {r["title"] for r in mcp_tools.list_findings(pid, finding_type="fuzz_crash")} == {"F102"}
+    assert {r["title"] for r in mcp_tools.list_findings(pid, verified=True)} == {"F103"}
+    assert "F103" not in {r["title"] for r in mcp_tools.list_findings(pid, verified=False)}
+
+
+def test_ingest_returns_bounded_summary(hg_home, monkeypatch):
+    """target_ingest's return is a bounded summary — children_count + a capped preview,
+    never the full child list inlined."""
+    import hexgraph.engine.pipeline as pipeline
+    from hexgraph.agent import mcp_tools as M
+
+    monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
+    monkeypatch.setattr("hexgraph.sandbox.executor.get_executor", lambda: None)
+
+    children = [{"target_id": f"c{i}", "name": f"child{i}"} for i in range(50)]
+
+    def fake_ingest_and_analyze(s, project, path, *, name=None, runner=None):
+        return {"root_target_id": "root", "children": children,
+                "children_count": len(children), "format": "squashfs"}
+
+    monkeypatch.setattr(pipeline, "ingest_and_analyze", fake_ingest_and_analyze)
+    # ingest() imports ingest_and_analyze locally from the module, so patching the module attr
+    # is what takes effect.
+    r = M.ingest(fixture_path("vuln_httpd"), name="fw")
+    assert r["children_count"] == 50
+    assert len(r["children"]) <= 20  # bounded preview, NOT all 50
+    assert r["format"] == "squashfs"
+    assert "target_list" in r.get("note", "")
+    # the full set must NOT be inlined
+    assert len(r["children"]) < r["children_count"]
+
+
 def test_run_task_static_analysis_offline(hg_home):
     with session_scope() as s:
         p = create_project(s, name="m3")  # mock backend

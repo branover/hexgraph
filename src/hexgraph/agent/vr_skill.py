@@ -79,10 +79,12 @@ synthesis; the per-phase methodology lives in the sub-files.
 skip ahead. If you were handed a PATH (e.g. "find vulns in the firmware at /path/to/fw"):
 - `proj_create(name)` a project for the engagement (or reuse one from `proj_list()`).
 - `target_ingest(path, project_id=<id>)` — processes the bytes in the sandbox and registers a
-  target. **Firmware unpacks into child targets**: the extracted binaries become their own
-  targets and the rootfs becomes browsable. `target_list(project_id)` then shows the binary
-  you ingested PLUS every child (httpd, cgi-bin handlers, daemons, libraries). That child set
-  is your attack surface and your unit of parallel work.
+  target, returning a bounded summary (children_count + a preview of the first ~20 children).
+  **Firmware unpacks into child targets**: the extracted binaries become their own targets and
+  the rootfs becomes browsable. `target_list(project_id)` then shows the binary you ingested
+  PLUS every child (httpd, cgi-bin handlers, daemons, libraries) — use it for the FULL set
+  (firmware can unpack into hundreds). That child set is your attack surface and your unit of
+  parallel work.
 
 **Phase 1 — Orient before you analyze.** Cheap reads first, so you never re-derive what's
 known and you can see where to go:
@@ -91,7 +93,9 @@ known and you can see where to go:
   decompiler). Don't guess field names.
 - Read prior work: `finding_list(project_id)` (what's already found / confirmed / dismissed —
   each row carries the `assurance` triple, so don't re-report a dismissed or already-proven
-  bug), `graph_stats` / `graph_list_nodes` / `graph_list_hypotheses` (what's promoted and what's
+  bug; it's newest-first, paginates via `limit`/`offset`, filters by
+  `finding_type`/`status`/`severity`/`target_id`/`verified`, and DEFAULT-EXCLUDES the
+  per-child `recon` findings — pass include_recon=true to see them), `graph_stats` / `graph_list_nodes` / `graph_list_hypotheses` (what's promoted and what's
   being chased), `journal_list` / `journal_search` (what a prior session tried and ruled out —
   the cheapest re-orientation), and `obs_list(target_id)` (heavy analysis already cached — reuse
   it, don't pay twice).
