@@ -114,8 +114,8 @@ def analyze_taint(session: Session, project: Any, target: Any, *,
     observation_id, cached, error}``. When no analyzer is available, returns availability
     False and promotes nothing — never fabricates a flow."""
     from hexgraph.engine import observations as obs
-    from hexgraph.engine.edges import add_edge
-    from hexgraph.engine.nodes import get_or_create_node
+    from hexgraph.engine.graph.edges import add_edge
+    from hexgraph.engine.graph.nodes import get_or_create_node
 
     analyzer = analyzer or get_taint_analyzer()
     path = getattr(target, "path", None)

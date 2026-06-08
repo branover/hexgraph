@@ -16,8 +16,8 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import EdgeType, Node, NodeType, Project, Target, TargetKind
-from hexgraph.engine.edges import add_edge
-from hexgraph.engine.nodes import get_or_create_node, normalize_symbol_name
+from hexgraph.engine.graph.edges import add_edge
+from hexgraph.engine.graph.nodes import get_or_create_node, normalize_symbol_name
 
 
 def _channel(target: Target) -> dict:
@@ -103,7 +103,7 @@ def register_service_target(
     # reachable surface) and node (a graph annotation) stay distinct entities; the
     # `listens_on` edge fuses them so the live service shows up on the same network map a
     # static binary's bind/listen sites do (identity = (project, kind, port), target_id=None).
-    from hexgraph.engine.nodes import materialize_socket
+    from hexgraph.engine.graph.nodes import materialize_socket
 
     # The socket node is the SHARED abstract endpoint (identity = kind+port); the concrete
     # live host lives on THIS target's Channel (where _device_host reads it), so we don't

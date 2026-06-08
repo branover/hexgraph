@@ -122,7 +122,7 @@ still rendered as an illegible two-clump smudge because the client **fetched and
 node at once**. The fix is to NOT render everything at once, both on the client and (the real fix)
 on the server.
 
-- **Backend skeleton-first endpoints** (`engine/graph.py` + `/graph/{id}/…`, no migration —
+- **Backend skeleton-first endpoints** (`engine/graph/graph.py` + `/graph/{id}/…`, no migration —
   read-only serialization over existing models):
   - `GET /graph/{id}/size` — cheap node/edge counts so the client picks skeleton-first vs full
     load WITHOUT first fetching ~13k nodes. `skeleton_recommended` true above `SKELETON_THRESHOLD`
@@ -887,7 +887,7 @@ From the Phase 5 tool evaluation (a VR agent doing real RE through the MCP tools
 ### 1. One-click promote of tool-discovered symbols  [M]
 Today only `target.metadata.exports` is one-click-promotable (`NodeInspector.tsx`). Functions/symbols/imports that appear in TOOL RESULTS — the binutils symbol/import table, `re_list_functions`, xref targets — are not: you either decompile (heavyweight; it promotes) or re-type the name in the generic add-node modal. The VR agent independently asked for a lightweight "promote this callee" verb.
 - **Frontend:** render those result items as clickable rows with a one-click "add as node" (mirror the existing exports affordance).
-- **Why it's high-value + cheap:** a promoted function/symbol node AUTO-ENRICHES on creation — `engine/nodes.get_or_create_node` calls `enrichment.apply_facts_for_node`, which joins every waiting always-welcome fact for the node's `(name, address)`: prototype/address/params/calling-convention/demangled-name (if a prior decompile/Ghidra recorded them) + `is_sink` (for dangerous imports). The node arrives pre-enriched, not empty. Reuse `graph_create_node` (MCP/API exists).
+- **Why it's high-value + cheap:** a promoted function/symbol node AUTO-ENRICHES on creation — `engine/graph/nodes.get_or_create_node` calls `enrichment.apply_facts_for_node`, which joins every waiting always-welcome fact for the node's `(name, address)`: prototype/address/params/calling-convention/demangled-name (if a prior decompile/Ghidra recorded them) + `is_sink` (for dangerous imports). The node arrives pre-enriched, not empty. Reuse `graph_create_node` (MCP/API exists).
 - **Agent side:** a lightweight verb to promote a symbol/callee to a node WITHOUT decompiling (decompile is the only current promote path for a function). Caveat: a fact only joins if a prior tool recorded it; a bare symbol with no prior analysis comes in plain (future runs enrich it forward).
 
 ### 2. Surface a node's FULL result set at the node  [M]

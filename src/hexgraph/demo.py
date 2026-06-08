@@ -121,7 +121,7 @@ def _run() -> int:
 
     from hexgraph import settings as st
     from hexgraph.db.session import init_db, reset_engine_for_tests, session_scope
-    from hexgraph.engine.graph import build_graph
+    from hexgraph.engine.graph.graph import build_graph
     from hexgraph.engine.ingest import create_project
     from hexgraph.engine.pipeline import ingest_and_analyze
 
@@ -169,7 +169,7 @@ def _run() -> int:
 
     with session_scope() as s:
         from hexgraph.db.models import Edge, EdgeType, Project, Target
-        from hexgraph.engine.authoring import create_edge
+        from hexgraph.engine.graph.authoring import create_edge
 
         project = s.query(Project).filter(Project.id == pid).one()
         tree = src.create_source_tree(s, project, name="acme-httpd (src)", origin="scratch")

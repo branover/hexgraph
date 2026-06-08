@@ -13,7 +13,7 @@ from collections import defaultdict
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Edge, EdgeType, Node, NodeType
-from hexgraph.engine.edges import add_edge
+from hexgraph.engine.graph.edges import add_edge
 
 
 def link_same_code(session: Session, project_id: str) -> int:

@@ -177,8 +177,8 @@ def _promote_matches(
     """Promote each matched rule to a project-level `pattern` node + a `matches_rule` edge
     from the scanned target to it. Idempotent (pattern identity is the rule; the edge
     merges), so a re-sweep doesn't duplicate. Returns a compact list of the promotions."""
-    from hexgraph.engine.edges import add_edge
-    from hexgraph.engine.nodes import get_or_create_node
+    from hexgraph.engine.graph.edges import add_edge
+    from hexgraph.engine.graph.nodes import get_or_create_node
 
     promoted: list[dict] = []
     for m in facts.get("matches") or []:

@@ -20,11 +20,11 @@ import os
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import EdgeType, Project, Target, TargetKind, Task, TaskStatus
-from hexgraph.engine.edges import add_edge
+from hexgraph.engine.graph.edges import add_edge
 from hexgraph.engine.findings import persist_finding
-from hexgraph.engine.nodes import materialize_function
+from hexgraph.engine.graph.nodes import materialize_function
 from hexgraph.engine.re.recon import RISKY_SINKS
-from hexgraph.engine.refs import pick_sibling, resolve_target_ref
+from hexgraph.engine.graph.refs import pick_sibling, resolve_target_ref
 from hexgraph.engine.tasks import write_trace
 from hexgraph.llm.registry import get_backend
 from hexgraph.llm.runner import run_findings_agentic
@@ -348,7 +348,7 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
 
     # Fold any duplicate function/symbol nodes this task introduced (e.g. a
     # decompiler `sym.foo` colliding with an agent's `foo`) into one node.
-    from hexgraph.engine.nodemerge import merge_duplicate_nodes
+    from hexgraph.engine.graph.nodemerge import merge_duplicate_nodes
 
     merge_duplicate_nodes(session, project.id)
 

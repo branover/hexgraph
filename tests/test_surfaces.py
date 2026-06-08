@@ -8,7 +8,7 @@ from hexgraph.db.models import Edge, EdgeType, Node, NodeType, Target, TargetKin
 from hexgraph.db.session import session_scope
 from hexgraph.agent import mcp_tools as M
 from hexgraph.engine.ingest import create_project, ingest_file
-from hexgraph.engine.nodes import materialize_function
+from hexgraph.engine.graph.nodes import materialize_function
 from hexgraph.engine.surfaces import register_web_surface, run_surface_recon
 from hexgraph.engine.tasks import create_task
 from hexgraph.engine.worker import run_task_sync
@@ -163,7 +163,7 @@ def test_byte_sandbox_refuses_empty_artifact(hg_home):
 def test_endpoint_and_param_are_hand_authorable(hg_home):
     """A4/A3 UX: endpoint and param are first-class, target-bound, hand-authorable
     node types (an analyst can add a route/field the same way as a function node)."""
-    from hexgraph.engine.authoring import MANUAL_NODE_TYPES, TARGET_BOUND
+    from hexgraph.engine.graph.authoring import MANUAL_NODE_TYPES, TARGET_BOUND
     assert {"endpoint", "param"} <= MANUAL_NODE_TYPES
     assert {"endpoint", "param"} <= TARGET_BOUND
     with session_scope() as s:

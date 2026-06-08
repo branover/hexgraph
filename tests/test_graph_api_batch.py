@@ -5,7 +5,7 @@ unauthenticated precondition override. Mock, offline — no Docker, no key."""
 from hexgraph.db.session import session_scope
 from hexgraph.engine import assurance as A
 from hexgraph.agent import mcp_tools as T
-from hexgraph.engine.authoring import create_edge, create_node
+from hexgraph.engine.graph.authoring import create_edge, create_node
 from hexgraph.engine.findings import normalize_cwe, persist_finding
 from hexgraph.engine.ingest import create_project, ingest_file
 from hexgraph.engine.reachability import argue_reachability_for_finding

@@ -94,14 +94,14 @@ def _gather_items(session: Session, project: Project, target: Target, task, ctx)
                            "Already reported here: " + "; ".join(f"[{f.severity}] {f.title}" for f in other[:10]),
                            70, "target", target.id))
 
-    from hexgraph.engine.annotations import confirmed_facts
+    from hexgraph.engine.graph.annotations import confirmed_facts
     ann_facts = confirmed_facts(session, project.id, target.id)
     if ann_facts:
         items.append(_Item("analyst_confirmed.annotations",
                            "ANALYST-CONFIRMED (authoritative): " + "; ".join(ann_facts[:15]),
                            96, "target", target.id))
 
-    from hexgraph.engine.hypotheses import (
+    from hexgraph.engine.graph.hypotheses import (
         open_for_target,
         unevidenced_investigating_for_target,
     )

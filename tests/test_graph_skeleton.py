@@ -2,16 +2,16 @@
 structural SKELETON (rooms + sockets + aggregated cross-room meta-edges) and a
 single room's interior on demand, so the browser never receives ~13k nodes at once.
 
-Covers engine/graph.{graph_size, build_skeleton, build_room} and their HTTP wiring.
+Covers engine/graph/graph.{graph_size, build_skeleton, build_room} and their HTTP wiring.
 Offline, mock, no Docker — builds a small synthetic firmware via the authoring API.
 """
 
 from hexgraph.db.models import EdgeType, FindingStatus, NodeType, TargetKind
 from hexgraph.db.session import session_scope
-from hexgraph.engine.authoring import create_socket
-from hexgraph.engine.edges import add_edge
+from hexgraph.engine.graph.authoring import create_socket
+from hexgraph.engine.graph.edges import add_edge
 from hexgraph.engine.findings import persist_finding
-from hexgraph.engine.graph import (
+from hexgraph.engine.graph.graph import (
     SKELETON_THRESHOLD,
     build_graph,
     build_room,
@@ -19,7 +19,7 @@ from hexgraph.engine.graph import (
     graph_size,
 )
 from hexgraph.engine.ingest import create_project, ingest_file
-from hexgraph.engine.nodes import materialize_function
+from hexgraph.engine.graph.nodes import materialize_function
 from hexgraph.engine.tasks import create_task
 from hexgraph.models.finding import Evidence, Finding
 

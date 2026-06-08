@@ -6,7 +6,7 @@ from jsonschema import Draft202012Validator
 
 from hexgraph.db.models import Edge, EdgeType, Finding, TargetKind
 from hexgraph.db.session import session_scope
-from hexgraph.engine.graph import build_graph
+from hexgraph.engine.graph.graph import build_graph
 from hexgraph.engine.ingest import create_project
 from hexgraph.engine.pipeline import ingest_and_analyze
 from hexgraph.engine.re.recon import build_recon_finding

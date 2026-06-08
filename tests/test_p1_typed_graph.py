@@ -2,9 +2,9 @@
 
 from hexgraph.db.models import Edge, EdgeType, Node, NodeType
 from hexgraph.db.session import session_scope
-from hexgraph.engine.edges import add_edge, delete_node_cascade
+from hexgraph.engine.graph.edges import add_edge, delete_node_cascade
 from hexgraph.engine.ingest import create_project, ingest_file
-from hexgraph.engine.nodes import materialize_function, materialize_symbol
+from hexgraph.engine.graph.nodes import materialize_function, materialize_symbol
 from hexgraph.engine.tasks import create_task
 from hexgraph.engine.worker import run_task_sync
 

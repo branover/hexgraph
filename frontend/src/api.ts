@@ -158,12 +158,12 @@ export interface GraphNode { id: string; type: "target" | "node" | "finding"; la
 export interface GraphEdge { id: string; source: string; target: string; type: string; src_kind?: string; dst_kind?: string; origin?: string; confidence?: number | null; attrs?: Record<string, any>; count?: number; }
 export interface Graph { project_id: string; nodes: GraphNode[]; edges: GraphEdge[]; }
 // Cheap node/edge counts so the client picks skeleton-first vs full load WITHOUT
-// first fetching the whole (~13k-node) graph (engine/graph.graph_size).
+// first fetching the whole (~13k-node) graph (engine/graph/graph.graph_size).
 export interface GraphSize { project_id: string; targets: number; nodes: number; findings: number; edges: number; total: number; skeleton_recommended: boolean; threshold: number; }
 // The structural SKELETON: rooms (byte targets, `room:true` + per-room counts +
 // worst_severity) + shared sockets + aggregated cross-room meta-edges. No interiors.
 export interface Skeleton { project_id: string; skeleton: true; nodes: GraphNode[]; edges: GraphEdge[]; }
-// One room's interior on demand (engine/graph.build_room).
+// One room's interior on demand (engine/graph/graph.build_room).
 export interface RoomGraph { project_id: string; target_id: string; nodes: GraphNode[]; edges: GraphEdge[]; }
 export interface ProjectDetail {
   project: Project; targets: TargetNode[]; findings: Finding[];

@@ -38,7 +38,7 @@ from hexgraph.db.models import (
     EdgeType, FuzzArtifact, FuzzCampaign, Project, Target, TargetKind, Task,
 )
 from hexgraph.engine import cas
-from hexgraph.engine.edges import add_edge
+from hexgraph.engine.graph.edges import add_edge
 from hexgraph.engine.findings import persist_finding
 from hexgraph.engine.fuzzers import FuzzCampaignSpec, get_fuzzer, resolve_engine
 from hexgraph.engine.fuzzers.mock import MOCK_PROBE

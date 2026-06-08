@@ -7,7 +7,7 @@ in (not silently drop it) while never overwriting a known address.
 
 from hexgraph.db.session import session_scope
 from hexgraph.engine.ingest import create_project, ingest_file
-from hexgraph.engine.nodes import get_or_create_node, materialize_function
+from hexgraph.engine.graph.nodes import get_or_create_node, materialize_function
 
 from conftest import fixture_path
 

@@ -300,7 +300,7 @@ def _candidate_sinks_for_finding(session: Session, finding: Finding) -> list[Nod
     # 2. Fall back to a sink-ish node whose name matches the finding's cited sink/function.
     ev = finding.evidence_json or {}
     names = [v for v in (ev.get("sink"), ev.get("function")) if v]
-    from hexgraph.engine.nodes import normalize_symbol_name
+    from hexgraph.engine.graph.nodes import normalize_symbol_name
 
     wanted = {normalize_symbol_name(n) or n for n in names}
     if not wanted:

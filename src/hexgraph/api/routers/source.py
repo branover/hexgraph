@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from hexgraph.db.models import Project, SourceTree, Target
 from hexgraph.db.session import session_scope
 from hexgraph.engine.build import source as src
-from hexgraph.engine.edges import add_edge
+from hexgraph.engine.graph.edges import add_edge
 from hexgraph.db.models import EdgeType
 
 router = APIRouter()

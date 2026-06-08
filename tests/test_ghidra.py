@@ -82,7 +82,7 @@ def test_enrich_target_records_substrate_not_bulk_graph(hg_home, monkeypatch):
 
     from hexgraph.db.models import Edge, EnrichmentFact, Observation
     from hexgraph.engine.re.ghidra import enrich_target
-    from hexgraph.engine.nodes import get_or_create_node
+    from hexgraph.engine.graph.nodes import get_or_create_node
 
     with session_scope() as s:
         p = create_project(s, name="g")

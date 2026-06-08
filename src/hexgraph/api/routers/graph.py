@@ -6,17 +6,17 @@ from fastapi import APIRouter, HTTPException
 
 from hexgraph.db.models import Edge, Node, Project
 from hexgraph.db.session import session_scope
-from hexgraph.engine.authoring import (
+from hexgraph.engine.graph.authoring import (
     InvariantError,
     create_edge,
     create_node,
     create_socket,
 )
-from hexgraph.engine.edge_schemas import SOCKET_KINDS, describe_edges, merge_edge_attrs
-from hexgraph.engine.graph import build_graph, build_room, build_skeleton, graph_size
-from hexgraph.engine.node_schemas import describe_nodes
-from hexgraph.engine.nodes import normalize_symbol_name
-from hexgraph.engine.removal import archive_node, delete_edge, restore_node
+from hexgraph.engine.graph.edge_schemas import SOCKET_KINDS, describe_edges, merge_edge_attrs
+from hexgraph.engine.graph.graph import build_graph, build_room, build_skeleton, graph_size
+from hexgraph.engine.graph.node_schemas import describe_nodes
+from hexgraph.engine.graph.nodes import normalize_symbol_name
+from hexgraph.engine.graph.removal import archive_node, delete_edge, restore_node
 
 from ._shared import EdgeAttrsUpdate, EdgeCreate, NodeCreate, NodePatch, SocketCreate
 

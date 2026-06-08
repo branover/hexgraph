@@ -11,7 +11,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Finding, Project, Task
-from hexgraph.engine.refs import resolve_target_ref
+from hexgraph.engine.graph.refs import resolve_target_ref
 from hexgraph.engine.tasks import create_task
 
 

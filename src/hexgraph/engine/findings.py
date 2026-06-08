@@ -10,8 +10,8 @@ from hexgraph.db.models import EdgeType
 from hexgraph.db.models import Finding as FindingRow
 from hexgraph.db.models import FindingStatus, Task
 from hexgraph.engine.assurance import assurance_of, default_for
-from hexgraph.engine.edges import add_edge
-from hexgraph.engine.nodes import materialize_function
+from hexgraph.engine.graph.edges import add_edge
+from hexgraph.engine.graph.nodes import materialize_function
 from hexgraph.models.finding import Finding
 
 
@@ -122,7 +122,7 @@ def persist_finding(
         # Auto-populate the node with context from the LLM call (agent-proposed
         # note, deduped). Gives freshly-materialized nodes some description; the
         # analyst confirms it before it feeds back into context as authoritative.
-        from hexgraph.engine.annotations import auto_note
+        from hexgraph.engine.graph.annotations import auto_note
 
         sink = f" [sink: {finding.evidence.sink}]" if finding.evidence.sink else ""
         auto_note(session, project_id, node_kind="node", node_id=node.id,

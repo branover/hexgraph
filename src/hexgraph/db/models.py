@@ -195,7 +195,7 @@ class SourceTree(Base):
     Storage (D2): files live on disk under the project data dir, indexed by a
     JSON `manifest_json` (a flat file listing — rel/size/role/origin); individual
     `source_file` *nodes* are materialized LAZILY on reference (mirrors
-    engine/filesystem.py + engine/nodes.py), never one row per file. `root_rel` is
+    engine/filesystem.py + engine/graph/nodes.py), never one row per file. `root_rel` is
     derived from the data dir — never a trusted absolute path. `content_hash` is a
     tree hash over the manifest (cheap content identity), NOT a byte sha256."""
 
@@ -697,8 +697,8 @@ class EnrichmentFact(Base):
     extractor registry and the join-at-`get_or_create_node` lifecycle land in PR 2.
     The table ships now so the program keeps its one-migration promise.
 
-    `subject_key` is the SAME identity `engine.nodes.get_or_create_node` computes:
-    `engine.nodes.normalize_symbol_name` for a name subject, the address for an
+    `subject_key` is the SAME identity `engine.graph.nodes.get_or_create_node` computes:
+    `engine.graph.nodes.normalize_symbol_name` for a name subject, the address for an
     address subject, and the ordered endpoint pair for a relationship (`pair`)."""
 
     __tablename__ = "enrichment_fact"

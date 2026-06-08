@@ -285,9 +285,9 @@ def _promote_and_emit(
     the finding id. Deliberately mints only the few grounded nodes the solve justifies, never the
     whole explored path."""
     from hexgraph.engine.assurance import INPUT_REACHABLE, STATIC, UNSPECIFIED, assurance
-    from hexgraph.engine.edges import add_edge
+    from hexgraph.engine.graph.edges import add_edge
     from hexgraph.engine.findings import persist_finding
-    from hexgraph.engine.nodes import materialize_function, materialize_symbol
+    from hexgraph.engine.graph.nodes import materialize_function, materialize_symbol
     from hexgraph.engine.tasks import create_task
     from hexgraph.models.finding import Evidence, Finding, FollowupSuggestion
 
@@ -465,7 +465,7 @@ def solve_constraint(
     # Annotate the function node with the recovered value (the emulation precedent), if named.
     annotated = None
     if function:
-        from hexgraph.engine.nodes import materialize_function
+        from hexgraph.engine.graph.nodes import materialize_function
 
         node = materialize_function(session, project_id=project.id, target_id=target.id,
                                     name=function, created_by="solver")

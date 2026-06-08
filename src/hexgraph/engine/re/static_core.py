@@ -84,9 +84,9 @@ def run_static_core(session: Session, project: Any, target: Any, *, task: Any = 
 
     Best-effort and honest: with no Ghidra backend `analyze_taint` reports unavailable and this
     returns no findings — nothing is fabricated."""
-    from hexgraph.engine.edges import add_edge
+    from hexgraph.engine.graph.edges import add_edge
     from hexgraph.engine.findings import persist_finding
-    from hexgraph.engine.nodes import get_or_create_node
+    from hexgraph.engine.graph.nodes import get_or_create_node
     from hexgraph.engine.re.taint import analyze_taint
 
     result = analyze_taint(session, project, target, source="static_core")

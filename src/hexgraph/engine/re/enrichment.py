@@ -21,7 +21,7 @@ to the two lifecycle events by thin hooks:
   attribute fact into `attrs` (an idempotent union) and materializes any relationship
   edge whose *other* endpoint now exists (respecting the both-endpoints-exist rule).
 
-Identity is exactly what `engine.nodes.get_or_create_node` computes:
+Identity is exactly what `engine.graph.nodes.get_or_create_node` computes:
 `normalize_symbol_name` for a name subject, the canonical address for an address
 subject, and the ordered endpoint pair for a relationship. Cache invalidation is
 **passive**: facts are scoped by `content_hash`, so re-ingesting changed bytes yields
@@ -37,7 +37,7 @@ from typing import Any, Callable
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import EnrichmentFact, Node
-from hexgraph.engine.nodes import normalize_symbol_name
+from hexgraph.engine.graph.nodes import normalize_symbol_name
 from hexgraph.engine.observations import add_provenance
 
 # --- the always-welcome whitelist (design §5.4) ------------------------------
@@ -399,7 +399,7 @@ def _materialize_relationship(session: Session, *, project_id: str, target_id: s
     if src is None or dst is None:
         return False  # both endpoints must exist
     from hexgraph.db.models import Edge
-    from hexgraph.engine.edges import add_edge
+    from hexgraph.engine.graph.edges import add_edge
 
     attrs = dict(fact.fact_json)
     if source_observation_id:

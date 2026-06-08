@@ -7,9 +7,9 @@ from hexgraph.api.app import create_app
 from hexgraph.db.models import Edge, EdgeType, Finding, Node, Target
 from hexgraph.db.session import session_scope
 from hexgraph.engine.findings import persist_finding
-from hexgraph.engine.graph import build_graph
+from hexgraph.engine.graph.graph import build_graph
 from hexgraph.engine.ingest import create_project, ingest_file
-from hexgraph.engine.nodes import materialize_function
+from hexgraph.engine.graph.nodes import materialize_function
 from hexgraph.engine.targets import archive_target, restore_matching, restore_target
 from hexgraph.engine.tasks import create_task
 from hexgraph.models.finding import Evidence, Finding as FModel

@@ -25,8 +25,8 @@ from collections import defaultdict
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Annotation, Edge, Finding, Node, Target, Task
-from hexgraph.engine.edges import edges_touching
-from hexgraph.engine.nodes import normalize_symbol_name
+from hexgraph.engine.graph.edges import edges_touching
+from hexgraph.engine.graph.nodes import normalize_symbol_name
 
 
 # --- nodes --------------------------------------------------------------------

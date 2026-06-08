@@ -16,8 +16,8 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Edge, EdgeType, Finding, Node, NodeType, Project, Target
-from hexgraph.engine.edges import add_edge
-from hexgraph.engine.nodes import get_or_create_node
+from hexgraph.engine.graph.edges import add_edge
+from hexgraph.engine.graph.nodes import get_or_create_node
 
 # Evidence relations (stored as edge types). `contradicts` reads as refuting.
 # `confirms`/`contradicts` are accepted aliases for `supports`/`refutes`: agents
