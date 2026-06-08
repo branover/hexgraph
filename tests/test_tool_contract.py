@@ -106,6 +106,8 @@ def test_closed_value_set_params_carry_a_schema_enum():
         ("graph_link_evidence", "relation"), ("graph_set_hypothesis_status", "status"),
         ("finding_record", "finding_type"), ("finding_update", "severity"),
         ("finding_update", "confidence"), ("finding_update", "status"),
+        ("finding_list", "finding_type"), ("finding_list", "status"),
+        ("finding_list", "severity"),
         ("task_run", "type"), ("net_remote_run", "tool"), ("target_rehost", "brand"),
         ("target_register_service", "transport"), ("src_build", "system"),
         ("fuzz_start", "surface"), ("proj_create", "backend"),
@@ -141,6 +143,14 @@ def test_closed_value_set_params_carry_a_schema_enum():
     # the journal author enum is the engine's AUTHORS authority (no drift).
     from hexgraph.engine.journal import AUTHORS
     assert set(by_name["journal_list"]["author"]["enum"]) == set(AUTHORS)
+    # finding_list's filter enums equal the same canonical authorities the catalog sources
+    # (FINDING_TYPES / FindingStatus / the Finding severity Literal) — pin them against drift.
+    from hexgraph.db.models import FindingStatus
+    from hexgraph.engine.findings.findings import FINDING_TYPES
+    fl = by_name["finding_list"]
+    assert set(fl["finding_type"]["enum"]) == set(FINDING_TYPES)
+    assert set(fl["status"]["enum"]) == {s.value for s in FindingStatus}
+    assert set(fl["severity"]["enum"]) == set(by_name["finding_update"]["severity"]["enum"])
 
 
 def test_gated_tools_name_their_feature_in_the_description():
