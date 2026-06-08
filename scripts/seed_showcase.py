@@ -13,7 +13,7 @@ render as static rows:
     clicking "Run → recon" / "static analysis" executes for real in the sandbox (needs
     Docker + the sandbox image; the seed itself never runs recon, it just lays the bytes).
   • BUILD (instrumented) — the instrumented rebuild is produced by the REAL build flow
-    (engine.builds.run_build via the offline MockBuilder, $0, no Docker), so it carries a
+    (engine.build.builds.run_build via the offline MockBuilder, $0, no Docker), so it carries a
     real recorded recipe, the reproducibility triple, a promoted fuzz harness, and
     on-disk `fuzz_target_sources` — exactly what a from-source build records.
   • FUZZ — because the instrumented target was built for real (harness promoted + real
@@ -175,10 +175,10 @@ int upnp_control(const char *soap) {
 """
 
 MAKEFILE = """\
-# Recipe for HexGraph's build-as-API instrumented rebuild (engine.builds.run_build).
+# Recipe for HexGraph's build-as-API instrumented rebuild (engine.build.builds.run_build).
 # HexGraph detects build system `make` from this file and runs the DEFAULT target with
 # the toolchain env injected by the build image's instrumentation contract
-# (engine/build.py::instrumentation_env), e.g.
+# (engine/build/build.py::instrumentation_env), e.g.
 #   libFuzzer:  CC=clang          CFLAGS="-g -O1 -fsanitize=fuzzer-no-link,address"
 #   AFL++:      CC=afl-clang-lto  CFLAGS="-g -O1 -fsanitize=address"
 #
@@ -281,17 +281,17 @@ def seed(session, *, reset: bool) -> dict:
         Project, Target,
     )
     from hexgraph.engine import assurance as A
-    from hexgraph.engine import builds as B
+    from hexgraph.engine.build import builds as B
     from hexgraph.engine.audit import record_egress
     from hexgraph.engine.authoring import create_edge, create_socket
-    from hexgraph.engine.build import BuildSpec
+    from hexgraph.engine.build.build import BuildSpec
     from hexgraph.engine.edges import add_edge
     from hexgraph.engine.filesystem import persistent_base, record_manifest
     from hexgraph.engine.findings import persist_finding
     from hexgraph.engine.fuzzers.base import FuzzCampaignSpec
     from hexgraph.engine.ingest import create_project, ingest_file
     from hexgraph.engine.nodes import get_or_create_node, materialize_function
-    from hexgraph.engine.source import (
+    from hexgraph.engine.build.source import (
         create_source_tree, link_finding_to_source, materialize_source_file, write_source_file,
     )
     from hexgraph.engine.surfaces import register_service_target, register_web_surface, run_surface_recon

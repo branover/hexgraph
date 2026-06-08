@@ -1486,7 +1486,7 @@ def _autolink_top_frame(session, project, finding_id: str, frames: list[dict]) -
     source tree (so the analyst can jump from the crash to its source line). Matches a
     frame's basename / suffix against a tree's manifest; silent on no match."""
     from hexgraph.db.models import SourceTree
-    from hexgraph.engine.source import link_finding_to_source
+    from hexgraph.engine.build.source import link_finding_to_source
 
     trees = (session.query(SourceTree)
              .filter(SourceTree.project_id == project.id, SourceTree.archived.is_(False)).all())

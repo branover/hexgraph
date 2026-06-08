@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Project, SourceRevision, SourceTree
 from hexgraph.engine import cas
-from hexgraph.engine.source import SOURCE_ROLES, SourceError, _safe_path, read_source_file
+from hexgraph.engine.build.source import SOURCE_ROLES, SourceError, _safe_path, read_source_file
 
 
 # The roles whose files are EDITABLE in the IDE (HexGraph-authored). `code` is editable
@@ -117,7 +117,7 @@ def save_revision(session: Session, project: Project, tree: SourceTree, rel: str
     Gated by features.source.edit (`gate=False` for the internal backfill of an existing
     file's first revision). The write itself goes through `write_source_file`, which
     refuses any non-editable tree — so extracted/vendor source can NEVER be revised."""
-    from hexgraph.engine.source import write_source_file
+    from hexgraph.engine.build.source import write_source_file
 
     if gate:
         _gate_edit(tree)

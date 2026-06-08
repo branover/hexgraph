@@ -6,7 +6,7 @@ file names), so it's safe to run in the box before any build is authorized.
   argv: /out (unused)  --src /src  (source mounted read-only)
 
 Emits JSON {system, phases:[{argv:[...]}], evidence:[...]}. The host-side
-`engine.builds.detect_build_system` is the fast default; this probe is the deeper
+`engine.build.builds.detect_build_system` is the fast default; this probe is the deeper
 in-sandbox inspection (e.g. recursing for a nested build file) the API can call
 when the manifest heuristic is inconclusive.
 """

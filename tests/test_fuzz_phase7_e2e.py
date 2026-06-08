@@ -21,9 +21,10 @@ import pytest
 
 from hexgraph import settings
 from hexgraph.db.session import session_scope
-from hexgraph.engine import builds as B
-from hexgraph.engine import cas, source as src
-from hexgraph.engine.build import BuildSpec
+from hexgraph.engine.build import builds as B
+from hexgraph.engine import cas
+from hexgraph.engine.build import source as src
+from hexgraph.engine.build.build import BuildSpec
 from hexgraph.engine.ingest import create_project
 
 from conftest import BUILD_IMAGE_READY

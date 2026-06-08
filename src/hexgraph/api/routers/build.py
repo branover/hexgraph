@@ -13,8 +13,8 @@ from pydantic import BaseModel
 
 from hexgraph.db.models import Build, BuildSpec as BuildSpecRow, Project, SourceTree
 from hexgraph.db.session import session_scope
-from hexgraph.engine import builds as B
-from hexgraph.engine.build import BuildError, BuildSpec
+from hexgraph.engine.build import builds as B
+from hexgraph.engine.build.build import BuildError, BuildSpec
 from hexgraph.policy import PolicyViolation, assert_allows_build
 
 router = APIRouter()
@@ -54,7 +54,7 @@ def _resolve_sysroot(s, project, tree, arch):
     """For a cross-build (arch != native), the parent firmware's extracted rootfs is the
     clang --sysroot (design §3.4) — REUSING poc._find_sysroot + filesystem.host_root.
     Best-effort: None ⇒ native fallback (degrade-to-qemu)."""
-    from hexgraph.engine.build import CROSS_TRIPLES
+    from hexgraph.engine.build.build import CROSS_TRIPLES
 
     if not CROSS_TRIPLES.get((arch or "x86_64").lower()):
         return None
@@ -104,7 +104,7 @@ def api_build_preview(project_id: str, body: BuildSpecBody):
     injected toolchain env (incl. cross --target/--sysroot), recipe_sha, reproducibility
     posture — without running anything. The Build modal calls this so instrumentation/
     arch/dependency-posture toggles regenerate the preview. No gate (it computes)."""
-    from hexgraph.engine.build import instrumentation_env
+    from hexgraph.engine.build.build import instrumentation_env
 
     with session_scope() as s:
         p = s.get(Project, project_id)
@@ -131,7 +131,7 @@ def api_import_oss_fuzz(project_id: str, body: OssFuzzImportBody):
     """Import an OSS-Fuzz `build.sh` into a recorded build_spec (the script is stored in
     the tree as role=script; the OSS-Fuzz env contract maps to ours). Returns the spec.
     The tree must be editable. No build is run (call POST /builds with the returned id)."""
-    from hexgraph.engine.source import SourceError
+    from hexgraph.engine.build.source import SourceError
 
     with session_scope() as s:
         p = s.get(Project, project_id)

@@ -13,9 +13,9 @@ from fastapi.testclient import TestClient
 from hexgraph.api.app import create_app
 from hexgraph.db.models import Build, BuildSpec as BuildSpecRow, Edge, EdgeType, EDGE_KINDS, Target
 from hexgraph.db.session import session_scope
-from hexgraph.engine import builds as B
-from hexgraph.engine import source as src
-from hexgraph.engine.build import (
+from hexgraph.engine.build import builds as B
+from hexgraph.engine.build import source as src
+from hexgraph.engine.build.build import (
     BuildError, BuildPhase, BuildResult, BuildSpec, Instrumentation, MockBuilder,
     assert_env_nonsecret, get_builder, instrumentation_env,
 )
@@ -103,14 +103,14 @@ def test_nonsecret_env_passes():
 
 @pytest.mark.parametrize("rel", ["/etc/passwd", "../../etc/passwd", "~/secret", "a/../../b"])
 def test_artifact_traversal_rejected(rel):
-    from hexgraph.engine.build import assert_artifacts_contained
+    from hexgraph.engine.build.build import assert_artifacts_contained
 
     with pytest.raises(BuildError):
         assert_artifacts_contained([rel])
 
 
 def test_artifact_contained_paths_pass():
-    from hexgraph.engine.build import assert_artifacts_contained
+    from hexgraph.engine.build.build import assert_artifacts_contained
 
     assert_artifacts_contained(["fuzz.o", "build/fuzz_target", "a/b/c.so"])  # no raise
 
@@ -256,7 +256,7 @@ def test_build_without_linked_target_makes_no_derived_target(hg_home):
 
 def test_run_build_failed_when_builder_unavailable(hg_home, monkeypatch):
     _enable_build()
-    from hexgraph.engine.build import BuildUnavailable
+    from hexgraph.engine.build.build import BuildUnavailable
 
     class Unavail(MockBuilder):
         def build(self, spec, *, source_root, content_hash=None, **kwargs):

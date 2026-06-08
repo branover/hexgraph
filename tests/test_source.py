@@ -11,7 +11,7 @@ from hexgraph.db.models import (
     EDGE_KINDS, Edge, EdgeType, Finding, Node, NodeType, SourceTree, Task,
 )
 from hexgraph.db.session import session_scope
-from hexgraph.engine import source as src
+from hexgraph.engine.build import source as src
 from hexgraph.engine.authoring import InvariantError, create_edge
 from hexgraph.engine.edges import add_edge
 from hexgraph.engine.findings import persist_finding

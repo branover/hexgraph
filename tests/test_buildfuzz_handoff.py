@@ -86,8 +86,8 @@ def _seed_tree_and_build(s, *, builder_mock: bool):
     derived_target). Shared by both lenses; the builder is the seam-selected one (mock or
     the real SandboxBuilder when builder_mock=False)."""
     from hexgraph.db.models import EdgeType, Target, TargetKind
-    from hexgraph.engine import builds as B, source as src
-    from hexgraph.engine.build import BuildSpec
+    from hexgraph.engine.build import builds as B, source as src
+    from hexgraph.engine.build.build import BuildSpec
     from hexgraph.engine.edges import add_edge
     from hexgraph.engine.ingest import create_project
 
@@ -111,7 +111,7 @@ def _seed_tree_and_build(s, *, builder_mock: bool):
     spec_row = B.create_build_spec(s, p, spec)
     builder = None
     if builder_mock:
-        from hexgraph.engine.build import MockBuilder
+        from hexgraph.engine.build.build import MockBuilder
         builder = MockBuilder()
     build = B.run_build(s, p, spec_row, builder=builder)
     assert build.status == "succeeded", build.error

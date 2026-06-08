@@ -163,9 +163,9 @@ def _run() -> int:
 
     # ── 2) Source tree + build-from-source WITH INSTRUMENTATION (MockBuilder) ────────
     _step("Author a source tree (C lib + fuzz harness) and build it INSTRUMENTED (MockBuilder)")
-    from hexgraph.engine import builds as B
-    from hexgraph.engine import source as src
-    from hexgraph.engine.build import BuildSpec
+    from hexgraph.engine.build import builds as B
+    from hexgraph.engine.build import source as src
+    from hexgraph.engine.build.build import BuildSpec
 
     with session_scope() as s:
         from hexgraph.db.models import Edge, EdgeType, Project, Target
