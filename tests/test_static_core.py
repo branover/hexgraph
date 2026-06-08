@@ -18,13 +18,17 @@ from hexgraph.llm.mock import MockLLMBackend
 from conftest import fixture_path
 
 # netcfgd (command-exec, partial sanitizer) + keyserv (overflow, no sanitizer) shaped flows.
+# Both use a SELF-CONTAINED source (libc_input — the untrusted bytes enter via a buffer-filling
+# input call within the same function), so the intra-procedural pass sees the WHOLE flow → high
+# confidence (capped to medium only by the partial sanitizer on the first). A param-sourced or
+# unattributed flow is deliberately NOT high — see the dedicated calibration tests below.
 _FAKE_FLOWS = [
     {"function": "run_probe", "function_addr": "0x1014a4",
-     "source": {"kind": "param", "detail": "host"},
+     "source": {"kind": "libc_input", "detail": "recv"},
      "sink": {"func": "popen", "category": "command_exec",
               "call_addr": "0x10158b", "arg_index": 1}, "sanitized": ["sanitize"]},
     {"function": "register_license", "function_addr": "0x101252",
-     "source": {"kind": "param", "detail": "key"},
+     "source": {"kind": "libc_input", "detail": "fgets"},
      "sink": {"func": "strcpy", "category": "buffer_overflow",
               "call_addr": "0x1012b8", "arg_index": 2}, "sanitized": []},
 ]
@@ -67,14 +71,78 @@ def test_grounded_finding_command_injection_flags_partial_sanitizer():
 
 
 def test_grounded_finding_overflow_is_high_confidence():
+    # A self-contained (libc_input) overflow with no sanitizer — the strongest grounded flow → high.
     f = _grounded_finding(_FAKE_FLOWS[1])
     assert f.category == "memory-safety" and f.confidence == "high"
     assert "strcpy" in f.title and f.evidence.function == "register_license"
+    assert f.evidence.extra["taint"]["input_attributed"] is True
+    assert f.evidence.extra["taint"]["source_kind"] == "libc_input"
 
 
 def test_grounded_finding_skips_unsurfaced_category():
     assert _grounded_finding({"function": "x", "function_addr": "0x1",
                               "sink": {"func": "y", "category": "weird"}}) is None
+
+
+# ── confidence calibration: the deterministic core must NOT over-promote ──────────────────
+
+def test_grounded_finding_self_contained_source_is_high():
+    # call_return (getenv) is a self-contained source — the whole input→sink flow lives in one
+    # function, so the intra-procedural taint pass sees it end to end → high confidence.
+    f = _grounded_finding({"function": "h", "function_addr": "0x1",
+                           "source": {"kind": "call_return", "detail": "getenv"},
+                           "sink": {"func": "system", "category": "command_exec",
+                                    "call_addr": "0x2", "arg_index": 1}, "sanitized": []})
+    assert f.confidence == "high"
+    assert f.evidence.extra["taint"]["input_attributed"] is True
+
+
+def test_grounded_finding_param_source_is_only_medium():
+    # A PARAMETER source is intra-procedural-only: the flow holds only if the param is actually
+    # attacker-controlled, which reachability across the call graph (not this pass) establishes.
+    # It must NOT be auto-promoted to high — medium until reachability argues it.
+    f = _grounded_finding({"function": "register_license", "function_addr": "0x101252",
+                           "source": {"kind": "param", "detail": "key"},
+                           "sink": {"func": "strcpy", "category": "buffer_overflow",
+                                    "call_addr": "0x1012b8", "arg_index": 2}, "sanitized": []})
+    assert f.confidence == "medium", "a param-sourced (intra-procedural-only) flow must not be high"
+    assert f.evidence.extra["taint"]["input_attributed"] is True
+    assert f.evidence.extra["taint"]["source_kind"] == "param"
+    assert "reachability" in f.reasoning.lower()
+
+
+def test_grounded_finding_unattributed_source_is_low_and_tagged():
+    # An UNATTRIBUTED source (kind "unknown" / missing) is the over-broad / input-independent case:
+    # taint reached the sink but could not be tied to a real input boundary. The prior code
+    # promoted this high/high — a confident false positive. It must now be low, tagged distinctly,
+    # but NOT dropped (still surfaced for triage).
+    f = _grounded_finding({"function": "h", "function_addr": "0x1",
+                           "source": {"kind": "unknown"},
+                           "sink": {"func": "system", "category": "command_exec",
+                                    "call_addr": "0x2", "arg_index": 1}, "sanitized": []})
+    assert f is not None, "an unattributed flow is downgraded, not dropped"
+    assert f.confidence == "low", "an unattributed (input-independent) flow must not be high/medium"
+    assert f.evidence.extra["taint"]["input_attributed"] is False
+    assert "input-independent" in f.reasoning.lower() or "unattributed" in f.reasoning.lower()
+
+
+def test_grounded_finding_missing_source_is_low():
+    # A flow with no source dict at all is treated as unattributed → low (never high).
+    f = _grounded_finding({"function": "h", "function_addr": "0x1",
+                           "sink": {"func": "system", "category": "command_exec",
+                                    "call_addr": "0x2", "arg_index": 1}})
+    assert f is not None and f.confidence == "low"
+    assert f.evidence.extra["taint"]["input_attributed"] is False
+
+
+def test_grounded_finding_sanitizer_never_raises_a_low_flow():
+    # A sanitizer caps a high flow to medium, but must NEVER raise a sub-medium (low) flow — an
+    # unattributed flow with a sanitizer-looking call on the path stays low, not medium.
+    f = _grounded_finding({"function": "h", "function_addr": "0x1",
+                           "source": {"kind": "unknown"},
+                           "sink": {"func": "system", "category": "command_exec",
+                                    "call_addr": "0x2", "arg_index": 1}, "sanitized": ["escape"]})
+    assert f.confidence == "low"
 
 
 # ── run_static_core: persists grounded findings + wires sink edges ───────────────────

@@ -256,6 +256,64 @@ def test_no_solution_fabricates_nothing(hg_home):
         assert len(obs) == 1
 
 
+# ── integrity gate: an input-INDEPENDENT solve must NOT be promoted high/high input_reachable ─────
+
+# A SOLVED result whose path does NOT depend on the input: zero constrained bytes, empty minimal
+# reproducer (the sink is reachable on any input). angr returns a SolverResult here because the
+# sink is *reachable*, but it is NOT "reachable via a crafted input".
+_INPUT_INDEPENDENT = SolverResult(
+    kind="reaching_input",
+    concrete_input="",            # empty reproducer
+    minimal_input="",
+    constrained_len=0,            # zero input bytes constrained → input-independent
+    path_addrs=["0x401146"],
+    provenance={"backend": "angr", "reason": "solved", "input_model": "argv",
+                "reached_addr": "0x401080"},
+)
+
+
+def test_input_independent_solve_not_promoted_high_high(hg_home):
+    """An input-INDEPENDENT solve (the sink is reachable on ANY input — empty reproducer, zero
+    constrained bytes) must NOT be recorded as a high/high `input_reachable / static` finding.
+    angr returns a result (the sink IS reachable), but claiming a *crafted input* steers to it
+    would be a confident false positive. We DOWNGRADE to code_present / static at medium
+    confidence with an honest note (suppress the over-claim, not the fact)."""
+    fake = _FakeSolver(reaching=_INPUT_INDEPENDENT)
+    with session_scope() as s:
+        p, t = _seed(s)
+        out = solve_reaching_input(s, p, t, sink_func="system", function="main", solver=fake)
+        s.flush()
+        assert out["solved"] is True and out["finding_id"]
+        f = s.query(Finding).filter(Finding.id == out["finding_id"]).one()
+        # NOT the over-claim: never high confidence, never input_reachable.
+        assert f.confidence != "high", "an input-independent solve must not be high confidence"
+        assert f.confidence == "medium"
+        asr = ((f.evidence_json or {}).get("extra") or {}).get("assurance") or {}
+        assert asr.get("standard") == "code_present", "must NOT claim input_reachable"
+        assert asr.get("standard") != "input_reachable"
+        assert asr.get("method") == "static"
+        # the over-claim is documented as deliberately downgraded
+        solver_extra = ((f.evidence_json or {}).get("extra") or {}).get("solver") or {}
+        assert solver_extra.get("input_constrained") is False
+
+
+def test_input_constrained_solve_still_high_high_input_reachable(hg_home):
+    """The control: a genuinely input-CONSTRAINED solve (positive constrained_len, non-empty
+    reproducer) STILL earns the strong high/high `input_reachable / static` claim — the fix
+    suppresses over-claims, it does NOT suppress real input-driven flows."""
+    fake = _FakeSolver(reaching=_REACHING)
+    with session_scope() as s:
+        p, t = _seed(s)
+        out = solve_reaching_input(s, p, t, sink_func="system", function="main", solver=fake)
+        s.flush()
+        f = s.query(Finding).filter(Finding.id == out["finding_id"]).one()
+        assert f.confidence == "high"
+        asr = ((f.evidence_json or {}).get("extra") or {}).get("assurance") or {}
+        assert asr.get("standard") == "input_reachable" and asr.get("method") == "static"
+        solver_extra = ((f.evidence_json or {}).get("extra") or {}).get("solver") or {}
+        assert solver_extra.get("input_constrained") is True
+
+
 def test_constraint_solving_annotates_function_node(hg_home):
     fake = _FakeSolver()
     with session_scope() as s:

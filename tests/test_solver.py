@@ -229,3 +229,37 @@ def test_to_result_omits_minimal_input_when_probe_did_not_determine_it():
     assert r is not None
     assert r.minimal_input is None and r.constrained_len is None
     assert "minimal_input" not in r.provenance and "constrained_len" not in r.provenance
+
+
+# ── integrity gate: is_input_constrained distinguishes a crafted-input solve from an
+#    input-INDEPENDENT one (a sink reachable on ANY input) so the engine never over-claims ──────
+
+def test_is_input_constrained_true_when_bytes_are_constrained():
+    # The authoritative signal: a positive constrained_len means the path genuinely depends on input.
+    r = SolverResult(kind="reaching_input", concrete_input="1cfe401a4b020101",
+                     minimal_input="1cfe401a4b020101", constrained_len=8)
+    assert r.is_input_constrained() is True
+
+
+def test_is_input_constrained_false_when_zero_constrained_len():
+    # constrained_len == 0 ⇒ the sink is reachable regardless of input — input-INDEPENDENT.
+    # Even with filler bytes in concrete_input, zero constrained bytes is NOT a crafted-input solve.
+    r = SolverResult(kind="reaching_input", concrete_input="00000000",
+                     minimal_input="", constrained_len=0)
+    assert r.is_input_constrained() is False
+
+
+def test_is_input_constrained_false_when_empty_reproducer_and_no_length():
+    # No measured length AND an empty reproducer ⇒ nothing to stand on → input-independent.
+    assert SolverResult(kind="reaching_input").is_input_constrained() is False
+    assert SolverResult(kind="reaching_input", concrete_input="",
+                        minimal_input="").is_input_constrained() is False
+
+
+def test_is_input_constrained_falls_back_to_witness_when_length_unknown():
+    # Older payloads omit constrained_len; a non-empty concrete witness still counts as constrained
+    # (so we don't suppress a genuine solve just because the probe couldn't measure the prefix).
+    r = SolverResult(kind="reaching_input", concrete_input="deadbeef")
+    assert r.is_input_constrained() is True
+    r2 = SolverResult(kind="reaching_input", minimal_input="ab")
+    assert r2.is_input_constrained() is True
