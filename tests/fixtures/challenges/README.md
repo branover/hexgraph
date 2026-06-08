@@ -24,7 +24,7 @@ the `*.bin` (and `keyserv`) are committed build outputs.
 export HEXGRAPH_HOME=/tmp/hg-challenge
 .venv/bin/hexgraph init
 .venv/bin/hexgraph config set features.poc.enabled true   # PoC needs the execution policy on
-# Drive via the MCP tools (engine.mcp_tools) or hand the firmware to a sub-agent.
+# Drive via the MCP tools (agent.mcp_tools) or hand the firmware to a sub-agent.
 ```
 
 PoC verification and (for fuzzing) dynamic runs require the analysis policy to permit

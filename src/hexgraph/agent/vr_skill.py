@@ -6,7 +6,7 @@ fuzzes never pays for the fuzzing methodology, and the file it *does* read can g
 deep. This module owns all of that content as string constants and the helpers that
 render it (`skill_markdown` / `full_skill_markdown` / `write_skill`), so the deployed
 skill, the `--print-skill` output, and the delegate-task brief can't drift from each
-other. `agent_setup` and `engine.agent_delegate` import from here.
+other. `agent_setup` and `agent_delegate` import from here.
 
 `record-keeping.md` is the exception: its body lives in `record_keeping.RECORD_KEEPING`
 (shared with the in-process system prompt) and is pulled into `SUBFILES` here so the

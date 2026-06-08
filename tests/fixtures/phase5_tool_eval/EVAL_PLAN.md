@@ -38,7 +38,7 @@ All are **x86-64** (so a future `verify_poc` runs natively) except the FLOSS tar
 
 ## 3. Part 1 — VR agent: step-by-step RE actions
 
-The VR agent is handed exactly one `BRIEFS.md` entry per target (no source, no spoilers) and drives HexGraph via the MCP driver tools (`engine/mcp_tools`). Enable the features under test first (`features.binutils` is always-on; `features.floss`, `features.yara`, and `features.angr` are opt-in — turn them on in Settings / `hexgraph config set`). For every challenge the agent runs the **same skeleton**, with the tool-specific step in bold:
+The VR agent is handed exactly one `BRIEFS.md` entry per target (no source, no spoilers) and drives HexGraph via the MCP driver tools (`agent/mcp_tools`). Enable the features under test first (`features.binutils` is always-on; `features.floss`, `features.yara`, and `features.angr` are opt-in — turn them on in Settings / `hexgraph config set`). For every challenge the agent runs the **same skeleton**, with the tool-specific step in bold:
 
 **Per-challenge skeleton**
 1. **Ingest** the target: `ingest_file <path>` (for the firmware, `ingest` then let recon unpack the squashfs into child targets).
