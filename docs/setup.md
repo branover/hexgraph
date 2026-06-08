@@ -61,6 +61,27 @@ install` prints the exact steps for each agent.
 > cause is the same broken `XDG_RUNTIME_DIR`; `export XDG_RUNTIME_DIR=$(mktemp -d)` is a quick
 > per-shell workaround, and `./setup.sh` sidesteps `just` entirely.
 
+## Keeping an install current (after a `git pull`)
+
+After you pull new code, the pieces that live outside the Python source can fall behind: the
+installed package (if its version changed), the built web UI, the Docker images whose Dockerfiles
+moved, your coding agent's MCP registration, and the VR skill files. Rather than remember which of
+those to rebuild, run the sanity-sync:
+
+```bash
+just refresh        # or: just setup --refresh, or: ./setup.sh --refresh
+```
+
+It is quick and non-destructive: it **keeps your existing configuration** (it writes no settings,
+enables no feature, and builds no image you didn't already opt into) and rebuilds only what is
+actually stale. Concretely it reinstalls the package when its version changed, rebuilds the SPA when
+the bundle is older than the front-end sources, rebuilds any image you've already built whose
+Dockerfile has moved (preserving your Ghidra choice — and rebuilding *with* Ghidra if your settings
+ask for headless Ghidra but the current image happens to lack it), re-affirms wherever the `hexgraph`
+MCP server is registered, regenerates the VR skill into whatever location it's already installed,
+and applies any pending database migration. Run it before `just serve` whenever you want to be sure
+you're on the latest build of everything.
+
 ## Manual install (or adding Ghidra)
 
 ```bash
@@ -78,7 +99,7 @@ Ghidra is optional and makes for a larger image. The default sandbox uses radare
 headless Ghidra (which adds a JDK and roughly 400 MB):
 
 ```bash
-just sandbox-build with_ghidra=1
+just sandbox-build 1                                  # bundle headless Ghidra (with_ghidra=1 also works)
 hexgraph config set features.ghidra.enabled true     # then re-run a decompile/recon task
 ```
 

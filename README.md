@@ -70,6 +70,11 @@ everything beyond that is something you turn on yourself, with eyes open. To ski
 the static-only defaults, pass `--yes` (`just setup --yes` or `./setup.sh --yes`). For the wizard, the
 manual step-by-step, the non-interactive CI mode, and Ghidra, see **[docs/setup.md](docs/setup.md)**.
 
+After a later `git pull`, `just refresh` (a.k.a. `just setup --refresh`) is a quick sanity-sync: it
+keeps your configuration and rebuilds only what's stale — the package, the web UI, any images whose
+Dockerfile moved, the MCP registration, and the VR skill. Run it before `just serve` to be sure
+you're on the latest build of everything.
+
 > To install `just` without sudo:
 > `curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to ~/.local/bin`
 > (make sure `~/.local/bin` is on your `PATH`), or `snap install just`. Run `just` on its own for the

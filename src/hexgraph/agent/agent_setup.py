@@ -195,6 +195,158 @@ def default_skill_dir() -> str:
     return os.path.join(os.path.expanduser("~"), ".claude", "skills")
 
 
+# The skill bundle's spine file — its presence under <base>/hexgraph-vr marks an install.
+_SKILL_DIR_NAME = "hexgraph-vr"
+_SKILL_SPINE = "SKILL.md"
+
+
+def detect_skill_dirs(project_dir: str | None = None) -> list[str]:
+    """Base dirs where the VR skill is ALREADY installed (so a refresh can regenerate it
+    in place, never inventing a new location).
+
+    A base counts as installed when `<base>/hexgraph-vr/SKILL.md` exists. We check the
+    user-global dir (`~/.claude/skills`) and the project-local `./.claude/skills`; pass
+    `write_skill(base)` each one to refresh it. Returns an ordered, de-duplicated list."""
+    import os
+
+    proj = os.path.abspath(project_dir or os.getcwd())
+    candidates = [default_skill_dir(), os.path.join(proj, ".claude", "skills")]
+    out: list[str] = []
+    for base in candidates:
+        if base not in out and os.path.isfile(os.path.join(base, _SKILL_DIR_NAME, _SKILL_SPINE)):
+            out.append(base)
+    return out
+
+
+def detect_registrations(project_dir: str | None = None) -> list[dict]:
+    """Every place the `hexgraph` MCP server is ALREADY registered, so a refresh can
+    re-affirm them (idempotent; fixes a command path that moved when the venv was
+    recreated). Read-only — performs no edits.
+
+    Scans the JSON agent configs we can manage (claude/gemini, user + project) AND
+    Claude Code's per-project "local" scope inside `~/.claude.json`
+    (`projects.<dir>.mcpServers`, where `claude mcp add` writes by default). Codex's TOML
+    is reported but not auto-rewritten (appending a duplicate table is invalid TOML).
+
+    Returns [{agent, scope, path, current}] — `current` is True iff the registered entry
+    already equals `mcp_server_entry()` (nothing to do). Never raises."""
+    import os
+
+    want = mcp_server_entry()
+    home = os.path.expanduser("~")
+    proj = os.path.abspath(project_dir or os.getcwd())
+    found: list[dict] = []
+
+    def _json_entry(path: str) -> dict | None:
+        try:
+            with open(path) as fh:
+                data = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        servers = data.get("mcpServers")
+        if isinstance(servers, dict) and isinstance(servers.get(SERVER_NAME), dict):
+            return servers[SERVER_NAME]
+        return None
+
+    # claude/gemini user + project (the scopes register_agent manages directly).
+    for agent in ("claude", "gemini"):
+        for scope in ("user", "project"):
+            try:
+                path, kind = agent_config_target(agent, scope, proj)
+            except ValueError:
+                continue
+            if kind != "json" or not os.path.isfile(path):
+                continue
+            entry = _json_entry(path)
+            if entry is not None:
+                found.append({"agent": agent, "scope": scope, "path": path,
+                              "current": entry == want})
+
+    # Claude Code "local" scope: ~/.claude.json → projects.<abspath>.mcpServers.hexgraph
+    claude_json = os.path.join(home, ".claude.json")
+    if os.path.isfile(claude_json):
+        try:
+            with open(claude_json) as fh:
+                data = json.load(fh)
+            projects = data.get("projects") if isinstance(data, dict) else None
+            if isinstance(projects, dict):
+                for pdir, pcfg in projects.items():
+                    servers = pcfg.get("mcpServers") if isinstance(pcfg, dict) else None
+                    if isinstance(servers, dict) and isinstance(servers.get(SERVER_NAME), dict):
+                        found.append({"agent": "claude", "scope": f"local:{pdir}",
+                                      "path": claude_json, "current": servers[SERVER_NAME] == want})
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    # Codex TOML (report-only; we never rewrite the user's hand-authored TOML on refresh).
+    try:
+        cpath, _ = agent_config_target("codex", "user")
+        if os.path.isfile(cpath):
+            import tomllib
+
+            with open(cpath, "rb") as fh:
+                parsed = tomllib.load(fh)
+            cur = parsed.get("mcp_servers", {}).get(SERVER_NAME)
+            if cur is not None:
+                want_toml = {"command": want["command"], "args": want["args"]}
+                found.append({"agent": "codex", "scope": "user", "path": cpath,
+                              "current": cur == want_toml})
+    except Exception:  # noqa: BLE001 — codex detection is best-effort (tomllib / read errors)
+        pass
+
+    return found
+
+
+def refresh_registrations(project_dir: str | None = None) -> list[dict]:
+    """Re-affirm every detected `hexgraph` MCP registration to the CURRENT launch command,
+    so a version refresh keeps them pointing at this install (no-op when already current).
+
+    Updates only JSON configs (claude user/project + claude per-project local, gemini
+    user/project); a Codex entry that has drifted is reported with `action="manual"`
+    rather than rewritten (appending a duplicate TOML table would be invalid). Idempotent.
+
+    Returns [{agent, scope, path, action}] where action ∈ {unchanged, updated, manual}."""
+    import os
+
+    import os
+
+    want = mcp_server_entry()
+    proj = os.path.abspath(project_dir or os.getcwd())
+    results: list[dict] = []
+    for reg in detect_registrations(project_dir):
+        agent, scope, path = reg["agent"], reg["scope"], reg["path"]
+        if reg["current"]:
+            results.append({**reg, "action": "unchanged"})
+            continue
+        if agent == "codex":
+            results.append({**reg, "action": "manual"})  # don't rewrite hand-authored TOML
+            continue
+        if scope.startswith("local:"):
+            pdir = scope.split(":", 1)[1]
+            try:
+                with open(path) as fh:
+                    data = json.load(fh)
+                data["projects"][pdir]["mcpServers"][SERVER_NAME] = want
+                with open(path, "w") as fh:
+                    json.dump(data, fh, indent=2)
+                    fh.write("\n")
+                results.append({**reg, "action": "updated"})
+            except (OSError, KeyError, json.JSONDecodeError):
+                results.append({**reg, "action": "manual"})
+            continue
+        # claude/gemini user|project — register_agent rewrites the entry idempotently. Pass the
+        # SAME project root detect_registrations used (NOT dirname(path) — gemini's config is
+        # nested under .gemini/, so dirname would double the path).
+        try:
+            register_agent(agent, scope=scope, project_dir=proj if scope == "project" else None)
+            results.append({**reg, "action": "updated"})
+        except (ValueError, RuntimeError):
+            results.append({**reg, "action": "manual"})
+    return results
+
+
 def install_help(agent: str | None = None) -> str:
     """Human-readable registration steps for one agent (or all)."""
     entry = mcp_server_entry()
