@@ -139,7 +139,14 @@ async def _capture(base: str, pid: str) -> None:
 
     proj = f"{base}/projects/{pid}"
     async with async_playwright() as p:
-        b = await p.chromium.launch(args=["--no-sandbox", "--force-color-profile=srgb"])
+        # Playwright's bundled chromium has no build for very new distros (e.g. Ubuntu 26.04),
+        # where `playwright install chromium` errors out — so prefer the system Chrome when
+        # present and fall back to the bundled browser (CI) otherwise.
+        _args = ["--no-sandbox", "--force-color-profile=srgb"]
+        try:
+            b = await p.chromium.launch(channel="chrome", args=_args)
+        except Exception:
+            b = await p.chromium.launch(args=_args)
         # device scale 1.0 at 1440p: the logical viewport is already high-res (2560x1440), so a
         # 1x render stays crisp when downscaled to README width without ballooning the PNG bytes.
         pg = await b.new_page(viewport=VIEWPORT, device_scale_factor=1.0)
@@ -334,11 +341,29 @@ async def _capture(base: str, pid: str) -> None:
         except Exception as e:
             print(f"  ! egress-audit: {e}")
 
-        # ── Feature — the research journal (timeline + @-mention chips) ──────────────
+        # ── Feature — the research journal: a FOCUSED right-pane shot. Widen the pane so the
+        # tabs sit on one row, then clip to the journal timeline (the empty Detail placeholder
+        # below it isn't part of this feature). This is the LAST shot, so the widened layout
+        # doesn't affect the others.
+        await pg.evaluate(
+            "localStorage.setItem('hexgraph.ws.layout.v1', JSON.stringify({rightW:680, detailFrac:0.2}))"
+        )
         await pg.goto(proj + "?tab=journal", wait_until="networkidle")
         await pg.wait_for_timeout(SETTLE)
         try:
-            await _shoot(pg, "journal.png")
+            OUT.mkdir(parents=True, exist_ok=True)
+            right = pg.locator("aside.pane.side").last
+            rb = await right.bounding_box()
+            entries = pg.locator(".jentry")
+            n = await entries.count()
+            last = await entries.nth(n - 1).bounding_box() if n else None
+            dsplit = await pg.locator(".dsplit").last.bounding_box()
+            bottom = (last["y"] + last["height"] + 14) if last else (dsplit["y"] if dsplit else rb["y"] + rb["height"])
+            if dsplit:
+                bottom = min(bottom, dsplit["y"])
+            await pg.screenshot(path=str(OUT / "journal.png"),
+                                clip={"x": rb["x"], "y": rb["y"], "width": rb["width"], "height": bottom - rb["y"]})
+            print("  ✓ journal.png (focused right pane)")
         except Exception as e:
             print(f"  ! journal: {e}")
 

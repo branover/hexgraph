@@ -184,12 +184,15 @@ For the full UX walkthrough, **`docs/dev/ux-contract.md` is the living behavior 
 No browser MCP here and `WebFetch` can't reach `127.0.0.1`; the UI is JS-driven, so fetching HTML isn't enough. Drive headless Chromium via Playwright (dev-only, **not** in `pyproject`):
 
 ```bash
-.venv/bin/pip install playwright && .venv/bin/playwright install chromium
+.venv/bin/pip install playwright && .venv/bin/playwright install chromium   # bundled chromium has no build on very new distros (e.g. Ubuntu 26.04); there, skip this and drive the system Chrome via channel="chrome" (below)
 ```
 
 Seed data + serve on a spare port with an isolated `HEXGRAPH_HOME`, then screenshot in Python (launch with `--no-sandbox`, `goto(..., wait_until="networkidle")` + a short `wait_for_timeout` so Cytoscape/fetches settle, then `page.screenshot(...)`). **View the PNGs with the Read tool.** Kill the backgrounded `serve` PID when done. Record findings in `docs/dev/ui-backlog.md`.
 ```python
-b = await p.chromium.launch(args=["--no-sandbox"])
+try:  # prefer system Chrome — bundled chromium has no build on very new distros (Ubuntu 26.04)
+    b = await p.chromium.launch(channel="chrome", args=["--no-sandbox"])
+except Exception:
+    b = await p.chromium.launch(args=["--no-sandbox"])
 pg = await b.new_page(viewport={"width": 1440, "height": 900})
 await pg.goto(f"{BASE}/projects/{PROJ}", wait_until="networkidle"); await pg.wait_for_timeout(1500)
 await pg.screenshot(path="/tmp/ui/workspace.png")
