@@ -7,11 +7,11 @@ import pytest
 from hexgraph import policy, settings
 from hexgraph.db.models import EgressEvent, Target, TargetKind
 from hexgraph.db.session import session_scope
-from hexgraph.engine.ingest import create_project, ingest_file
-from hexgraph.engine.rehost import (FirmAERehoster, QemuDiskRehoster, RehostResult,
+from hexgraph.engine.targets.ingest import create_project, ingest_file
+from hexgraph.engine.targets.rehost import (FirmAERehoster, QemuDiskRehoster, RehostResult,
                                     _looks_like_disk_image, get_rehoster, rehost_firmware,
                                     select_rehoster)
-from hexgraph.engine.surfaces import _rehost_container
+from hexgraph.engine.targets.surfaces import _rehost_container
 
 from conftest import fixture_path
 
@@ -159,7 +159,7 @@ def test_assess_rehosted_surface_joins_emulator_netns(hg_home):
             self.kw = {"net_container": net_container, "channel": channel}
             return {"response": {"ok": True, "status": 200, "headers": {}, "body": "ok"}}
 
-    from hexgraph.engine.surfaces import run_http_request
+    from hexgraph.engine.targets.surfaces import run_http_request
     runner = _FakeRunner()
     with session_scope() as s:
         p, t = _firmware(s)
@@ -175,7 +175,7 @@ def test_get_rehoster_default(hg_home):
 
 
 def test_infer_brand_from_firmware_strings(tmp_path):
-    from hexgraph.engine.rehost import _infer_brand
+    from hexgraph.engine.targets.rehost import _infer_brand
     fw = tmp_path / "fw.bin"
     fw.write_bytes(b"\x00" * 100 + b"Netgear R6700 httpd build" + b"\x00" * 100)
     assert _infer_brand(str(fw)) == "netgear"

@@ -114,9 +114,9 @@ def promote_file(session: Session, project: Project, firmware: Target, rel: str,
     bytes → recon if Docker is up). Idempotent per `rel` (returns the existing
     child if already added)."""
     from hexgraph.engine.graph.edges import add_edge
-    from hexgraph.engine.ingest import ingest_file
+    from hexgraph.engine.targets.ingest import ingest_file
     from hexgraph.engine.pipeline import analyze_target
-    from hexgraph.engine.unpack import build_links_against
+    from hexgraph.engine.targets.unpack import build_links_against
     from hexgraph.sandbox.executor import get_executor
     from hexgraph.sandbox.runner import docker_available
 

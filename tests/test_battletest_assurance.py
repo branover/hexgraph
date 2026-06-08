@@ -15,8 +15,8 @@ from hexgraph.engine.findings import assurance as A
 from hexgraph.agent import mcp_tools
 from hexgraph.engine.findings import poc as poc_mod
 from hexgraph.engine.findings.findings import persist_finding
-from hexgraph.engine.ingest import create_project, ingest_file
-from hexgraph.engine.surfaces import register_web_surface
+from hexgraph.engine.targets.ingest import create_project, ingest_file
+from hexgraph.engine.targets.surfaces import register_web_surface
 from hexgraph.engine.tasks import create_task
 from hexgraph.models.finding import Evidence, Finding as FModel
 

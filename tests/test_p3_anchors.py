@@ -7,7 +7,7 @@ from hexgraph.db.models import Finding, Task
 from hexgraph.db.session import session_scope
 from hexgraph import settings as st
 from hexgraph.engine.capabilities import capabilities_for, capability_table
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph.engine.suggester import suggest_followups
 from hexgraph.engine.tasks import create_task
 

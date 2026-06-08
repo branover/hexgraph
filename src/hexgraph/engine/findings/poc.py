@@ -95,7 +95,7 @@ def _verify_tcp_poc(session, project, target, spec, runner, nonce) -> dict:
     the response (the probe strips the sent payload first, so a match is unforgeable).
     {{NONCE}} is already substituted. Gated by the SAME bounded-egress policy as the web
     tools (network on + local-only scope) and audited."""
-    from hexgraph.engine.surfaces import run_tcp_probe
+    from hexgraph.engine.targets.surfaces import run_tcp_probe
 
     tcp = spec.get("tcp") if isinstance(spec.get("tcp"), dict) else spec
     port = tcp.get("port") or spec.get("port")
@@ -113,7 +113,7 @@ def _verify_web_poc(session, project, target, spec, runner, nonce) -> dict:
     """Web PoC: run the spec's HTTP steps and evaluate its oracle on the final response
     (cookies carry across steps). {{NONCE}} is already substituted. Gated by the SAME
     bounded-egress policy as web_recon (network on + local-only scope) and audited."""
-    from hexgraph.engine.surfaces import run_web_poc
+    from hexgraph.engine.targets.surfaces import run_web_poc
 
     steps = spec.get("steps") or ([spec["request"]] if spec.get("request") else [])
     if not steps:
@@ -205,7 +205,7 @@ def _verify_binary_poc(session, project, target, live, runner, nonce) -> dict:
 
     extra_mounts: list[tuple[str, str]] = []
     if target.parent_id and not live.get("sysroot"):
-        from hexgraph.engine.filesystem import host_root
+        from hexgraph.engine.targets.filesystem import host_root
         fw = session.get(Target, target.parent_id)
         if fw is not None and (fw.metadata_json or {}).get("filesystem"):
             root = _find_sysroot(host_root(project, fw))

@@ -76,7 +76,7 @@ def seed_small(session, project) -> None:
     from hexgraph.engine.graph.authoring import create_socket
     from hexgraph.engine.graph.edges import add_edge
     from hexgraph.engine.findings.findings import persist_finding
-    from hexgraph.engine.ingest import ingest_file
+    from hexgraph.engine.targets.ingest import ingest_file
     from hexgraph.engine.graph.nodes import get_or_create_node, materialize_function
     from hexgraph.engine.tasks import create_task
     from hexgraph.models.finding import Evidence, Finding
@@ -141,7 +141,7 @@ def _seed_firmware(session, project, *, n_bins: int, fns_per_bin: int,
     from hexgraph.engine.graph.authoring import create_socket
     from hexgraph.engine.graph.edges import add_edge
     from hexgraph.engine.findings.findings import persist_finding
-    from hexgraph.engine.ingest import ingest_file
+    from hexgraph.engine.targets.ingest import ingest_file
     from hexgraph.engine.graph.nodes import get_or_create_node, materialize_function
     from hexgraph.engine.tasks import create_task
     from hexgraph.models.finding import Evidence, Finding
@@ -280,7 +280,7 @@ def seed_real(session, project) -> None:
     from hexgraph.engine.graph.authoring import create_socket
     from hexgraph.engine.graph.edges import add_edge
     from hexgraph.engine.findings.findings import persist_finding
-    from hexgraph.engine.ingest import ingest_file
+    from hexgraph.engine.targets.ingest import ingest_file
     from hexgraph.engine.graph.nodes import get_or_create_node, materialize_function
     from hexgraph.engine.tasks import create_task
     from hexgraph.models.finding import Evidence, Finding
@@ -416,7 +416,7 @@ def _counts(session, pid: str) -> dict:
 def seed_tier(session, tier: str, *, reset: bool) -> dict:
     """Seed one tier into its own project. Returns {project_id, reused, counts...}."""
     from hexgraph.db.models import Project
-    from hexgraph.engine.ingest import create_project
+    from hexgraph.engine.targets.ingest import create_project
 
     name = TIER_NAMES[tier]
     existing = session.query(Project).filter(Project.name == name).all()

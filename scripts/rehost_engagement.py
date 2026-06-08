@@ -34,8 +34,8 @@ def main() -> int:
     from hexgraph import settings
     from hexgraph.db.migrate import prepare_database
     from hexgraph.db.session import session_scope
-    from hexgraph.engine.ingest import create_project, ingest_file
-    from hexgraph.engine.rehost import RehostError, rehost_firmware
+    from hexgraph.engine.targets.ingest import create_project, ingest_file
+    from hexgraph.engine.targets.rehost import RehostError, rehost_firmware
     from hexgraph.policy import PolicyViolation
     from hexgraph.sandbox.executor import get_executor
     from hexgraph.sandbox.runner import docker_available

@@ -27,7 +27,7 @@ from hexgraph.engine.build.build import (
     determinism_env, instrumentation_env, is_reproducible,
 )
 from hexgraph.engine.graph.edges import add_edge
-from hexgraph.engine.ingest import create_project
+from hexgraph.engine.targets.ingest import create_project
 from hexgraph.db.models import EdgeType, Target, TargetKind
 from hexgraph.policy import (
     PolicyViolation, assert_allows_build_fetch, build_fetch_scope, current_policy,

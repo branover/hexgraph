@@ -296,7 +296,7 @@ def test_api_campaign_nothing_to_fuzz_is_clear_400(hg_home, monkeypatch):
     """A campaign on a target with no harness / no instrumented build must fail with a
     HUMAN 400 body (the UI shows it verbatim) — never a terse internal message or a
     half-created campaign. Covers the source_lib (no harness/sources) case."""
-    from hexgraph.engine.ingest import create_project, ingest_file
+    from hexgraph.engine.targets.ingest import create_project, ingest_file
     from hexgraph.db.session import session_scope as _ss
 
     _mock_env(monkeypatch)

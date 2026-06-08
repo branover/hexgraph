@@ -41,8 +41,8 @@ from hexgraph.db.models import EgressEvent
 from hexgraph.db.session import session_scope
 from hexgraph.agent import mcp_tools as M
 from hexgraph.engine.audit import list_egress, record_egress
-from hexgraph.engine.ingest import create_project
-from hexgraph.engine.surfaces import register_web_surface
+from hexgraph.engine.targets.ingest import create_project
+from hexgraph.engine.targets.surfaces import register_web_surface
 from hexgraph.engine.tasks import create_task
 from hexgraph.engine.worker import run_task_sync
 
@@ -131,7 +131,7 @@ def test_web_recon_denied_by_default_and_audited(hg_home):
 def test_web_recon_refuses_public_target(hg_home):
     # even with network enabled, a public target is refused by the scope guard
     settings.update_settings({"features": {"network": {"enabled": True}}})
-    from hexgraph.engine.surfaces import run_web_recon
+    from hexgraph.engine.targets.surfaces import run_web_recon
     with session_scope() as s:
         p = create_project(s, name="pub")
         surface = register_web_surface(s, p, "http://example.com", endpoints=[{"path": "/"}])

@@ -17,7 +17,7 @@ from hexgraph.db.models import Node
 from hexgraph.db.session import session_scope
 from hexgraph.engine import observations as O
 from hexgraph.engine.re.emulation import emulate_constant
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph import settings as st
 from hexgraph.policy import PolicyViolation, assert_allows_emulation
 

@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from hexgraph.api.app import create_app
 from hexgraph.db.models import Finding, FindingStatus
 from hexgraph.db.session import session_scope
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph.engine.tasks import create_task
 from hexgraph.engine.worker import run_task_sync
 

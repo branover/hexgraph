@@ -89,7 +89,7 @@ def _seed_tree_and_build(s, *, builder_mock: bool):
     from hexgraph.engine.build import builds as B, source as src
     from hexgraph.engine.build.build import BuildSpec
     from hexgraph.engine.graph.edges import add_edge
-    from hexgraph.engine.ingest import create_project
+    from hexgraph.engine.targets.ingest import create_project
 
     p = create_project(s, name="buildfuzz-handoff")
     tree = src.create_source_tree(s, p, name="tinytlv", origin="scratch", editable=True)

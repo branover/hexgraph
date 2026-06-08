@@ -21,8 +21,8 @@ import pytest
 
 from hexgraph.db.models import Edge, EdgeType, Node, NodeType, Observation
 from hexgraph.db.session import session_scope
-from hexgraph.engine.filesystem import persistent_base, record_manifest
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.filesystem import persistent_base, record_manifest
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph.engine.re.yara import available_rulesets, scan_target, sweep_project
 from hexgraph import config
 

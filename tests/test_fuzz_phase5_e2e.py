@@ -75,7 +75,7 @@ def test_binary_only_qemu_mode_finds_planted_crash(hg_home):
     from hexgraph.db.session import session_scope
     from hexgraph.engine import campaigns as C
     from hexgraph.engine.fuzzers.base import FuzzCampaignSpec
-    from hexgraph.engine.ingest import create_project
+    from hexgraph.engine.targets.ingest import create_project
     from hexgraph import settings as st
 
     st.update_settings({"features.fuzzing.enabled": True, "features.poc.enabled": True})
@@ -157,7 +157,7 @@ def test_network_boofuzz_drops_live_service_and_reverifies(hg_home):
     from hexgraph.db.session import session_scope
     from hexgraph.engine import campaigns as C
     from hexgraph.engine.fuzzers.base import FuzzCampaignSpec
-    from hexgraph.engine.ingest import create_project
+    from hexgraph.engine.targets.ingest import create_project
     from hexgraph import settings as st
 
     # Network fuzzing rides the EXISTING local-network tier — features.network, no new gate.
@@ -278,7 +278,7 @@ def test_desock_afl_fuzzes_local_server_no_network(hg_home):
     from hexgraph.db.session import session_scope
     from hexgraph.engine import campaigns as C
     from hexgraph.engine.fuzzers.base import FuzzCampaignSpec
-    from hexgraph.engine.ingest import create_project
+    from hexgraph.engine.targets.ingest import create_project
     from hexgraph import settings as st
 
     st.update_settings({"features.fuzzing.enabled": True, "features.poc.enabled": True})

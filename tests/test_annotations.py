@@ -6,7 +6,7 @@ from hexgraph.api.app import create_app
 from hexgraph.db.models import Node
 from hexgraph.db.session import session_scope
 from hexgraph.engine.graph.annotations import confirmed_facts, create_annotation, set_status
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph.engine.graph.nodes import is_placeholder_name, materialize_function
 
 from conftest import fixture_path

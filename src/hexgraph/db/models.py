@@ -195,7 +195,7 @@ class SourceTree(Base):
     Storage (D2): files live on disk under the project data dir, indexed by a
     JSON `manifest_json` (a flat file listing — rel/size/role/origin); individual
     `source_file` *nodes* are materialized LAZILY on reference (mirrors
-    engine/filesystem.py + engine/graph/nodes.py), never one row per file. `root_rel` is
+    engine/targets/filesystem.py + engine/graph/nodes.py), never one row per file. `root_rel` is
     derived from the data dir — never a trusted absolute path. `content_hash` is a
     tree hash over the manifest (cheap content identity), NOT a byte sha256."""
 
@@ -432,7 +432,7 @@ class FuzzEnvironment(Base):
     campaign inherits. The SECRET connection details (the full DOCKER_HOST string, SSH
     key/password, TLS certs) are NEVER stored here — they are read at connect time from
     env/config.toml KEYED BY THIS ENVIRONMENT'S `id`, exactly like the SSH/telnet remote
-    creds (config.py / engine/remote.py). `last_health_json` caches the last health-check
+    creds (config.py / engine/targets/remote.py). `last_health_json` caches the last health-check
     result (reachable/authorized/image-present) for the Settings indicator — also
     non-secret. Environments are HOST-level (not per-project): a registered remote box
     serves every project, so there is no project_id."""

@@ -8,8 +8,8 @@ from hexgraph.db.models import Edge, Target
 from hexgraph.db.session import session_scope
 from hexgraph.engine.graph.dedup import dedupe_findings
 from hexgraph.engine.findings.findings import persist_finding
-from hexgraph.engine.ingest import create_project, ingest_file
-from hexgraph.engine.targets import archive_target, file_sha256, restore_matching
+from hexgraph.engine.targets.ingest import create_project, ingest_file
+from hexgraph.engine.targets.targets import archive_target, file_sha256, restore_matching
 from hexgraph.engine.tasks import create_task
 from hexgraph.engine.worker import run_task_sync
 from hexgraph.models.finding import Evidence, Finding as FModel

@@ -49,17 +49,17 @@ def _dispatch(session: Session, project: Project, target: Target, task: Task) ->
         execute_poc(session, project, target, task, get_executor())
         return
     if task.type == "surface_recon":
-        from hexgraph.engine.surfaces import run_surface_recon
+        from hexgraph.engine.targets.surfaces import run_surface_recon
 
         run_surface_recon(session, project, target, task)
         return
     if task.type == "web_recon":
-        from hexgraph.engine.surfaces import run_web_recon
+        from hexgraph.engine.targets.surfaces import run_web_recon
 
         run_web_recon(session, project, target, task)
         return
     if task.type == "web_discover":
-        from hexgraph.engine.surfaces import run_web_discover
+        from hexgraph.engine.targets.surfaces import run_web_discover
 
         run_web_discover(session, project, target, task)
         return
@@ -76,7 +76,7 @@ def _dispatch_surface_recon(session: Session, project: Project, target: Target, 
     spec → endpoint/param nodes + routes_to handler edges) — the surface analogue of byte
     recon, no network. A `service`/`remote` surface has no offline deterministic recon
     probe, so we fail with a clear, actionable error rather than crashing on the byte path."""
-    from hexgraph.engine.surfaces import run_surface_recon
+    from hexgraph.engine.targets.surfaces import run_surface_recon
 
     if target.kind == TargetKind.web_app:
         run_surface_recon(session, project, target, task)

@@ -61,8 +61,8 @@ def test_live_web_discover_materializes_endpoints(hg_home, vulnrouter):
     from hexgraph import settings
     from hexgraph.db.models import Node, NodeType
     from hexgraph.db.session import session_scope
-    from hexgraph.engine.ingest import create_project
-    from hexgraph.engine.surfaces import register_web_surface, run_web_discover
+    from hexgraph.engine.targets.ingest import create_project
+    from hexgraph.engine.targets.surfaces import register_web_surface, run_web_discover
 
     settings.update_settings({"features": {"network": {"enabled": True}}})
     with session_scope() as s:
@@ -81,8 +81,8 @@ def test_live_web_discover_materializes_endpoints(hg_home, vulnrouter):
 def test_web_discover_denied_when_network_off(hg_home):
     from hexgraph import policy
     from hexgraph.db.session import session_scope
-    from hexgraph.engine.ingest import create_project
-    from hexgraph.engine.surfaces import register_web_surface, run_web_discover
+    from hexgraph.engine.targets.ingest import create_project
+    from hexgraph.engine.targets.surfaces import register_web_surface, run_web_discover
 
     with session_scope() as s:
         p = create_project(s, name="off")

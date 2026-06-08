@@ -67,7 +67,7 @@ def _resolve_sysroot(s, project, tree, arch):
         return None
     try:
         from pathlib import Path as _P
-        from hexgraph.engine.filesystem import host_root as _fs_root
+        from hexgraph.engine.targets.filesystem import host_root as _fs_root
         from hexgraph.engine.findings.poc import _find_sysroot
         root = _find_sysroot(_fs_root(project, fw))
         return str(root) if root and _P(str(root)).is_dir() else None

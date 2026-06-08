@@ -7,7 +7,7 @@ import subprocess
 import pytest
 
 from conftest import SANDBOX_READY, container_ip, fixture_path, wait_for_port
-from hexgraph.engine.surfaces import _parse_set_cookie
+from hexgraph.engine.targets.surfaces import _parse_set_cookie
 
 
 def test_parse_set_cookie():
@@ -31,8 +31,8 @@ class _FakeRunner:
 def test_session_jar_injects_stored_cookies(hg_home, monkeypatch):
     from hexgraph import settings
     from hexgraph.db.session import session_scope
-    from hexgraph.engine.ingest import create_project
-    from hexgraph.engine.surfaces import clear_http_session, register_web_surface, run_http_request
+    from hexgraph.engine.targets.ingest import create_project
+    from hexgraph.engine.targets.surfaces import clear_http_session, register_web_surface, run_http_request
 
     settings.update_settings({"features": {"network": {"enabled": True}}})
     runner = _FakeRunner([
@@ -63,8 +63,8 @@ def test_session_jar_injects_stored_cookies(hg_home, monkeypatch):
 def test_no_session_means_no_jar(hg_home):
     from hexgraph import settings
     from hexgraph.db.session import session_scope
-    from hexgraph.engine.ingest import create_project
-    from hexgraph.engine.surfaces import register_web_surface, run_http_request
+    from hexgraph.engine.targets.ingest import create_project
+    from hexgraph.engine.targets.surfaces import register_web_surface, run_http_request
 
     settings.update_settings({"features": {"network": {"enabled": True}}})
     runner = _FakeRunner([{"ok": True, "status": 200, "headers": {},
@@ -100,8 +100,8 @@ def test_live_session_auth_flow_across_calls(hg_home, vulnrouter):
     from hexgraph import settings
     from hexgraph.db.session import session_scope
     from hexgraph.agent import mcp_tools as M
-    from hexgraph.engine.ingest import create_project
-    from hexgraph.engine.surfaces import register_web_surface
+    from hexgraph.engine.targets.ingest import create_project
+    from hexgraph.engine.targets.surfaces import register_web_surface
 
     settings.update_settings({"features": {"network": {"enabled": True}}})
     with session_scope() as s:

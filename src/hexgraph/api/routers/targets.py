@@ -11,16 +11,16 @@ from pydantic import BaseModel
 
 from hexgraph.db.models import Project, Target
 from hexgraph.db.session import session_scope
-from hexgraph.engine.filesystem import (
+from hexgraph.engine.targets.filesystem import (
     FilesystemError,
     promote_file,
     list_filesystem,
     read_file,
 )
-from hexgraph.engine.ingest import ingest_file
+from hexgraph.engine.targets.ingest import ingest_file
 from hexgraph.engine.pipeline import analyze_target
-from hexgraph.engine.targets import archive_target, restore_matching, restore_target
-from hexgraph.engine.unpack import build_links_against
+from hexgraph.engine.targets.targets import archive_target, restore_matching, restore_target
+from hexgraph.engine.targets.unpack import build_links_against
 # Import the modules (not the names) so tests can monkeypatch runner.docker_available /
 # executor.get_executor and have HTTP routes pick up the patched callable.
 from hexgraph.sandbox import executor, runner
@@ -91,7 +91,7 @@ def api_register_service(project_id: str, body: SocketCreate):
     this host:port) and probeable via the raw-TCP tools, all on the EXISTING bounded local-
     network tier (loopback/private only, features.network, audited). The first-class home for
     a bind shell / vendor binary protocol / custom daemon — distinct from `remote` (no shell)."""
-    from hexgraph.engine.surfaces import register_service_target
+    from hexgraph.engine.targets.surfaces import register_service_target
 
     with session_scope() as s:
         project = s.get(Project, project_id)

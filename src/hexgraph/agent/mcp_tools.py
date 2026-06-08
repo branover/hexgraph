@@ -57,7 +57,7 @@ def list_filesystem(target_id: str) -> dict:
     """List a firmware target's unpacked filesystem (paths, sizes, which are ELFs / already
     child targets). Use it to find config files, scripts, keys, and web assets to inspect —
     then read_file to view one. Returns {unpacked, method, files:[{rel,size,is_elf,added}]}."""
-    from hexgraph.engine.filesystem import list_filesystem as _ls
+    from hexgraph.engine.targets.filesystem import list_filesystem as _ls
 
     with session_scope() as s:
         t = s.get(Target, target_id)
@@ -71,7 +71,7 @@ def read_file(target_id: str, path: str) -> dict:
     web template — NOT the raw binary; decompile_function for code). Bounded (256 KiB),
     path-traversal safe; text is returned as-is, binary as hex. `path` is relative to the
     firmware's extracted root (see list_filesystem). Returns {rel,size,encoding,content,truncated}."""
-    from hexgraph.engine.filesystem import FilesystemError, read_file as _read
+    from hexgraph.engine.targets.filesystem import FilesystemError, read_file as _read
 
     with session_scope() as s:
         t = s.get(Target, target_id)
@@ -92,7 +92,7 @@ def promote_file(target_id: str, path: str) -> dict:
     is up. Idempotent per path (returns the existing child if already promoted). Use it when
     list_filesystem surfaces an interesting binary (a CGI, a service daemon, a helper) that
     unpack didn't already register. Returns {id, name, kind, parent_id, arch}."""
-    from hexgraph.engine.filesystem import FilesystemError, promote_file as _add
+    from hexgraph.engine.targets.filesystem import FilesystemError, promote_file as _add
 
     with session_scope() as s:
         t = s.get(Target, target_id)
@@ -152,7 +152,7 @@ def create_project(name: str, backend: str | None = None) -> dict:
     (mock|anthropic|claude_code; defaults to mock). Returns {error} on a blank name or an
     unknown backend."""
     from hexgraph.db.models import LLMBackendName
-    from hexgraph.engine.ingest import create_project as _create
+    from hexgraph.engine.targets.ingest import create_project as _create
 
     name = (name or "").strip()
     if not name:
@@ -404,7 +404,7 @@ def build_target(project_id: str, source_tree_id: str, system: str | None = None
                 if fw is not None and (fw.metadata_json or {}).get("filesystem"):
                     try:
                         from pathlib import Path as _P
-                        from hexgraph.engine.filesystem import host_root as _fs
+                        from hexgraph.engine.targets.filesystem import host_root as _fs
                         from hexgraph.engine.findings.poc import _find_sysroot
                         r = _find_sysroot(_fs(p, fw))
                         sysroot = str(r) if r and _P(str(r)).is_dir() else None
@@ -1169,7 +1169,7 @@ def archive_target(project_id: str, target_id: str) -> dict:
     (REVERSIBLE): they're hidden, not deleted; re-ingesting the same bytes, or restore_target,
     brings them back. Use to declutter (e.g. an irrelevant firmware component). Returns how
     many targets were archived. (Whole-project deletion is operator-only — not an MCP tool.)"""
-    from hexgraph.engine.targets import archive_target as _archive
+    from hexgraph.engine.targets.targets import archive_target as _archive
 
     with session_scope() as s:
         if s.get(Project, project_id) is None:
@@ -1182,7 +1182,7 @@ def archive_target(project_id: str, target_id: str) -> dict:
 
 def restore_target(project_id: str, target_id: str) -> dict:
     """Un-archive a previously soft-removed target subtree (its nodes/findings reappear)."""
-    from hexgraph.engine.targets import restore_target as _restore
+    from hexgraph.engine.targets.targets import restore_target as _restore
 
     with session_scope() as s:
         if s.get(Project, project_id) is None:
@@ -2027,7 +2027,7 @@ def ingest(path: str, name: str | None = None, project_id: str | None = None) ->
     children), running recon in the sandbox. Creates a project if none is given."""
     import os
 
-    from hexgraph.engine.ingest import create_project, ingest_file
+    from hexgraph.engine.targets.ingest import create_project, ingest_file
     from hexgraph.engine.pipeline import ingest_and_analyze
     from hexgraph.sandbox.executor import get_executor
     from hexgraph.sandbox.runner import docker_available
@@ -2055,7 +2055,7 @@ def register_web_surface(project_id: str, base_url: str, name: str | None = None
     [{"method","path","params"?,"handler"?,"auth"?}]. Then run_task(target_id,
     "surface_recon") materialises endpoint/param nodes and `routes_to` edges linking
     each route to its handler function in the firmware. Phase 1 is offline (no egress)."""
-    from hexgraph.engine.surfaces import register_web_surface as _register_web_surface
+    from hexgraph.engine.targets.surfaces import register_web_surface as _register_web_surface
 
     with session_scope() as s:
         project = s.get(Project, project_id)
@@ -2088,7 +2088,7 @@ def rehost(target_id: str, brand: str | None = None) -> dict:
     remote_run on it to enumerate the LIVE device, not just the extracted rootfs (needs
     features.remote). `ports` lists every device port that answered, so you know which
     raw-TCP services are up to test."""
-    from hexgraph.engine.rehost import RehostError, rehost_firmware
+    from hexgraph.engine.targets.rehost import RehostError, rehost_firmware
     from hexgraph.policy import PolicyViolation
 
     with session_scope() as s:
@@ -2124,7 +2124,7 @@ def register_service(project_id: str, host: str, port: int, name: str | None = N
     network tier: loopback/private host only (refused otherwise), features.network-gated,
     every send audited. `parent_ref` makes it a child of e.g. a rehosted firmware (the probe
     then reaches the device on its private IP through the emulator netns)."""
-    from hexgraph.engine.surfaces import register_service_target
+    from hexgraph.engine.targets.surfaces import register_service_target
 
     with session_scope() as s:
         project = s.get(Project, project_id)
@@ -2157,7 +2157,7 @@ def register_remote(project_id: str, host: str, port: int | None = None, usernam
     remote_list_files / remote_read_file / remote_run. Credentials are NOT passed here: the
     operator sets them via env (HEXGRAPH_REMOTE_PASSWORD/KEY) or config.toml [remote], read
     only at connect (never stored). Requires features.remote."""
-    from hexgraph.engine.remote import register_remote_target
+    from hexgraph.engine.targets.remote import register_remote_target
 
     with session_scope() as s:
         project = s.get(Project, project_id)
@@ -2173,7 +2173,7 @@ def register_remote(project_id: str, host: str, port: int | None = None, usernam
 
 
 def _remote_op(target_id: str, **kw) -> dict:
-    from hexgraph.engine.remote import run_remote
+    from hexgraph.engine.targets.remote import run_remote
     from hexgraph.policy import PolicyViolation
 
     with session_scope() as s:
@@ -2233,7 +2233,7 @@ def tcp_request(target_id: str, port: int, payload: str | None = None,
     value:"{{NONCE}}"}}) — the probe strips your sent bytes before matching, so a reflected
     payload can't forge it. Bounded to the device's loopback/private host:port, audited.
     Requires features.network."""
-    from hexgraph.engine.surfaces import run_tcp_probe
+    from hexgraph.engine.targets.surfaces import run_tcp_probe
     from hexgraph.policy import PolicyViolation
 
     with session_scope() as s:
@@ -2267,7 +2267,7 @@ def http_request(target_id: str, method: str, path: str, params: dict | None = N
     Egress is bounded and audited exactly like web_recon: it runs in the sandbox, follows
     no redirects, and the destination must be the surface's own loopback/private host.
     Requires features.network enabled in Settings."""
-    from hexgraph.engine.surfaces import run_http_request
+    from hexgraph.engine.targets.surfaces import run_http_request
     from hexgraph.policy import PolicyViolation
 
     with session_scope() as s:

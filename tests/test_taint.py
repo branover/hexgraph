@@ -16,7 +16,7 @@ from hexgraph.db.models import Edge, Node
 from hexgraph.db.session import session_scope
 from hexgraph.engine import observations as obs
 from hexgraph.engine.re import taint as T
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph import settings as st
 
 from conftest import SANDBOX_READY, fixture_path

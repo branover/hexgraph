@@ -286,15 +286,15 @@ def seed(session, *, reset: bool) -> dict:
     from hexgraph.engine.graph.authoring import create_edge, create_socket
     from hexgraph.engine.build.build import BuildSpec
     from hexgraph.engine.graph.edges import add_edge
-    from hexgraph.engine.filesystem import persistent_base, record_manifest
+    from hexgraph.engine.targets.filesystem import persistent_base, record_manifest
     from hexgraph.engine.findings.findings import persist_finding
     from hexgraph.engine.fuzzers.base import FuzzCampaignSpec
-    from hexgraph.engine.ingest import create_project, ingest_file
+    from hexgraph.engine.targets.ingest import create_project, ingest_file
     from hexgraph.engine.graph.nodes import get_or_create_node, materialize_function
     from hexgraph.engine.build.source import (
         create_source_tree, link_finding_to_source, materialize_source_file, write_source_file,
     )
-    from hexgraph.engine.surfaces import register_service_target, register_web_surface, run_surface_recon
+    from hexgraph.engine.targets.surfaces import register_service_target, register_web_surface, run_surface_recon
     from hexgraph.engine.tasks import create_task
     from hexgraph.models.finding import Evidence, Finding, FollowupSuggestion
 

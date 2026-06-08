@@ -8,9 +8,9 @@ import pytest
 from hexgraph import policy, settings
 from hexgraph.db.models import EgressEvent
 from hexgraph.db.session import session_scope
-from hexgraph.engine.ingest import create_project
+from hexgraph.engine.targets.ingest import create_project
 from hexgraph.engine.findings.poc import verify_poc
-from hexgraph.engine.surfaces import register_web_surface, run_tcp_probe
+from hexgraph.engine.targets.surfaces import register_web_surface, run_tcp_probe
 
 
 # ── the probe's oracle/decoding logic (pure, importable) ───────────────────────────────

@@ -70,8 +70,8 @@ def test_remote_tier_opt_in(hg_home):
 def test_register_remote_target_no_secret_stored(hg_home, monkeypatch):
     from hexgraph.db.models import TargetKind
     from hexgraph.db.session import session_scope
-    from hexgraph.engine.ingest import create_project
-    from hexgraph.engine.remote import _remote_secret, register_remote_target
+    from hexgraph.engine.targets.ingest import create_project
+    from hexgraph.engine.targets.remote import _remote_secret, register_remote_target
 
     with session_scope() as s:
         p = create_project(s, name="rem")
@@ -97,8 +97,8 @@ def test_secret_not_in_docker_argv_but_reaches_env(hg_home, monkeypatch):
 
     from hexgraph import settings
     from hexgraph.db.session import session_scope
-    from hexgraph.engine.ingest import create_project
-    from hexgraph.engine.remote import register_remote_target, run_remote
+    from hexgraph.engine.targets.ingest import create_project
+    from hexgraph.engine.targets.remote import register_remote_target, run_remote
     from hexgraph.sandbox.runner import RunResult, SandboxRunner
 
     settings.update_settings({"features": {"remote": {"enabled": True}}})
@@ -152,8 +152,8 @@ def test_run_remote_scrubs_password_and_key_from_result(hg_home):
     BOTH from what it returns. A fake runner stands in for the sandbox, no Docker."""
     from hexgraph import settings
     from hexgraph.db.session import session_scope
-    from hexgraph.engine.ingest import create_project
-    from hexgraph.engine.remote import register_remote_target, run_remote
+    from hexgraph.engine.targets.ingest import create_project
+    from hexgraph.engine.targets.remote import register_remote_target, run_remote
 
     class LeakyRunner:
         def run_channel_probe(self, probe, *, channel, net_container=None, secret=None, **kw):
@@ -204,8 +204,8 @@ def test_live_remote_ssh_ops(hg_home, sshd, monkeypatch):
     from hexgraph import settings
     from hexgraph.db.session import session_scope
     from hexgraph.agent import mcp_tools as M
-    from hexgraph.engine.ingest import create_project
-    from hexgraph.engine.remote import register_remote_target
+    from hexgraph.engine.targets.ingest import create_project
+    from hexgraph.engine.targets.remote import register_remote_target
 
     settings.update_settings({"features": {"remote": {"enabled": True}}})
     monkeypatch.setenv("HEXGRAPH_REMOTE_PASSWORD", "testpass123")
@@ -233,8 +233,8 @@ def test_live_remote_ssh_ops(hg_home, sshd, monkeypatch):
 def test_live_remote_denied_when_feature_off(hg_home, sshd):
     from hexgraph.db.session import session_scope
     from hexgraph.agent import mcp_tools as M
-    from hexgraph.engine.ingest import create_project
-    from hexgraph.engine.remote import register_remote_target
+    from hexgraph.engine.targets.ingest import create_project
+    from hexgraph.engine.targets.remote import register_remote_target
 
     with session_scope() as s:
         p = create_project(s, name="rem-off")

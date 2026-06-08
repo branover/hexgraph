@@ -326,7 +326,7 @@ def rehost_firmware(session: Session, project: Project, firmware: Target,
     `web_app` surface child of the firmware. Gated by features.rehost. Returns the surface
     target; assess it with surface_recon/web_recon/http_request (needs features.network)."""
     from hexgraph.engine.audit import record_egress
-    from hexgraph.engine.surfaces import register_web_surface
+    from hexgraph.engine.targets.surfaces import register_web_surface
     from hexgraph.policy import assert_allows_rehost
 
     assert_allows_rehost()  # opt-in gate: raises unless features.rehost is enabled
@@ -379,7 +379,7 @@ def _auto_register_remote(session: Session, project: Project, firmware: Target,
         transport, port = "telnet", 23
     else:
         return None
-    from hexgraph.engine.remote import register_remote_target
+    from hexgraph.engine.targets.remote import register_remote_target
 
     return register_remote_target(
         session, project, result.ip, port=port, transport=transport,

@@ -12,7 +12,7 @@ from hexgraph.db.models import Edge, EdgeType, Node, NodeType
 from hexgraph.db.session import session_scope
 from hexgraph.agent import mcp_tools as M
 from hexgraph.engine.graph.edge_schemas import describe_edges, merge_edge_attrs
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 
 from conftest import fixture_path
 

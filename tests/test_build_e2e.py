@@ -22,7 +22,7 @@ from hexgraph.engine.build import builds as B
 from hexgraph.engine import cas
 from hexgraph.engine.build import source as src
 from hexgraph.engine.build.build import BuildSpec
-from hexgraph.engine.ingest import create_project
+from hexgraph.engine.targets.ingest import create_project
 from hexgraph import settings
 
 from conftest import BUILD_IMAGE_READY

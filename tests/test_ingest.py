@@ -4,7 +4,7 @@ from pathlib import Path
 
 from hexgraph.db.models import Project, Target, TargetKind
 from hexgraph.db.session import session_scope
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 
 
 def test_ingest_creates_project_and_target(hg_home, tmp_path):

@@ -7,7 +7,7 @@ from jsonschema import Draft202012Validator
 from hexgraph.db.models import Edge, EdgeType, Finding, TargetKind
 from hexgraph.db.session import session_scope
 from hexgraph.engine.graph.graph import build_graph
-from hexgraph.engine.ingest import create_project
+from hexgraph.engine.targets.ingest import create_project
 from hexgraph.engine.pipeline import ingest_and_analyze
 from hexgraph.engine.re.recon import build_recon_finding
 from hexgraph.models.finding import Finding as FindingModel
@@ -79,7 +79,7 @@ def test_firmware_unpack_creates_children_and_edges(hg_home, sandbox):
 
 def test_worker_runs_recon_task(hg_home, sandbox):
     """The worker executes a queued recon task end-to-end."""
-    from hexgraph.engine.ingest import ingest_file
+    from hexgraph.engine.targets.ingest import ingest_file
     from hexgraph.engine.tasks import create_task
     from hexgraph.engine.worker import run_task_sync
 

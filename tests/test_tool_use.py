@@ -7,7 +7,7 @@ from pathlib import Path
 from hexgraph.db.models import Finding, Node, Task
 from hexgraph.db.session import session_scope
 from hexgraph.agent.agent_tools import ToolContext, available_tools, run_tool
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph.engine.tasks import create_task
 from hexgraph.engine.worker import run_task_sync
 from hexgraph.llm.base import (LLMRequest, LLMResponse, RateLimitError, ToolCall, ToolSpec,

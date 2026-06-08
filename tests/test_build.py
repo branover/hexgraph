@@ -20,7 +20,7 @@ from hexgraph.engine.build.build import (
     assert_env_nonsecret, get_builder, instrumentation_env,
 )
 from hexgraph.engine.graph.edges import add_edge
-from hexgraph.engine.ingest import create_project
+from hexgraph.engine.targets.ingest import create_project
 from hexgraph.policy import PolicyViolation, assert_allows_build, current_policy
 from hexgraph import settings
 

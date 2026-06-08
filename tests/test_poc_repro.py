@@ -8,10 +8,10 @@ from fastapi.testclient import TestClient
 from hexgraph.api.app import create_app
 from hexgraph.db.models import Finding
 from hexgraph.db.session import session_scope
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph.engine.findings.poc import execute_poc, verify_poc
 from hexgraph.engine.findings.poc_repro import repro_command
-from hexgraph.engine.surfaces import register_web_surface
+from hexgraph.engine.targets.surfaces import register_web_surface
 from hexgraph.engine.tasks import create_task
 from hexgraph import settings as st
 

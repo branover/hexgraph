@@ -16,7 +16,7 @@ from hexgraph.db.session import session_scope
 from hexgraph.engine.graph.edges import add_edge
 from hexgraph.engine.findings.findings import persist_finding
 from hexgraph.engine.graph.graph import build_graph
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph.engine.graph.nodes import get_or_create_node, materialize_function
 from hexgraph.engine.graph.removal import (
     archive_node, delete_edge, delete_finding, delete_project, restore_node,

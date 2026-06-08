@@ -7,7 +7,7 @@ from hexgraph.db.session import session_scope
 from hexgraph.engine.re.ghidra_bridge import (
     BridgeUnavailable, GhidraBridgeDecompiler, import_program, list_open_programs,
 )
-from hexgraph.engine.ingest import create_project
+from hexgraph.engine.targets.ingest import create_project
 
 from conftest import fixture_path
 

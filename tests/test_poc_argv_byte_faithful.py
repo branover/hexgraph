@@ -30,7 +30,7 @@ import sys
 import pytest
 
 from hexgraph.db.session import session_scope
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph.models.finding import Evidence, Finding as FModel
 from hexgraph import settings as st
 

@@ -18,7 +18,7 @@ from hexgraph.engine.graph.graph import (
     build_skeleton,
     graph_size,
 )
-from hexgraph.engine.ingest import create_project, ingest_file
+from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph.engine.graph.nodes import materialize_function
 from hexgraph.engine.tasks import create_task
 from hexgraph.models.finding import Evidence, Finding
