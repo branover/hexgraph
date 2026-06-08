@@ -1124,6 +1124,11 @@ def test_api_campaign_accepts_instrumentation_knobs(hg_home, monkeypatch):
         assert cfg.get("bug_oracles") is True
         assert cfg.get("path_coverage") == 2
         assert cfg.get("cmplog") is True
+    with TestClient(app) as c:
+        # Out-of-range path_coverage is rejected (parity with the MCP enum), not silently dropped.
+        bad = c.post(f"/api/projects/{pid}/campaigns",
+                     json={"target_id": tid, "function": "cgi_handler", "path_coverage": 9})
+        assert bad.status_code == 422, bad.text
 
         # stop is idempotent on an already-finalized campaign
         st_r = c.post(f"/api/campaigns/{cid}/stop")

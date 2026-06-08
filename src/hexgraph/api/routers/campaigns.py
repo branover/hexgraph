@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Annotated
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from hexgraph.db.models import FuzzArtifact, FuzzCampaign, Project, Target
 from hexgraph.db.session import session_scope
@@ -59,7 +60,9 @@ class CampaignCreate(BaseModel):
     # Opt-in AFL source-fuzz instrumentation knobs (each inherits features.fuzzing.* when
     # omitted) — mirror the MCP start_fuzz_campaign params + the Fuzz modal toggles.
     bug_oracles: bool | None = None     # AFL++ 5.x bug-detection oracles (AFL_LLVM_BUG)
-    path_coverage: int | None = None    # Ball-Larus path coverage 0..3 (AFL_LLVM_PATH)
+    # Ball-Larus path coverage 0..3 (AFL_LLVM_PATH) — bounded for parity with the MCP enum,
+    # so an out-of-range value is a clear 422 rather than silently dropped at the env seam.
+    path_coverage: Annotated[int, Field(ge=0, le=3)] | None = None
     cmplog: bool | None = None          # CmpLog -c binary (magic-byte/memcmp gating)
     build_spec_id: str | None = None
     net: CampaignNet | None = None      # network-fuzz overrides (surface=network)
