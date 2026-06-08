@@ -153,7 +153,7 @@ def list_journal_entries(
             return []
         q = q.filter(JournalEntry.id.in_(ids))
     rows = q.order_by(JournalEntry.created_at.desc(), JournalEntry.id.desc()).limit(limit).all()
-    return [serialize_entry(session, e) for e in rows]
+    return serialize_entries(session, rows)
 
 
 def get_journal_entry(session: Session, entry_id: str) -> dict[str, Any] | None:
@@ -174,7 +174,7 @@ def search_journal(
     if needle:
         query = query.filter(JournalEntry.body.ilike(f"%{needle}%"))
     rows = query.order_by(JournalEntry.created_at.desc(), JournalEntry.id.desc()).limit(limit).all()
-    return [serialize_entry(session, e) for e in rows]
+    return serialize_entries(session, rows)
 
 
 # --- update / delete (authorship enforced at the agent seam) ------------------
@@ -250,6 +250,49 @@ def _resolve_node(session: Session, project_id: str, node_id: str, want_hypothes
     return node
 
 
+def _dangling(ref_kind: str, ref_id: str) -> dict[str, Any]:
+    """The display dict for an unresolved ref — archived, missing, or cross-project."""
+    return {"ref_kind": ref_kind, "ref_id": ref_id, "resolved_id": ref_id,
+            "label": None, "dangling": True}
+
+
+def _node_display(node: Node | None, ref_kind: str, ref_id: str,
+                  project_id: str, want_hypothesis: bool) -> dict[str, Any]:
+    """Display dict for an already-fetched (or None) node row, applying the SAME gates
+    as `_resolve_node` — project scope + the hypothesis-type check + archived→dangling.
+    Shared by the single-ref and batch paths so they resolve identically."""
+    out = _dangling(ref_kind, ref_id)
+    if node is None or node.project_id != project_id:
+        return out
+    if want_hypothesis and node.node_type != NodeType.hypothesis.value:
+        return out
+    out["resolved_id"] = node.id
+    out["label"] = node.name
+    out["dangling"] = bool(node.archived)
+    return out
+
+
+def _finding_display(f: Finding | None, ref_id: str, project_id: str) -> dict[str, Any]:
+    """Display dict for an already-fetched (or None) finding row (project-scoped)."""
+    out = _dangling("finding", ref_id)
+    if f is not None and f.project_id == project_id:
+        out["resolved_id"] = f.id
+        out["label"] = f.title
+        out["dangling"] = False
+    return out
+
+
+def _target_display(t: Target | None, ref_id: str, project_id: str) -> dict[str, Any]:
+    """Display dict for an already-fetched (or None) target row. An archived target
+    subtree is hidden from the graph → grey it."""
+    out = _dangling("target", ref_id)
+    if t is not None and t.project_id == project_id:
+        out["resolved_id"] = t.id
+        out["label"] = t.name
+        out["dangling"] = bool(t.archived)
+    return out
+
+
 def resolve_mention(session: Session, project_id: str, ref_kind: str, ref_id: str) -> dict[str, Any]:
     """Resolve one `(ref_kind, ref_id)` to a display dict for rendering.
 
@@ -257,45 +300,71 @@ def resolve_mention(session: Session, project_id: str, ref_kind: str, ref_id: st
     id the UI should select (the merge keeper's id when different); `dangling` is True
     when the object is archived, missing, or in another project — the future frontend
     greys those rather than crashing. The store keeps the raw `(kind, id)`; this
-    resolution is read-time only (design §5.3 link-stability)."""
-    out: dict[str, Any] = {"ref_kind": ref_kind, "ref_id": ref_id, "resolved_id": ref_id,
-                           "label": None, "dangling": True}
+    resolution is read-time only (design §5.3 link-stability).
+
+    Single-ref convenience (the back-reference filter `_entry_ids_mentioning` calls it);
+    serializing MANY entries goes through `_resolve_mentions_batch`/`serialize_entries`,
+    which batches the lookups instead of one point query per mention (the N+1 fix)."""
     if ref_kind in ("node", "hypothesis"):
-        node = _resolve_node(session, project_id, ref_id, want_hypothesis=(ref_kind == "hypothesis"))
-        if node is not None:
-            out["resolved_id"] = node.id
-            out["label"] = node.name
-            out["dangling"] = bool(node.archived)
-    elif ref_kind == "finding":
-        f = session.get(Finding, ref_id)
-        if f is not None and f.project_id == project_id:
-            out["resolved_id"] = f.id
-            out["label"] = f.title
-            out["dangling"] = False
-    elif ref_kind == "target":
-        t = session.get(Target, ref_id)
-        if t is not None and t.project_id == project_id:
-            out["resolved_id"] = t.id
-            out["label"] = t.name
-            # An archived target subtree is hidden from the graph → grey it.
-            out["dangling"] = bool(t.archived)
-    return out
+        node = _resolve_node(session, project_id, ref_id,
+                             want_hypothesis=(ref_kind == "hypothesis"))
+        return _node_display(node, ref_kind, ref_id, project_id,
+                             want_hypothesis=(ref_kind == "hypothesis"))
+    if ref_kind == "finding":
+        return _finding_display(session.get(Finding, ref_id), ref_id, project_id)
+    if ref_kind == "target":
+        return _target_display(session.get(Target, ref_id), ref_id, project_id)
+    return _dangling(ref_kind, ref_id)
 
 
-def serialize_entry(session: Session, entry: JournalEntry) -> dict[str, Any]:
-    """One journal entry as a JSON-able dict, with every mention RESOLVED through the
-    merge keeper (danglers flagged). The `mentions` list carries the stored raw ref
-    plus the resolved id/label/dangling for the renderer."""
-    mention_rows = (
-        session.query(JournalMention)
-        .filter(JournalMention.entry_id == entry.id)
-        .all()
+def _resolve_mentions_batch(
+    session: Session, project_id: str, refs: list[tuple[str, str]],
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """Resolve many `(ref_kind, ref_id)` refs at once, batching by referenced kind.
+
+    Issues ONE `id IN (...)` query per kind present (node/hypothesis share the Node
+    table → a single query) instead of a `session.get` per mention, then builds each
+    display dict from the fetched rows via the same `_*_display` helpers the single-ref
+    path uses. The result is identical to calling `resolve_mention` on each ref — same
+    project-scope, hypothesis-type, and archived/missing→dangling rules, including a
+    folded-away merge duplicate (whose ROW is gone) degrading to `dangling`. Keyed by the
+    raw `(ref_kind, ref_id)`. Bounded at O(kinds) queries no matter how many mentions —
+    the fix for the per-mention N+1 in the list/search path."""
+    refs = list(dict.fromkeys(refs))  # dedup, preserve order
+    node_ids = {rid for kind, rid in refs if kind in ("node", "hypothesis")}
+    finding_ids = {rid for kind, rid in refs if kind == "finding"}
+    target_ids = {rid for kind, rid in refs if kind == "target"}
+
+    nodes = (
+        {n.id: n for n in session.query(Node).filter(Node.id.in_(node_ids)).all()}
+        if node_ids else {}
     )
-    mentions = []
-    for mr in mention_rows:
-        resolved = resolve_mention(session, entry.project_id, mr.ref_kind, mr.ref_id)
-        resolved["stored_label"] = mr.label
-        mentions.append(resolved)
+    findings = (
+        {f.id: f for f in session.query(Finding).filter(Finding.id.in_(finding_ids)).all()}
+        if finding_ids else {}
+    )
+    targets = (
+        {t.id: t for t in session.query(Target).filter(Target.id.in_(target_ids)).all()}
+        if target_ids else {}
+    )
+
+    resolved: dict[tuple[str, str], dict[str, Any]] = {}
+    for kind, rid in refs:
+        if kind in ("node", "hypothesis"):
+            resolved[(kind, rid)] = _node_display(
+                nodes.get(rid), kind, rid, project_id,
+                want_hypothesis=(kind == "hypothesis"))
+        elif kind == "finding":
+            resolved[(kind, rid)] = _finding_display(findings.get(rid), rid, project_id)
+        elif kind == "target":
+            resolved[(kind, rid)] = _target_display(targets.get(rid), rid, project_id)
+        else:
+            resolved[(kind, rid)] = _dangling(kind, rid)
+    return resolved
+
+
+def _entry_dict(entry: JournalEntry, mentions: list[dict[str, Any]]) -> dict[str, Any]:
+    """Assemble the JSON-able entry dict from an entry row + its resolved mentions."""
     return {
         "id": entry.id,
         "project_id": entry.project_id,
@@ -307,6 +376,55 @@ def serialize_entry(session: Session, entry: JournalEntry) -> dict[str, Any]:
         "updated_at": entry.updated_at.isoformat() if entry.updated_at else None,
         "mentions": mentions,
     }
+
+
+def serialize_entry(session: Session, entry: JournalEntry) -> dict[str, Any]:
+    """One journal entry as a JSON-able dict, with every mention RESOLVED through the
+    merge keeper (danglers flagged). The `mentions` list carries the stored raw ref
+    plus the resolved id/label/dangling for the renderer.
+
+    To serialize MANY entries (list/search) call `serialize_entries`, which batches the
+    mention resolution; this single-entry path (get-by-id) just delegates to it."""
+    return serialize_entries(session, [entry])[0]
+
+
+def serialize_entries(session: Session, entries: list[JournalEntry]) -> list[dict[str, Any]]:
+    """Serialize a batch of entries, resolving every mention with a BOUNDED number of
+    queries rather than one point lookup per mention (the N+1 the list/search path hit).
+
+    One query fetches all the entries' mention rows; `_resolve_mentions_batch` then
+    resolves the distinct refs in one query per kind. The per-entry output is identical
+    to the old per-mention `serialize_entry` (same `mentions` shape and ordering, same
+    dangling / merge-fold behavior). A ref is scoped to ITS entry's project, so the batch
+    runs per project (one project in the common single-project list/search case)."""
+    if not entries:
+        return []
+    by_id = {e.id: e for e in entries}
+    mention_rows = (
+        session.query(JournalMention)
+        .filter(JournalMention.entry_id.in_(by_id.keys()))
+        .all()
+    )
+
+    # Group the distinct refs by the project of their owning entry, then resolve each
+    # project's refs in one query per kind.
+    per_project_refs: dict[str, list[tuple[str, str]]] = {}
+    for mr in mention_rows:
+        pid = by_id[mr.entry_id].project_id
+        per_project_refs.setdefault(pid, []).append((mr.ref_kind, mr.ref_id))
+    resolved_by_project = {
+        pid: _resolve_mentions_batch(session, pid, refs)
+        for pid, refs in per_project_refs.items()
+    }
+
+    grouped: dict[str, list[dict[str, Any]]] = {eid: [] for eid in by_id}
+    for mr in mention_rows:
+        pid = by_id[mr.entry_id].project_id
+        resolved = dict(resolved_by_project[pid][(mr.ref_kind, mr.ref_id)])
+        resolved["stored_label"] = mr.label
+        grouped[mr.entry_id].append(resolved)
+
+    return [_entry_dict(by_id[e.id], grouped[e.id]) for e in entries]
 
 
 # --- Layer 1: the task-completion seam (auto-journaling) ----------------------
