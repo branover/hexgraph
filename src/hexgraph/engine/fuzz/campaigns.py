@@ -222,7 +222,7 @@ def _executor_for(session, row: FuzzCampaign, executor):
         return executor
     from hexgraph.sandbox.executor import get_executor
     env_id = (row.config_json or {}).get("environment_id")
-    from hexgraph.engine import fuzz_env as FE
+    from hexgraph.engine.fuzz import fuzz_env as FE
     if not env_id or env_id == FE.LOCAL_ID:
         return get_executor()
     try:
@@ -262,7 +262,7 @@ def start_campaign(session: Session, project: Project, target: Target, *,
     # boundary holds on the remote — only the compute host changes). A caller-supplied
     # executor (tests) wins, but selecting a remote endpoint stays fail-closed regardless.
     # The env's ResourceSpec CEILING folds under the per-campaign override.
-    from hexgraph.engine import fuzz_env as FE
+    from hexgraph.engine.fuzz import fuzz_env as FE
     env_id = spec.environment_id or FE.LOCAL_ID
     if executor is None:
         executor = FE.get_campaign_executor(session, env_id)
@@ -689,7 +689,7 @@ def _ingest_artifacts(session, project, target, row, status: dict, *, executor=N
     symbolizing replay `verify_artifact` uses to backfill the representative's stack — so
     the headline crash gets a clickable backtrace + a real faulting function rather than a
     null one. `executor` threads the campaign's executor through so that replay reuses it."""
-    from hexgraph.engine.fuzzing import crash_finding
+    from hexgraph.engine.fuzz.fuzzing import crash_finding
 
     created = 0
     coverage = bool(status.get("coverage_instrumented"))
@@ -1056,7 +1056,7 @@ def resume_campaign(session: Session, row: FuzzCampaign, *, executor=None) -> Fu
 
 
 def _spec_from_config(session, project, target, row, cfg) -> FuzzCampaignSpec:
-    from hexgraph.engine.fuzzing import resolve_harness
+    from hexgraph.engine.fuzz.fuzzing import resolve_harness
 
     task = session.get(Task, row.task_id) if row.task_id else None
     harness_source = None

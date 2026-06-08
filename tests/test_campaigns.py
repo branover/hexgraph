@@ -9,7 +9,7 @@ from hexgraph.db.models import (
     Edge, EdgeType, Finding, FuzzArtifact, FuzzCampaign, Target, TargetKind,
 )
 from hexgraph.db.session import session_scope
-from hexgraph.engine import campaigns as C
+from hexgraph.engine.fuzz import campaigns as C
 from hexgraph.engine.findings.findings import persist_finding
 from hexgraph.engine.fuzzers import FuzzerError, get_fuzzer, resolve_engine
 from hexgraph.engine.fuzzers.base import FuzzCampaignSpec
@@ -925,7 +925,7 @@ def test_libfuzzer_single_pass_regression(hg_home):
     """The single-pass `fuzzing` task now routes input resolution through the
     LibFuzzerFuzzer seam, but the fuzz_probe invocation must be UNCHANGED: same probe,
     same flags, same requires_execution, libFuzzer crash → finding."""
-    from hexgraph.engine.fuzzing import execute_fuzzing
+    from hexgraph.engine.fuzz.fuzzing import execute_fuzzing
 
     _enable_fuzzing()
     payload = {"compiled": True, "ran": True, "coverage_instrumented": False,
@@ -1043,7 +1043,7 @@ def test_verify_finding_reproducer_reads_ref(hg_home):
     """verify_finding_reproducer pulls reproducer_ref from a fuzz_crash finding's
     evidence.extra.fuzz and re-runs it — the one-click re-verify for a fuzz finding."""
     from hexgraph.engine import cas
-    from hexgraph.engine.fuzzing import crash_finding
+    from hexgraph.engine.fuzz.fuzzing import crash_finding
     from hexgraph.engine.findings.poc import verify_finding_reproducer
 
     _enable_fuzzing()

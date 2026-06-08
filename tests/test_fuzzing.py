@@ -8,7 +8,7 @@ import pytest
 from hexgraph.db.models import Annotation, Finding, Node, Task, TaskStatus
 from hexgraph.db.session import session_scope
 from hexgraph.engine.findings.findings import persist_finding
-from hexgraph.engine.fuzzing import execute_fuzzing, resolve_harness, resolve_target_sources
+from hexgraph.engine.fuzz.fuzzing import execute_fuzzing, resolve_harness, resolve_target_sources
 from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph.engine.tasks import create_task
 from hexgraph.models.finding import Evidence, Finding as FModel

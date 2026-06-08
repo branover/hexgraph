@@ -108,7 +108,7 @@ def resolve_harness(session: Session, target: Target, task: Task) -> tuple[str |
     # Prefer a promoted managed harness file (durable, navigable).
     project = session.get(Project, target.project_id)
     if project is not None:
-        from hexgraph.engine.harness_promote import resolve_managed_harness
+        from hexgraph.engine.fuzz.harness_promote import resolve_managed_harness
 
         managed, _node_id = resolve_managed_harness(session, project, target.id)
         if managed:

@@ -9,7 +9,7 @@ nonsensical pairing). Feature/campaign code calls the seam and NEVER writes
 A fuzzer's job is bounded and pure-ish: `prepare(spec, project, target)` resolves
 the harness/target-sources/seeds/dictionary and returns a `PreparedFuzz` describing
 HOW to launch the fuzz probe in the sandbox (probe name + image + extra_args +
-read-only mounts). The campaign engine (`engine/campaigns.py`) then launches it as a
+read-only mounts). The campaign engine (`engine/fuzz/campaigns.py`) then launches it as a
 DETACHED container (`Executor.start_detached`) and a periodic reaper ingests the
 streamed artifacts/stats — so a multi-hour campaign never pins a worker thread.
 

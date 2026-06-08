@@ -152,7 +152,7 @@ def _compile_harnesses(findings) -> None:
 
     if not docker_available():
         return
-    from hexgraph.engine.harness import compile_harness_source
+    from hexgraph.engine.fuzz.harness import compile_harness_source
 
     for finding in findings:
         source = finding.evidence.decompiled_snippet
@@ -334,7 +334,7 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
     # never fail the task over it (the findings are already persisted).
     if task.type == "harness_generation" and persisted_ids:
         from hexgraph.db.models import Finding as _Finding
-        from hexgraph.engine.harness_promote import promote_harness
+        from hexgraph.engine.fuzz.harness_promote import promote_harness
 
         for fid in persisted_ids:
             f = session.get(_Finding, fid)

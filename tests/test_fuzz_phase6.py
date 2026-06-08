@@ -19,8 +19,8 @@ from hexgraph import config
 from hexgraph import settings as st
 from hexgraph.db.models import EgressEvent, FuzzCampaign, FuzzEnvironment
 from hexgraph.db.session import session_scope
-from hexgraph.engine import campaigns as C
-from hexgraph.engine import fuzz_env as FE
+from hexgraph.engine.fuzz import campaigns as C
+from hexgraph.engine.fuzz import fuzz_env as FE
 from hexgraph.engine.fuzzers.base import FuzzCampaignSpec
 from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph.engine.findings.findings import persist_finding

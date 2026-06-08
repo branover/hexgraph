@@ -322,7 +322,7 @@ def coverage_diff(campaign_id: str, other_campaign_id: str) -> dict:
     corpus/engine change actually improved reach. Returns per-file {gained, lost} + totals;
     `available=False` when either campaign exposed no per-line coverage map."""
     from hexgraph.db.models import FuzzCampaign
-    from hexgraph.engine import campaigns as C
+    from hexgraph.engine.fuzz import campaigns as C
 
     with session_scope() as s:
         base = s.get(FuzzCampaign, campaign_id)
@@ -481,10 +481,10 @@ def start_fuzz_campaign(target_id: str, surface: str | None = None, engine: str 
     host — building + fuzzing run there with no analysis change, gated by
     features.fuzz_remote, the SAME sandbox boundary, connection details secret + audited."""
     from hexgraph.db.models import Task as _Task
-    from hexgraph.engine import campaigns as C
-    from hexgraph.engine import fuzz_env as FE
+    from hexgraph.engine.fuzz import campaigns as C
+    from hexgraph.engine.fuzz import fuzz_env as FE
     from hexgraph.engine.fuzzers import FuzzCampaignSpec
-    from hexgraph.engine.fuzzing import resolve_harness, resolve_target_sources
+    from hexgraph.engine.fuzz.fuzzing import resolve_harness, resolve_target_sources
     from hexgraph.policy import PolicyViolation
 
     with session_scope() as s:
@@ -525,7 +525,7 @@ def list_fuzz_environments(project_id: str | None = None) -> dict:
     env/config.toml, never stored/returned), and the cached health-check. Pass the
     `environment` id to start_fuzz_campaign to run a campaign there (gated by
     features.fuzz_remote)."""
-    from hexgraph.engine import fuzz_env as FE
+    from hexgraph.engine.fuzz import fuzz_env as FE
 
     with session_scope() as s:
         return {"environments": FE.list_environments(s)}
@@ -536,7 +536,7 @@ def fuzz_environment_health(environment_id: str) -> dict:
     the fuzz image present (the one-time remote build/pull). Gated by features.fuzz_remote.
     Returns a NON-SECRET dict {ok, reachable, authorized, image_present, docker_version,
     detail} — the connection string is never echoed."""
-    from hexgraph.engine import fuzz_env as FE
+    from hexgraph.engine.fuzz import fuzz_env as FE
     from hexgraph.policy import PolicyViolation
 
     with session_scope() as s:
@@ -552,7 +552,7 @@ def stop_fuzz_campaign(campaign_id: str) -> dict:
     """Stop a running fuzz campaign — kills the container PRESERVING the corpus in CAS
     (resumable). Reaps any final crashes first so nothing is lost."""
     from hexgraph.db.models import FuzzCampaign
-    from hexgraph.engine import campaigns as C
+    from hexgraph.engine.fuzz import campaigns as C
 
     with session_scope() as s:
         c = s.get(FuzzCampaign, campaign_id)
@@ -569,7 +569,7 @@ def resume_fuzz_campaign(campaign_id: str) -> dict:
     for a binary/source campaign, egress for a live-socket network campaign) — NO new gate.
     Returns the campaign dict ({id, status:'running', …}); poll fuzz_status as before."""
     from hexgraph.db.models import FuzzCampaign
-    from hexgraph.engine import campaigns as C
+    from hexgraph.engine.fuzz import campaigns as C
     from hexgraph.policy import PolicyViolation
 
     with session_scope() as s:
@@ -592,7 +592,7 @@ def fuzz_status(campaign_id: str) -> dict:
     """Live status + stats of a campaign (execs, edges_covered, crash_count, coverage,
     status). Reaps on read so the figures are fresh. Poll this while a campaign runs."""
     from hexgraph.db.models import FuzzCampaign
-    from hexgraph.engine import campaigns as C
+    from hexgraph.engine.fuzz import campaigns as C
 
     with session_scope() as s:
         c = s.get(FuzzCampaign, campaign_id)
@@ -612,7 +612,7 @@ def list_fuzz_artifacts(campaign_id: str) -> dict:
     exploitability, the CAS reproducer sha (re-runnable via verify_poc), and the
     fuzz_crash finding it produced."""
     from hexgraph.db.models import FuzzCampaign
-    from hexgraph.engine import campaigns as C
+    from hexgraph.engine.fuzz import campaigns as C
 
     with session_scope() as s:
         c = s.get(FuzzCampaign, campaign_id)
@@ -629,7 +629,7 @@ def minimize_artifact(artifact_id: str) -> dict:
     a liveness oracle. LLM-free; the surface-correct gate is applied inside verify_artifact.
     Returns {verified, detail, assurance}."""
     from hexgraph.db.models import FuzzArtifact
-    from hexgraph.engine import campaigns as C
+    from hexgraph.engine.fuzz import campaigns as C
     from hexgraph.policy import PolicyViolation
 
     with session_scope() as s:
@@ -659,7 +659,7 @@ def verify_fuzz_artifact(artifact_id: str) -> dict:
     message over the live socket + a liveness oracle. LLM-free; the surface-correct exec/egress
     gate is applied inside. Returns {artifact_id, verified, detail, assurance, output}."""
     from hexgraph.db.models import FuzzArtifact
-    from hexgraph.engine import campaigns as C
+    from hexgraph.engine.fuzz import campaigns as C
     from hexgraph.policy import PolicyViolation
 
     with session_scope() as s:

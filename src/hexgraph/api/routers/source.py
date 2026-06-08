@@ -142,7 +142,7 @@ def api_backfill_harnesses(project_id: str):
         p = s.get(Project, project_id)
         if p is None:
             raise HTTPException(404, "project not found")
-        from hexgraph.engine.harness_promote import backfill_harnesses
+        from hexgraph.engine.fuzz.harness_promote import backfill_harnesses
 
         return backfill_harnesses(s, p)
 

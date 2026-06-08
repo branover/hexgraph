@@ -19,7 +19,7 @@ import pytest
 
 from hexgraph.db.models import EgressEvent, FuzzCampaign, Target, TargetKind
 from hexgraph.db.session import session_scope
-from hexgraph.engine import campaigns as C
+from hexgraph.engine.fuzz import campaigns as C
 from hexgraph.engine.fuzzers.base import FuzzCampaignSpec
 from hexgraph.engine.fuzzers.network import BoofuzzFuzzer
 from hexgraph.engine.targets.ingest import create_project, ingest_file

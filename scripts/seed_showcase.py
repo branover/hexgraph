@@ -596,7 +596,7 @@ def seed(session, *, reset: bool) -> dict:
     # source paths) and PROMOTES the harness (a `harness` node `harnesses`→ the derived target).
     # So a later UI "Start campaign" resolves the harness + sources and LAUNCHES for real.
     _step("Build the instrumented rebuild for real (MockBuilder, offline) + run a mock fuzz campaign")
-    from hexgraph.engine import campaigns as C
+    from hexgraph.engine.fuzz import campaigns as C
 
     build_spec = BuildSpec.from_dict({
         **B.propose_build_spec(tree), "artifacts": ["fuzz_target"],

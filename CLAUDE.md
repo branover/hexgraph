@@ -92,7 +92,7 @@ src/hexgraph/
   llm/                         # backend seam: base, mock, anthropic_api, claude_code, registry, cassette
   sandbox/                     # runner (docker boundary), executor, decompiler; probes/ mounted from the install
                                #   (http_probe = live web assessment + session cookie jar)
-  engine/                      # pipeline, worker, context, runs, fuzzing, tasks, observations, llm_tasks,
+  engine/                      # pipeline, worker, context, runs, tasks, observations, llm_tasks,
                                #   suggester, capabilities, cas, audit  (the task-runner core + substrate)
                                # (sub-packaged by responsibility; see engine/<pkg>/ below)
   engine/build/                #   build-as-API: build, builds, source, revisions, oss_fuzz
@@ -105,6 +105,7 @@ src/hexgraph/
                                #     reachability, followups, report
   engine/targets/              #   target acquisition/lifecycle/surfaces: ingest, unpack, targets,
                                #     filesystem, surfaces, rehost, remote, callback_listener
+  engine/fuzz/                 #   fuzz campaigns: campaigns, fuzzing, fuzz_env, harness, harness_promote
   agent/                       # agent-integration layer (the INTERFACE engine/ implements): mcp_server +
                                #   mcp_catalog + mcp_tools (the MCP tool surface external agents drive),
                                #   agent_tools (the in-process LLM agent-loop tools), agent_delegate (delegate
@@ -132,7 +133,7 @@ Key disciplines: **probes are mounted from the install at runtime** (`sandbox/ru
 
 `settings.json` (managed; written via `PATCH /api/settings` or `hexgraph config set`) holds non-secret prefs + optional-feature toggles, layered **env > settings.json > config.toml > defaults**. Secrets are never written there (presence-only). Optional features:
 - **Ghidra** (`features.ghidra`): `headless` (analyzeHeadless in the sandbox, needs `just sandbox-build with_ghidra=1`), `bridge` (connect to a running Ghidra via `ghidra_bridge`), `enrich_recon` (materialize functions/call-graph/structs). Degrades to radare2 when off.
-- **Fuzzing** (`features.fuzzing`, default off): the `fuzzing` task type; enabling it (or PoC) flips `policy.current_policy()` to a dynamic profile (`allow_execution=True`) — the only place the static-only invariant relaxes — while the sandbox stays `--network none`, capped, timed. Compiles a `harness_generation` harness with libFuzzer+ASan and auto-creates a finding per crash. `engine/fuzzing.py`, `sandbox/probes/fuzz_probe.py`.
+- **Fuzzing** (`features.fuzzing`, default off): the `fuzzing` task type; enabling it (or PoC) flips `policy.current_policy()` to a dynamic profile (`allow_execution=True`) — the only place the static-only invariant relaxes — while the sandbox stays `--network none`, capped, timed. Compiles a `harness_generation` harness with libFuzzer+ASan and auto-creates a finding per crash. `engine/fuzz/fuzzing.py`, `sandbox/probes/fuzz_probe.py`.
 - **PoC verification** (`features.poc`, default off): the `poc` task + `finding_verify_poc` MCP tool **execute the target** in the sandbox with an attacker input and confirm exploitation via an unforgeable `{{NONCE}}` oracle (engine substitutes a random token; "verified" = the injected behaviour really happened). Also policy-gated. `engine/findings/poc.py`, `sandbox/probes/poc_probe.py`. **Foreign-arch targets run under qemu-user** — `poc_probe` picks `qemu-<arch>` from the ELF header and `verify_poc` mounts the parent firmware's extracted rootfs as the qemu sysroot (`-L`) so a dynamically-linked MIPS/ARM/… binary finds its libs (verified end-to-end on real MIPS firmware).
 
 **Firmware extraction** (`sandbox/probes/unpack_probe.py`): bare squashfs → **sasquatch** (patched unsquashfs for vendor/LZMA squashfs; falls back to `unsquashfs`); cpio → `cpio`; **partitioned full-OS disk images** (MBR/GPT — recon detects these via `_is_disk_image` → `format=disk_image`) → **The Sleuth Kit** (`mmls` + `tsk_recover`, unprivileged, no loop-mount) pulls the rootfs from the largest Linux/ext partition, falling back to binwalk (which also handles a squashfs-on-a-partition rootfs like OpenWrt-x86); wrapped vendor firmware (TRX/uImage → squashfs/jffs2/ubifs/cramfs, often nested) → **binwalk recursive** (`-eM`), driving sasquatch / jefferson (JFFS2) / ubi_reader (UBIFS). All in the default sandbox image (sleuthkit + e2tools included); rebuild after a toolchain change.
