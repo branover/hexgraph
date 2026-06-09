@@ -122,3 +122,27 @@ def test_proj_doctor_advertised_in_catalog():
     spec = next((t for t in M.catalog({"read"}) if t["name"] == "proj_doctor"), None)
     assert spec is not None and callable(spec["fn"])
     assert "clean" in spec["schema"]["properties"]
+
+
+def test_clean_never_prunes_through_a_symlink(hg_home):
+    """A symlinked 'orphan' (name isn't a live id) must NOT be pruned: `.resolve()` would
+    rewrite it to its real target, so rmtree'ing the resolved path could wipe a live sibling
+    project's dir. The symlink is reported but never deleted, and its target survives."""
+    import os
+    from pathlib import Path
+
+    with session_scope() as s:
+        live = _seed_project_with_dir(s, "live")
+        live_dir = Path(live.data_dir)
+    (live_dir / "keep.txt").write_text("precious")
+    # An orphan ENTRY that is a symlink pointing at the live sibling's real dir.
+    link = projects_dir() / "orphan-symlink"
+    os.symlink(live_dir, link)
+
+    with session_scope() as s:
+        report = maintenance.prune_orphan_dirs(s)
+
+    assert "orphan-symlink" in report["orphan_dirs"]   # still surfaced in the report
+    assert "orphan-symlink" not in report["deleted"]    # but NEVER pruned through the link
+    assert link.is_symlink()                            # the link itself is left alone
+    assert (live_dir / "keep.txt").read_text() == "precious"  # the real target is intact

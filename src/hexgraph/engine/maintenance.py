@@ -68,7 +68,14 @@ def prune_orphan_dirs(session: Session) -> dict:
     root = Path(report["projects_dir"])
     deleted: list[str] = []
     for name in report["orphan_dirs"]:
-        target = (root / name).resolve()
+        entry = root / name
+        # NEVER delete through a symlink: `.resolve()` would rewrite it to its real target,
+        # so rmtree'ing the resolved path could wipe a live SIBLING project's dir (or any
+        # dir the link points at) even though rmtree refuses a symlink directly. Skip
+        # symlinked entries entirely — a symlinked "orphan" is reported, never pruned.
+        if entry.is_symlink():
+            continue
+        target = entry.resolve()
         # Defensive: the candidate must be a DIRECT child of the projects root (no traversal).
         if target.parent != root.resolve() or not target.is_dir():
             continue
