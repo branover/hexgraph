@@ -171,6 +171,26 @@ def test_closed_value_set_params_carry_a_schema_enum():
     assert set(fl["severity"]["enum"]) == set(by_name["finding_update"]["severity"]["enum"])
 
 
+def test_finding_record_nested_finding_schema_is_discoverable():
+    # F20: the `finding` param expands inline into the Finding-schema fields so title + the
+    # severity/confidence/category enums are discoverable without a meta_get_schemas round-trip.
+    # The enums must be the SAME canonical Finding Literals (not hand-typed), and the nested
+    # required set must equal the model's required fields (so the schema can't drift from it).
+    import typing
+    from hexgraph.models.finding import Finding as FModel
+    by_name = {s["name"]: s["schema"]["properties"] for s in M.catalog()}
+    fp = by_name["finding_record"]["finding"]
+    props = fp.get("properties") or {}
+    assert "title" in props and props["title"]["type"] == "string"
+    # the three closed enums come from the model's own Literals (no drift)
+    assert set(props["severity"]["enum"]) == set(typing.get_args(FModel.model_fields["severity"].annotation))
+    assert set(props["confidence"]["enum"]) == set(typing.get_args(FModel.model_fields["confidence"].annotation))
+    assert set(props["category"]["enum"]) == set(typing.get_args(FModel.model_fields["category"].annotation))
+    # the nested required set equals the model's required fields
+    model_required = {n for n, f in FModel.model_fields.items() if f.is_required()}
+    assert set(fp.get("required") or []) == model_required
+
+
 def test_gated_tools_name_their_feature_in_the_description():
     # No agent should learn a capability tier exists only by being refused: every tool that
     # touches the network / executes / boots an image / edits source declares its features.* gate.

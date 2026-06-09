@@ -195,6 +195,81 @@ def test_list_findings_filters_paginates_and_excludes_recon(hg_home):
     assert "F103" not in {r["title"] for r in mcp_tools.list_findings(pid, verified=False)}
 
 
+def test_list_findings_verified_filter_paginates_over_filtered_set(hg_home):
+    """#225 follow-up: the `verified` filter is a nested-JSON predicate, so pagination must run
+    OVER the verified-filtered set (not the raw DB page). A verified finding beyond page 1 must be
+    reachable, and a full page must come back whenever enough match."""
+    from datetime import datetime, timedelta, timezone
+
+    from hexgraph.db.models import Finding
+
+    base = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    with session_scope() as s:
+        p = create_project(s, name="vpage")
+        t1 = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        pid = p.id
+
+        # Interleave verified/unverified so a raw-page post-filter would miss most verified rows:
+        # 10 findings, ODD indices verified. Newest-first ⇒ F9(v) F8 F7(v) F6 F5(v) F4 F3(v) F2 F1(v) F0.
+        for i in range(10):
+            ev = {"function": "f"}
+            if i % 2 == 1:
+                ev["extra"] = {"verification": {"verified": True, "detail": "ok"}}
+            s.add(Finding(project_id=pid, target_id=t1.id, task_id="task",
+                          title=f"F{i}", severity="high", confidence="high",
+                          category="memory-safety", summary="s", reasoning="r",
+                          evidence_json=ev, finding_type="vulnerability", status="new",
+                          created_at=base + timedelta(minutes=i)))
+
+    # 5 verified rows total, newest-first.
+    all_v = mcp_tools.list_findings(pid, verified=True, limit=0)
+    assert [r["title"] for r in all_v] == ["F9", "F7", "F5", "F3", "F1"]
+
+    # Paging is over the VERIFIED set: page 1 of 2, then page 2 of 2 — F5/F3 are reachable on
+    # page 2 even though they sit deep in the raw newest-first list (a raw-page post-filter would
+    # have returned fewer than `limit` here, and never reached F3/F1).
+    p1 = mcp_tools.list_findings(pid, verified=True, limit=2)
+    assert [r["title"] for r in p1] == ["F9", "F7"]
+    p2 = mcp_tools.list_findings(pid, verified=True, limit=2, offset=2)
+    assert [r["title"] for r in p2] == ["F5", "F3"]
+    p3 = mcp_tools.list_findings(pid, verified=True, limit=2, offset=4)
+    assert [r["title"] for r in p3] == ["F1"]  # the last one, a short final page
+
+    # A full page is returned whenever enough match (it is not cut short by interleaved unverified
+    # rows that the old post-filter would have consumed from the page budget).
+    assert len(mcp_tools.list_findings(pid, verified=True, limit=3)) == 3
+
+    # verified=False mirrors it over the unverified set.
+    assert [r["title"] for r in mcp_tools.list_findings(pid, verified=False, limit=0)] == \
+        ["F8", "F6", "F4", "F2", "F0"]
+
+
+def test_list_findings_limit_zero_means_no_limit(hg_home):
+    """limit=0 returns EVERY matching row (offset still applies), not zero rows — both on the
+    cheap SQL path and the verified-filtered Python path."""
+    from datetime import datetime, timedelta, timezone
+
+    from hexgraph.db.models import Finding
+
+    base = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    with session_scope() as s:
+        p = create_project(s, name="limit0")
+        t1 = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        pid = p.id
+        for i in range(7):
+            s.add(Finding(project_id=pid, target_id=t1.id, task_id="task",
+                          title=f"F{i}", severity="high", confidence="high",
+                          category="memory-safety", summary="s", reasoning="r",
+                          evidence_json={"function": "f"}, finding_type="vulnerability",
+                          status="new", created_at=base + timedelta(minutes=i)))
+
+    # No verified filter (SQL path): limit=0 ⇒ all 7; offset still skips.
+    assert len(mcp_tools.list_findings(pid, limit=0)) == 7
+    assert len(mcp_tools.list_findings(pid, limit=0, offset=5)) == 2
+    # verified filter (Python path): limit=0 ⇒ every unverified row.
+    assert len(mcp_tools.list_findings(pid, verified=False, limit=0)) == 7
+
+
 def test_ingest_returns_bounded_summary(hg_home, monkeypatch):
     """target_ingest's return is a bounded summary — children_count + a capped preview,
     never the full child list inlined."""

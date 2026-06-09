@@ -44,10 +44,13 @@ The tools are also grouped into **read**, **write**, and **run**, and each group
 agent's context small:
 
 - **read** covers the listing and inspection verbs across the domains. `finding_list` returns
-  findings newest-first, paginated (`limit`/`offset`) and filterable
-  (`finding_type`/`status`/`severity`/`target_id`/`verified`); it default-excludes the
+  findings newest-first, paginated (`limit`/`offset`, where `limit=0` means no limit) and
+  filterable (`finding_type`/`status`/`severity`/`target_id`/`verified`); it default-excludes the
   per-child `recon` findings (ingest mints one per child target — easily hundreds), so pass
-  `include_recon=true` (or `finding_type='recon'`) to see them. Also `graph_get_node`, `finding_get`, `re_xrefs`, `graph_list_sockets`,
+  `include_recon=true` (or `finding_type='recon'`) to see them. The `verified` flag lives in the
+  finding's evidence JSON rather than a SQL column, so when you filter on it the paging runs over
+  the verified-filtered set — page two of verified findings is reachable and a full page comes
+  back whenever enough match. Also `graph_get_node`, `finding_get`, `re_xrefs`, `graph_list_sockets`,
   `graph_list_hypotheses` (the hypothesis worklist — statement, evidence status, work_state, evidence counts; your "what am I chasing" orient),
   `graph_stats` (per-type node/edge tallies — a cheap before/after count without listing every node),
   `fs_list`/`fs_read_file`, `src_list_trees`/`src_read_file`, `fuzz_status`,

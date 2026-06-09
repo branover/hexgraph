@@ -302,3 +302,123 @@ def test_max_depth_bounds_the_search(hg_home):
         assert find_source_to_sink_path(s, p.id, sink.id, max_depth=3) is None
         # A generous bound finds it.
         assert find_source_to_sink_path(s, p.id, sink.id, max_depth=12) is not None
+
+
+# ── F12: an explicit sink_node_id OVERRIDES the finding's about→sink resolution ──────────────
+
+def test_explicit_sink_node_id_overrides_finding_resolution(hg_home):
+    """Passing BOTH finding_id and sink_node_id uses the explicit sink directly — even when the
+    finding cites NOTHING (no about→sink edge, no matching evidence.sink). Before F12 the
+    sink_node_id was silently dropped and the caller got 'no sink node cited by this finding'."""
+    with session_scope() as s:
+        p, t = _project_with_binary(s)
+        ep = create_node(s, p, node_type="endpoint", name="/cgi-bin/cmd", target_id=t.id,
+                         attrs={"auth": "none"})
+        sink = create_node(s, p, node_type="symbol", name="system", target_id=t.id,
+                           attrs={"is_sink": True})
+        create_edge(s, p, src_kind="node", src_id=ep.id, dst_kind="node", dst_id=sink.id,
+                    type="taints")
+        # A finding that does NOT cite the sink (no about edge, no evidence.sink/function).
+        task = create_task(s, project=p, target_id=t.id, type="static_analysis")
+        f = F(title="cmdi", severity="high", confidence="medium", category="command-injection",
+              summary="s", reasoning="r", evidence=Evidence())
+        row = persist_finding(s, project_id=p.id, target_id=t.id, task_id=task.id, finding=f,
+                              finding_type="vulnerability")
+
+        # Without the override, the sink can't be resolved.
+        miss = argue_reachability_for_finding(s, row.id)
+        assert miss["found"] is False and "no sink node cited" in miss["detail"]
+        # The enriched error names BOTH remedies.
+        assert "about" in miss["detail"] and "sink_node_id" in miss["detail"]
+
+        # With the override, the explicit sink is used and the path is argued + recorded.
+        res = argue_reachability_for_finding(s, row.id, sink_node_id=sink.id)
+        assert res["found"] is True
+        assert res["sink_node_id"] == sink.id
+        a = res["assurance_recorded"]
+        assert a["standard"] == A.INPUT_REACHABLE and a["method"] == A.STATIC
+        s.refresh(row)
+        assert row.evidence_json["extra"]["reachability"]["sink_node_id"] == sink.id
+
+
+def test_explicit_sink_node_id_must_be_in_findings_project(hg_home):
+    """A sink_node_id from a DIFFERENT project (or a bad id) is a clear error, not a silent miss."""
+    from hexgraph.engine.findings.reachability import ReachabilityError
+    with session_scope() as s:
+        p, t = _project_with_binary(s, name="a")
+        p2, t2 = _project_with_binary(s, name="b")
+        other_sink = create_node(s, p2, node_type="symbol", name="system", target_id=t2.id,
+                                 attrs={"is_sink": True})
+        sink = create_node(s, p, node_type="symbol", name="system", target_id=t.id,
+                           attrs={"is_sink": True})
+        row = _vuln_finding(s, p, t, sink_node=sink)
+        try:
+            argue_reachability_for_finding(s, row.id, sink_node_id=other_sink.id)
+            assert False, "expected ReachabilityError for a cross-project sink"
+        except ReachabilityError as exc:
+            assert "project" in str(exc)
+        try:
+            argue_reachability_for_finding(s, row.id, sink_node_id="does-not-exist")
+            assert False, "expected ReachabilityError for a missing sink"
+        except ReachabilityError as exc:
+            assert "not found" in str(exc)
+
+
+# ── 4(a): recording input_reachable bumps the finding's confidence (no contradictory rung) ────
+
+def test_input_reachable_bumps_confidence_to_high(hg_home):
+    """When reachability upgrades a finding to input_reachable, its `confidence` column must rise
+    too — a medium-confidence finding reading input_reachable assurance looks self-contradictory."""
+    with session_scope() as s:
+        p, t = _project_with_binary(s)
+        ep = create_node(s, p, node_type="param", name="cmd", target_id=t.id,
+                         attrs={"auth": "none"})
+        sink = create_node(s, p, node_type="symbol", name="system", target_id=t.id,
+                           attrs={"is_sink": True})
+        create_edge(s, p, src_kind="node", src_id=ep.id, dst_kind="node", dst_id=sink.id,
+                    type="taints")
+        row = _vuln_finding(s, p, t, sink_node=sink)  # confidence="medium"
+        assert row.confidence == "medium"
+        res = argue_reachability_for_finding(s, row.id)
+        assert res["upgraded"] is True
+        assert res.get("confidence_bumped") == "high"
+        s.refresh(row)
+        assert row.confidence == "high"
+
+
+def test_no_upgrade_leaves_confidence_untouched(hg_home):
+    """No source→sink path ⇒ no assurance upgrade ⇒ confidence is NOT touched."""
+    with session_scope() as s:
+        p, t = _project_with_binary(s)
+        sink = create_node(s, p, node_type="symbol", name="system", target_id=t.id,
+                           attrs={"is_sink": True})
+        row = _vuln_finding(s, p, t, sink_node=sink)  # confidence="medium", no source path
+        res = argue_reachability_for_finding(s, row.id)
+        assert res["found"] is False
+        s.refresh(row)
+        assert row.confidence == "medium"
+        assert "confidence_bumped" not in res
+
+
+def test_existing_high_confidence_not_relabelled(hg_home):
+    """A finding already at high confidence is not re-touched (and no bump is reported)."""
+    with session_scope() as s:
+        p, t = _project_with_binary(s)
+        ep = create_node(s, p, node_type="param", name="cmd", target_id=t.id,
+                         attrs={"auth": "none"})
+        sink = create_node(s, p, node_type="symbol", name="system", target_id=t.id,
+                           attrs={"is_sink": True})
+        create_edge(s, p, src_kind="node", src_id=ep.id, dst_kind="node", dst_id=sink.id,
+                    type="taints")
+        task = create_task(s, project=p, target_id=t.id, type="static_analysis")
+        f = F(title="cmdi", severity="high", confidence="high", category="command-injection",
+              summary="s", reasoning="r", evidence=Evidence(function="h", sink=sink.name))
+        row = persist_finding(s, project_id=p.id, target_id=t.id, task_id=task.id, finding=f,
+                              finding_type="vulnerability")
+        create_edge(s, p, src_kind="finding", src_id=row.id, dst_kind="node", dst_id=sink.id,
+                    type="about")
+        res = argue_reachability_for_finding(s, row.id)
+        assert res["upgraded"] is True
+        assert "confidence_bumped" not in res  # already high
+        s.refresh(row)
+        assert row.confidence == "high"
