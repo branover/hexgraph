@@ -94,17 +94,25 @@ def test_emulate_constant_skips_arg_dependent_function(hg_home):
         assert O.list_observations(s, t.id, kind="emulation") == []
 
 
-def test_emulate_constant_no_signature_falls_through(hg_home):
-    """With NO recorded signature, the pre-check must NOT second-guess — it falls through to
-    the emulation path (which here just degrades, since Ghidra isn't really in the image)."""
+def test_emulate_constant_no_signature_falls_through(hg_home, monkeypatch):
+    """With NO recorded signature, the pre-check must NOT second-guess — it falls through PAST
+    the arg gate into the emulation path. We stub `run_emulate` so this stays an OFFLINE
+    host-logic test (no sandbox image needed); a real emulation is covered by the
+    GHIDRA_READY-gated tests below. (Without the stub this hit the real ghidra_probe and failed
+    in the no-Docker offline CI with 'Unable to find image hexgraph-sandbox:latest'.)"""
+    from hexgraph.sandbox.decompiler import GhidraDecompiler
+
+    monkeypatch.setattr(GhidraDecompiler, "run_emulate",
+                        lambda self, *a, **k: {"emulation": {"reached_ret": False, "value": None}})
     st.update_settings({"features.emulation.enabled": True,
                         "features.ghidra.enabled": True, "features.ghidra.mode": "headless"})
     with session_scope() as s:
         p = create_project(s, name="nosig")
         t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
         out = emulate_constant(s, p, t, function="unknown_fn")
-        # It went PAST the arg pre-check (no skipped marker) into the real emulation attempt.
+        # It went PAST the arg pre-check (no skipped marker) into the emulation path.
         assert out.get("skipped") != "arg_dependent"
+        assert out["available"] is True
 
 
 def test_emu_script_guards_arg_dependent_functions():
