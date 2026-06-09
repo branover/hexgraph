@@ -117,7 +117,10 @@ def api_export(project_id: str):
         findings = s.query(Finding).filter(Finding.project_id == project_id).all()
         return {
             "project": project_dict(project),
-            "graph": build_graph(s, project_id),
+            # An export is the COMPLETE graph, not the on-screen subset, so include hidden
+            # firmware children (their bare target nodes) too — the workspace defaults to
+            # include_hidden=False, but a downloaded archive should miss nothing.
+            "graph": build_graph(s, project_id, include_hidden=True),
             "findings": [finding_dict(f) for f in findings],
         }
 
