@@ -55,6 +55,9 @@ bridge = [
 ]
 dev = [
     "pytest>=8.0",
+    # Per-test wall-clock cap — backstops a wedged real-container E2E so a hung test fails
+    # loudly instead of blocking the run forever (see `just test-heavy`).
+    "pytest-timeout>=2.3",
     "httpx>=0.27",
     "anthropic>=0.40",
     "mcp>=1.2",
@@ -88,3 +91,12 @@ hexgraph = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # Tests default to the mock backend (set in tests/conftest.py): zero key, zero network (SPEC §1).
+markers = [
+    # Heavy real-container E2E: a fuzz campaign or firmware rehost boot that spins up a real
+    # Docker container and runs for many seconds-to-minutes. These ONLY run when the relevant
+    # image is built (conftest.SANDBOX_READY gates them), so on a fully-provisioned dev box a
+    # plain `pytest`/`just test` would run the whole slow tier — and a flaky one could wedge it.
+    # `just test` deselects them (`-m 'not slow'`); run them via `just test-heavy` or in CI's
+    # live-tests job (which is where they belong).
+    "slow: heavy real-container E2E (fuzz campaign / rehost boot); deselected by default in 'just test'",
+]

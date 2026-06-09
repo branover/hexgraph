@@ -135,6 +135,7 @@ def vulnrouter():
         subprocess.run(["docker", "rm", "-f", name], capture_output=True)
 
 
+@pytest.mark.slow  # boots the live vulnrouter target — run via `just test-heavy` / CI
 def test_live_vulnrouter_auth_bypass_and_rce(hg_home, vulnrouter):
     from hexgraph import settings
     from hexgraph.db.session import session_scope
@@ -168,6 +169,7 @@ def test_live_vulnrouter_auth_bypass_and_rce(hg_home, vulnrouter):
     assert rce["verified"] is True and "HEXGRAPH_PWNED_" in (rce.get("output") or "")
 
 
+@pytest.mark.slow  # boots the live vulnrouter target — run via `just test-heavy` / CI
 def test_live_http_request_returns_body(hg_home, vulnrouter):
     from hexgraph import settings
     from hexgraph.db.session import session_scope

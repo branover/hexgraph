@@ -57,6 +57,7 @@ def vulnrouter():
         subprocess.run(["docker", "rm", "-f", name], capture_output=True)
 
 
+@pytest.mark.slow  # boots the live vulnrouter target — run via `just test-heavy` / CI
 def test_live_web_discover_materializes_endpoints(hg_home, vulnrouter):
     from hexgraph import settings
     from hexgraph.db.models import Node, NodeType

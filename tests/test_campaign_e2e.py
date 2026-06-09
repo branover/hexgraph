@@ -15,6 +15,10 @@ import pytest
 
 from conftest import FUZZ_IMAGE_READY
 
+# Heavy real fuzz campaign — deselected from the fast `just test` (-m 'not slow'); run via
+# `just test-heavy` or CI's live job.
+pytestmark = pytest.mark.slow
+
 # A target with an out-of-bounds heap WRITE behind a magic gate — coverage-guided
 # AFL++ (with CmpLog) learns the gate and reaches the bug fast.
 TARGET_C = r"""

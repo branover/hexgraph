@@ -17,6 +17,10 @@ import pytest
 
 from conftest import SANDBOX_READY
 
+# Heavy real fuzz campaign — deselected from the fast `just test` (-m 'not slow'); run via
+# `just test-heavy` or CI's live job.
+pytestmark = pytest.mark.slow
+
 # A target with an out-of-bounds WRITE reachable only after the input matches the
 # magic bytes "FUZZ" — the classic coverage-guided-vs-blackbox discriminator. With
 # SanCov+CmpLog-style feedback libFuzzer learns the magic byte-by-byte in seconds.

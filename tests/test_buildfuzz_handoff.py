@@ -210,6 +210,7 @@ def test_verify_fuzz_artifact_tool_registered_and_byte_faithful():
     assert "stdin_b64" in src and "decode(\"latin-1\")" not in src
 
 
+@pytest.mark.slow  # real build + libFuzzer campaign — run via `just test-heavy` / CI
 @pytest.mark.skipif(not (BUILD_IMAGE_READY and FUZZ_IMAGE_READY),
                     reason="requires Docker + hexgraph-build + hexgraph-fuzz images")
 def test_build_to_libfuzzer_campaign_finds_crash_with_coverage(hg_home):

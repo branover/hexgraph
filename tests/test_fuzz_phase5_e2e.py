@@ -23,6 +23,10 @@ import pytest
 
 from conftest import FUZZ_IMAGE_READY
 
+# Heavy real fuzz campaigns (libdesock/boofuzz/qemu) — ~1.5 min each. Deselected from the fast
+# `just test` (-m 'not slow'); run via `just test-heavy` or CI's live job.
+pytestmark = pytest.mark.slow
+
 
 def _fuzz_image():
     return os.environ.get("HEXGRAPH_FUZZ_IMAGE", "hexgraph-fuzz:latest")
@@ -319,8 +323,9 @@ def test_desock_afl_fuzzes_local_server_no_network(hg_home):
         with session_scope() as s:
             C.reap_campaign(s, s.get(FuzzCampaign, cid))
             c = s.get(FuzzCampaign, cid)
-            # `degraded` is terminal too (e.g. preeny's forkserver-startup race exhausted the
-            # probe's bounded retries) — stop and let the assertion report it, don't spin.
+            # `degraded` is terminal too (e.g. a forkserver-startup crash exhausted the probe's
+            # bounded retries — rare now that libdesock is fork-safe) — stop, let the assertion
+            # report it, don't spin.
             if c.status in ("completed", "failed", "degraded"):
                 break
         time.sleep(4)
@@ -328,7 +333,7 @@ def test_desock_afl_fuzzes_local_server_no_network(hg_home):
     with session_scope() as s:
         c = s.get(FuzzCampaign, cid)
         arts = s.query(FuzzArtifact).filter(FuzzArtifact.campaign_id == cid).all()
-        # desock requires preeny in the image; if absent, the probe degrades to file-input
+        # desock requires libdesock in the image; if absent, the probe degrades to file-input
         # qemu-mode (still coverage-guided) — either way it should reach the overflow.
         assert arts, f"desock/AFL found no crash (status={c.status}, err={c.error})"
         assert arts[0].content_cas and arts[0].finding_id

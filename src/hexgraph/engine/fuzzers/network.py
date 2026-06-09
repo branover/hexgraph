@@ -21,7 +21,7 @@ Two tiers, picked by the surface's engine (the seam, never branched on in task c
     coverage-guided local-binary case today.
 
   • **desock+AFL++ (tier 1, `engine="desock"`, `--network none`).** When we HAVE the
-    server binary, LD_PRELOAD preeny/desock turns its accept()/recv() socket into stdin,
+    server binary, LD_PRELOAD libdesock turns its accept()/recv() socket into stdin,
     so AFL++ coverage-fuzzes it with no real networking — keeping the static-by-default
     posture. A desock crash (ASan/signal) is `code_present/dynamic`.
 
