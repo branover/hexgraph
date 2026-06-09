@@ -66,3 +66,31 @@ def test_export_endpoint(hg_home):
     assert set(body.keys()) == {"project", "graph", "findings"}
     assert len(body["findings"]) == 1
     assert body["graph"]["nodes"]
+
+
+def test_export_includes_hidden_targets(hg_home):
+    """An export is the COMPLETE graph, not the on-screen subset: a hidden firmware child
+    (and its nodes) is dropped from the workspace graph but MUST appear in the export."""
+    from hexgraph.db.models import TargetKind
+    from hexgraph.engine.graph.graph import build_graph
+    from hexgraph.engine.graph.nodes import materialize_symbol
+
+    with session_scope() as s:
+        project = create_project(s, name="m5-hidden")
+        fw = ingest_file(s, project, fixture_path("synthetic_fw.bin"), name="fw")
+        fw.kind = TargetKind.firmware_image
+        child = ingest_file(s, project, fixture_path("vuln_httpd"), name="usr/sbin/httpd",
+                            parent=fw, visible=False)
+        materialize_symbol(s, project_id=project.id, target_id=child.id,
+                           name="strcpy", kind="import", is_sink=True)
+        s.flush()
+        pid, fwid, cid = project.id, fw.id, child.id
+        # Sanity: the workspace graph (include_hidden=False) hides the child.
+        assert cid not in {n["id"] for n in build_graph(s, pid)["nodes"]}
+
+    client = TestClient(create_app())
+    body = client.get(f"/api/projects/{pid}/export").json()
+    ids = {n["id"] for n in body["graph"]["nodes"]}
+    assert fwid in ids          # the visible firmware
+    assert cid in ids           # the hidden child's bare target node is present in the export
+    assert any(n["type"] == "node" for n in body["graph"]["nodes"])  # and its materialized node

@@ -433,13 +433,24 @@ export default function Workspace() {
   };
   const viewTask = (tid: string) => { setSelTask(tid); setTab("tasks"); setUrl({ tab: undefined }); };
   const viewFinding = (fid: string) => { setSelTask(undefined); setSelNode(null); setSelCampaign(undefined); api.finding(fid).then((f) => { setSelFinding(f); setSelGraphId(f.id); }); setUrl({ tab: undefined, campaign: undefined }); };
-  // Select a hypothesis from the worklist → render the existing (singular) HypothesisPanel in
-  // the detail split (NodeInspector already routes a hypothesis node to it). The hypothesis node
-  // is in `graph.nodes` whether or not it's pinned to the canvas, so a plain node-select works.
-  const viewHypothesis = (hid: string) => {
+  // Select a hypothesis from the worklist (or an @-mention) → render the existing (singular)
+  // HypothesisPanel in the detail split (NodeInspector already routes a node_type='hypothesis'
+  // node to it). On a large project the graph loads skeleton-first, so the hypothesis node may
+  // NOT be in graph.nodes — on a miss, fetch it by id (api.getNode, same as onGraphSelect) so the
+  // inspector opens regardless of graph LOD. Async, but every caller is fire-and-forget. Same
+  // last-write-wins guard as onGraphSelect: a late fetch only wins if it's still the latest pick.
+  const viewHypothesis = async (hid: string) => {
     setSelTask(undefined); setSelFinding(null); setSelCampaign(undefined); setSelEdge(null);
+    setSelGraphId(hid);
     const n = graph?.nodes.find((x) => x.id === hid);
-    if (n) { setSelNode(n); setSelGraphId(hid); }
+    if (n) { setSelNode(n); return; }
+    try {
+      const fetched = await api.getNode(projectId!, hid);
+      setSelGraphId((cur) => {
+        if (cur === hid) setSelNode(fetched);
+        return cur;
+      });
+    } catch { /* hypothesis not found / removed — leave the pane as-is */ }
   };
   // A journal @-mention chip was clicked → select the referenced object via the SAME plumbing
   // every other navigation uses: a finding opens in the Inspector; a node/target/hypothesis
@@ -517,10 +528,15 @@ export default function Workspace() {
     }
     // A node (or hypothesis, which is a node_type='hypothesis' node) not in the loaded
     // graph: fetch it by id so the inspector opens anyway (NodeInspector routes a
-    // hypothesis node to the HypothesisPanel).
+    // hypothesis node to the HypothesisPanel). Last-write-wins guard: a rapid click of an
+    // unloaded item A then B must not let A's late fetch clobber B — apply the result only
+    // if `id` is still the latest requested selection (`selGraphId`) when it resolves.
     try {
       const fetched = await api.getNode(projectId!, id);
-      setSelFinding(null); setSelNode(fetched);
+      setSelGraphId((cur) => {
+        if (cur === id) { setSelFinding(null); setSelNode(fetched); }
+        return cur;
+      });
     } catch { /* node not found / removed — leave the pane as-is */ }
   };
 

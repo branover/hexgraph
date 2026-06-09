@@ -968,11 +968,17 @@ confirmed/rejected verdicts) and the **work-state** (investigating / parked / do
 - Steps: click a worklist row.
 - Functional: the Detail split shows the existing hypothesis detail — status + origin chips, the work-state
   tag, the pin toggle, the rationale, Confirm/Reject/Reopen + Mark-done/Park/Resume actions, and the
-  supporting/refuting evidence lists (each finding clickable → its Inspector).
-- 🔌 Backend: `GET /api/hypotheses/{id}`.
+  supporting/refuting evidence lists (each finding clickable → its Inspector). This holds **even when the
+  hypothesis node isn't currently loaded in the graph** — hypotheses are off-canvas by default (HYP-04) and on
+  a large project the graph loads skeleton-first, so the node may not be rendered; the click then **fetches it
+  by id** (the same fallback as a journal @-mention, JRN-03) so the inspector opens regardless of graph LOD.
+- 🔌 Backend: `GET /api/hypotheses/{id}` for the worklist detail; when the hypothesis node isn't in the loaded
+  graph the click also calls `GET /api/projects/{id}/nodes/{node_id}` (which routes a `node_type='hypothesis'`
+  node to the HypothesisPanel; 404 if missing).
 - Qualitative: the worklist row and the detail agree on both axes; reusing the existing detail view keeps
-  the vocabulary consistent (Consistency).
-- Prereq: a hypothesis with linked evidence.
+  the vocabulary consistent (Consistency). A click reliably opens the hypothesis regardless of graph LOD.
+- Prereq: a hypothesis with linked evidence; ideally one that isn't pinned to the canvas (large project /
+  skeleton mode) to exercise the fetch-by-id fallback.
 
 ---
 
