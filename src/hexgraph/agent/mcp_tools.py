@@ -752,6 +752,21 @@ def disassemble(target_id: str, function: str | None = None, address: str | None
     return _tool(target_id, "disassemble", a)
 
 
+def disassemble_range(target_id: str, address: str, length: int | None = None,
+                      count: int | None = None, max_chars: int | None = None) -> str:
+    """Disassemble a RAW address+length byte range — no function required, the fallback for a
+    CFG blind spot both backends miss. `length` bytes (default 256) or `count` instructions;
+    `max_chars` raises the inlined cap (default 6000, clamped)."""
+    a: dict = {"address": address}
+    if length is not None:
+        a["length"] = length
+    if count is not None:
+        a["count"] = count
+    if max_chars is not None:
+        a["max_chars"] = max_chars
+    return _tool(target_id, "disassemble_range", a)
+
+
 def reanalyze(target_id: str) -> str:
     """Re-run analysis at a higher depth (busting the cache) so a missed function/edge retries."""
     return _tool(target_id, "reanalyze", {})
