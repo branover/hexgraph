@@ -52,6 +52,13 @@ MAX_CHARS_DESC = _MAX_CHARS_DESC
 # silent truncation (the repo's no-silent-caps discipline).
 _PROMOTE_BUDGET = 50
 
+# list_strings pagination: how many matched strings one page returns by default, and the
+# ceiling an agent can request. A page is BOUNDED so a broad grep can't flood the context;
+# the result reports the total match count + the next offset so the agent can page on
+# (the no-silent-caps discipline — never silently clip without saying so).
+_STRINGS_PAGE = 200
+_STRINGS_PAGE_MAX = 1000
+
 
 @dataclass
 class ToolContext:
@@ -129,9 +136,19 @@ _STATIC_SPECS = [
              "is_sink on any dangerous import ALREADY in the graph + folds mitigation flags onto the "
              "target; adds NO new graph nodes — promote what matters.",
              {"type": "object", "properties": {}}),
-    ToolSpec("list_strings", "List notable strings in the target, optionally filtered by a substring. "
-             "QUERY: records an Observation; adds no graph nodes.",
-             {"type": "object", "properties": {"pattern": {"type": "string"}}}),
+    ToolSpec("list_strings", "GREP the target's FULL string table (the real strings(1) pass, NOT a "
+             "small recon sample) for a substring `pattern` — find a command template (.cgi, %s), a "
+             "config key (factory, aes), a path or URL anywhere in the binary. Server-side filtered + "
+             "PAGINATED: pass `pattern` to filter, `offset`/`limit` to page (default 200, max 1000); "
+             "the result reports the total match count + the next offset. With no `pattern` it lists "
+             "the table page by page. QUERY: records an Observation; adds no graph nodes. (Falls back "
+             "to the recon sample, flagged, only when the full strings pass is unavailable — non-ELF "
+             "or sandbox down. For OBFUSCATED stack/decoded strings a plain pass misses, use "
+             "floss_strings.)",
+             {"type": "object", "properties": {
+                 "pattern": {"type": "string", "description": "substring to grep the full string table for"},
+                 "offset": {"type": "integer", "description": "page start index into the matches (default 0)"},
+                 "limit": {"type": "integer", "description": "max strings to return (default 200, clamped 1–1000)"}}}),
     ToolSpec("search_decompiled", "Search ACROSS already-decompiled function BODIES on this target for a "
              "string/identifier (a variable, constant, call, format string) — mines PRIOR "
              "decompilations in the Observation store, NO re-decompile. Returns the matching functions "
@@ -185,8 +202,10 @@ _FLOSS_SPEC = ToolSpec(
     "firmware/malware these hidden strings (URLs, command templates, keys, format strings) are "
     "often the lead. QUERY: records a floss_strings Observation; adds NO graph nodes — PROMOTE an "
     "interesting recovered string to a string node deliberately. FLOSS is slow, so check "
-    "list_observations(target_id) first. NOTE: stack/decoded recovery supports x86/amd64 PE "
-    "targets; on an ELF/foreign-arch artifact it degrades to a static-strings-only pass.",
+    "list_observations(target_id) first. NOTE: stack/tight/decoded recovery is x86/amd64 PE "
+    "ONLY — an INHERENT vivisect/FLOSS limit, not a bug; on an ELF/foreign-arch artifact "
+    "(most firmware) it degrades to a static-strings pass (= a plain strings) with a note, so "
+    "don't expect hidden-string recovery there — use list_strings to grep the static table.",
     {"type": "object", "properties": {"min_length": {"type": "integer",
      "description": "minimum recovered string length (default 4, clamped 4–64)"}}},
 )
@@ -529,15 +548,7 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
                 f"mitigations: {meta.get('mitigations', {})}\nexports: {meta.get('exports', [])[:60]}"
             )
         if name == "list_strings":
-            strings = meta.get("strings", []) or []
-            pat = (args.get("pattern") or "").lower()
-            if pat:
-                strings = [s for s in strings if pat in str(s).lower()]
-            _record_obs(ctx, tool="list_strings",
-                        args={"pattern": pat} if pat else {}, result_kind="strings",
-                        payload={"strings": [str(s) for s in strings[:200]]},
-                        summary=f"{len(strings)} strings" + (f" matching {pat!r}" if pat else ""))
-            return _clip("strings:\n" + ("\n".join(str(s) for s in strings[:200]) or "(none)"))
+            return _list_strings(ctx, args)
         if name == "binutils_facts":
             return _binutils(ctx)
         if name == "floss_strings":
@@ -694,6 +705,108 @@ def _observations(ctx: ToolContext, name: str, args: dict) -> str:
     lines = [f"- {r['id']} [{r['result_kind']}] {r['tool']}: {r['summary'][:120]}" for r in rows]
     return _clip("prior observations (get_observation(id) for the full payload):\n"
                  + "\n".join(lines))
+
+
+def _full_string_table(ctx: ToolContext) -> tuple[list[str], str]:
+    """The FULL `strings(1)` table for this target, for list_strings to grep — NOT the
+    ~40-entry recon SAMPLE in target.metadata_json (the bug that made a real `.cgi`/`%s`/
+    `aes` string return "(none)").
+
+    Prefers the binutils probe's real `strings -a -n 6` pass (bounded but generous, recorded
+    as a binutils_facts Observation and CACHED, so a repeat is free), and falls back to the
+    recon sample when the binutils pass is unavailable — a non-ELF artifact, no byte target,
+    or the sandbox/Docker being down (so the tool still answers offline, just over the sample).
+    Returns `(strings, source)` where source is "binutils" | "sample" — the caller surfaces
+    which set it grepped so a sample-only result isn't mistaken for the full table. Caches the
+    resolved table on the ToolContext so repeated paged/filtered calls don't re-resolve."""
+    cached = ctx.cache.get("strings_table")
+    if cached is not None:
+        return cached
+    sample = [str(s) for s in (ctx.target.metadata_json or {}).get("strings", []) or []]
+    full: list[str] | None = None
+    if str(ctx.target.path or "").strip():
+        # Only an ELF byte target has a binutils strings pass; the engine helper returns a
+        # clean {"error": ...} (non-ELF, sandbox down, no artifact) without raising, so a
+        # failure just falls through to the sample — never breaks the tool.
+        try:
+            from hexgraph.engine.re.binutils import collect_binutils_facts
+
+            out = collect_binutils_facts(ctx.session, ctx.project, ctx.target, source="agent")
+            if not out.get("error"):
+                full = [str(s) for s in (out.get("facts", {}) or {}).get("strings", []) or []]
+        except Exception:  # noqa: BLE001 — best-effort; fall back to the sample, never raise
+            logger.debug("binutils strings pass failed for target=%s; using recon sample",
+                         ctx.target.id, exc_info=True)
+    if full is not None:
+        # Union the recon sample in so a notable string recon surfaced but the bounded
+        # binutils pass clipped is never lost (sample stays first-class), de-duped, order-stable.
+        seen: set[str] = set()
+        merged: list[str] = []
+        for s in [*full, *sample]:
+            if s not in seen:
+                seen.add(s)
+                merged.append(s)
+        resolved = (merged, "binutils")
+    else:
+        resolved = (sample, "sample")
+    ctx.cache["strings_table"] = resolved
+    return resolved
+
+
+def _list_strings(ctx: ToolContext, args: dict) -> str:
+    """List/grep the target's FULL string table (not the recon sample), server-side filtered
+    by an optional substring `pattern` with offset/limit PAGINATION. QUERY: records an
+    Observation; adds no graph nodes. Bounded — reports the total match count + next offset
+    rather than silently clipping (the no-silent-caps discipline). Folds F13 (grep finds a
+    real string the sample omitted) and F15 (greppable full strings, no obs_get dance)."""
+    table, source = _full_string_table(ctx)
+    pat = (args.get("pattern") or "").lower()
+    matches = [s for s in table if pat in s.lower()] if pat else table
+    total = len(matches)
+
+    def _bound(val, default, lo, hi):
+        try:
+            v = int(val) if val is not None else default
+        except (TypeError, ValueError):
+            return default
+        return max(lo, min(v, hi))
+
+    offset = _bound(args.get("offset"), 0, 0, max(0, total))
+    limit = _bound(args.get("limit"), _STRINGS_PAGE, 1, _STRINGS_PAGE_MAX)
+    page = matches[offset:offset + limit]
+    next_offset = offset + len(page)
+    more = next_offset < total
+
+    pat_note = f" matching {pat!r}" if pat else ""
+    src_note = "" if source == "binutils" else (
+        " [recon SAMPLE only — the full strings pass needs the sandbox image; "
+        "results may be incomplete]")
+    # The Observation records the page actually returned (keyed by pattern+offset+limit so a
+    # different page is its own row), plus the total + source so a later reader sees the scope.
+    _record_obs(ctx, tool="list_strings",
+                args={k: v for k, v in (("pattern", pat), ("offset", offset),
+                                        ("limit", limit)) if v},
+                result_kind="strings",
+                payload={"strings": page, "total": total, "offset": offset,
+                         "limit": limit, "source": source},
+                summary=f"{total} strings{pat_note}; page {offset}-{next_offset} ({source})")
+
+    header = (f"strings{pat_note} ({total} total, source={source}; "
+              f"showing {offset}-{next_offset}){src_note}")
+    body = "\n".join(page) or "(none)"
+    tail = ""
+    if more:
+        tail = (f"\n…[{total - next_offset} more — re-call with offset={next_offset}"
+                + (f", limit={limit}" if limit != _STRINGS_PAGE else "") + "]")
+    # Clip ONLY the body, reserving room for the header + the page tail, so the source flag and
+    # the "N more / offset=…" marker can never be truncated away (the page is the bound; a clipped
+    # body always says so, and the full page is in the Observation). A page-of-strings is bounded
+    # by _STRINGS_PAGE_MAX but very long individual strings can still overflow _MAX.
+    prefix = f"{header}:\n"
+    budget = _MAX - len(prefix) - len(tail)
+    if budget > 0 and len(body) > budget:
+        body = body[:budget] + "\n…[strings truncated — obs_get for the full page]"
+    return f"{prefix}{body}{tail}"
 
 
 def _binutils(ctx: ToolContext) -> str:

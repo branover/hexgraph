@@ -176,7 +176,14 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
   the marker tells you both ways to get the rest: re-call the same tool with a larger `max_chars`
   (clamped to a generous ceiling, so one call can pull a whole long function), or read the recorded
   Observation in full with `obs_get(<id>)`, which is uncapped. So a long decompilation can never quietly
-  hide a sink in its tail — raise `max_chars` rather than guessing from the head.
+  hide a sink in its tail — raise `max_chars` rather than guessing from the head. `re_list_strings`
+  applies the same discipline to a `strings(1)` grep: it filters the target's *full* string table (not a
+  small sample), so a real command template like `.cgi`, a format string `%s`, or a config key like
+  `aes` is found wherever it lives in the binary, and a broad match is paged with `offset`/`limit` that
+  report the total and the next offset rather than clipping silently. For strings hidden behind a decode
+  routine or built on the stack, `re_floss_strings` recovers what a plain pass misses, but only on x86/
+  amd64 PE targets; on an ELF or other firmware it falls back to a plain static pass, so reach for the
+  `re_list_strings` grep there.
 
 The fuller, user-facing tour of all this lives in [observations.md](observations.md).
 
