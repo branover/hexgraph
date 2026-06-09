@@ -265,8 +265,8 @@ def test_catalog_group_filtering():
     # the RUN group must advertise every live/network/exec run-tool (review #8) — these were
     # added without a catalog-membership assertion, so a drop would go unnoticed.
     run_only = {t["name"] for t in mcp_tools.catalog({"run"})}
-    assert {"net_tcp_request", "net_remote_launch", "target_register_remote", "target_rehost",
-            "net_http_request", "finding_verify_poc"} <= run_only
+    assert {"net_tcp_request", "net_udp_request", "net_remote_launch", "target_register_remote",
+            "target_rehost", "net_http_request", "finding_verify_poc"} <= run_only
     assert "re_decompile_function" not in run_only
     # every catalog entry is tagged with a known group
     assert all(t["group"] in mcp_tools.GROUPS for t in mcp_tools.catalog())
@@ -324,6 +324,35 @@ def test_mcp_tcp_request_features_off_returns_error_string(hg_home):
         _p, surface = _rehosted_surface(s)
         tid = surface.id
     out = mcp_tools.tcp_request(tid, port=1337, payload="x")
+    assert "error" in out and "not permitted" in out["error"]
+
+
+def test_mcp_udp_request_success_carries_transport_and_coerces_port(hg_home, monkeypatch):
+    """net_udp_request mirrors net_tcp_request through the same channel-probe wiring, but the
+    probe channel carries transport:'udp' (so the probe opens a datagram socket) and the tool
+    name disambiguates from the TCP one. Dispatched BY KEYWORD as MCP does."""
+    from hexgraph import settings
+    settings.update_settings({"features": {"network": {"enabled": True}}})
+    fake = _FakeExecutor({"ok": True, "tool": "udp_probe", "response": "infosvr-reply"})
+    _patch_executor(monkeypatch, fake)
+    with session_scope() as s:
+        _p, surface = _rehosted_surface(s)
+        tid = surface.id
+    out = mcp_tools.udp_request(target_id=tid, port="9999", payload="probe")  # port as a STRING
+    assert out.get("ok") is True and out["response"] == "infosvr-reply"
+    chan = fake.calls[0]["channel"]
+    assert chan["transport"] == "udp"                       # datagram path selected
+    assert chan["port"] == 9999 and chan["allow"] == ["192.168.0.1:9999"]
+    assert chan["payload"] == "probe"
+
+
+def test_mcp_udp_request_features_off_returns_error_string(hg_home):
+    """network off → the same gate raises internally, but udp_request returns the
+    `{"error": "...not permitted..."}` string, never propagates the exception (parity with tcp)."""
+    with session_scope() as s:
+        _p, surface = _rehosted_surface(s)
+        tid = surface.id
+    out = mcp_tools.udp_request(target_id=tid, port=9999, payload="x")
     assert "error" in out and "not permitted" in out["error"]
 
 

@@ -32,7 +32,8 @@ without fetching its schema. The domains are `proj` (projects), `target` (the ta
 every tool that creates a target, including rehosting), `re` (static reverse engineering), `fs` (a
 target's unpacked filesystem), `obs` (the Observation store), `graph` (the curated node/edge/hypothesis
 graph), `journal` (the freeform research notebook), `finding` (findings, n-day, and proving), `src`
-(source trees and builds), `fuzz` (campaigns), `net` (live network interaction and the egress log),
+(source trees and builds), `fuzz` (campaigns), `net` (live network interaction over HTTP, raw TCP, and
+raw UDP, plus the egress log),
 `task` (the task runner), and `meta` (schemas and
 health). Closed value sets — node and edge types, finding severities, task types, the socket kinds,
 and so on — are real schema `enum`s generated from the codebase's own definitions, so an

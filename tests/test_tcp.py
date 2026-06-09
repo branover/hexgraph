@@ -10,7 +10,7 @@ from hexgraph.db.models import EgressEvent
 from hexgraph.db.session import session_scope
 from hexgraph.engine.targets.ingest import create_project
 from hexgraph.engine.findings.poc import verify_poc
-from hexgraph.engine.targets.surfaces import register_web_surface, run_tcp_probe
+from hexgraph.engine.targets.surfaces import register_web_surface, run_tcp_probe, run_udp_probe
 
 
 # ── the probe's oracle/decoding logic (pure, importable) ───────────────────────────────
@@ -138,6 +138,117 @@ def test_verify_poc_routes_tcp_spec_and_substitutes_nonce(hg_home):
         chan = runner.calls[0]["channel"]
         assert "{{NONCE}}" not in chan["payload"] and "HEXGRAPH_PWNED_" in chan["payload"]
         assert "{{NONCE}}" not in chan["oracle"]["value"]
+
+
+# ── UDP (the datagram analogue of the raw-TCP path) ─────────────────────────────────────
+def test_udp_probe_exchange_real_loopback_datagram():
+    """The probe's `_exchange_udp` is exercised against a REAL loopback UDP echo (in-process,
+    no sandbox) — proves the sendto/recvfrom datagram path round-trips. The host-side egress
+    gate is tested separately; here we confirm the actual datagram I/O works."""
+    import socket as _socket
+    import threading
+
+    from hexgraph.sandbox.probes import tcp_probe
+
+    srv = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+    srv.bind(("127.0.0.1", 0))
+    srv.settimeout(5)
+    port = srv.getsockname()[1]
+
+    def _echo():
+        try:
+            data, peer = srv.recvfrom(4096)
+            srv.sendto(b"REPLY:" + data, peer)
+        except Exception:  # noqa: BLE001 — test teardown / timeout
+            pass
+
+    t = threading.Thread(target=_echo, daemon=True)
+    t.start()
+    try:
+        ex = tcp_probe._exchange_udp("127.0.0.1", port, b"ping", timeout=2, cap=1024)
+    finally:
+        srv.close()
+    assert ex["ok"] is True
+    assert ex["raw"] == b"REPLY:ping"
+
+
+def test_udp_probe_silent_service_is_not_an_error():
+    """UDP is connectionless: a service that never answers yields an EMPTY response under the
+    timeout, which is normal (ok=True, no bytes) — NOT a failure like a refused TCP connect."""
+    from hexgraph.sandbox.probes import tcp_probe
+
+    # Nothing is bound here; the datagram is sent into the void and recvfrom times out.
+    ex = tcp_probe._exchange_udp("127.0.0.1", 9, b"", timeout=1, cap=64)
+    assert ex["ok"] is True and ex["raw"] == b""
+
+
+def test_udp_probe_main_emits_udp_tool_and_honors_allowlist(monkeypatch):
+    """The probe's main() selects the datagram path on transport:'udp', tags its output
+    `udp_probe`, and refuses an off-allowlist destination via the explicit ensure_allowed
+    chokepoint (the socket-guard backstop only covers TCP connects)."""
+    import json as _json
+
+    from hexgraph.sandbox.probes import tcp_probe
+
+    # off-allowlist → refused with the udp tool tag, no datagram sent
+    captured = {}
+    monkeypatch.setattr(tcp_probe.sys, "argv",
+                        ["tcp_probe.py", "--channel",
+                         _json.dumps({"host": "127.0.0.1", "port": 5353, "transport": "udp",
+                                      "allow": ["127.0.0.1:1900"]})])
+    monkeypatch.setattr("builtins.print", lambda s: captured.setdefault("out", s))
+    tcp_probe.main()
+    out = _json.loads(captured["out"])
+    assert out["tool"] == "udp_probe" and out["ok"] is False
+    assert "not in allowlist" in out["error"]
+
+
+def test_run_udp_probe_denied_and_audited_when_network_off(hg_home):
+    with session_scope() as s:
+        p, surface = _rehosted_surface(s)
+        runner = _FakeRunner({"ok": True})
+        with pytest.raises(policy.PolicyViolation):
+            run_udp_probe(s, p, surface, port=9999, payload="x", runner=runner)
+        assert not runner.calls  # never reached the probe
+        ev = s.query(EgressEvent).filter(EgressEvent.tool == "udp_probe").all()
+        assert len(ev) == 1 and ev[0].allowed is False and ev[0].dest == "192.168.0.1:9999"
+
+
+def test_run_udp_probe_reaches_device_via_netns_and_marks_transport(hg_home):
+    settings.update_settings({"features": {"network": {"enabled": True}}})
+    with session_scope() as s:
+        p, surface = _rehosted_surface(s)
+        runner = _FakeRunner({"ok": True, "tool": "udp_probe", "response": "infosvr", "verified": False})
+        run_udp_probe(s, p, surface, port=9999, payload="probe", runner=runner)
+        call = runner.calls[0]
+        assert call["probe"] == "tcp_probe.py"
+        assert call["net_container"] == "firmae-xyz"           # routed through the emulator
+        assert call["channel"]["transport"] == "udp"           # datagram path
+        assert call["channel"]["host"] == "192.168.0.1" and call["channel"]["port"] == 9999
+        assert call["channel"]["allow"] == ["192.168.0.1:9999"]
+        assert call["channel"]["payload"] == "probe"
+        ev = s.query(EgressEvent).filter(EgressEvent.tool == "udp_probe").all()
+        assert len(ev) == 1 and ev[0].allowed is True
+
+
+def test_verify_poc_routes_udp_spec_substitutes_nonce_and_marks_assurance(hg_home):
+    settings.update_settings({"features": {"network": {"enabled": True}}})
+    with session_scope() as s:
+        p, surface = _rehosted_surface(s)
+        runner = _FakeRunner({"ok": True, "verified": True, "detail": "produced nonce",
+                              "response": "device-name=ROUTER"})
+        spec = {"transport": "udp", "port": 9999, "payload": "WHOAREYOU {{NONCE}}",
+                "oracle": {"type": "response_contains", "value": "{{NONCE}}"}}
+        out = verify_poc(s, p, surface, spec, runner=runner)
+        assert out["verified"] is True
+        # the udp transport reached the datagram probe with the nonce substituted
+        chan = runner.calls[0]["channel"]
+        assert chan["transport"] == "udp"
+        assert "{{NONCE}}" not in chan["payload"] and "HEXGRAPH_PWNED_" in chan["payload"]
+        assert "{{NONCE}}" not in chan["oracle"]["value"]
+        # a verified live-socket surface PoC records the strongest assurance (input_reachable),
+        # the SAME entrypoint rung a verified TCP service does.
+        assert out["assurance"]["standard"] == "input_reachable"
 
 
 # ── the bounded remote `launch` op ──────────────────────────────────────────────────────

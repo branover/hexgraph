@@ -66,11 +66,14 @@ def register_service_target(
     `remote` target there are NO shell/credential semantics: a socket service is a protocol
     endpoint you talk to, not a box you log into.
 
-    This is the first-class home for a bind shell / vendor binary protocol / custom daemon:
-    `infer_surface` resolves it to the `network` surface, so `start_fuzz_campaign` (boofuzz)
-    and `run_tcp_probe`/`verify_poc` Just Work against it — all on the EXISTING bounded local-
-    network tier (`features.network` + `local_tcp_scope`, audited). `net_container` pins the
-    probe to a rehosted device's emulator netns (a service on the device's private IP)."""
+    This is the first-class home for a bind shell / vendor binary protocol / custom daemon,
+    over TCP or UDP (infosvr/9999, SSDP/1900, mDNS/5353, DNS, DHCP, …). `infer_surface`
+    resolves it to the `network` surface, so `start_fuzz_campaign` (boofuzz, tcp or udp) and
+    the live request/prove path work against it: `run_tcp_probe`/`verify_poc({transport:"tcp"})`
+    for a TCP service, `run_udp_probe`/`verify_poc({transport:"udp"})` for a UDP one. All on the
+    EXISTING bounded local-network tier (`features.network` + `local_tcp_scope`, audited).
+    `net_container` pins the probe to a rehosted device's emulator netns (a service on the
+    device's private IP)."""
     transport = (transport or "tcp").lower()
     if transport not in ("tcp", "udp"):
         raise ValueError("transport must be 'tcp' or 'udp'")
@@ -332,6 +335,55 @@ def _device_host(target: Target) -> str | None:
     return None
 
 
+def _run_socket_probe(session: Session, project: Project, target: Target, *, transport: str,
+                      port: int, payload: str | None = None, payload_hex: str | None = None,
+                      oracle: dict | None = None, read_bytes: int | None = None, runner=None,
+                      task_id=None, host: str | None = None,
+                      net_container: str | None = None) -> dict:
+    """Shared raw-socket probe driver for the TCP and UDP live paths — identical bounded-egress
+    contract (a per-target deny-all-but-this `local_tcp_scope`, loopback/private only, this
+    port), policy gate (features.network) and EgressEvent audit; only the `transport` carried
+    into the probe channel (and thus the datagram-vs-stream socket it opens) differs."""
+    from hexgraph import settings
+    from hexgraph.engine.audit import record_egress
+    from hexgraph.policy import (PolicyViolation, assert_allows_egress, current_policy,
+                                 local_tcp_scope)
+    from hexgraph.sandbox.executor import get_executor
+
+    tool = "udp_probe" if transport == "udp" else "tcp_probe"
+    host = host or _device_host(target)
+    if not host:
+        raise ValueError("target has no live device host (rehost ip / remote host / base_url)")
+    net_container = net_container or _rehost_container(target)
+    scope = local_tcp_scope(host, int(port))  # host:port scope; transport-agnostic
+    dest = next(iter(scope.allow))
+    try:
+        assert_allows_egress(dest, scope, current_policy())
+    except PolicyViolation:
+        record_egress(session, project_id=project.id, target_id=target.id, task_id=task_id,
+                      dest=dest, allowed=False, tool=tool,
+                      detail="blocked: network egress not permitted by policy")
+        raise
+    record_egress(session, project_id=project.id, target_id=target.id, task_id=task_id,
+                  dest=dest, allowed=True, tool=tool, detail=scope.rationale)
+
+    runner = runner or get_executor()
+    timeout = int(settings.get("features.network.timeout", 30) or 30)
+    channel = {"host": host, "port": int(port), "allow": sorted(scope.allow), "timeout": timeout}
+    if transport == "udp":
+        channel["transport"] = "udp"
+    if payload_hex is not None:
+        channel["payload_hex"] = payload_hex   # byte-exact (binary protocol / fuzz reproducer)
+    elif payload is not None:
+        channel["payload"] = payload
+    if oracle:
+        channel["oracle"] = oracle
+    if read_bytes is not None:
+        channel["read_bytes"] = int(read_bytes)
+    return runner.run_channel_probe("tcp_probe.py", channel=channel,
+                                    net_container=net_container)
+
+
 def run_tcp_probe(session: Session, project: Project, target: Target, *, port: int,
                   payload: str | None = None, payload_hex: str | None = None,
                   oracle: dict | None = None,
@@ -354,41 +406,32 @@ def run_tcp_probe(session: Session, project: Project, target: Target, *, port: i
     container is gone by verify time, so there is no live host on the target to resolve. The
     SAME local_tcp_scope egress gate + audit still applies (the override only changes WHERE,
     not WHETHER, egress is permitted)."""
-    from hexgraph import settings
-    from hexgraph.engine.audit import record_egress
-    from hexgraph.policy import (PolicyViolation, assert_allows_egress, current_policy,
-                                 local_tcp_scope)
-    from hexgraph.sandbox.executor import get_executor
+    return _run_socket_probe(session, project, target, transport="tcp", port=port,
+                             payload=payload, payload_hex=payload_hex, oracle=oracle,
+                             read_bytes=read_bytes, runner=runner, task_id=task_id,
+                             host=host, net_container=net_container)
 
-    host = host or _device_host(target)
-    if not host:
-        raise ValueError("target has no live device host (rehost ip / remote host / base_url)")
-    net_container = net_container or _rehost_container(target)
-    scope = local_tcp_scope(host, int(port))  # raises if the host isn't loopback/private
-    dest = next(iter(scope.allow))
-    try:
-        assert_allows_egress(dest, scope, current_policy())
-    except PolicyViolation:
-        record_egress(session, project_id=project.id, target_id=target.id, task_id=task_id,
-                      dest=dest, allowed=False, tool="tcp_probe",
-                      detail="blocked: network egress not permitted by policy")
-        raise
-    record_egress(session, project_id=project.id, target_id=target.id, task_id=task_id,
-                  dest=dest, allowed=True, tool="tcp_probe", detail=scope.rationale)
 
-    runner = runner or get_executor()
-    timeout = int(settings.get("features.network.timeout", 30) or 30)
-    channel = {"host": host, "port": int(port), "allow": sorted(scope.allow), "timeout": timeout}
-    if payload_hex is not None:
-        channel["payload_hex"] = payload_hex   # byte-exact (binary protocol / fuzz reproducer)
-    elif payload is not None:
-        channel["payload"] = payload
-    if oracle:
-        channel["oracle"] = oracle
-    if read_bytes is not None:
-        channel["read_bytes"] = int(read_bytes)
-    return runner.run_channel_probe("tcp_probe.py", channel=channel,
-                                    net_container=net_container)
+def run_udp_probe(session: Session, project: Project, target: Target, *, port: int,
+                  payload: str | None = None, payload_hex: str | None = None,
+                  oracle: dict | None = None,
+                  read_bytes: int | None = None, runner=None, task_id=None,
+                  host: str | None = None, net_container: str | None = None) -> dict:
+    """The datagram analogue of run_tcp_probe — for a UDP service on a live device (infosvr,
+    SSDP, mDNS, DNS, DHCP, WS-Discovery, a vendor discovery responder). Sends one datagram to
+    `<device_host>:<port>` (omit `payload` to probe with an empty packet) and reads a bounded
+    response under the timeout; UDP is connectionless, so a silent service simply yields no
+    response (not an error). Same bounded-egress contract, policy gate (features.network) and
+    audit as run_tcp_probe — only the transport differs. With an `oracle`, the probe strips the
+    sent payload (reflection) before matching, so a verified result is unforgeable.
+
+    `payload_hex` sends BYTE-EXACT arbitrary bytes (a binary discovery packet / a replayed
+    fuzz reproducer). `host`/`net_container` override the target-derived device host /
+    emulator netns exactly as in run_tcp_probe."""
+    return _run_socket_probe(session, project, target, transport="udp", port=port,
+                             payload=payload, payload_hex=payload_hex, oracle=oracle,
+                             read_bytes=read_bytes, runner=runner, task_id=task_id,
+                             host=host, net_container=net_container)
 
 
 def run_web_recon(session: Session, project: Project, target: Target, task=None, runner=None) -> dict:

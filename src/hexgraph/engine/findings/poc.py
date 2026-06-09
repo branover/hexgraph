@@ -77,33 +77,53 @@ def _is_web(target: Target) -> bool:
 
 
 def _is_tcp(spec: dict) -> bool:
-    """A raw-TCP PoC: `{transport:"tcp", port, payload?, oracle}` (or a nested `tcp` block).
-    Reaches a live socket service on the device — the network tier, not byte execution.
+    """A raw-socket PoC: `{transport:"tcp"|"udp", port, payload?, oracle}` (or a nested `tcp`/
+    `udp` block). Reaches a live socket service on the device — the network tier, not byte
+    execution. (The name predates UDP support; the boolean means "a live raw-socket service",
+    TCP or UDP — both establish the same entrypoint-scope assurance.)
 
-    Requires BOTH a tcp marker AND a port: an incidental/stray `tcp` field (or a
-    `transport:"tcp"` left on an otherwise-web/binary spec) without a reachable port
-    can't misroute a web spec into the TCP path or slip past the exec gate. The port
-    may sit at the top level or inside a nested `tcp` block."""
-    tcp = spec.get("tcp") if isinstance(spec.get("tcp"), dict) else {}
-    has_marker = (spec.get("transport") == "tcp") or bool(spec.get("tcp"))
-    has_port = bool(spec.get("port") or tcp.get("port"))
+    Requires BOTH a socket marker AND a port: an incidental/stray `tcp`/`udp` field (or a
+    `transport:"tcp"` left on an otherwise-web/binary spec) without a reachable port can't
+    misroute a web spec into the socket path or slip past the exec gate. The port may sit at
+    the top level or inside a nested `tcp`/`udp` block."""
+    block = _socket_block(spec)
+    has_marker = (spec.get("transport") in ("tcp", "udp")) or bool(spec.get("tcp")) or bool(spec.get("udp"))
+    has_port = bool(spec.get("port") or block.get("port"))
     return has_marker and has_port
 
 
-def _verify_tcp_poc(session, project, target, spec, runner, nonce) -> dict:
-    """Raw-TCP PoC: send the spec's payload to the device's port and evaluate the oracle on
-    the response (the probe strips the sent payload first, so a match is unforgeable).
-    {{NONCE}} is already substituted. Gated by the SAME bounded-egress policy as the web
-    tools (network on + local-only scope) and audited."""
-    from hexgraph.engine.targets.surfaces import run_tcp_probe
+def _socket_block(spec: dict) -> dict:
+    """The nested transport block (`tcp` or `udp`) if the spec uses one, else `{}`."""
+    for key in ("udp", "tcp"):
+        if isinstance(spec.get(key), dict):
+            return spec[key]
+    return {}
 
-    tcp = spec.get("tcp") if isinstance(spec.get("tcp"), dict) else spec
-    port = tcp.get("port") or spec.get("port")
+
+def _spec_transport(spec: dict) -> str:
+    """The raw-socket transport for this spec — `"udp"` if the spec marks UDP (top-level
+    `transport:"udp"` or a nested `udp` block), else `"tcp"`."""
+    if spec.get("transport") == "udp" or isinstance(spec.get("udp"), dict):
+        return "udp"
+    return "tcp"
+
+
+def _verify_tcp_poc(session, project, target, spec, runner, nonce) -> dict:
+    """Raw-socket PoC (TCP or UDP): send the spec's payload to the device's port and evaluate
+    the oracle on the response (the probe strips the sent payload first, so a match is
+    unforgeable). The transport is read from the spec (`transport`/a nested `udp` block) and
+    picks run_tcp_probe vs run_udp_probe. {{NONCE}} is already substituted. Gated by the SAME
+    bounded-egress policy as the web tools (network on + local-only scope) and audited."""
+    from hexgraph.engine.targets.surfaces import run_tcp_probe, run_udp_probe
+
+    block = _socket_block(spec) or spec
+    port = block.get("port") or spec.get("port")
     if not port:
-        raise ValueError("a tcp PoC spec needs a `port` (and usually `payload` + `oracle`)")
-    oracle = spec.get("oracle") or tcp.get("oracle") or {}
-    result = run_tcp_probe(session, project, target, port=int(port), payload=tcp.get("payload"),
-                           oracle=oracle, runner=runner)
+        raise ValueError("a tcp/udp PoC spec needs a `port` (and usually `payload` + `oracle`)")
+    oracle = spec.get("oracle") or block.get("oracle") or {}
+    probe = run_udp_probe if _spec_transport(spec) == "udp" else run_tcp_probe
+    result = probe(session, project, target, port=int(port), payload=block.get("payload"),
+                   oracle=oracle, runner=runner)
     return {"verified": bool(result.get("verified")), "detail": result.get("detail"),
             "exit_code": None, "output": (result.get("response") or "")[:2000],
             "nonce": nonce, "spec": spec}
@@ -132,10 +152,11 @@ def verify_poc(session: Session, project: Project, target: Target, spec: dict,
 
     A `{{NONCE}}` placeholder anywhere in the spec is replaced with a fresh random
     token before running, making the oracle unforgeable. Three flavours:
-    - **raw TCP** (spec has `transport:"tcp"` or a `tcp` block) → send `payload` to the
-      device's `port` and check a `response_contains` oracle; reaches a live socket service
-      on a rehosted/remote device, gated by the bounded-egress network tier. Checked FIRST,
-      since a rehosted device is also a web surface.
+    - **raw socket** (spec has `transport:"tcp"|"udp"` or a `tcp`/`udp` block) → send `payload`
+      to the device's `port` over TCP (a stream) or UDP (a datagram) and check a
+      `response_contains` oracle; reaches a live socket service on a rehosted/remote device,
+      gated by the bounded-egress network tier. Checked FIRST, since a rehosted device is also
+      a web surface.
     - **web surface** (a `web_app` Channel) → send the spec's HTTP `steps` and check a
       `body_contains`/`status_is`/`status_differs` oracle on the final response; gated by
       the bounded-egress network tier.
