@@ -422,8 +422,16 @@ def _solve(args) -> dict:
     # failure `_constrained_byte_len` returns None and we omit both fields rather than mislead.
     clen = _constrained_byte_len(found, sym, length=length)
     if clen is not None:
-        # Never report more bytes than we actually have (argv data was NUL-truncated above; the
-        # constrained prefix can't extend past the real reproducer bytes).
+        # `_constrained_byte_len` measures the FULL symbolic buffer, BEFORE the argv NUL-truncation
+        # above — so its raw value is the faithful "does the path depend on the input" signal even
+        # when the reportable reproducer is shorter. Record that signal explicitly so the engine's
+        # integrity gate (`SolverResult.is_input_constrained`) can't be fooled by a NUL-prefix corner.
+        result["input_constrained"] = clen > 0
+        # Never report more constrained_len bytes than the reproducer actually has (argv `data` was
+        # NUL-truncated above; the constrained PREFIX can't extend past the real reproducer bytes).
+        # NUL-prefix-argv corner: a path that genuinely constrains argv[1] to BEGIN with a NUL
+        # truncates `data` to empty, so this clamps constrained_len to 0 even though the path IS
+        # input-dependent — hence the explicit `input_constrained` flag above, which is NOT clamped.
         clen = min(clen, len(data))
         result["constrained_len"] = clen
         result["minimal_input"] = data[:clen].hex()

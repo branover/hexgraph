@@ -296,7 +296,13 @@ def _promote_and_emit(
     it). When the solve is input-INDEPENDENT (the sink is reachable on any input — an empty
     reproducer, or zero measured constrained bytes), we must NOT over-claim: the finding is
     DOWNGRADED to `code_present / static` at medium confidence with an honest note, because all we
-    truly know is the sink is reachable in code, not that a user input can steer execution to it."""
+    truly know is the sink is reachable in code, not that a user input can steer execution to it.
+
+    NUL-prefix-argv corner: a path that genuinely constrains argv[1] to BEGIN with a NUL has its
+    reportable reproducer NUL-truncated to empty, which zeroes `constrained_len` — so the bare
+    length would mislabel a real input-dependent solve as input-independent. The probe guards this
+    by also reporting an explicit pre-truncation `input_constrained` flag that
+    `SolverResult.is_input_constrained` honors first, so this gate stays honest in that corner."""
     from hexgraph.engine.findings.assurance import (
         CODE_PRESENT, INPUT_REACHABLE, STATIC, UNSPECIFIED, assurance,
     )

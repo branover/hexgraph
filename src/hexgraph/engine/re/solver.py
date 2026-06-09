@@ -103,6 +103,8 @@ class SolverResult:
     concrete_input: str | None = None        # hex-encoded reaching input, when kind=="reaching_input"
     minimal_input: str | None = None         # hex of the leading constrained-byte prefix ("the part that matters")
     constrained_len: int | None = None       # number of leading input bytes the path constrains
+    input_constrained: bool | None = None    # explicit "the path depends on input" signal, measured
+    #                                          BEFORE the argv NUL-truncation clamps constrained_len
     recovered_value: int | str | None = None  # the satisfying value, when kind=="constraint_value"
     recovered_value_hex: str | None = None
     path_addrs: list[str] = field(default_factory=list)
@@ -121,13 +123,25 @@ class SolverResult:
         the input matters: a measured `constrained_len > 0`, OR — when the probe couldn't
         introspect that (older payload) — a non-empty `minimal_input`/`concrete_input` so we
         at least have a concrete witness. An empty reproducer with no constrained length is
-        the input-independent case and returns False (the caller must NOT promote high/high)."""
+        the input-independent case and returns False (the caller must NOT promote high/high).
+
+        NUL-prefix-argv corner: when the satisfying path constrains argv[1] to BEGIN with a NUL,
+        the probe NUL-truncates the reported argv reproducer to empty, which clamps
+        `constrained_len` to 0 — even though the path genuinely DEPENDS on the input. The probe
+        therefore also reports an explicit `input_constrained` flag measured BEFORE that clamp; we
+        honor it FIRST so a real, input-dependent NUL-prefix solve isn't wrongly downgraded to
+        code_present/static. (Older payloads omit the flag; the constrained_len / witness fallbacks
+        below stay as the legacy behavior.)"""
+        if self.input_constrained is not None:
+            # The faithful pre-clamp signal from the probe — authoritative when present, because it
+            # is immune to the argv NUL-truncation that can zero out `constrained_len`.
+            return bool(self.input_constrained)
         if self.constrained_len is not None:
-            # The authoritative signal: the probe measured how many leading input bytes the
-            # path actually restricts. Zero ⇒ the sink does not depend on the input.
+            # The next-best signal: how many leading input bytes the path restricts (post-clamp).
+            # Zero ⇒ the sink does not depend on the input.
             return self.constrained_len > 0
-        # Fall back to a concrete-witness check only when the probe couldn't measure the
-        # constrained length (an older payload): a genuinely empty reproducer is suppressed.
+        # Fall back to a concrete-witness check only when the probe reported neither signal
+        # (an older payload): a genuinely empty reproducer is suppressed.
         return bool((self.minimal_input or "").strip()) or bool((self.concrete_input or "").strip())
 
 
@@ -355,6 +369,9 @@ class AngrSolver(Solver):
             concrete_input=payload.get("concrete_input"),
             minimal_input=payload.get("minimal_input"),
             constrained_len=payload.get("constrained_len"),
+            # Explicit pre-clamp input-dependence flag (the angr probe sets it; older payloads
+            # omit it → None, and is_input_constrained falls back to constrained_len/witness).
+            input_constrained=payload.get("input_constrained"),
             recovered_value=payload.get("recovered_value"),
             recovered_value_hex=payload.get("recovered_value_hex"),
             path_addrs=list(payload.get("path_addrs") or []),

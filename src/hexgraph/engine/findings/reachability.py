@@ -316,20 +316,40 @@ def _candidate_sinks_for_finding(session: Session, finding: Finding) -> list[Nod
 
 def argue_reachability_for_finding(
     session: Session, finding_id: str, *, max_depth: int = 12, record: bool = True,
-    precondition: str | None = None,
+    precondition: str | None = None, sink_node_id: str | None = None,
 ) -> dict:
     """Compute a static source→sink reachability argument for the finding's cited sink and, when
     one exists and `record` is set, UPGRADE the finding's assurance to input_reachable/static
     (only if stronger than what's recorded — never downgrades a dynamic claim). Returns a
-    JSON-able result {found, sink_node_id?, path?, precondition?, assurance?, detail}."""
+    JSON-able result {found, sink_node_id?, path?, precondition?, assurance?, detail}.
+
+    `sink_node_id`, when given, OVERRIDES sink resolution: that node is used as the sink directly
+    (it must be a real, non-archived node in the finding's project), bypassing the
+    `about`→sink-edge / `evidence.sink`-name lookup. Use it when the caller knows the sink node but
+    the finding doesn't cite it via an `about` edge yet — the upgraded assurance + recorded path
+    still land on the finding."""
     finding = session.get(Finding, finding_id)
     if finding is None:
         raise ReachabilityError(f"finding {finding_id} not found")
-    sinks = _candidate_sinks_for_finding(session, finding)
+    if sink_node_id is not None:
+        # Explicit override: resolve the one node the caller named (validated here so a bad id is a
+        # clear error, not a silent "no sink" — find_source_to_sink_path also re-checks existence).
+        override = session.get(Node, sink_node_id)
+        if override is None:
+            raise ReachabilityError(f"sink node {sink_node_id} not found")
+        if override.archived:
+            raise ReachabilityError("sink node is archived")
+        if override.project_id != finding.project_id:
+            raise ReachabilityError("sink node is not in the finding's project")
+        sinks = [override]
+    else:
+        sinks = _candidate_sinks_for_finding(session, finding)
     if not sinks:
         return {"found": False, "detail": "no sink node cited by this finding (no `about`→sink "
-                                          "edge and no node matching evidence.sink/function); "
-                                          "create the sink node first, then re-run."}
+                                          "edge and no node matching evidence.sink/function). "
+                                          "Either add an `about`→sink edge (graph_create_edge "
+                                          "from this finding to the sink node), pass an explicit "
+                                          "sink_node_id, or create the sink node first, then re-run."}
     best: dict[str, Any] | None = None
     for sink in sinks:
         res = find_source_to_sink_path(session, finding.project_id, sink.id, max_depth=max_depth,
@@ -380,8 +400,18 @@ def argue_reachability_for_finding(
             "precondition_inferred": best["precondition_inferred"], "path": best["path"],
         }
         finding.evidence_json = ev
-        session.flush()
         after = A.assurance_of(ev)
-        result["upgraded"] = (after == cand and before != after)
+        upgraded = (after == cand and before != after)
+        # When the assurance actually rose to input_reachable, the finding's `confidence` column
+        # should not lag behind it: a recovered source→sink path is concrete evidence the flaw is
+        # reachable, so a `medium`-confidence finding reading `input_reachable` assurance looks
+        # self-contradictory to a triager. Bump confidence to at least `high` (never DOWNGRADE a
+        # finding that was already high). Only bump on a real upgrade to the input_reachable rung.
+        if upgraded and cand.get("standard") == A.INPUT_REACHABLE \
+                and (finding.confidence or "").strip().lower() != "high":
+            finding.confidence = "high"
+            result["confidence_bumped"] = "high"
+        session.flush()
+        result["upgraded"] = upgraded
         result["assurance_recorded"] = after
     return result

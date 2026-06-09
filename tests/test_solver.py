@@ -263,3 +263,36 @@ def test_is_input_constrained_falls_back_to_witness_when_length_unknown():
     assert r.is_input_constrained() is True
     r2 = SolverResult(kind="reaching_input", minimal_input="ab")
     assert r2.is_input_constrained() is True
+
+
+def test_is_input_constrained_honors_explicit_flag_over_zero_len():
+    # NUL-prefix-argv corner: a path that genuinely constrains argv[1] to BEGIN with a NUL gets
+    # its reproducer NUL-truncated to empty, which clamps constrained_len to 0 — yet the path IS
+    # input-dependent. The probe reports the pre-clamp `input_constrained` flag, which MUST win
+    # over the zeroed constrained_len so the solve isn't wrongly downgraded to code_present/static.
+    r = SolverResult(kind="reaching_input", concrete_input="", minimal_input="",
+                     constrained_len=0, input_constrained=True)
+    assert r.is_input_constrained() is True
+
+
+def test_is_input_constrained_explicit_false_flag_suppresses_witness():
+    # The explicit flag is authoritative both ways: input_constrained=False suppresses even a
+    # non-empty witness (a truly input-independent solve that happened to assign filler bytes).
+    r = SolverResult(kind="reaching_input", concrete_input="deadbeef", input_constrained=False)
+    assert r.is_input_constrained() is False
+
+
+def test_to_result_maps_input_constrained_flag():
+    # AngrSolver._to_result threads the probe's input_constrained flag onto the SolverResult.
+    from hexgraph.engine.re.solver import AngrSolver
+    payload = {"solved": True, "kind": "reaching_input", "concrete_input": "",
+               "minimal_input": "", "constrained_len": 0, "input_constrained": True}
+    r = AngrSolver._to_result(payload, kind="reaching_input")
+    assert r is not None and r.input_constrained is True
+    assert r.is_input_constrained() is True
+    # Older payload (no flag) → None, and the legacy fallbacks apply.
+    bare = AngrSolver._to_result({"solved": True, "kind": "reaching_input",
+                                  "concrete_input": "ab", "constrained_len": 1},
+                                 kind="reaching_input")
+    assert bare is not None and bare.input_constrained is None
+    assert bare.is_input_constrained() is True

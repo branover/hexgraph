@@ -967,7 +967,12 @@ def list_findings(project_id: str, limit: int = 100, offset: int = 0,
     needed) and, for a PoC that ran, a compact `verification` summary {verified, detail};
     a fuzz_crash carries a compact `fuzz` summary {exploitability, coverage_instrumented,
     dupe_count} so you can triage at a glance — call get_finding(id) for the full evidence
-    (incl. the PoC/fuzz detail in evidence.extra)."""
+    (incl. the PoC/fuzz detail in evidence.extra).
+
+    `limit=0` means NO limit (every matching row), not zero rows; `offset` still applies. The
+    `verified` filter derives from nested evidence JSON (not a SQL column), so when it is set
+    pagination is computed OVER the verified-filtered set in Python — otherwise a verified finding
+    beyond page 1 would be unreachable and a page could come back short while more matched."""
     from hexgraph.engine.findings.assurance import assurance_of, compact_assurance
 
     try:
@@ -975,6 +980,27 @@ def list_findings(project_id: str, limit: int = 100, offset: int = 0,
         offset = max(0, int(offset))
     except (TypeError, ValueError):
         limit, offset = 100, 0
+
+    def _row(f):
+        ev = f.evidence_json or {}
+        extra = ev.get("extra") or {}
+        row = {"id": f.id, "title": f.title, "severity": f.severity, "category": f.category,
+               "status": f.status, "finding_type": f.finding_type, "cwe": f.cwe,
+               "verified": is_verified(ev), "target_id": f.target_id,
+               "function": ev.get("function"),
+               "assurance": compact_assurance(assurance_of(ev))}
+        ver = extra.get("verification")
+        if ver:
+            row["verification"] = {"verified": bool(ver.get("verified")), "detail": ver.get("detail")}
+        fz = extra.get("fuzz")
+        if fz:
+            # coverage_instrumented=False => a black-box run; don't over-trust dedup.
+            row["fuzz"] = {
+                "exploitability": (fz.get("exploitability") or {}).get("rating"),
+                "coverage_instrumented": fz.get("coverage_instrumented"),
+                "dupe_count": fz.get("dupe_count"),
+            }
+        return row
 
     with session_scope() as s:
         q = s.query(Finding).filter(Finding.project_id == project_id)
@@ -989,35 +1015,30 @@ def list_findings(project_id: str, limit: int = 100, offset: int = 0,
             q = q.filter(Finding.severity == severity)
         if target_id:
             q = q.filter(Finding.target_id == target_id)
-        q = q.order_by(Finding.created_at.desc()).offset(offset).limit(limit)
-        rows = q.all()
-        out = []
-        for f in rows:
-            ev = f.evidence_json or {}
-            extra = ev.get("extra") or {}
-            is_ver = is_verified(ev)
-            # `verified` derives from nested evidence JSON (not a portable SQL column), so
-            # it filters the page after fetch — limit/offset apply to the DB query.
-            if verified is not None and is_ver != bool(verified):
-                continue
-            row = {"id": f.id, "title": f.title, "severity": f.severity, "category": f.category,
-                   "status": f.status, "finding_type": f.finding_type, "cwe": f.cwe,
-                   "verified": is_ver, "target_id": f.target_id,
-                   "function": ev.get("function"),
-                   "assurance": compact_assurance(assurance_of(ev))}
-            ver = extra.get("verification")
-            if ver:
-                row["verification"] = {"verified": bool(ver.get("verified")), "detail": ver.get("detail")}
-            fz = extra.get("fuzz")
-            if fz:
-                # coverage_instrumented=False ⇒ a black-box run; don't over-trust dedup.
-                row["fuzz"] = {
-                    "exploitability": (fz.get("exploitability") or {}).get("rating"),
-                    "coverage_instrumented": fz.get("coverage_instrumented"),
-                    "dupe_count": fz.get("dupe_count"),
-                }
-            out.append(row)
-        return out
+        q = q.order_by(Finding.created_at.desc())
+
+        if verified is not None:
+            # `verified` is a nested-JSON predicate, not a SQL column, so it can't be pushed into
+            # the LIMIT/OFFSET. Stream the ordered rows, keep only those matching the flag, and
+            # paginate OVER that filtered set in Python — so page N is correct and a full page is
+            # returned whenever enough matches exist past the offset. (offset/limit slice the
+            # filtered, newest-first sequence; limit==0 ⇒ no cap.)
+            want = bool(verified)
+            matched = (f for f in q.yield_per(200) if is_verified(f.evidence_json or {}) == want)
+            out = []
+            for i, f in enumerate(matched):
+                if i < offset:
+                    continue
+                if limit and len(out) >= limit:
+                    break
+                out.append(_row(f))
+            return out
+
+        # No verified filter: the cheap path — push offset/limit straight into SQL.
+        q = q.offset(offset)
+        if limit:  # limit==0 ⇒ no cap (return everything past the offset)
+            q = q.limit(limit)
+        return [_row(f) for f in q.all()]
 
 
 def get_finding(finding_id: str) -> dict:
@@ -2638,7 +2659,10 @@ def reachability(finding_id: str | None = None, sink_node_id: str | None = None,
     directed source→sink path so a finding can claim `input_reachable/static` even when you can't
     trigger it live (the DIR-823G case: a real sink, but the service won't boot). Pass `finding_id`
     (resolves the sink it cites + RECORDS the path & upgraded assurance on the finding) and/or
-    `sink_node_id` (just reports a path to that sink).
+    `sink_node_id`. With finding_id ALONE the sink is resolved from the finding's `about`→sink edge
+    / evidence.sink; pass BOTH to OVERRIDE that resolution with an explicit sink node while still
+    recording the upgraded assurance on the finding (use this when the finding doesn't cite the
+    sink via an `about` edge yet). `sink_node_id` ALONE just reports a path to that sink.
 
     Sources = the untrusted boundary (input/param/endpoint/socket nodes, or a function/symbol you
     marked attrs.entry); the search follows taints/calls/routes_to/reads/writes/references FORWARD
@@ -2661,8 +2685,11 @@ def reachability(finding_id: str | None = None, sink_node_id: str | None = None,
     with session_scope() as s:
         try:
             if finding_id:
+                # Thread sink_node_id through so an explicit sink OVERRIDES the finding's
+                # about→sink / evidence.sink resolution (F12: it was silently dropped before).
                 return argue_reachability_for_finding(s, finding_id, max_depth=max_depth,
-                                                      precondition=precondition)
+                                                      precondition=precondition,
+                                                      sink_node_id=sink_node_id)
             n = s.get(Node, sink_node_id)
             if n is None:
                 return {"error": "sink node not found"}

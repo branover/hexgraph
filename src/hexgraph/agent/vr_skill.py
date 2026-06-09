@@ -663,12 +663,15 @@ When you can't trigger a bug live, build the path in the graph and let HexGraph 
 `graph_create_node` the untrusted **input**/`param`/`endpoint` source and the **sink**, then
 `graph_create_edge` the **`taints`** (best) / `calls` / `routes_to` dataflow from source to sink,
 then call **finding_reachability(finding_id=…)**. If a directed source→sink path exists it
-UPGRADES `code_present/static` → `input_reachable/static`, records the path, and derives the
+UPGRADES `code_present/static` → `input_reachable/static`, records the path, derives the
 precondition (an auth boundary on the path ⇒ `requires_credentials`; an unauth boundary ⇒
-`unauthenticated`). When the route is pre-auth but the graph lacks the auth markers — so the
-derived default would under-state it as `unspecified` — pass `precondition="unauthenticated"` to
-assert it (recorded as not-inferred). (This is the DIR-823G situation: a real cmdi sink HexGraph
-couldn't boot goahead to trigger — argue the path, state the precondition.)
+`unauthenticated`), and bumps the finding's confidence to `high` (a recovered path is concrete).
+The sink is resolved from the finding's `about`→sink edge / evidence.sink; if the finding doesn't
+cite it yet, pass **sink_node_id** to point at the sink node explicitly (the upgrade still records
+on the finding). When the route is pre-auth but the graph lacks the auth markers — so the derived
+default would under-state it as `unspecified` — pass `precondition="unauthenticated"` to assert it
+(recorded as not-inferred). (This is the DIR-823G situation: a real cmdi sink HexGraph couldn't
+boot goahead to trigger — argue the path, state the precondition.)
 
 ## Report the precondition honestly
 Always state the highest rung you reached and what you could NOT establish (e.g. "code-present,
