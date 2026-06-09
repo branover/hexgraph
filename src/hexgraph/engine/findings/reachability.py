@@ -383,6 +383,8 @@ def argue_reachability_for_finding(
         "precondition_inferred": best["precondition_inferred"],
         "summary": best["summary"], "assurance": cand,
     }
+    if sink_node_id is not None:
+        result["operator_asserted"] = True
     if record:
         # Deep-copy so we never mutate the ORM object's nested dicts in place (an in-place nested
         # mutation isn't detected as a column change, so it wouldn't be flushed); we build a fresh
@@ -393,12 +395,18 @@ def argue_reachability_for_finding(
         before = A.assurance_of(ev)
         A.upgrade_if_stronger(ev, cand)
         # Also record the path itself under evidence.extra.reachability so a triager can audit it.
-        ev.setdefault("extra", {})["reachability"] = {
+        reach = {
             "sink_node_id": best["sink_node_id"], "summary": best["summary"],
             "via_taint": best["via_taint"], "precondition": best["precondition"],
             "precondition_why": best["precondition_why"],
             "precondition_inferred": best["precondition_inferred"], "path": best["path"],
         }
+        # Honesty marker: when the sink came from the caller's explicit sink_node_id override, it
+        # bypassed sink resolution AND the is_sink check (an operator-asserted sink, not one the
+        # graph auto-resolved). Record that so a triager knows the sink was asserted, not derived.
+        if sink_node_id is not None:
+            reach["operator_asserted"] = True
+        ev.setdefault("extra", {})["reachability"] = reach
         finding.evidence_json = ev
         after = A.assurance_of(ev)
         upgraded = (after == cand and before != after)

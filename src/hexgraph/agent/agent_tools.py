@@ -439,14 +439,12 @@ def _decomp(ctx: ToolContext, function: str | None, *,
         # function. result_kind="decompilation" so the enrichment extractor distills the
         # focus's whitelisted facts (prototype/address/callees) into the index.
         focus = out["focus"]
-        # Store a FOCUS-ONLY payload: the decompilation Observation is about THIS one function,
-        # but the Ghidra decompiler dict also carries the whole-program `calls` (≤2000) and
-        # `structs` (≤200) used by enriched recon — ~33 KB of unrelated noise on every obs_get
-        # of a per-function decompile. The decompilation extractor (_extract_functions) and
-        # search_decompiled read only `focus` (whole-program calls/structs are enriched from
-        # SEPARATE call_graph/structs Observations recorded by enrich_recon), so dropping them
-        # here loses nothing — the focus's own callees stay inside `focus`.
-        decomp_payload = {"functions": out.get("functions", []), "focus": focus}
+        # Store a FOCUS-ONLY payload (shared helper, also used by the single-pass
+        # static_analysis path): the decompilation Observation is about THIS one function, but
+        # the Ghidra decompiler dict also carries the whole-program calls/structs (~33 KB of
+        # noise on every obs_get). focus_only_payload() drops them; the focus's own callees stay.
+        from hexgraph.sandbox.decompiler import focus_only_payload
+        decomp_payload = focus_only_payload(out)
         obs, _cached = _record_obs(
             ctx, tool=req_tool, args=req_args,
             result_kind="decompilation", payload=decomp_payload,

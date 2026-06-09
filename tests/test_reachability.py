@@ -338,7 +338,32 @@ def test_explicit_sink_node_id_overrides_finding_resolution(hg_home):
         a = res["assurance_recorded"]
         assert a["standard"] == A.INPUT_REACHABLE and a["method"] == A.STATIC
         s.refresh(row)
-        assert row.evidence_json["extra"]["reachability"]["sink_node_id"] == sink.id
+        reach = row.evidence_json["extra"]["reachability"]
+        assert reach["sink_node_id"] == sink.id
+        # #232 honesty marker: the sink came from the explicit override (bypassing is_sink), so
+        # the result + the recorded evidence say it was operator-asserted, not auto-resolved.
+        assert res["operator_asserted"] is True
+        assert reach["operator_asserted"] is True
+
+
+def test_auto_resolved_sink_is_not_operator_asserted(hg_home):
+    """#232: when the sink is AUTO-resolved (an about→sink edge / evidence.sink match, NOT an
+    explicit override), the operator_asserted marker is ABSENT — it only marks the override."""
+    with session_scope() as s:
+        p, t = _project_with_binary(s)
+        ep = create_node(s, p, node_type="param", name="cmd", target_id=t.id,
+                         attrs={"auth": "none"})
+        sink = create_node(s, p, node_type="symbol", name="system", target_id=t.id,
+                           attrs={"is_sink": True})
+        create_edge(s, p, src_kind="node", src_id=ep.id, dst_kind="node", dst_id=sink.id,
+                    type="taints")
+        # _vuln_finding cites the sink so it auto-resolves (no explicit sink_node_id passed).
+        row = _vuln_finding(s, p, t, sink_node=sink)
+        res = argue_reachability_for_finding(s, row.id)
+        assert res["found"] is True
+        assert "operator_asserted" not in res
+        s.refresh(row)
+        assert "operator_asserted" not in row.evidence_json["extra"]["reachability"]
 
 
 def test_explicit_sink_node_id_must_be_in_findings_project(hg_home):

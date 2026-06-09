@@ -162,6 +162,57 @@ def test_scan_records_observation_and_promotes_patterns(hg_home, monkeypatch):
         assert s.query(Finding).count() == 0
 
 
+def test_promotion_surfaces_matched_strings(hg_home, monkeypatch):
+    """F14: a promoted match carries a tiny matched-string sample (identifier/offset/value) so a
+    sweep hit is triable without re-fetching the Observation payload by hand."""
+    _wire(monkeypatch)
+    with session_scope() as s:
+        p, t = _seed(s)
+        out = scan_target(s, p, t, source="agent")
+        s.flush()
+        promoted = {m["rule"]: m for m in out["promoted"]}
+        admin = promoted["hexgraph_default_admin_creds"]
+        assert admin["matched_strings"] == [
+            {"identifier": "$admin_admin", "offset": 12, "value": "admin:admin"}]
+        dropbear = promoted["hexgraph_dropbear_old_banner"]
+        assert dropbear["matched_strings"][0]["value"] == "Dropbear sshd v2015"
+        assert dropbear["matched_strings"][0]["offset"] == 40
+
+
+# --- F14: the telnet-backdoor rule no longer fires on the benign factory_mode substring ----
+
+def _telnet_backdoor_rule_text() -> str:
+    from hexgraph.paths import bundled_yara_rules_dir
+
+    return (bundled_yara_rules_dir() / "hexgraph_embedded_creds.yar").read_text()
+
+
+def test_telnet_backdoor_rule_dropped_factory_mode(hg_home):
+    """The bundled telnet_backdoor rule used to carry a bare `factory_mode` string that fired
+    HIGH on the benign, ubiquitous ASUS substring `ate_brcm_factory_mode` (a false positive).
+    That string is gone; the small high-signal set stays."""
+    text = _telnet_backdoor_rule_text()
+    # The false-positive trigger is removed from the rule's string set (a YARA string is a
+    # quoted literal in a `strings:` line — `= "factory_mode"`; a prose mention in a comment
+    # doesn't define a matchable string).
+    assert '= "factory_mode"' not in text
+    # The high-signal backdoor strings remain.
+    for keep in ('"Gemtek"', '"Xc#523xi!9 87&"', '"/bin/telnetd -l /bin/sh"'):
+        assert keep in text
+
+
+def test_telnet_backdoor_rule_compiles_and_misses_factory_mode():
+    """When yara-python is available (the sandbox image), the rule compiles and does NOT match a
+    blob containing only `ate_brcm_factory_mode` — the exact dogfood false positive. Skips
+    offline where yara-python isn't installed (host venv); the text assertion above still pins it."""
+    yara = pytest.importorskip("yara")
+    rules = yara.compile(source=_telnet_backdoor_rule_text())
+    benign = b"...ate_brcm_factory_mode=1; other_config...factory_mode_stuff..."
+    assert rules.match(data=benign) == []
+    # Sanity: a real high-signal string still matches.
+    assert rules.match(data=b"prefix /bin/telnetd -l /bin/sh suffix")
+
+
 def test_same_rule_dedups_to_one_pattern_across_targets(hg_home, monkeypatch):
     """The cross-target shape: the SAME rule matched in two targets resolves to ONE project-
     level pattern node, with a matches_rule edge from each target (the corpus-wide hunt)."""

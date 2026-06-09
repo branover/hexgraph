@@ -23,6 +23,49 @@ from hexgraph import policy
 
 log = logging.getLogger(__name__)
 
+# Guidance returned when the target routine takes arguments — emulating it over uninitialized
+# inputs would just burn a sandbox run and (almost always) fail to reach a clean `ret`.
+_ARG_DEPENDENT_HINT = (
+    "function takes arguments — recover_constant needs a SELF-CONTAINED, parameterless routine "
+    "(it emulates over uninitialized inputs, so an arg-dependent function won't reach a clean "
+    "ret and yields no recoverable value). Use the solver re_solve_constraint / "
+    "re_solve_reaching_input to recover a value/input that satisfies a check instead."
+)
+
+
+def _recovered_arg_count(session: Session, project: Any, target: Any, function: str) -> int | None:
+    """Best-effort recovered argument count for `function` from the curated function node's
+    enrichment attrs (`param_count`, else `len(params)`), so an arg-dependent routine is
+    caught BEFORE a doomed emulation. Returns None when nothing is recorded yet (then we
+    don't second-guess — the emulation's own arg guard is the authoritative fallback)."""
+    try:
+        from hexgraph.db.models import Node, NodeType
+        from hexgraph.engine.graph.nodes import normalize_symbol_name
+
+        want = normalize_symbol_name(function) or function
+        node = (
+            session.query(Node)
+            .filter(
+                Node.project_id == project.id,
+                Node.target_id == target.id,
+                Node.node_type == NodeType.function.value,
+                Node.name == want,
+            )
+            .first()
+        )
+        if node is None:
+            return None
+        attrs = node.attrs_json or {}
+        pc = attrs.get("param_count")
+        if isinstance(pc, int):
+            return pc
+        params = attrs.get("params")
+        if isinstance(params, list):
+            return len(params)
+    except Exception:  # noqa: BLE001 — a lookup hiccup just falls through to emulation
+        return None
+    return None
+
 
 def _ghidra_headless_enabled() -> bool:
     try:
@@ -48,6 +91,18 @@ def emulate_constant(session: Session, project: Any, target: Any, *, function: s
         return {"available": False, "function": function, "value": None, "value_hex": None,
                 "reached_ret": False, "steps": None, "observation_id": None,
                 "error": "emulation requires the Ghidra headless decompiler (features.ghidra)"}
+
+    # PRE-CHECK: skip the doomed run for an argument-dependent routine. If a prior decompile
+    # recorded the recovered signature on the function node and it takes arguments, emulating
+    # it over uninitialized inputs won't reach a clean ret — return an informative result
+    # instead of burning a sandbox emulation. (No recorded signature ⇒ fall through and let
+    # the emulation's own in-probe arg guard decide; we never fabricate.)
+    arg_count = _recovered_arg_count(session, project, target, function)
+    if arg_count and arg_count > 0:
+        return {"available": True, "function": function, "value": None, "value_hex": None,
+                "reached_ret": False, "steps": 0, "observation_id": None,
+                "skipped": "arg_dependent", "param_count": arg_count,
+                "error": _ARG_DEPENDENT_HINT}
 
     from hexgraph.engine import observations as obs
     from hexgraph.engine.graph.nodes import get_or_create_node

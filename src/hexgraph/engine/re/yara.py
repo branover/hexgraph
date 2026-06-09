@@ -220,9 +220,35 @@ def _promote_matches(
         )
         # node_refs (the reverse pointer from the Observation to these pattern nodes) are
         # recorded on the Observation in scan_target after promotion returns.
-        promoted.append({"rule": rule, "pattern_node_id": node.id,
-                         "severity": meta.get("severity"), "cve": meta.get("cve")})
+        entry = {"rule": rule, "pattern_node_id": node.id,
+                 "severity": meta.get("severity"), "cve": meta.get("cve")}
+        # Surface WHICH string fired and WHERE (a bounded sample) so a sweep hit is triable
+        # without re-fetching the Observation payload by hand — the dogfood pain point was a
+        # HIGH backdoor "match" with no clue what substring tripped it. The probe already
+        # records the full bounded list on the Observation; here we carry a tiny sample.
+        sample = _string_evidence(m.get("strings"))
+        if sample:
+            entry["matched_strings"] = sample
+        promoted.append(entry)
     return promoted
+
+
+# How many matched-string instances to echo onto a promotion entry (the full bounded list
+# stays on the Observation payload; this is just enough to triage the hit at a glance).
+_PROMOTE_STRING_SAMPLE = 3
+
+
+def _string_evidence(strings: list[dict] | None) -> list[dict]:
+    """A tiny `[{identifier, offset, value}]` sample of what fired, pulled from the probe's
+    bounded matched-string list, so a promoted match says WHICH string matched and WHERE
+    (e.g. "$c at 0x1a40 = /bin/telnetd -l /bin/sh") without a manual Observation dig."""
+    out: list[dict] = []
+    for s in (strings or [])[:_PROMOTE_STRING_SAMPLE]:
+        if not isinstance(s, dict):
+            continue
+        out.append({"identifier": s.get("identifier"), "offset": s.get("offset"),
+                    "value": s.get("value")})
+    return out
 
 
 def scan_target(

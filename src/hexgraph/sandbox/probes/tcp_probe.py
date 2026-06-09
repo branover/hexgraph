@@ -121,30 +121,35 @@ def _exchange_udp(host: str, port: int, payload: bytes, timeout: int, cap: int) 
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-    chunks: list[bytes] = []
-    got = 0
+    raw = b""
     try:
-        sock.settimeout(min(timeout, 5))
+        # UDP is message-oriented: a request/response service answers with ONE datagram, so a
+        # single recvfrom captures the reply. Use a SHORTER idle than TCP (capped by the caller's
+        # timeout) so a silent service or a one-shot responder doesn't idle the full window before
+        # we give up — the TCP-style 5s read loop would waste ~5s after every single-datagram
+        # reply (#230 nit).
+        sock.settimeout(max(1, min(timeout, 2)))
         # A datagram probe always SENDS (even an empty packet) so a request/response service
         # answers; an empty payload still elicits a reply from e.g. a discovery responder.
         sock.sendto(payload, (host, port))
-        while got < cap + 1:
-            try:
-                buf, _peer = sock.recvfrom(min(8192, cap + 1 - got))
-            except socket.timeout:
-                break
-            except Exception:  # noqa: BLE001 — port-unreachable ICMP surfaces as an OS error
-                break
-            if not buf:
-                break
-            chunks.append(buf)
-            got += len(buf)
+        # Read the SINGLE reply datagram (the expected request/response shape) rather than
+        # looping like TCP — a connectionless service answers with one datagram, so a read
+        # loop just idles the full timeout after it before giving up. recvfrom must be given a
+        # buffer big enough for the WHOLE datagram (the unread tail is discarded by the OS), so
+        # size it to a full UDP datagram bounded only by `cap` — not the TCP 8 KiB chunk size.
+        try:
+            buf, _peer = sock.recvfrom(min(65535, cap + 1))
+            raw = buf or b""
+        except socket.timeout:
+            pass  # silent service — normal for fire-and-forget UDP, not an error
+        except Exception:  # noqa: BLE001 — port-unreachable ICMP surfaces as an OS error
+            pass
     finally:
         try:
             sock.close()
         except Exception:  # noqa: BLE001
             pass
-    return {"ok": True, "raw": b"".join(chunks)[: cap + 1]}
+    return {"ok": True, "raw": raw[: cap + 1]}
 
 
 def _decode(raw: bytes, cap: int) -> dict:

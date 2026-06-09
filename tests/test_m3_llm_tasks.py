@@ -107,3 +107,33 @@ def test_hash_fallback_never_picks_error_scenario(hg_home):
     for i in range(50):
         sc = m._resolve_scenario(LLMRequest(task_type="static_analysis", task_id=f"t-{i}"))
         assert not sc.startswith("error_")
+
+
+def test_single_pass_decompilation_observation_is_focus_only(hg_home):
+    """#226 nit: the single-pass static_analysis path (_materialize_decomp_graph) must record a
+    FOCUS-ONLY decompilation Observation — the whole-program calls/structs the decompiler dict
+    also carries (~33 KB) are enriched from separate Observations, so they don't belong on a
+    per-function decompilation payload (matching the agent-tool path #226 already trimmed)."""
+    from hexgraph.engine import observations as O
+    from hexgraph.engine.llm_tasks import _materialize_decomp_graph
+
+    with session_scope() as s:
+        project, httpd, _ = _project_with_two_targets(s)
+        # A decompiler payload shaped like Ghidra's: a focus PLUS whole-program calls + structs.
+        decomp = {
+            "focus": {"name": "cgi_handler", "address": "0x401200",
+                      "pseudocode": "int cgi_handler(){...}", "callees": ["strcpy"]},
+            "functions": [{"name": "cgi_handler"}, {"name": "main"}],
+            "calls": [{"caller": "main", "callee": "cgi_handler"}] * 2000,  # whole-program noise
+            "structs": [{"name": "req_t"}] * 200,
+        }
+        _materialize_decomp_graph(s, project.id, httpd.id, decomp)
+        s.flush()
+        obs = O.list_observations(s, httpd.id, kind="decompilation")
+        assert len(obs) == 1
+        # Load the full payload back from CAS and assert the whole-program noise was trimmed.
+        full = O.get_observation(s, obs[0]["id"])
+        payload = full["payload"]
+        assert "calls" not in payload and "structs" not in payload
+        assert payload["focus"]["name"] == "cgi_handler"
+        assert payload["functions"]  # the focus + function list are kept

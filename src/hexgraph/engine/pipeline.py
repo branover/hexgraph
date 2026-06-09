@@ -9,9 +9,11 @@ every target (SPEC §5).
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from hexgraph.db.models import Project, Target
 from hexgraph.engine.targets.ingest import ingest_file
@@ -19,8 +21,33 @@ from hexgraph.engine.re.recon import run_recon
 from hexgraph.engine.targets.unpack import build_links_against, unpack_firmware
 from hexgraph.sandbox.executor import Executor, get_executor
 
+log = logging.getLogger(__name__)
+
 _FIRMWARE_FORMATS = {"squashfs", "cpio", "disk_image"}
 _ENRICHABLE_KINDS = {"executable", "shared_library"}
+
+
+def _record_progress(session: Session, target: Target, stage: str, **extra) -> None:
+    """Emit a coarse ingest-progress signal so the multi-minute unpack+recon isn't a silent
+    black box (dogfood F05): log the stage AND stamp it on the root target's
+    `metadata_json["ingest_progress"]`, committing so a concurrent poller (the UI / target_facts)
+    sees it mid-run — under WAL another connection only sees COMMITTED rows, so we commit each
+    stage. Best-effort: a progress hiccup must never break the actual ingest.
+
+    NOTE (scope): this is the pragmatic signal, not a job-id + async-poll redesign. The ingest
+    request is still synchronous; the operator/UI polls the root target's metadata to watch it
+    advance, and the final stage is "done"."""
+    payload = {"stage": stage, **extra}
+    log.info("ingest progress [%s]: %s%s", target.id, stage,
+             (" " + ", ".join(f"{k}={v}" for k, v in extra.items()) if extra else ""))
+    try:
+        meta = dict(target.metadata_json or {})
+        meta["ingest_progress"] = payload
+        target.metadata_json = meta
+        flag_modified(target, "metadata_json")
+        session.commit()
+    except Exception:  # noqa: BLE001 — progress is advisory; never let it abort the ingest
+        session.rollback()
 
 
 def _maybe_enrich_ghidra(session: Session, project: Project, target: Target, facts: dict) -> None:
@@ -47,14 +74,24 @@ def analyze_target(
     target: Target,
     runner: Executor,
 ) -> dict:
-    """Recon a target; if it's firmware, unpack and recon each child."""
+    """Recon a target; if it's firmware, unpack and recon each child.
+
+    Emits coarse per-stage progress on the root target's metadata (recon → unpacking →
+    recon i/N children → done) so the multi-minute firmware path isn't a silent black box
+    (F05). The signal is advisory — a poller watches `metadata_json["ingest_progress"]`."""
+    _record_progress(session, target, "recon")
     facts = run_recon(session, project, target, runner)
     summary = {"target_id": target.id, "name": target.name, "children": []}
 
     is_firmware = facts.get("kind") == "firmware_image" or facts.get("format") in _FIRMWARE_FORMATS
     if is_firmware:
         summary["format"] = facts.get("format")
-        for child in unpack_firmware(session, project, target, runner):
+        _record_progress(session, target, "unpacking", format=facts.get("format"))
+        # Materialize the child list first so we can report "recon i/N children" with a known N.
+        children = list(unpack_firmware(session, project, target, runner))
+        total = len(children)
+        for i, child in enumerate(children, start=1):
+            _record_progress(session, target, "recon_children", done=i - 1, total=total)
             # Children are registered HIDDEN by unpack_firmware: recon ENRICHES each
             # (metadata + a recon Observation) but materializes no graph nodes — a
             # hidden child contributes nothing to the graph until revealed.
@@ -64,6 +101,7 @@ def analyze_target(
     else:
         _maybe_enrich_ghidra(session, project, target, facts)
     summary["children_count"] = len(summary["children"])
+    _record_progress(session, target, "done", children=summary["children_count"])
     return summary
 
 

@@ -53,6 +53,8 @@ agent's context small:
   back whenever enough match. Also `graph_get_node`, `finding_get`, `re_xrefs`, `graph_list_sockets`,
   `graph_list_hypotheses` (the hypothesis worklist — statement, evidence status, work_state, evidence counts; your "what am I chasing" orient),
   `graph_stats` (per-type node/edge tallies — a cheap before/after count without listing every node),
+  `proj_doctor` (reconcile the on-disk project dirs against the DB — orphan dirs with no project,
+  or DB projects whose dir is missing; read-only unless you pass `clean=true` to delete the orphans),
   `fs_list`/`fs_read_file`, `src_list_trees`/`src_read_file`, `fuzz_status`,
   `src_list_builds`/`src_build_log`/`fuzz_coverage_diff`, the observation read verbs
   `obs_list`/`obs_get`/`obs_search` (see the next section), the journal read verbs

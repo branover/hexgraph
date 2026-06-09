@@ -662,6 +662,8 @@ def _run_non_interactive(state: DetectedState, *, reason: str, rebuild: bool) ->
         print(f"  (!) {stale}")
     print("✓ HexGraph baseline ready.  Run an interactive setup any time with: hexgraph setup")
     print("  Start it with:  just serve")
+    print("  (the hexgraph CLI is in the venv: run `source .venv/bin/activate`, "
+          "or use `.venv/bin/hexgraph`)")
     return rc
 
 
@@ -932,7 +934,10 @@ def _run_interactive(state: DetectedState, *, rebuild: bool) -> int:  # pragma: 
         f"Start it:        [bold]just serve[/bold]  →  http://{plan.settings_patch.get('server.host', host)}:"
         f"{plan.settings_patch.get('server.port', port)}\n"
         "Re-run setup:    [bold]hexgraph setup[/bold]\n"
-        "Inspect config:  [bold]hexgraph config list[/bold]\n"
+        "Inspect config:  [bold]hexgraph config list[/bold]\n\n"
+        "[dim]The [bold]hexgraph[/bold] CLI lives in the project venv ([bold].venv/bin/hexgraph[/bold]). "
+        "Run [bold]source .venv/bin/activate[/bold] to use the bare [bold]hexgraph[/bold] name, "
+        "or invoke [bold].venv/bin/hexgraph[/bold] directly.[/dim]\n"
     )
     if any(by_key[k].policy_changing for k in selected_set):
         next_steps += ("\n[yellow]You enabled policy-relaxing features.[/yellow] Targets are "

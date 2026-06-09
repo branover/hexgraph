@@ -53,7 +53,10 @@ rule hexgraph_telnet_backdoor_account
         $a = "Gemtek" nocase ascii wide
         $b = "Xc#523xi!9 87&" ascii wide          // a real planted hard-coded backdoor key shape
         $c = "/bin/telnetd -l /bin/sh" nocase ascii wide
-        $d = "factory_mode" nocase ascii wide
+        // NOTE: a bare factory_mode string used to live here; it fired HIGH on the benign,
+        // ubiquitous ASUS substring ate_brcm_factory_mode (a manufacturing-test mode, not a
+        // backdoor) — a pure false positive. Dropped: this rule's value is the small, high-signal
+        // set above, and a generic factory token is noise, not a lead.
     condition:
         any of them
 }
