@@ -200,6 +200,7 @@ def sshd():
         subprocess.run(["docker", "rm", "-f", name], capture_output=True)
 
 
+@pytest.mark.slow  # builds + runs a real sshd container — run via `just test-heavy` / CI
 def test_live_remote_ssh_ops(hg_home, sshd, monkeypatch):
     from hexgraph import settings
     from hexgraph.db.session import session_scope
@@ -230,6 +231,7 @@ def test_live_remote_ssh_ops(hg_home, sshd, monkeypatch):
     assert "testpass123" not in str(r) and "password" not in r
 
 
+@pytest.mark.slow  # uses the sshd-container fixture (real image build) — run via `just test-heavy` / CI
 def test_live_remote_denied_when_feature_off(hg_home, sshd):
     from hexgraph.db.session import session_scope
     from hexgraph.agent import mcp_tools as M
