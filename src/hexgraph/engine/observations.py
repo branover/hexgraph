@@ -103,9 +103,10 @@ def record_observation(
     Observation row + its always-welcome enrichment are written**, checkpointing all the
     reusable analysis accumulated so far — the Observation substrate AND the curated-graph
     enrichment (both are derived from the real bytes and stand on their own) — so a later
-    failure can no longer wipe them. The commit goes through the bounded write-retry from
-    `db.session.call_with_write_retry`, so a transient SQLite lock on the checkpoint
-    retries with backoff instead of aborting.
+    failure can no longer wipe them. The checkpoint is a plain `session.commit()` (see
+    `_checkpoint` for why it is deliberately NOT wrapped in the commit-level write-retry);
+    `busy_timeout` (5s) is the transient-lock resilience that IS safe here — it makes the
+    commit's flush WAIT for the lock rather than fail immediately.
 
     Why commit the CALLER's session rather than a separate one: SQLite is single-writer.
     The task session holds the write lock continuously once it has flushed any pending

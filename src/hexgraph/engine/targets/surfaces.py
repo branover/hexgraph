@@ -223,7 +223,7 @@ def _egress_gate(session, project: Project, target: Target, *, tool: str, task_i
     except PolicyViolation:
         record_egress(session, project_id=project.id, target_id=target.id, task_id=task_id,
                       dest=dest, allowed=False, tool=tool,
-                      detail="blocked: network egress not permitted by policy")
+                      detail="blocked: network egress not permitted by policy", durable=True)
         raise
     record_egress(session, project_id=project.id, target_id=target.id, task_id=task_id,
                   dest=dest, allowed=True, tool=tool, detail=scope.rationale)
@@ -362,7 +362,7 @@ def _run_socket_probe(session: Session, project: Project, target: Target, *, tra
     except PolicyViolation:
         record_egress(session, project_id=project.id, target_id=target.id, task_id=task_id,
                       dest=dest, allowed=False, tool=tool,
-                      detail="blocked: network egress not permitted by policy")
+                      detail="blocked: network egress not permitted by policy", durable=True)
         raise
     record_egress(session, project_id=project.id, target_id=target.id, task_id=task_id,
                   dest=dest, allowed=True, tool=tool, detail=scope.rationale)
@@ -457,7 +457,7 @@ def run_web_recon(session: Session, project: Project, target: Target, task=None,
     except PolicyViolation:
         record_egress(session, project_id=project.id, target_id=target.id, task_id=task_id,
                       dest=dest, allowed=False, tool="web_recon",
-                      detail="blocked: network egress not permitted by policy")
+                      detail="blocked: network egress not permitted by policy", durable=True)
         raise
     record_egress(session, project_id=project.id, target_id=target.id, task_id=task_id,
                   dest=dest, allowed=True, tool="web_recon", detail=scope.rationale)
