@@ -163,7 +163,8 @@ and unanalyzed nodes so a follow-up run (or the analyst) can continue.
 You DIRECT; HexGraph runs each tool in the sandbox and PERSISTS the result as a reusable
 Observation. Work cheap-to-expensive and check `obs_list(target_id)` before any costly re-run
 (analyze once, reuse forever). The spine of it: get the authoritative facts (`re_binutils_facts`,
-`re_list_strings`) → map the sinks and who reaches them (`re_xrefs` with no symbol) → read the
+`re_list_strings` — GREP the FULL string table, not a sample) → map the sinks and who reaches
+them (`re_xrefs` with no symbol) → read the
 suspect functions (`re_decompile_function`) → trace untrusted input to a dangerous sink,
 promoting the functions and the path as you go → synthesize and prove. The how-and-when of
 each tool, the grounded taint pass, constant recovery, and symbolic solving are in
@@ -248,11 +249,18 @@ scoped to the target's exact bytes. The two rules that make this cheap:
   imports/exports, relocations, sections, and the NX/RELRO/PIE/canary/FORTIFY mitigations)
   straight from GNU binutils. Sharper than `target_facts`/`re_imports`, which recon caps.
   Start here on any ELF.
-- **re_list_strings** — hardcoded creds, URLs, format strings, command fragments. Cheap and
-  high-signal. **re_floss_strings** when the lead is HIDDEN — a packed/malware-adjacent target
-  that builds its C2 URLs, keys, or command templates on the stack or behind a decode routine;
-  FLARE FLOSS emulates the constructing functions to recover what a plain strings pass misses
-  (stack/decoded recovery is best on PE/x86; on an ELF it degrades to a static pass). No gate.
+- **re_list_strings** — GREP the target's FULL `strings(1)` table (NOT a ~40-entry sample) for a
+  substring: hardcoded creds, URLs, format strings (`%s`), command templates (`.cgi`), config keys
+  (`factory`, `aes`) anywhere in the binary. Pass `pattern` to filter, `offset`/`limit` to page
+  (default 200, max 1000); the result reports the total match count + the next offset, so a broad
+  grep pages inline — no `obs_get` dance. Cheap and high-signal; reach for it first. (It falls back
+  to the small recon sample, flagged in the result, only when the full pass can't run — a non-ELF
+  artifact or the sandbox image being down.) **re_floss_strings** is for OBFUSCATED leads a plain
+  pass MISSES — a target that builds its C2 URLs/keys/command templates on the stack or behind a
+  decode routine; FLARE FLOSS emulates the constructing functions to recover them. But stack/tight/
+  decoded recovery is **x86/amd64 PE only** — an INHERENT vivisect limit, not a bug; on an ELF or
+  foreign-arch artifact (most firmware) FLOSS degrades to a plain static pass, so on firmware reach
+  for `re_list_strings`'s full-table grep, not FLOSS, for the hidden-in-plain-sight strings. No gate.
 - **re_xrefs** — the surface map. With NO symbol it lists every dangerous sink
   (system/popen/exec/strcpy/sprintf/memcpy/…), the format-string sinks, AND the network
   bind/listen/connect/recv sites, each with who reaches it. **Start your code reading from

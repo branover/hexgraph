@@ -33,7 +33,12 @@ _MAX_SYMBOLS = 4000      # nm symbol-table rows kept
 _MAX_IMPORTS = 2000      # undefined (imported) symbols
 _MAX_EXPORTS = 2000      # defined, exported (global) symbols
 _MAX_RELOCS = 4000       # dynamic relocations
-_MAX_STRINGS = 400       # `strings` rows kept (recon promotes far fewer)
+# The FULL `strings` table kept in the Observation payload — deliberately generous so a
+# pattern grep (re_list_strings/list_strings filters THIS table, not the ~40-entry recon
+# sample) can find a real string anywhere in the binary, not just in a tiny head sample.
+# Still bounded so a hostile blob saturated with strings can't grow the payload without
+# limit (recon promotes far fewer into the graph via its own tight MAX_STRINGS).
+_MAX_STRINGS = 5000      # `strings` rows kept (recon promotes far fewer)
 _MIN_STR_LEN = 6         # `strings -n` minimum (a touch longer than the default 4)
 
 _TIMEOUT = 90            # per-tool wall-clock guard (the sandbox also hard-caps the run)

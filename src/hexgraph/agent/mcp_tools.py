@@ -800,8 +800,19 @@ def yara_sweep(project_id: str, ruleset: str | None = None) -> dict:
         return sweep_project(s, p, ruleset=ruleset, source="agent")
 
 
-def list_strings(target_id: str, pattern: str | None = None) -> str:
-    return _tool(target_id, "list_strings", {"pattern": pattern} if pattern else {})
+def list_strings(target_id: str, pattern: str | None = None,
+                 offset: int | None = None, limit: int | None = None) -> str:
+    """GREP a target's FULL string table (the real strings(1) pass, not the recon sample)
+    for `pattern`, paged by `offset`/`limit` (default 200, max 1000). The result reports the
+    total match count + the next offset so a broad grep pages on without an obs_get dance."""
+    a: dict = {}
+    if pattern:
+        a["pattern"] = pattern
+    if offset is not None:
+        a["offset"] = offset
+    if limit is not None:
+        a["limit"] = limit
+    return _tool(target_id, "list_strings", a)
 
 
 def xrefs(target_id: str, symbol: str | None = None) -> str:
