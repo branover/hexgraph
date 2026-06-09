@@ -581,8 +581,15 @@ def _disassemble_range(ctx: ToolContext, args: dict) -> str:
     except Exception as exc:  # noqa: BLE001 — surface a reason, let the agent recover
         return f"disassembly failed: {exc}"
     rng = (out or {}).get("range") or {}
+    # Record the RESOLVED (clamped) bounds the probe actually ran, not the raw request — so the
+    # Observation's args_json reflects reality (an agent asking count=99999 records the real
+    # count=1024). Fall back to the request only on the miss path, where the probe echoed no bounds.
     obs_args = {"address": addr}
-    if count is not None:
+    if rng.get("count") is not None:
+        obs_args["count"] = rng["count"]
+    elif rng.get("length") is not None:
+        obs_args["length"] = rng["length"]
+    elif count is not None:
         obs_args["count"] = count
     elif length is not None:
         obs_args["length"] = length
