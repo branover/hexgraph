@@ -27,6 +27,19 @@ def list_projects() -> list[dict]:
                 for p in s.query(Project).all()]
 
 
+def doctor(clean: bool = False) -> dict:
+    """Reconcile the on-disk project dirs (under HEXGRAPH_HOME/projects/) against the DB and
+    report drift: orphan dirs (no matching DB project) and DB projects whose dir is missing.
+    Read-only by default; pass clean=true to DELETE orphan dirs (never a DB project — those
+    go only through the explicit delete path). The CLI mirror is `hexgraph doctor [--clean]`."""
+    from hexgraph.engine import maintenance
+
+    with session_scope() as s:
+        if clean:
+            return maintenance.prune_orphan_dirs(s)
+        return maintenance.project_dir_report(s)
+
+
 def list_targets(project_id: str, include_hidden: bool = False) -> list[dict]:
     with session_scope() as s:
         q = s.query(Target).filter(Target.project_id == project_id, Target.archived.is_(False))
@@ -2364,7 +2377,7 @@ def tcp_request(target_id: str, port: int, payload: str | None = None,
     spec ({transport:"tcp", port, payload:"…{{NONCE}}…", oracle:{type:"response_contains",
     value:"{{NONCE}}"}}) — the probe strips your sent bytes before matching, so a reflected
     payload can't forge it. Bounded to the device's loopback/private host:port, audited.
-    Requires features.network."""
+    `read_bytes` caps the response captured (default 64 KiB). Requires features.network."""
     from hexgraph.engine.targets.surfaces import run_tcp_probe
     from hexgraph.policy import PolicyViolation
 
@@ -2393,7 +2406,8 @@ def udp_request(target_id: str, port: int, payload: str | None = None,
     use verify_poc with a `udp` spec ({transport:"udp", port, payload:"…{{NONCE}}…",
     oracle:{type:"response_contains", value:"{{NONCE}}"}}) — the probe strips your sent bytes
     before matching, so a reflected payload can't forge it. Bounded to the device's
-    loopback/private host:port, audited. Requires features.network."""
+    loopback/private host:port, audited. `read_bytes` caps the response captured (default
+    64 KiB). Requires features.network."""
     from hexgraph.engine.targets.surfaces import run_udp_probe
     from hexgraph.policy import PolicyViolation
 
@@ -2591,9 +2605,11 @@ def recover_constant(target_id: str, function: str) -> dict:
     Opt-in: requires features.emulation (a heavy-analysis gate that relaxes NO sandbox
     boundary). Returns available=false when the Ghidra headless decompiler isn't active. Best on a
     SELF-CONTAINED, parameterless routine — one that takes arguments is emulated over uninitialized
-    inputs and usually won't reach a clean `ret`, so it yields no recoverable value
-    (`reached_ret=false` / an `error`); don't trust a constant from an argument-dependent routine.
-    Returns {available, function, value, value_hex, reached_ret, steps, observation_id, error}."""
+    inputs and usually won't reach a clean `ret`, so it yields no recoverable value. When the
+    routine's recovered signature shows it takes arguments, this RETURNS EARLY without emulating
+    ({skipped:"arg_dependent", param_count, error pointing at re_solve_constraint}) — recover a
+    value/input that satisfies a check with the solver instead. Returns {available, function,
+    value, value_hex, reached_ret, steps, observation_id, error}."""
     from hexgraph.engine.re.emulation import emulate_constant
     from hexgraph.policy import PolicyViolation
 

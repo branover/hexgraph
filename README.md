@@ -199,6 +199,7 @@ hexgraph run <target> --type T [--objective TEXT] [--function F] [--backend B] [
 hexgraph rehost <target> [--brand HINT]      # boot firmware under emulation (needs features.rehost)
 hexgraph findings <project> [--status S] [--export FILE]
 hexgraph graph <project> --export FILE
+hexgraph doctor [--clean]                    # reconcile on-disk project dirs vs the DB; --clean removes orphans
 hexgraph config list | get K | set K V       # managed settings + optional-feature toggles
 hexgraph mcp [--tools read,write,run] | mcp install [--agent A] | mcp --check
 hexgraph serve [--host H] [--port P]          # loopback-only API/UI (default 127.0.0.1:8765)

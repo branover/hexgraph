@@ -694,6 +694,18 @@ try:
         result = {"emulation": {"error": err_msg}}
     elif target is None:
         result = {"emulation": {"error": "function not found: %s" % focus}}
+    elif target.getParameterCount() > 0:
+        # Authoritative arg guard (the engine pre-check uses recorded node attrs; this catches
+        # a cold path with no recorded signature). An argument-dependent routine emulated over
+        # uninitialized inputs won't reach a clean ret, so don't burn the step budget on it.
+        result = {"emulation": {
+            "function": target.getName(),
+            "function_addr": "0x" + target.getEntryPoint().toString(),
+            "param_count": target.getParameterCount(),
+            "reached_ret": False, "steps": 0, "skipped": "arg_dependent",
+            "error": ("function takes %d argument(s) — recover_constant needs a self-contained, "
+                      "parameterless routine; use the solver instead" % target.getParameterCount()),
+        }}
     else:
         ret = target.getReturn()
         ret_reg = ret.getRegister() if ret is not None else None

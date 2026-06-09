@@ -172,6 +172,43 @@ def test_udp_probe_exchange_real_loopback_datagram():
     assert ex["raw"] == b"REPLY:ping"
 
 
+def test_udp_probe_returns_promptly_after_single_datagram():
+    """#230 nit: the UDP path reads the SINGLE reply datagram and returns — it must NOT idle the
+    full timeout waiting for a follow-up that (for a request/response service) never comes. A
+    server that answers once then stays silent should return in well under the timeout window."""
+    import socket as _socket
+    import threading
+    import time
+
+    from hexgraph.sandbox.probes import tcp_probe
+
+    srv = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+    srv.bind(("127.0.0.1", 0))
+    srv.settimeout(5)
+    port = srv.getsockname()[1]
+
+    def _answer_once():
+        try:
+            data, peer = srv.recvfrom(4096)
+            srv.sendto(b"ONE:" + data, peer)  # one reply, then go quiet
+        except Exception:  # noqa: BLE001
+            pass
+
+    th = threading.Thread(target=_answer_once, daemon=True)
+    th.start()
+    try:
+        # Pass a generous timeout; the old read-loop would block ~min(timeout,5)s after the
+        # single reply. The single-recvfrom path returns as soon as the one datagram lands.
+        start = time.monotonic()
+        ex = tcp_probe._exchange_udp("127.0.0.1", port, b"ping", timeout=5, cap=1024)
+        elapsed = time.monotonic() - start
+    finally:
+        srv.close()
+    assert ex["ok"] is True and ex["raw"] == b"ONE:ping"
+    # Returned promptly after the single reply (not after idling the ~5s read window).
+    assert elapsed < 2.0, f"UDP probe idled {elapsed:.2f}s after a single-datagram reply"
+
+
 def test_udp_probe_silent_service_is_not_an_error():
     """UDP is connectionless: a service that never answers yields an EMPTY response under the
     timeout, which is normal (ok=True, no bytes) — NOT a failure like a refused TCP connect."""

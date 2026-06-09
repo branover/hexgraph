@@ -304,7 +304,9 @@ reach a dangerous operation without adequate validation?*
   interpreter (a JVM interpreter — never native execution, no network) and returns the value,
   tagging it on the function node. Best on a SELF-CONTAINED, parameterless routine; an
   argument-dependent one is emulated over uninitialized inputs and usually won't reach a clean
-  `ret` (returns `reached_ret=false`/an error — don't trust a constant from it).
+  `ret`, so when the recovered signature shows arguments this returns early without emulating
+  (`skipped="arg_dependent"`) and points you at `re_solve_constraint` — use the solver to recover
+  a value that satisfies a check instead.
   **Gated: features.emulation** (+ Ghidra headless; returns `available=false` if Ghidra is off).
 - **re_solve_reaching_input(target, sink_func=…, function=…)** / **re_solve_constraint** —
   when the triggering input is COMPUTED, not stored (a magic value, a serial, a password the

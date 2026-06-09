@@ -188,10 +188,16 @@ def _materialize_decomp_graph(session: Session, project_id: str, target_id: str,
     # store hiccup must never break task execution.
     if target is not None:
         try:
+            from hexgraph.sandbox.decompiler import focus_only_payload
+
+            # FOCUS-ONLY payload (shared with the agent-tool path): the whole-program
+            # calls/structs the decompiler dict also carries are ~33 KB of noise on a
+            # per-function decompilation Observation and are enriched from separate
+            # call_graph/structs Observations, so drop them here too.
             O.record_observation(
                 session, project_id=project_id, target_id=target_id, source="decompile",
                 tool="decompile_function", args={"function": focus["name"]},
-                result_kind="decompilation", payload=decomp,
+                result_kind="decompilation", payload=focus_only_payload(decomp),
                 summary=f"decompiled {focus['name']}",
                 content_hash=O.content_hash_for(target),
                 node_refs=[focus["name"]],

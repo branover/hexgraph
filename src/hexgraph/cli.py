@@ -219,6 +219,40 @@ def _cmd_prune(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    """Reconcile on-disk project dirs against the DB. Read-only report by default; `--clean`
+    deletes orphan dirs (dirs with no matching DB project). Never deletes a DB project."""
+    from hexgraph.engine import maintenance
+
+    init_db()
+    with session_scope() as session:
+        if args.clean:
+            report = maintenance.prune_orphan_dirs(session)
+        else:
+            report = maintenance.project_dir_report(session)
+
+    print(f"projects dir: {report['projects_dir']}")
+    print(f"DB projects: {report['db_projects']}  |  on-disk dirs: {report['on_disk_dirs']}")
+
+    orphans = report["orphan_dirs"]
+    if orphans:
+        print(f"\norphan dirs (no matching DB project): {len(orphans)}")
+        for name in orphans:
+            tag = "DELETED" if name in report.get("deleted", []) else "stale"
+            print(f"  [{tag}] {name}")
+        if not args.clean:
+            print("  (run `hexgraph doctor --clean` to delete these orphan dirs)")
+    else:
+        print("\nno orphan dirs.")
+
+    missing = report["missing_dirs"]
+    if missing:
+        print(f"\nDB projects with NO dir on disk: {len(missing)} (data gone; not auto-fixed)")
+        for m in missing:
+            print(f"  {m['project_id']}  {m['name']!r}  (expected {m['data_dir']})")
+    return 0
+
+
 def _cmd_config(args: argparse.Namespace) -> int:
     """Read/write managed settings (optional features + non-secret prefs).
     Secrets (API keys) are reported as status only and are never written here."""
@@ -400,6 +434,12 @@ def build_parser() -> argparse.ArgumentParser:
     pp = sub.add_parser("prune", help="report the project's content-addressed store size")
     pp.add_argument("project")
     pp.set_defaults(func=_cmd_prune)
+
+    pd = sub.add_parser("doctor", help="reconcile on-disk project dirs against the DB "
+                                       "(report orphan/missing dirs; --clean removes orphans)")
+    pd.add_argument("--clean", action="store_true",
+                    help="delete orphan project dirs (those with no matching DB project)")
+    pd.set_defaults(func=_cmd_doctor)
 
     pc = sub.add_parser("config", help="read/write managed settings (optional features, prefs)")
     csub = pc.add_subparsers(dest="_cfgcmd", required=True)

@@ -17,6 +17,20 @@ from hexgraph.sandbox.executor import Executor, get_executor
 log = logging.getLogger(__name__)
 
 
+def focus_only_payload(out: dict) -> dict:
+    """Trim a decompiler result dict to a FOCUS-ONLY payload for a per-function `decompilation`
+    Observation.
+
+    A focused decompile is about THIS one function, but the decompiler dict also carries the
+    whole-program `calls` (≤2000) and `structs` (≤200) used by enriched recon — ~33 KB of
+    unrelated noise on every `obs_get` of a per-function decompile. The decompilation extractor
+    (`_extract_functions`) and `search_decompiled` read only `focus` (whole-program calls/structs
+    are enriched from SEPARATE call_graph/structs Observations recorded by enrich_recon), so
+    dropping them here loses nothing — the focus's own callees stay inside `focus`. The single
+    source of truth so the agent-tool path and the single-pass static_analysis path stay in sync."""
+    return {"functions": (out or {}).get("functions", []), "focus": (out or {}).get("focus")}
+
+
 class Decompiler(ABC):
     name: str
 

@@ -95,6 +95,12 @@ The sandbox image bundles the firmware extractors (sasquatch, jefferson, ubi_rea
 Sleuth Kit) and qemu-user (MIPS, ARM, PPC, and friends), so real vendor firmware extracts and
 foreign-arch PoCs both run with no extra setup.
 
+A note on the `hexgraph` command. The CLI is installed into the project's virtualenv, at
+`.venv/bin/hexgraph`, so it isn't on your `PATH` until you activate that venv. The examples below (and
+throughout the docs) write `hexgraph …` for brevity, but unless you've run `source .venv/bin/activate`
+first, run them as `.venv/bin/hexgraph …`. The `just` recipes already use the venv binary, so `just
+serve` and friends work without activating anything.
+
 Ghidra is optional and makes for a larger image. The default sandbox uses radare2; to also bundle
 headless Ghidra (which adds a JDK and roughly 400 MB):
 

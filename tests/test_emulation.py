@@ -65,6 +65,65 @@ def test_emulate_constant_unavailable_without_ghidra(hg_home):
         assert O.list_observations(s, t.id, kind="emulation") == []
 
 
+# ── F18: skip the doomed emulation for an arg-dependent routine ───────────────────────
+
+def test_emulate_constant_skips_arg_dependent_function(hg_home):
+    """If a prior decompile recorded a signature showing the routine takes arguments,
+    emulate_constant returns early (no doomed emulation over uninitialized inputs) with an
+    informative result pointing at the solver — and records NO emulation Observation."""
+    from hexgraph.engine.graph.nodes import get_or_create_node
+
+    # Gate ON + Ghidra "headless" enabled so we get PAST the availability check and into the
+    # arg pre-check (the point of the test — the early return must fire before any Ghidra call).
+    st.update_settings({"features.emulation.enabled": True,
+                        "features.ghidra.enabled": True, "features.ghidra.mode": "headless"})
+    with session_scope() as s:
+        p = create_project(s, name="argdep")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        # Curate the function node with a recovered signature that takes args.
+        get_or_create_node(s, project_id=p.id, node_type="function", name="check_password",
+                           target_id=t.id, attrs={"param_count": 1})
+        s.flush()
+        out = emulate_constant(s, p, t, function="check_password")
+        assert out["skipped"] == "arg_dependent"
+        assert out["param_count"] == 1
+        assert out["reached_ret"] is False and out["value"] is None
+        assert "argument" in out["error"].lower()
+        assert "re_solve" in out["error"]
+        # No emulation was run, so no Observation was recorded.
+        assert O.list_observations(s, t.id, kind="emulation") == []
+
+
+def test_emulate_constant_no_signature_falls_through(hg_home, monkeypatch):
+    """With NO recorded signature, the pre-check must NOT second-guess — it falls through PAST
+    the arg gate into the emulation path. We stub `run_emulate` so this stays an OFFLINE
+    host-logic test (no sandbox image needed); a real emulation is covered by the
+    GHIDRA_READY-gated tests below. (Without the stub this hit the real ghidra_probe and failed
+    in the no-Docker offline CI with 'Unable to find image hexgraph-sandbox:latest'.)"""
+    from hexgraph.sandbox.decompiler import GhidraDecompiler
+
+    monkeypatch.setattr(GhidraDecompiler, "run_emulate",
+                        lambda self, *a, **k: {"emulation": {"reached_ret": False, "value": None}})
+    st.update_settings({"features.emulation.enabled": True,
+                        "features.ghidra.enabled": True, "features.ghidra.mode": "headless"})
+    with session_scope() as s:
+        p = create_project(s, name="nosig")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        out = emulate_constant(s, p, t, function="unknown_fn")
+        # It went PAST the arg pre-check (no skipped marker) into the emulation path.
+        assert out.get("skipped") != "arg_dependent"
+        assert out["available"] is True
+
+
+def test_emu_script_guards_arg_dependent_functions():
+    """The authoritative in-probe guard (EMU_SCRIPT) bails on getParameterCount() > 0 before
+    the step loop — the cold-path fallback when no signature is recorded on the node."""
+    from hexgraph.sandbox.probes import ghidra_probe as GP
+
+    assert "getParameterCount() > 0" in GP.EMU_SCRIPT
+    assert "arg_dependent" in GP.EMU_SCRIPT
+
+
 # ── the MCP agent surface (recover_constant) ──────────────────────────────────────────
 
 def test_recover_constant_advertised_in_catalog():
