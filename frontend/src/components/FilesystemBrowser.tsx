@@ -25,7 +25,9 @@ const looksAddable = (e?: FsEntry) => !!e && (e.is_elf || /\.so(\.\d+)*$/.test(e
 const isHidden = (e?: FsEntry) => !!e && !!e.added && e.revealed === false;
 // All the leaf entries under a directory path (used for the per-dir "Reveal all" count).
 const leavesUnder = (files: FsEntry[], prefix: string) =>
-  files.filter((f) => f.rel === prefix || f.rel.startsWith(prefix + "/"));
+  // `""` = the whole tree (rootfs paths have no leading slash, so a "" + "/" prefix
+  // would match nothing and the firmware-wide "reveal all" button would never show).
+  files.filter((f) => prefix === "" || f.rel === prefix || f.rel.startsWith(prefix + "/"));
 
 // Traversable unpacked firmware filesystem. Folders collapse; binaries/libraries can be
 // added as child targets, and unpack-registered (hidden) children revealed into the graph —

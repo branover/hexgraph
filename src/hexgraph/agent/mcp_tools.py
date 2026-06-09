@@ -1261,20 +1261,23 @@ def set_visible(project_id: str, target_id: str, visible: bool = True) -> dict:
             return {"error": str(exc)}
 
 
-def reveal_dir(project_id: str, firmware_target_id: str, prefix: str = "") -> dict:
+def reveal_dir(project_id: str, target_id: str, prefix: str = "") -> dict:
     """REVEAL every HIDDEN child of a firmware whose rootfs path is under `prefix`
     (e.g. prefix='usr/sbin' reveals all ELFs in /usr/sbin) — the bulk counterpart to
     target_set_visible for bringing a whole directory of binaries into the curated graph
     at once. An empty prefix reveals ALL hidden children. Materializes each revealed
-    child's recon nodes from stored facts (no re-run). Returns
-    {firmware_target_id, prefix, revealed, target_ids}."""
+    child's recon nodes from stored facts (no re-run). `target_id` is the firmware.
+    Returns {firmware_target_id, prefix, revealed, target_ids}."""
+    # NB: the catalog advertises this arg as `target_id` (the firmware), and the MCP
+    # server dispatches by KEYWORD (`fn(**arguments)`), so this param name MUST match
+    # the catalog schema — otherwise every MCP call raises TypeError.
     from hexgraph.engine.targets.reveal import reveal_dir as _reveal
 
     with session_scope() as s:
         if s.get(Project, project_id) is None:
             return {"error": "project not found"}
         try:
-            return _reveal(s, project_id, firmware_target_id, prefix)
+            return _reveal(s, project_id, target_id, prefix)
         except ValueError as exc:
             return {"error": str(exc)}
 

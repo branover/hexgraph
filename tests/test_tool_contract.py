@@ -66,6 +66,24 @@ def test_catalog_tools_are_documented():
         assert schema.get("type") == "object", f"tool {name} has no object schema"
 
 
+def test_schema_property_names_match_backing_fn_params():
+    # The MCP server dispatches each tool as `fn(**arguments)` (mcp_server.py), so every
+    # schema property name MUST be a bin. keyword of the backing function — otherwise a real
+    # MCP call raises TypeError (the catalog `target_id` vs fn `firmware_target_id` class of
+    # bug). Tests that call the fn positionally don't catch it; this guard does.
+    import inspect
+    for spec in M.catalog():
+        fn, props = spec["fn"], set((spec["schema"].get("properties") or {}).keys())
+        sig = inspect.signature(fn)
+        # a **kwargs-accepting fn takes anything; otherwise props must be a subset of params
+        if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+            continue
+        params = {p for p in sig.parameters if p != "self"}
+        missing = props - params
+        assert not missing, f"tool {spec['name']}: schema props {sorted(missing)} are not " \
+                            f"params of {fn.__name__}{tuple(params)} — MCP fn(**args) would TypeError"
+
+
 def test_authoring_tools_state_expectations():
     by_name = {s["name"]: s["description"] for s in M.catalog()}
     # create_node must point at the per-type contract and the sink rule
