@@ -120,6 +120,7 @@ _ZOMBIE_PRESSURE = textwrap.dedent(
 )
 
 
+@pytest.mark.slow  # real sandbox container under pid pressure — run via `just test-heavy` / CI
 @pytest.mark.skipif(not SANDBOX_READY, reason="requires Docker + the hexgraph-sandbox image")
 def test_forkserver_survives_pid_pressure_under_real_hardening():
     """Run the EXACT hardened docker invocation HexGraph generates (with `--init`) on a

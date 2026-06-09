@@ -210,10 +210,19 @@ down:
 # test — the offline suites (mock backend, $0)
 # ===========================================================================
 
-# Run the full offline test suite (mock). Docker-gated tests auto-skip without the sandbox image. The merge gate.
+# Run the FAST offline suite (mock, $0): deselects the heavy real-container E2E tier (-m 'not slow')
+# so it stays quick + can't wedge on a fuzz/rehost container. Docker-gated UNIT tests still auto-skip
+# without the sandbox image. Run the slow tier with `just test-heavy` (or CI's live job). Merge gate.
 [group('test')]
 test:
-    {{py}} -m pytest -q
+    {{py}} -m pytest -q -m "not slow"
+
+# Run the heavy real-container E2E tier (fuzz campaigns / firmware rehost boots) — needs the Docker
+# images built (else they skip). A per-test wall-clock cap (pytest-timeout) backstops a wedged
+# container so a hung test FAILS loudly instead of blocking the run forever.
+[group('test')]
+test-heavy:
+    {{py}} -m pytest -q -m "slow" --timeout=900 -rs
 
 # CI gate: FAIL FAST if Docker/the sandbox image is absent, then run the full suite.
 # A green OFFLINE `just test` validates NONE of the live egress/exec/rehost/remote paths

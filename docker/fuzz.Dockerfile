@@ -16,8 +16,9 @@
 #   - AFL++ FRIDA-mode (afl-frida-trace.so) — the binary-only opt-in alternative.
 #   - boofuzz + a built-in generational mutator — NETWORK/protocol fuzzing of a LIVE
 #     service (Phase 5), bounded by features.network + local_tcp_scope + audited.
-#   - preeny / desock.so — desock+AFL++ coverage-fuzzes a LOCAL server binary with
-#     --network none (network tier 1, static-by-default).
+#   - libdesock (fkie-cad) — desock+AFL++ coverage-fuzzes a LOCAL server binary with
+#     --network none (network tier 1, static-by-default). Fork-safe (single-threaded),
+#     unlike preeny's threaded desock.so which raced AFL's fork-based forkserver.
 #
 # Build:  docker build -f docker/fuzz.Dockerfile -t hexgraph-fuzz:latest .  (context = repo root)
 #         WORKTREE DISCIPLINE: for local testing build a PRIVATE tag and point the env
@@ -120,19 +121,28 @@ RUN (pip3 install --no-cache-dir --break-system-packages afl-cov 2>/dev/null \
 # Network fuzzing (Phase 5):
 #  - boofuzz: the DEFAULT live-socket generational protocol fuzzer (the probe also ships a
 #    built-in generational mutator so the network path works even if pip can't fetch it).
-#  - preeny / desock.so: LD_PRELOADed onto a LOCAL server binary so its socket becomes
-#    stdin → AFL++ coverage-fuzzes it with --network none (tier 1, static-by-default).
+#  - libdesock (fkie-cad/libdesock): LD_PRELOADed onto a LOCAL server binary so its socket
+#    becomes stdin → AFL++ coverage-fuzzes it with --network none (tier 1, static-by-default).
+#    REPLACES preeny's desock.so. WHY: preeny pumps the socket↔stdin in a THREAD, but AFL's
+#    forkserver fork()s the target for every input — fork() in a multithreaded process clones
+#    only the calling thread, so the pump thread's held locks/half-init state are orphaned in
+#    the child and it SIGSEGVs/deadlocks during AFL's pre-fuzz calibration ("Fork server
+#    crashed before receiving any input"). libdesock intercepts recv/read/accept SYNCHRONOUSLY
+#    (no pump thread), so the forkserver comes up cleanly every fork — the race is gone at the
+#    root. Built x86_64-only (matches what we ever shipped — the probe only used preeny's
+#    x86_64-lib/desock.so); foreign-arch desock still degrades to qemu file-input.
 RUN (pip3 install --no-cache-dir --break-system-packages boofuzz 2>/dev/null \
         || echo "WARN: boofuzz not installed (the built-in generational mutator covers it)") \
     || true
 RUN ( set -e; \
-      git clone --depth 1 https://github.com/zardus/preeny /tmp/preeny; \
-      cd /tmp/preeny; make || true; \
-      mkdir -p /usr/lib/preeny; \
-      cp -v $(find . -name 'desock*.so' 2>/dev/null) /usr/lib/preeny/ 2>/dev/null || true; \
-      ( cp -v ./x86_64-lib/desock.so /usr/lib/preeny/desock.so 2>/dev/null || true ); \
-      cd /; rm -rf /tmp/preeny ) \
-    || echo "WARN: preeny/desock build failed (desock path degrades to qemu-mode file-input)"
+      git clone --depth 1 https://github.com/fkie-cad/libdesock /tmp/libdesock; \
+      cd /tmp/libdesock; \
+      ( meson setup -Darch=x86_64 -Ddesock_server=true build \
+          || meson setup build ); \
+      ninja -C build; \
+      install -Dm644 build/libdesock.so /usr/lib/libdesock.so; \
+      cd /; rm -rf /tmp/libdesock ) \
+    || echo "WARN: libdesock build failed (desock path degrades to qemu-mode file-input)"
 
 # Bake the probe scripts into the image (mounted-over at run time, except NO_MOUNT mode).
 COPY src/hexgraph/sandbox/probes/ /opt/hexgraph/

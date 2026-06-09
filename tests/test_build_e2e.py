@@ -27,10 +27,15 @@ from hexgraph import settings
 
 from conftest import BUILD_IMAGE_READY
 
-pytestmark = pytest.mark.skipif(
-    not BUILD_IMAGE_READY,
-    reason="requires Docker + the hexgraph-build image (just build-image; "
-           "set HEXGRAPH_BUILD_IMAGE for a worktree tag)")
+# Real instrumented builds in the build image — slow; deselected from the fast `just test`
+# (-m 'not slow'), run via `just test-heavy` or CI's live job.
+pytestmark = [
+    pytest.mark.skipif(
+        not BUILD_IMAGE_READY,
+        reason="requires Docker + the hexgraph-build image (just build-image; "
+               "set HEXGRAPH_BUILD_IMAGE for a worktree tag)"),
+    pytest.mark.slow,
+]
 
 # A self-contained libFuzzer target with a planted heap-buffer-overflow. We compile
 # it under the SanCov+ASan profile into an object (`fuzz.o`) and a linked binary

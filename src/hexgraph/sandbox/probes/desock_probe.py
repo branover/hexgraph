@@ -6,15 +6,17 @@
   flags: --max-total-time=N --max-crashes=K --instances=M --port=P
          [--sysroot=/sysroot]  [--seed=/path ...]  [--dict=<json array>]
 
-preeny/desock's `desock.so` LD_PRELOADs over the server: it replaces socket()/accept()/
+libdesock's `libdesock.so` LD_PRELOADs over the server: it replaces socket()/accept()/
 recv() so the service reads its "network" input from STDIN instead of a real socket. So
 AFL++ can coverage-fuzz the server's PROTOCOL PARSER by feeding mutated bytes on stdin,
 while the container stays `--network none` — the static-by-default posture holds (no real
-listener, no egress). A crash (signal/ASan) is `code_present/dynamic`.
+listener, no egress). A crash (signal/ASan) is `code_present/dynamic`. libdesock is single-
+threaded, so it's fork-safe with AFL's forkserver (unlike preeny's threaded desock.so, which
+raced AFL's per-input fork() and SIGSEGV'd during calibration).
 
 This keeps the SAME Phase-0 crash pipeline (reproduce/dedup/classify/minimize) and streams
-to /out exactly like afl_probe/afl_qemu_probe. Falls back to qemu-mode file-input if
-desock.so isn't in the image. Foreign-arch under afl-qemu-trace + the `-L` sysroot.
+to /out exactly like afl_probe/afl_qemu_probe. Falls back to qemu-mode file-input if a desock
+.so isn't in the image. Foreign-arch under afl-qemu-trace + the `-L` sysroot.
 
 Runs only when the policy permits execution; --network none, capped, timed. STDLIB only.
 """
@@ -83,9 +85,20 @@ def _write_status(outdir, obj):
 
 
 def _find_desock():
-    """Locate desock.so (preeny). Common debian/preeny install paths + ldconfig."""
+    """Locate the desock shared object. Prefer fkie-cad/libdesock (fork-safe, what the image
+    now ships); fall back to a legacy preeny desock.so if only that is present. Either is
+    LD_PRELOAD/AFL_PRELOADed and reads the 'network' input from stdin."""
+    for c in ("/usr/lib/libdesock.so", "/usr/local/lib/libdesock.so",
+              "/usr/lib/x86_64-linux-gnu/libdesock.so"):
+        if os.path.isfile(c):
+            return c
+    for pat in ("/usr/**/libdesock.so", "/opt/**/libdesock.so"):
+        hits = glob.glob(pat, recursive=True)
+        if hits:
+            return hits[0]
+    # Legacy fallback: a preeny desock.so if an older image still ships it.
     for c in ("/usr/lib/preeny/desock.so", "/usr/local/lib/preeny/desock.so",
-              "/usr/lib/x86_64-linux-gnu/preeny/desock.so", "/opt/preeny/x86_64-lib/desock.so"):
+              "/opt/preeny/x86_64-lib/desock.so"):
         if os.path.isfile(c):
             return c
     for pat in ("/usr/**/desock.so", "/opt/**/desock.so"):
@@ -96,12 +109,14 @@ def _find_desock():
 
 
 # The unambiguous AFL++ message when the forkserver's pre-fuzz calibration run crashed
-# BEFORE any fuzzer input — i.e. the target died on a benign seed during startup. With
-# desock that is preeny's socket-pump-thread race (a fresh exec usually starts cleanly),
-# NOT a real finding, so we retry the launch on exactly this signal (and nothing else).
+# BEFORE any fuzzer input — i.e. the target died on a benign seed during startup. This was
+# preeny's socket-pump-THREAD racing AFL's fork()-based forkserver; libdesock is single-
+# threaded and fork-safe, so it should NOT occur anymore. We keep a small bounded retry as
+# cheap belt-and-suspenders (a fresh exec almost always starts cleanly) — it fires on exactly
+# this signal and nothing else, so a genuine config/target breakage still surfaces fast.
 _FORKSERVER_RACE = "before receiving any input"
 _FORKSERVER_ABORT = "Fork server crashed"
-_MAX_FORKSERVER_RETRIES = 8
+_MAX_FORKSERVER_RETRIES = 3
 
 
 def _launch_afl(cmd, env, outdir):
@@ -129,8 +144,9 @@ def _forkserver_raced(proc, errp) -> bool:
 
 
 def _launch_with_forkserver_retry(cmd, env, outdir, work):
-    """Launch AFL++, retrying ONLY the preeny/desock forkserver-startup race (the target
-    SIGSEGVs on a benign seed during AFL's calibration, before any fuzzing). Each retry
+    """Launch AFL++, retrying ONLY a desock forkserver-startup crash (the target SIGSEGVs on
+    a benign seed during AFL's calibration, before any fuzzing — the legacy preeny socket-pump-
+    thread race, which libdesock's single-threaded design removes). Each retry
     wipes the `-o` dir and re-execs from scratch — a fresh process almost always starts
     cleanly, and wiping ensures a clean attempt rather than an AFL_AUTORESUME (set below) of
     the crashed session. Returns (running_proc, note_or_None). `note` is set
@@ -153,8 +169,8 @@ def _launch_with_forkserver_retry(cmd, env, outdir, work):
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
-        note = (f"desock forkserver crashed on calibration (preeny socket-thread startup "
-                f"race) — gave up after {attempt + 1} attempts")
+        note = (f"desock forkserver crashed on calibration (a forkserver-startup crash — "
+                f"libdesock should be fork-safe) — gave up after {attempt + 1} attempts")
     return proc, note
 
 
@@ -216,12 +232,13 @@ def main() -> int:
         afl_env["QEMU_LD_PREFIX"] = sysroot
     qemu = ["-Q"] if foreign else []
 
-    # desock turns the socket into stdin → AFL feeds stdin (NO `@@`). When desock.so is
+    # desock turns the socket into stdin → AFL feeds stdin (NO `@@`). When the desock .so is
     # present we LD_PRELOAD it onto the target via AFL_PRELOAD; otherwise we degrade to
-    # qemu-mode file-input (still coverage-guided, just feeds a file arg).
+    # qemu-mode file-input (still coverage-guided, just feeds a file arg). libdesock reads the
+    # "network" input from stdin by default (desock_server hooks bind/accept) — no port env
+    # needed (preeny's DESOCK_PORT is not a libdesock knob).
     if desock:
         afl_env["AFL_PRELOAD"] = desock
-        afl_env["DESOCK_PORT"] = str(_flag(args, "--port", 0))
         run_argv = ["--", target]            # stdin-fed (no @@)
         mode = "desock"
     else:
@@ -264,12 +281,12 @@ def main() -> int:
 
     final = _collect(outdir, work, target, desock, sysroot if foreign else None, arch, mode,
                      max_crashes, done=True)
-    # A diagnostic about a flaky forkserver startup (preeny/desock's socket-pump threads
-    # can SIGSEGV during AFL's pre-fuzz calibration on a benign input — a startup race, not
-    # a target bug). We bounded-retry the launch on exactly that signal; if EVERY retry hit
-    # it we never got past calibration → surface it as the degradation reason (so the
-    # campaign's `degraded`-with-0-execs carries WHY). When AFL DID recover and fuzz, the
-    # note stays out of the status so the run finalizes as a clean `completed`.
+    # A diagnostic about a flaky forkserver startup (a desock target SIGSEGVing during AFL's
+    # pre-fuzz calibration on a benign input — historically preeny's socket-pump-thread race,
+    # which libdesock's single-threaded design removes; kept as a guard). We bounded-retry the
+    # launch on exactly that signal; if EVERY retry hit it we never got past calibration →
+    # surface it as the degradation reason (so the campaign's `degraded`-with-0-execs carries
+    # WHY). When AFL DID recover and fuzz, the note stays out of the status (clean `completed`).
     if note and int(final.get("executions") or 0) <= 0:
         final["engine_note"] = note
     _write_status(outdir, final)

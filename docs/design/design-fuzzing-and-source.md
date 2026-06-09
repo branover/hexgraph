@@ -234,7 +234,7 @@ Every new capability maps onto the **existing tiers in `policy.py`**; **the only
 
 **Decision: two new dedicated images, never touch the shared `hexgraph-sandbox:latest`.**
 - **`hexgraph-build:latest`** (`make build-image`, `WITH_CROSS=1` adds cross sysroots) — clang/llvm + sanitizer/SanCov runtimes, autotools/cmake/meson/ninja, AFL++ instrumented compilers, cross toolchains. It *is* the recorded `base_image` in a BuildSpec (immutably date-tagged for reproducibility).
-- **`hexgraph-fuzz:latest`** (`make fuzz-build`) — AFL++ (LTO/qemu-mode/frida-mode/CmpLog), libFuzzer runtimes, boofuzz/AFLNet, preeny/desock, `afl-cov`/`llvm-cov`, gdb + an `exploitable`-style classifier, qemu-user (reusing the foreign-arch path).
+- **`hexgraph-fuzz:latest`** (`make fuzz-build`) — AFL++ (LTO/qemu-mode/frida-mode/CmpLog), libFuzzer runtimes, boofuzz/AFLNet, libdesock, `afl-cov`/`llvm-cov`, gdb + an `exploitable`-style classifier, qemu-user (reusing the foreign-arch path).
 
 *Rationale.* The lean `hexgraph-sandbox` is the always-required baseline (every recon/decompile/unpack run); AFL++/boofuzz/cross-toolchains are hundreds of MB–GB and would tax every static run and bloat the build attack surface. This mirrors the shipped rehost-image pattern (`hexgraph-firmae`/`hexgraph-qemu`, separate `make` targets, seam-selected) and Ghidra-as-build-arg. Selected by `HEXGRAPH_BUILD_IMAGE`/`HEXGRAPH_FUZZ_IMAGE`; the `Executor` threads an `image=` arg per probe family (additive, no boundary change). **Worktree discipline holds:** a toolchain change builds a private tag (`hexgraph-fuzz:wt-<topic>`) and points the env override at it — never clobber the shared tag. **Probes still mount from the install** at run time — editing `build_probe.py`/the fuzz probes needs no rebuild; only a toolchain change does.
 
@@ -569,7 +569,7 @@ Each phase is independently shippable through the worktree→PR-review-subagent�
 > live/rehosted service we have no source for, and carries a re-runnable crashing sequence — the exact
 > blind-network-fuzz case the battle test needs (AFLNet remains a future mutational-replay alt; desock
 > covers the coverage-guided local-binary case today). **desock+AFL++** (`desock_probe.py`, tier-1 alt)
-> LD_PRELOADs preeny/desock to turn a LOCAL server's socket into stdin → AFL++ coverage-fuzzes it with
+> LD_PRELOADs libdesock to turn a LOCAL server's socket into stdin → AFL++ coverage-fuzzes it with
 > `--network none` (`code_present/dynamic`). **(3) file_format** keeps the auto-dictionary + a
 > structure hook on the AFL/qemu paths. **Gating, by surface (the ONLY change is WHICH existing gate
 > applies — no `policy.py` edit):** source/binary-only/desock EXECUTE a target → the exec gate

@@ -42,7 +42,7 @@ SURFACE_ENGINES: dict[str, tuple[str, ...]] = {
     # spec'd protocol blocks/checksums/a small state graph) is the DEFAULT live-socket
     # fuzzer — pure-Python, joins the emulator netns cleanly, bounded by local_tcp_scope +
     # features.network + every send audited to EgressEvent. `desock` is the static-by-
-    # default tier-1 alternative: LD_PRELOAD preeny/desock turns a LOCAL server binary's
+    # default tier-1 alternative: LD_PRELOAD libdesock turns a LOCAL server binary's
     # socket into stdin so AFL++ coverage-fuzzes it with --network none (no real net).
     "network": ("boofuzz", "desock"),
     # Structured input parser — same as source_lib if source is present (the auto-dict +
