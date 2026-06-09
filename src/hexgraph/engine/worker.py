@@ -118,8 +118,19 @@ def run_task_sync(task_id: str) -> str:
                 # e.g. a handler set needs_triage; still stamp completion time.
                 task.finished_at = datetime.now(timezone.utc)
         except Exception as exc:  # noqa: BLE001 — any failure marks the task failed
-            mark_failed(task, f"{type(exc).__name__}: {exc}")
-        return task.status.value
+            # A task records its reusable Observations in their OWN durable commits as it
+            # runs (engine.observations.record_observation checkpoints them), so they
+            # survive THIS failure — the long task transaction is no longer all-or-nothing.
+            # Roll back only the work pending SINCE the last such checkpoint: that clears
+            # any failed/pending-rollback transaction state (e.g. when the failure was a DB
+            # lock mid-flush) so the mark_failed write below can commit, and discards the
+            # half-built synthesized result that SHOULD die with the task. The committed
+            # Observations are untouched. Re-fetch the task — rollback expires it.
+            session.rollback()
+            task = session.get(Task, task_id)
+            if task is not None:
+                mark_failed(task, f"{type(exc).__name__}: {exc}")
+        return task.status.value if task is not None else TaskStatus.failed.value
 
 
 # How often the reaper polls detached fuzz-campaign containers (seconds). A campaign
