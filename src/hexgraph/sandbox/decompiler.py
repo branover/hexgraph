@@ -63,6 +63,18 @@ def _focus_args(function: str | None, address: str | None, reanalyze: bool) -> l
     return args or None
 
 
+def _range_args(address: str, length: int | None, count: int | None) -> list[str]:
+    """The probe's `--range <addr>` argv for RAW-byte-range disassembly (no function).
+    `count` (instructions) wins over `length` (bytes) when both are supplied, mirroring
+    the probe; either is omitted entirely when None so the probe applies its default."""
+    args = ["--range", address]
+    if count is not None:
+        args += ["--count", str(int(count))]
+    elif length is not None:
+        args += ["--length", str(int(length))]
+    return args
+
+
 class R2Decompiler(Decompiler):
     name = "radare2"
 
@@ -75,6 +87,16 @@ class R2Decompiler(Decompiler):
         return self.runner.run_json_probe(
             "decompile_probe.py", artifact,
             extra_args=_focus_args(function, address, reanalyze))
+
+    def disassemble_range(self, artifact: str, address: str, *,
+                          length: int | None = None, count: int | None = None) -> dict:
+        """Disassemble a RAW byte range at `address` (no function required) — the fallback
+        for a CFG blind spot both decompilers miss. Returns the probe's
+        {tool, range: {address, length|count, disasm} | {..., error}} payload. Always
+        radare2: `pD`/`pd` read+disassemble raw bytes (Ghidra's path returns empty disasm)."""
+        return self.runner.run_json_probe(
+            "decompile_probe.py", artifact,
+            extra_args=_range_args(address, length, count))
 
 
 class GhidraDecompiler(Decompiler):

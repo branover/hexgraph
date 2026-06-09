@@ -20,6 +20,7 @@ the fan-out guard). A per-call promotion budget backstops it, reporting any over
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
@@ -30,6 +31,11 @@ from hexgraph.llm.base import ToolSpec
 logger = logging.getLogger(__name__)
 
 _MAX = 6000  # default cap on any single tool result so the context stays bounded
+
+# A raw hex address (0x…) the agent passes to disassemble_range. Validated host-side so a
+# bad value gets a friendly error rather than a probe round-trip; the probe re-validates
+# with the SAME-strict regex before any r2 seek (defence in depth, never trust the host).
+_HEX_ADDR = re.compile(r"^0x[0-9a-fA-F]+$")
 
 # An agent may ask a body-returning tool (decompile/disassemble/search) to inline more than
 # the default with `max_chars`. The request is clamped to a sane window — a small floor so a
@@ -97,6 +103,17 @@ _STATIC_SPECS = [
              {"type": "object", "properties": {"function": {"type": "string"},
                                                "address": {"type": "string"},
                                                "max_chars": {"type": "integer", "description": _MAX_CHARS_DESC}}}),
+    ToolSpec("disassemble_range", "Disassemble a RAW ADDRESS + LENGTH byte range — NO function needed, "
+             "for a CFG blind spot both backends miss (when disassemble/decompile_at return 'not found' "
+             "because no function is defined there). Disassembles `length` bytes (default 256), or "
+             "`count` instructions if given, starting at hex `address`. QUERY: records an Observation; "
+             "adds no graph nodes.",
+             {"type": "object", "properties": {
+                 "address": {"type": "string", "description": "hex start address, e.g. 0x67158"},
+                 "length": {"type": "integer", "description": "bytes to disassemble (default 256, clamped 1–8192)"},
+                 "count": {"type": "integer", "description": "instructions to disassemble (overrides length; clamped 1–1024)"},
+                 "max_chars": {"type": "integer", "description": _MAX_CHARS_DESC}},
+              "required": ["address"]}),
     ToolSpec("reanalyze", "Re-run the target's analysis at a HIGHER depth (and bust the cache) so a "
              "function or call edge the fast pass missed gets a second chance — use when "
              "list_functions/decompile look incomplete. QUERY: refreshes the inventory, adds no graph "
@@ -537,6 +554,57 @@ def _materialize(ctx: ToolContext, focus: dict) -> list[str]:
     return promotable
 
 
+def _disassemble_range(ctx: ToolContext, args: dict) -> str:
+    """Disassemble a RAW byte range at a hex address — the QUERY fallback for a CFG blind spot
+    both backends miss (no function defined there, so disassemble/decompile_at find nothing).
+
+    Always radare2 (`pD`/`pd` read+disassemble raw bytes; the Ghidra path returns empty disasm).
+    Records a `disassembly` Observation keyed to the address; mutates NO graph. The body is
+    clipped with the actionable truncation marker (max_chars re-call / obs_get), same contract
+    as the other body-returning tools."""
+    addr = args.get("address")
+    if not addr:
+        return "error: 'address' argument is required (a hex start address, e.g. 0x67158)"
+    if not _HEX_ADDR.match(str(addr)):
+        return f"error: invalid address {addr!r} — expected a hex address like 0x67158"
+    # length/count are the two bounding knobs; count (instructions) overrides length (bytes).
+    # Pass through as-is — the probe clamps to its ceilings (no silent host-side rewrite).
+    length = args.get("length")
+    count = args.get("count")
+
+    from hexgraph.sandbox.decompiler import R2Decompiler
+    from hexgraph.sandbox.runner import docker_available
+    if not docker_available():
+        return "disassembly unavailable (Docker/sandbox not running)"
+    try:
+        out = R2Decompiler().disassemble_range(ctx.target.path, addr, length=length, count=count)
+    except Exception as exc:  # noqa: BLE001 — surface a reason, let the agent recover
+        return f"disassembly failed: {exc}"
+    rng = (out or {}).get("range") or {}
+    obs_args = {"address": addr}
+    if count is not None:
+        obs_args["count"] = count
+    elif length is not None:
+        obs_args["length"] = length
+    disasm = rng.get("disasm")
+    if not disasm:
+        # No bytes there (out of range / unmapped) — still record the miss for discoverability,
+        # mirroring the disassemble not-found path; never silently drop it.
+        why = rng.get("error") or "no disassembly at this address"
+        _record_obs(ctx, tool="disassemble_range", args=obs_args, result_kind="disassembly",
+                    payload={"address": addr, **rng}, summary=f"no disassembly at {addr}", status="ok")
+        return f"{why} ({addr})"
+    span = (f"{rng['count']} instructions" if rng.get("count") is not None
+            else f"{rng.get('length', '?')} bytes")
+    obs, _cached = _record_obs(
+        ctx, tool="disassemble_range", args=obs_args, result_kind="disassembly",
+        payload={"address": addr, **rng},
+        summary=f"disassembled {span} at {addr}")
+    return _clip_body(f"// raw disassembly @ {addr} ({span})\n{disasm}",
+                      limit=_effective_limit(args.get("max_chars")),
+                      obs_id=obs.id if obs is not None else None)
+
+
 def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
     """Execute a tool call and return its result as text (errors as text too)."""
     args = args or {}
@@ -605,6 +673,8 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
             return _clip_body(f"// {focus.get('name') or subj}{at} disassembly\n{disasm}",
                               limit=_effective_limit(args.get("max_chars")),
                               obs_id=obs.id if obs is not None else None)
+        if name == "disassemble_range":
+            return _disassemble_range(ctx, args)
         if name == "decompile_function":
             fn = args.get("function")
             if not fn:

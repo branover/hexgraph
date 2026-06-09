@@ -151,6 +151,11 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
 - **Query verbs add nothing to the graph.** `re_list_functions`, `re_xrefs`, `re_disassemble`, `re_list_strings`
   and the rest return their results as tool output and quietly record an Observation. They create no
   nodes and no edges. An enumeration is an answer, not a pile of graph objects.
+- **A CFG blind spot has a fallback.** When both `re_disassemble` (which needs a defined function) and
+  `re_decompile_at` (the function containing an address) return "not found" because the call graph has a
+  hole at that address, `re_disassemble_range(target, 0x67158)` disassembles the raw byte range there
+  with no function required, so you can still read the instructions. It is a query like the rest, bytes
+  to instructions clamped to a generous ceiling, recorded as an Observation, and it adds nothing to the graph.
 - **Enrichment of existing objects is automatic and free.** When a call recovers something unambiguous
   about an object that is *already* a node, a function's recovered prototype and address, the `is_sink`
   tag on a dangerous import, the call sites on an existing `calls` edge, HexGraph attaches it in place
@@ -171,7 +176,7 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
   for a substring search over tool, summary, and result kind across a project or a single target. Every
   tool result also carries a one-line reuse hint pointing you at them.
 - **Truncation is recoverable, never silent.** The body-returning tools (`re_decompile_function`,
-  `re_decompile_at`, `re_disassemble`, `re_search_decompiled`) inline at most about 6000 characters so
+  `re_decompile_at`, `re_disassemble`, `re_disassemble_range`, `re_search_decompiled`) inline at most about 6000 characters so
   your context stays bounded, but the full body always lives in the Observation. When a result is cut,
   the marker tells you both ways to get the rest: re-call the same tool with a larger `max_chars`
   (clamped to a generous ceiling, so one call can pull a whole long function), or read the recorded
