@@ -180,6 +180,15 @@ class Target(Base):
     # graph/lists but never deleted (durable knowledge). Re-adding the same bytes
     # restores them. Cascades down the parent_id subtree.
     archived: Mapped[bool] = mapped_column(default=False, index=True)
+    # Curated-graph visibility: a hidden target is still recorded + searchable + addressable
+    # (unpack registers every firmware ELF), but contributes NOTHING to the curated graph —
+    # the graph/Targets list/MCP target_list filter to visible=True by default, and recon on a
+    # hidden target ENRICHES it (metadata + an Observation) without materializing nodes or
+    # minting a finding. Revealing it (`set_visible`/`reveal_dir`) flips this True and
+    # materializes its recon nodes from the already-stored facts. Default True so a lone
+    # ingest, a promoted file, and every pre-existing target stay visible; only
+    # `unpack_firmware` registers its ELF children hidden.
+    visible: Mapped[bool] = mapped_column(default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     project: Mapped[Project] = relationship(back_populates="targets")

@@ -139,6 +139,7 @@ def target_dict(t: Target) -> dict:
         "format": t.format,
         "arch": t.arch,
         "parent_id": t.parent_id,
+        "visible": t.visible,
         "metadata": t.metadata_json or {},
     }
 

@@ -48,21 +48,36 @@ def host_root(project: Project, firmware: Target) -> Path:
     return _host_root(project, firmware)
 
 
-def list_filesystem(project: Project, firmware: Target) -> dict:
+def list_filesystem(project: Project, firmware: Target, session=None) -> dict:
     """The firmware's file tree for the detail panel (paths/sizes/types + which are
-    already targets)."""
+    already targets, and whether those are revealed into the curated graph).
+
+    Every unpacked ELF gets a `child_target_id` at unpack time, but unpack registers
+    those children HIDDEN — so `added` (a child exists) is distinct from `revealed`
+    (it's visible in the graph/Targets pane). The browser shows "Reveal" for an added
+    but hidden child, and the plain "added" badge once revealed."""
     fs = (firmware.metadata_json or {}).get("filesystem")
     if not fs:
         return {"unpacked": False, "files": []}
-    return {
-        "unpacked": True,
-        "method": fs.get("method"),
-        "files": [
-            {"rel": f["rel"], "size": f.get("size"), "is_elf": f.get("is_elf"),
-             "child_target_id": f.get("child_target_id"), "added": bool(f.get("child_target_id"))}
-            for f in fs.get("files", [])
-        ],
-    }
+
+    # Map child_target_id → visible, so the listing can distinguish hidden vs revealed.
+    # Read it from the live target rows (the manifest doesn't carry mutable visibility).
+    visible_by_id: dict[str, bool] = {}
+    if session is not None:
+        rows = (session.query(Target)
+                .filter(Target.project_id == project.id, Target.parent_id == firmware.id).all())
+        visible_by_id = {t.id: bool(t.visible) for t in rows}
+
+    out_files = []
+    for f in fs.get("files", []):
+        cid = f.get("child_target_id")
+        added = bool(cid)
+        revealed = bool(cid and visible_by_id.get(cid, True))  # default True when not resolvable
+        out_files.append({
+            "rel": f["rel"], "size": f.get("size"), "is_elf": f.get("is_elf"),
+            "child_target_id": cid, "added": added, "revealed": revealed,
+        })
+    return {"unpacked": True, "method": fs.get("method"), "files": out_files}
 
 
 class FilesystemError(ValueError):

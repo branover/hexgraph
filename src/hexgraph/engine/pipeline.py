@@ -25,7 +25,11 @@ _ENRICHABLE_KINDS = {"executable", "shared_library"}
 
 def _maybe_enrich_ghidra(session: Session, project: Project, target: Target, facts: dict) -> None:
     """Optionally fold Ghidra's function/call-graph/struct inventory into the graph
-    (Settings → features.ghidra.enrich_recon). Best-effort: never breaks recon."""
+    (Settings → features.ghidra.enrich_recon). Best-effort: never breaks recon.
+    Skipped for HIDDEN targets — a hidden target adds nothing to the curated graph
+    until revealed (reveal runs this enrichment then)."""
+    if not target.visible:
+        return
     if facts.get("kind") not in _ENRICHABLE_KINDS:
         return
     try:
@@ -44,14 +48,17 @@ def analyze_target(
     runner: Executor,
 ) -> dict:
     """Recon a target; if it's firmware, unpack and recon each child."""
-    _finding, facts = run_recon(session, project, target, runner)
+    facts = run_recon(session, project, target, runner)
     summary = {"target_id": target.id, "name": target.name, "children": []}
 
     is_firmware = facts.get("kind") == "firmware_image" or facts.get("format") in _FIRMWARE_FORMATS
     if is_firmware:
         summary["format"] = facts.get("format")
         for child in unpack_firmware(session, project, target, runner):
-            _child_finding, child_facts = run_recon(session, project, child, runner)
+            # Children are registered HIDDEN by unpack_firmware: recon ENRICHES each
+            # (metadata + a recon Observation) but materializes no graph nodes — a
+            # hidden child contributes nothing to the graph until revealed.
+            child_facts = run_recon(session, project, child, runner)
             _maybe_enrich_ghidra(session, project, child, child_facts)
             summary["children"].append({"target_id": child.id, "name": child.name})
     else:

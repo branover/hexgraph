@@ -66,12 +66,26 @@ agent's context small:
   and the hard `graph_delete_edge` — plus `finding_delete` for clearing a junk finding outright
   (a hard, irreversible delete that also removes the edges and annotations touching it, and
   detaches any task or fuzz artifact that referenced it); to set a finding aside reversibly
-  instead, call `finding_update(status='dismissed')`.
+  instead, call `finding_update(status='dismissed')`. It also holds the visibility verbs
+  `target_set_visible` (reveal or re-hide one target) and `target_reveal_dir` (reveal every
+  hidden firmware child under a rootfs directory prefix) — see the hidden-children note below.
 - **run** covers `target_ingest`, `target_promote_file` (promote a file from an unpacked firmware into
   its own target), `task_run`, `finding_verify_poc`, `fuzz_verify_artifact`,
   `fuzz_start`/`fuzz_resume`, `src_build`, and more. `target_ingest` returns a bounded summary
   (the child count plus a preview of the first ~20 children, since firmware can unpack into
   hundreds); call `target_list(project_id)` for the full target tree.
+
+**Firmware children are hidden by default.** A real firmware unpacks into hundreds of ELFs, so
+unpack registers each as a child target but keeps it **hidden** — it's recorded, searchable, and
+addressable, and recon still **enriches** it (its facts land on the target and as a `recon`
+Observation, queryable via `obs_list`/`obs_get`), but a hidden child contributes nothing to the
+curated graph and mints no finding. `target_list(project_id)` returns only the visible targets;
+pass `include_hidden=true` (or browse the rootfs with `fs_list`, whose entries now carry
+`added`/`revealed`) to find the children worth analyzing, then reveal them: `target_set_visible`
+for one, or `target_reveal_dir(firmware_target_id, "usr/sbin")` for a whole directory at once.
+Revealing flips the target visible and materializes its recon nodes from the already-stored facts
+(no re-run), so it joins the graph. Recon's old risky-sink → static-analysis follow-up now surfaces
+per target from the suggester (the firmware's own findings are unaffected).
 
 When a binary PoC needs to feed raw, non-printable bytes (an angr-solved serial, a binary stdin
 payload), `finding_verify_poc` takes byte-faithful `argv_b64` and `stdin_b64` fields: each is base64

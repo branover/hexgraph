@@ -1,39 +1,32 @@
-"""M2: deterministic recon + firmware unpack + graph (the zero-model-call loop)."""
+"""M2: deterministic recon + firmware unpack + graph (the zero-model-call loop).
 
-import json
+Recon ENRICHES a target (metadata + a recon Observation) and, for VISIBLE targets,
+materializes nodes — it no longer mints a per-target finding (PR: hidden-by-default
+children + recon-as-enrichment). Firmware children are registered HIDDEN, so they
+add nothing to the curated graph until revealed.
+"""
 
-from jsonschema import Draft202012Validator
-
-from hexgraph.db.models import Edge, EdgeType, Finding, TargetKind
+from hexgraph.db.models import Edge, EdgeType, Finding, Observation, TargetKind
 from hexgraph.db.session import session_scope
 from hexgraph.engine.graph.graph import build_graph
 from hexgraph.engine.targets.ingest import create_project
 from hexgraph.engine.pipeline import ingest_and_analyze
-from hexgraph.engine.re.recon import build_recon_finding
-from hexgraph.models.finding import Finding as FindingModel
-from hexgraph.paths import finding_schema_path
+from hexgraph.engine.suggester import suggest_target_followups
 
 from conftest import fixture_path
 
 
-def test_recon_finding_builder_is_schema_valid():
-    """Pure (no Docker): the recon finding builder emits a schema-valid finding."""
+def test_recon_summary_flags_risky_sinks():
+    """Pure (no Docker): the recon summary names weak mitigations + risky sinks."""
+    from hexgraph.engine.re.recon import recon_summary
+
     facts = {
         "format": "ELF", "arch": "x64", "kind": "executable",
-        "sha256": "deadbeef", "md5": "cafe", "size": 1234,
         "imports": ["strcpy", "printf", "strtok"],
-        "libraries": ["libc.so.6"],
-        "strings": ["/cgi-bin/", "token="],
         "mitigations": {"nx": True, "canary": False, "pie": False, "relro": "none"},
     }
-    finding = build_recon_finding(facts, "/sbin/httpd")
-    # Pydantic + JSON Schema both accept it.
-    FindingModel.model_validate(finding.to_payload())
-    validator = Draft202012Validator(json.loads(finding_schema_path().read_text()))
-    assert not list(validator.iter_errors(finding.to_payload()))
-    # Risky sink (strcpy) yields a static_analysis follow-up.
-    assert finding.suggested_followups
-    assert finding.suggested_followups[0].task_type == "static_analysis"
+    summary = recon_summary(facts, "/sbin/httpd")
+    assert "weak mitigations" in summary and "strcpy" in summary
 
 
 def test_recon_on_lone_elf(hg_home, sandbox):
@@ -47,13 +40,20 @@ def test_recon_on_lone_elf(hg_home, sandbox):
 
         t = s.get(Target, tid)
         assert t.kind == TargetKind.executable
+        assert t.visible is True  # a lone ingest is visible
         assert t.metadata_json["mitigations"]["canary"] is False
         assert "strcpy" in t.metadata_json["imports"]
-        findings = s.query(Finding).filter(Finding.project_id == pid).all()
-        assert len(findings) == 1 and findings[0].category == "recon"
+        # Recon mints NO finding — it enriches + records a recon Observation instead.
+        assert s.query(Finding).filter(Finding.project_id == pid).count() == 0
+        obs = s.query(Observation).filter(Observation.target_id == tid,
+                                          Observation.result_kind == "recon").all()
+        assert len(obs) == 1
+        # The risky-sink follow-up now surfaces at the target level (suggester seam).
+        fus = suggest_target_followups(t)
+        assert fus and fus[0].task_type == "static_analysis"
 
 
-def test_firmware_unpack_creates_children_and_edges(hg_home, sandbox):
+def test_firmware_unpack_hides_children_and_keeps_graph_lean(hg_home, sandbox):
     with session_scope() as s:
         project = create_project(s, name="fw")
         summary = ingest_and_analyze(s, project, fixture_path("synthetic_fw.bin"), runner=sandbox)
@@ -61,24 +61,46 @@ def test_firmware_unpack_creates_children_and_edges(hg_home, sandbox):
         assert len(summary["children"]) == 2  # httpd + libupnp.so
 
     with session_scope() as s:
+        from hexgraph.db.models import Target
+
         # firmware→child containment (target→target); excludes binary→symbol/string contains
         contains = s.query(Edge).filter(
             Edge.project_id == pid, Edge.type == EdgeType.contains, Edge.dst_kind == "target"
         ).all()
         assert len(contains) == 2
-        # one recon finding per target (3 total)
-        assert s.query(Finding).filter(Finding.project_id == pid).count() == 3
+        # The firmware itself is visible; both ELF children are HIDDEN.
+        targets = s.query(Target).filter(Target.project_id == pid).all()
+        fw = next(t for t in targets if t.kind == TargetKind.firmware_image)
+        kids = [t for t in targets if t.parent_id == fw.id]
+        assert fw.visible is True
+        assert len(kids) == 2 and all(k.visible is False for k in kids)
+        # Recon minted NO findings (was 3 per-target findings before).
+        assert s.query(Finding).filter(Finding.project_id == pid).count() == 0
+        # Each child recorded a recon Observation (enriched, queryable, re-usable).
+        for k in kids:
+            assert s.query(Observation).filter(
+                Observation.target_id == k.id, Observation.result_kind == "recon").count() == 1
+
+        # The graph shows ONLY the visible firmware (its hidden children add nothing).
         graph = build_graph(s, pid)
-        targets = [n for n in graph["nodes"] if n["type"] == "target"]
-        finding_nodes = [n for n in graph["nodes"] if n["type"] == "finding"]
-        assert len(targets) == 3 and len(finding_nodes) == 3
-        assert {n["kind"] for n in targets} == {"firmware_image", "executable", "shared_library"}
-        # recon also materialized typed symbol/string nodes
-        assert any(n["type"] == "node" for n in graph["nodes"])
+        gtargets = [n for n in graph["nodes"] if n["type"] == "target"]
+        assert len(gtargets) == 1 and gtargets[0]["kind"] == "firmware_image"
+        assert not [n for n in graph["nodes"] if n["type"] == "finding"]
+        # Any code nodes belong to the VISIBLE firmware itself; the hidden children
+        # contribute none (their recon nodes are deferred to reveal).
+        child_ids = {k.id for k in kids}
+        assert not [n for n in graph["nodes"]
+                    if n["type"] == "node" and n.get("target_id") in child_ids]
+
+        # include_hidden surfaces the children as target rows (their recon nodes are
+        # still deferred to reveal — included here only to be picked for reveal).
+        full = build_graph(s, pid, include_hidden=True)
+        assert len([n for n in full["nodes"] if n["type"] == "target"]) == 3
 
 
 def test_worker_runs_recon_task(hg_home, sandbox):
-    """The worker executes a queued recon task end-to-end."""
+    """The worker executes a queued recon task end-to-end: enriches + records an
+    Observation, mints no finding."""
     from hexgraph.engine.targets.ingest import ingest_file
     from hexgraph.engine.tasks import create_task
     from hexgraph.engine.worker import run_task_sync
@@ -87,11 +109,13 @@ def test_worker_runs_recon_task(hg_home, sandbox):
         project = create_project(s, name="w")
         target = ingest_file(s, project, fixture_path("vuln_httpd"))
         task = create_task(s, project=project, target_id=target.id, type="recon")
-        task_id = task.id
+        task_id, tid = task.id, target.id
 
     assert run_task_sync(task_id) == "succeeded"
     with session_scope() as s:
-        assert s.query(Finding).count() == 1
+        assert s.query(Finding).count() == 0
+        assert s.query(Observation).filter(
+            Observation.target_id == tid, Observation.result_kind == "recon").count() == 1
 
 
 def test_recon_classifies_wrapped_firmware():

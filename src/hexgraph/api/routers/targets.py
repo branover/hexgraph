@@ -129,6 +129,47 @@ def api_remove_target(project_id: str, target_id: str):
         return {"archived": n}
 
 
+class VisibleUpdate(BaseModel):
+    visible: bool = True
+
+
+@router.post("/api/projects/{project_id}/targets/{target_id}/visible")
+def api_set_target_visible(project_id: str, target_id: str, body: VisibleUpdate):
+    """Reveal (visible=true) or re-hide (visible=false) one target. Firmware children
+    are HIDDEN by default (unpack registers them so they're searchable/addressable, but
+    they add nothing to the curated graph); revealing materializes the target's recon
+    nodes from the already-stored facts (no re-run)."""
+    from hexgraph.engine.targets.reveal import set_visible
+
+    with session_scope() as s:
+        if s.get(Project, project_id) is None:
+            raise HTTPException(404, "project not found")
+        try:
+            return set_visible(s, project_id, target_id, body.visible)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc))
+
+
+class RevealDir(BaseModel):
+    prefix: str = ""
+
+
+@router.post("/api/projects/{project_id}/targets/{target_id}/reveal-dir")
+def api_reveal_dir(project_id: str, target_id: str, body: RevealDir):
+    """Reveal every HIDDEN child of a firmware whose rootfs path is under `prefix`
+    (e.g. "usr/sbin" reveals all ELFs under that directory). Materializes each revealed
+    child's recon nodes. `target_id` is the firmware target."""
+    from hexgraph.engine.targets.reveal import reveal_dir
+
+    with session_scope() as s:
+        if s.get(Project, project_id) is None:
+            raise HTTPException(404, "project not found")
+        try:
+            return reveal_dir(s, project_id, target_id, body.prefix)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc))
+
+
 @router.post("/api/projects/{project_id}/targets/{target_id}/restore")
 def api_restore_target(project_id: str, target_id: str):
     with session_scope() as s:
@@ -204,6 +245,21 @@ def api_disassemble(target_id: str, body: dict):
                 "functions": out.get("functions", []), "focus": out.get("focus")}
 
 
+@router.get("/api/targets/{target_id}/suggestions")
+def api_target_suggestions(target_id: str):
+    """Target-level follow-up suggestions from the target's enriched recon metadata
+    (e.g. it imports a risky sink → static-analyze it). This is where the risky-sink
+    follow-up lives now that recon enriches the target rather than minting a finding.
+    Launch one with POST /api/projects/{pid}/tasks (target_id + the suggestion's type)."""
+    from hexgraph.engine.suggester import suggest_target_followups
+
+    with session_scope() as s:
+        t = s.get(Target, target_id)
+        if t is None:
+            raise HTTPException(404, "target not found")
+        return [fu.model_dump(exclude_none=True) for fu in suggest_target_followups(t)]
+
+
 @router.get("/api/targets/{target_id}/filesystem")
 def api_target_filesystem(target_id: str):
     """The unpacked filesystem manifest of a firmware target (browsable tree)."""
@@ -211,7 +267,7 @@ def api_target_filesystem(target_id: str):
         t = s.get(Target, target_id)
         if t is None:
             raise HTTPException(404, "target not found")
-        return list_filesystem(s.get(Project, t.project_id), t)
+        return list_filesystem(s.get(Project, t.project_id), t, session=s)
 
 
 @router.get("/api/targets/{target_id}/file")

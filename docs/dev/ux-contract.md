@@ -158,6 +158,11 @@ entries reference them by name.
 
 ## SURFACE 1 — Targets pane (left)
 
+The Targets pane shows only **visible** targets. A firmware unpacks into hundreds of ELF children,
+each registered HIDDEN (recorded, searchable, recon-enriched, but not in the pane or graph) so the
+tree isn't a 765-row wall; you **reveal** the binaries worth analyzing from the firmware's
+FilesystemBrowser (TGT-13/TGT-14). A lone ingest and a promoted file are visible immediately.
+
 **TGT-01 — Add a target (upload)**
 - Steps: click **Add** in the Targets header → pick a file.
 - Functional: a busy badge ("analyzing <name>…") appears; on completion the target appears in the tree.
@@ -242,12 +247,39 @@ entries reference them by name.
 
 **TGT-10 — Firmware filesystem browser + add-file-as-target**
 - Steps: select a firmware target → in its NodeInspector open the FilesystemBrowser → browse the unpacked
-  tree → add a file as a child target.
-- Functional: the file is added as a new child target and appears in the tree.
-- 🔌 Backend: `GET` the firmware filesystem listing; the add-file call creates a child `target`. Verify the row.
+  tree → add a NON-registered file (a script/config, or a binary unpack didn't register) as a child target.
+- Functional: the file is added as a new (visible) child target and appears in the tree.
+- 🔌 Backend: `GET` the firmware filesystem listing (entries carry `added` + `revealed`); the add-file
+  (`promote-file`) call creates a visible child `target`. Verify the row.
 - Qualitative: the FS browser reads like a file explorer (Discoverable); adding is one action (Friction).
 - Principle: any file in the firmware is promotable to a curated target.
 - Prereq: a firmware with an unpacked filesystem.
+
+**TGT-13 — Reveal an unpack-registered (hidden) binary**
+- Steps: in a firmware's FilesystemBrowser, find an ELF entry showing a **Reveal** button (it's `added` —
+  unpack registered it — but not yet `revealed`) → click Reveal.
+- Functional: the child target becomes visible — it appears in the Targets tree and the graph, its recon
+  symbol/string nodes materialize, and the entry's button flips to the plain `added` badge.
+- 🔌 Backend: `POST /api/projects/{id}/targets/{tid}/visible` `{visible:true}` (`target_set_visible`) flips
+  `target.visible` and materializes the recon nodes from the already-stored facts (no re-run); verify the
+  target now appears in `GET /api/projects/{id}` and `/graph`, with code nodes under it.
+- Qualitative: Reveal is distinct from add (Honesty — the binary already exists; you're surfacing it, not
+  re-ingesting); one click (Friction); the firmware's hundreds of ELFs stay out of the way until chosen (calm).
+- Principle: hidden-by-default keeps the graph lean; reveal is the curation gate for firmware children.
+- Prereq: a firmware whose unpacked ELFs are hidden (the default after ingest).
+
+**TGT-14 — Reveal a whole directory of binaries**
+- Steps: in the FilesystemBrowser, on a folder that holds hidden ELFs (or the header's **reveal all**),
+  click **reveal all**.
+- Functional: every hidden child under that directory prefix is revealed at once (appears in tree + graph);
+  a directory with nothing hidden shows no reveal-all button.
+- 🔌 Backend: `POST /api/projects/{id}/targets/{fwId}/reveal-dir` `{prefix}` (`target_reveal_dir`) reveals
+  all matching hidden children + materializes their recon nodes; verify the count and that the revealed
+  targets appear in the listing.
+- Qualitative: bulk reveal for "I want everything under /usr/sbin" without clicking each (Friction); the
+  button only shows where it would do something (Forgiveness — no dead control).
+- Principle: reveal scales from one binary to a directory.
+- Prereq: a firmware directory with ≥1 hidden ELF child.
 
 **TGT-11 — Ghidra import (bridge mode)**
 - Steps: with Ghidra bridge enabled, click the **Ghidra** button in the Targets header → the import modal.
@@ -275,6 +307,18 @@ entries reference them by name.
   plain rather than mislabeled (Honesty — auto-enrichment never *judges*).
 - Principle: anything recon surfaced is one click from the curated graph; promotion is lightweight and
   forward-enriching.
+
+**TGT-15 — Target "Next steps" (recon-derived follow-ups)**
+- Steps: select a byte target whose recon found risky-sink imports (e.g. it imports `strcpy`) → in its
+  NodeInspector, look under **Next steps** (between the Run launcher and Recon facts).
+- Functional: one or more suggestion buttons (e.g. "Static-analyze … for memory safety"); clicking one opens
+  the LaunchModal prefilled for that task type on this target.
+- 🔌 Backend: `GET /api/targets/{id}/suggestions` (`suggest_target_followups`) — the home for the risky-sink →
+  static-analysis follow-up now that recon enriches the target instead of minting a per-target finding.
+- Qualitative: the loop still surfaces ("recon found a binary that imports strcpy → static-analyze it")
+  without a noise finding (Honesty); absent when there's nothing to suggest (no empty section).
+- Principle: the target → task loop survives recon-as-enrichment; follow-ups live on the target, not a finding.
+- Prereq: a byte target whose recon metadata shows a risky sink import.
 - Prereq: a target whose recon facts include imports/exports.
 
 ---

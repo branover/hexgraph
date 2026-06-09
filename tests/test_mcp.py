@@ -54,6 +54,41 @@ def test_list_and_facts(hg_home):
     assert facts["imports"] == ["strcpy"] and facts["exports"] == ["ssdp_recv"]
 
 
+def test_list_targets_excludes_hidden_by_default(hg_home):
+    """target_list hides firmware children by default (visible filter); include_hidden
+    surfaces them, and target_set_visible reveals one."""
+    with session_scope() as s:
+        p = create_project(s, name="hid")
+        fw = ingest_file(s, p, fixture_path("synthetic_fw.bin"), name="fw")
+        child = ingest_file(s, p, fixture_path("vuln_httpd"), name="usr/sbin/httpd",
+                            parent=fw, visible=False)
+        pid, fwid, cid = p.id, fw.id, child.id
+
+    visible_ids = {t["id"] for t in mcp_tools.list_targets(pid)}
+    assert fwid in visible_ids and cid not in visible_ids
+    all_ids = {t["id"] for t in mcp_tools.list_targets(pid, include_hidden=True)}
+    assert {fwid, cid} <= all_ids
+
+    out = mcp_tools.set_visible(pid, cid, True)
+    assert out["visible"] is True
+    assert cid in {t["id"] for t in mcp_tools.list_targets(pid)}
+
+
+def test_reveal_dir_tool(hg_home):
+    """target_reveal_dir reveals every hidden child under a rootfs prefix."""
+    with session_scope() as s:
+        p = create_project(s, name="rd")
+        fw = ingest_file(s, p, fixture_path("synthetic_fw.bin"), name="fw")
+        a = ingest_file(s, p, fixture_path("vuln_httpd"), name="usr/sbin/httpd", parent=fw, visible=False)
+        b = ingest_file(s, p, fixture_path("vuln_httpd"), name="bin/busybox", parent=fw, visible=False)
+        pid, fwid, aid, bid = p.id, fw.id, a.id, b.id
+
+    out = mcp_tools.reveal_dir(pid, fwid, "usr/sbin")
+    assert out["revealed"] == 1 and out["target_ids"] == [aid]
+    vis = {t["id"] for t in mcp_tools.list_targets(pid)}
+    assert aid in vis and bid not in vis
+
+
 def test_create_project_tool_makes_empty_project(hg_home):
     """Eval finding F1: a source-first workflow couldn't start from MCP (ingest needs a
     binary path, import_source_tree errors without a project). create_project makes an

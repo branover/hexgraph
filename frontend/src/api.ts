@@ -107,7 +107,7 @@ export interface SettingsView {
 export interface PolicyFeatureState { configured: boolean; effective: boolean; pending_restart: boolean }
 export interface PolicyView { restart_required: boolean; pending: string[]; features: Record<string, PolicyFeatureState> }
 export interface GhidraStatus { enabled: boolean; ok: boolean; detail: string; mode?: string; [k: string]: any; }
-export interface FsEntry { rel: string; size?: number; is_elf?: boolean; child_target_id?: string | null; added?: boolean; }
+export interface FsEntry { rel: string; size?: number; is_elf?: boolean; child_target_id?: string | null; added?: boolean; revealed?: boolean; }
 export interface SourceTreeRow { id: string; name: string; origin: string; editable: boolean; can_edit?: boolean; vcs_rev?: string | null; content_hash?: string | null; file_count: number; archived: boolean; target_ids: string[]; }
 export interface SourceFileEntry { rel: string; size?: number; role: string; node_id?: string | null; is_harness?: boolean; }
 export interface BuildSpecBody { source_tree_id: string; system?: string; phases?: any[]; instrumentation?: { sanitizers?: string[]; coverage?: string[]; engine?: string }; artifacts?: string[]; env?: Record<string, string>; arch?: string; name?: string; network?: string; fetch_phases?: any[]; }
@@ -288,6 +288,13 @@ export const api = {
   disassemble: (tid: string, opts: { function?: string; address?: string }) => postJSON<{ available: boolean; backend?: string; detail?: string; focus?: any; functions?: string[] }>(`/api/targets/${tid}/disassemble`, opts),
   filesystem: (tid: string) => getJSON<{ unpacked: boolean; method?: string; files: FsEntry[] }>(`/api/targets/${tid}/filesystem`),
   promoteFile: (pid: string, fwId: string, rel: string) => postJSON<any>(`/api/projects/${pid}/targets/${fwId}/promote-file`, { rel }),
+  // Reveal/re-hide a target in the curated graph. Firmware ELF children are hidden by default
+  // (unpack registers them all); revealing materializes the target's recon nodes from stored facts.
+  setTargetVisible: (pid: string, tid: string, visible: boolean) => postJSON<{ target_id: string; name: string; visible: boolean; materialized: boolean }>(`/api/projects/${pid}/targets/${tid}/visible`, { visible }),
+  // Bulk-reveal every hidden firmware child whose rootfs path is under `prefix` (e.g. "usr/sbin").
+  revealDir: (pid: string, fwId: string, prefix: string) => postJSON<{ firmware_target_id: string; prefix: string; revealed: number; target_ids: string[] }>(`/api/projects/${pid}/targets/${fwId}/reveal-dir`, { prefix }),
+  // Target-level follow-up suggestions from enriched recon metadata (e.g. risky-sink → static-analyze).
+  targetSuggestions: (tid: string) => getJSON<any[]>(`/api/targets/${tid}/suggestions`),
   // Source trees (Phase 1 — read-only IDE browse)
   sourceTrees: (pid: string) => getJSON<{ source_trees: SourceTreeRow[] }>(`/api/projects/${pid}/source-trees`),
   createSourceTree: (pid: string, body: { name: string; origin?: string; target_id?: string }) => postJSON<{ id: string; name: string; origin: string }>(`/api/projects/${pid}/source-trees`, body),

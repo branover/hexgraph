@@ -58,18 +58,24 @@ def api_delete_project(project_id: str):
 
 
 @router.get("/api/projects/{project_id}")
-def api_project(project_id: str):
+def api_project(project_id: str, include_hidden: bool = False):
+    """The project workspace payload. Targets default to VISIBLE only — a firmware's
+    hidden ELF children (unpack registered but unrevealed) are excluded so the Targets
+    pane isn't flooded; pass `include_hidden=true` to list them too."""
     with session_scope() as s:
         project = s.get(Project, project_id)
         if project is None:
             raise HTTPException(404, "project not found")
-        targets = s.query(Target).filter(
+        tq = s.query(Target).filter(
             Target.project_id == project_id, Target.archived.is_(False)
-        ).all()
+        )
+        if not include_hidden:
+            tq = tq.filter(Target.visible.is_(True))
+        targets = tq.all()
         live_ids = {t.id for t in targets}
         findings = [
             f for f in s.query(Finding).filter(Finding.project_id == project_id).all()
-            if f.target_id in live_ids  # hide findings under archived (removed) targets
+            if f.target_id in live_ids  # hide findings under archived/hidden targets
         ]
         tasks = s.query(Task).filter(Task.project_id == project_id).all()
         total_cost = round(sum(t.cost_estimate or 0.0 for t in tasks), 6)

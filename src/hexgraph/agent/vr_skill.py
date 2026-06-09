@@ -81,10 +81,16 @@ skip ahead. If you were handed a PATH (e.g. "find vulns in the firmware at /path
 - `target_ingest(path, project_id=<id>)` — processes the bytes in the sandbox and registers a
   target, returning a bounded summary (children_count + a preview of the first ~20 children).
   **Firmware unpacks into child targets**: the extracted binaries become their own targets and
-  the rootfs becomes browsable. `target_list(project_id)` then shows the binary you ingested
-  PLUS every child (httpd, cgi-bin handlers, daemons, libraries) — use it for the FULL set
-  (firmware can unpack into hundreds). That child set is your attack surface and your unit of
-  parallel work.
+  the rootfs becomes browsable. Those children are registered **hidden** (a firmware unpacks
+  into hundreds of ELFs; a visible child each would bury the graph), but each is still
+  recon-enriched, searchable, and addressable. `target_list(project_id)` shows the firmware
+  plus the **revealed** children; `target_list(project_id, include_hidden=true)` (or `fs_list`,
+  whose entries carry `added`/`revealed`) shows the full set. Pick the binaries worth analyzing
+  (httpd, cgi-bin handlers, daemons, the libraries they link) and **reveal** them —
+  `target_set_visible(project_id, target_id)` for one, `target_reveal_dir(project_id,
+  firmware_id, "usr/sbin")` for a whole directory — which brings them into the graph
+  (materializing their recon nodes from the already-stored facts, no re-run). That revealed
+  set is your attack surface and your unit of parallel work.
 
 **Phase 1 — Orient before you analyze.** Cheap reads first, so you never re-derive what's
 known and you can see where to go:
@@ -94,8 +100,11 @@ known and you can see where to go:
 - Read prior work: `finding_list(project_id)` (what's already found / confirmed / dismissed —
   each row carries the `assurance` triple, so don't re-report a dismissed or already-proven
   bug; it's newest-first, paginates via `limit`/`offset`, filters by
-  `finding_type`/`status`/`severity`/`target_id`/`verified`, and DEFAULT-EXCLUDES the
-  per-child `recon` findings — pass include_recon=true to see them), `graph_stats` / `graph_list_nodes` / `graph_list_hypotheses` (what's promoted and what's
+  `finding_type`/`status`/`severity`/`target_id`/`verified`, and DEFAULT-EXCLUDES
+  low-signal `recon` findings — pass include_recon=true to see them. Byte recon no longer
+  mints a per-target finding: it ENRICHES the target + records a `recon` Observation
+  (`obs_list(target_id, kind='recon')`), so read facts via `target_facts`/`obs_*`, not the
+  findings list), `graph_stats` / `graph_list_nodes` / `graph_list_hypotheses` (what's promoted and what's
   being chased), `journal_list` / `journal_search` (what a prior session tried and ruled out —
   the cheapest re-orientation), and `obs_list(target_id)` (heavy analysis already cached — reuse
   it, don't pay twice).
@@ -315,18 +324,25 @@ FILES, not its code: hardcoded credentials and API keys, private keys/certs, wea
 defaults, CGI scripts, and the web root. **Skim the tree EARLY** — it shows you what runs and
 where the secrets are before you decompile a thing.
 - **fs_list(target_id)** — the unpacked tree (paths/sizes, which entries are ELFs, which are
-  already child targets). Start here.
+  `added` as child targets, and which of those are `revealed` into the graph). Start here.
 - **fs_read_file(target_id, path)** — read ONE file (config/script/key/web template; bounded,
   traversal-safe; binary shown as hex; path relative to the extracted root). This is the
   firmware's OWN unpacked bytes — distinct from `src_read_file`, which reads trusted managed
   source. Turn what you find into findings + nodes: a startup script running `/sbin/httpd` →
   record the service + a `socket` node; `/etc/shadow` with a weak hash → a hardcoded-credential
   finding; a baked-in private key → record it.
-- **target_promote_file(target_id, path)** — promote an interesting file (a CGI, a daemon, a
-  helper binary) that unpack didn't already register into its OWN child target, then decompile
-  / list functions / `task_run` / fuzz it like any other target. This is the bridge from "I see
-  an interesting binary in the rootfs" to actually analyzing it — and a natural seam for
-  handing that child to a parallel sub-agent.
+- **target_set_visible(project_id, target_id) / target_reveal_dir(project_id, firmware_id,
+  prefix)** — REVEAL an unpack-registered ELF child (or a whole directory of them, e.g.
+  prefix=`"usr/sbin"`) into the curated graph. Unpack registers every ELF hidden, so an
+  `fs_list` entry that's `added` but not `revealed` already IS a target — reveal it (recon
+  already enriched it; reveal materializes its nodes, no re-run) rather than re-promoting.
+  Reveal the binaries worth analyzing, then decompile / `task_run` / fuzz them like any other.
+- **target_promote_file(target_id, path)** — promote a NON-ELF file or one unpack didn't register
+  (a CGI script, a helper) into its OWN child target (created visible), then analyze it. Use
+  `target_set_visible`/`target_reveal_dir` for the ELF children that already exist hidden, and
+  `target_promote_file` for anything not already a target. Either way it's the bridge from "I see
+  an interesting file in the rootfs" to analyzing it — and a natural seam for handing that child
+  to a parallel sub-agent.
 
 ## The firmware network map
 Model network/IPC endpoints as **socket nodes** (`graph_create_socket(kind, port|name)`) and

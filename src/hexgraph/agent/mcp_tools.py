@@ -27,11 +27,17 @@ def list_projects() -> list[dict]:
                 for p in s.query(Project).all()]
 
 
-def list_targets(project_id: str) -> list[dict]:
+def list_targets(project_id: str, include_hidden: bool = False) -> list[dict]:
     with session_scope() as s:
-        rows = s.query(Target).filter(Target.project_id == project_id, Target.archived.is_(False)).all()
+        q = s.query(Target).filter(Target.project_id == project_id, Target.archived.is_(False))
+        if not include_hidden:
+            # Hidden firmware children (unpack registers every ELF hidden) are excluded by
+            # default — addressable/searchable, but they'd flood the list. Pass
+            # include_hidden=true to enumerate them (then target_set_visible to reveal).
+            q = q.filter(Target.visible.is_(True))
+        rows = q.all()
         return [{"id": t.id, "name": t.name, "kind": t.kind.value, "arch": t.arch,
-                 "parent_id": t.parent_id} for t in rows]
+                 "parent_id": t.parent_id, "visible": t.visible} for t in rows]
 
 
 # libc/shell sinks worth pointing a researcher straight at.
@@ -55,15 +61,18 @@ def target_facts(target_id: str) -> dict:
 
 def list_filesystem(target_id: str) -> dict:
     """List a firmware target's unpacked filesystem (paths, sizes, which are ELFs / already
-    child targets). Use it to find config files, scripts, keys, and web assets to inspect —
-    then read_file to view one. Returns {unpacked, method, files:[{rel,size,is_elf,added}]}."""
+    child targets, and whether those child targets are REVEALED into the graph). Use it to
+    find config files, scripts, keys, web assets to inspect — then read_file to view one, or
+    target_set_visible to reveal a hidden ELF child. Returns {unpacked, method,
+    files:[{rel,size,is_elf,added,revealed,child_target_id}]} (added=a child target exists;
+    revealed=it's visible in the graph — unpack registers ELF children hidden)."""
     from hexgraph.engine.targets.filesystem import list_filesystem as _ls
 
     with session_scope() as s:
         t = s.get(Target, target_id)
         if t is None:
             return {"error": "target not found"}
-        return _ls(s.get(Project, t.project_id), t)
+        return _ls(s.get(Project, t.project_id), t, session=s)
 
 
 def read_file(target_id: str, path: str) -> dict:
@@ -1230,6 +1239,45 @@ def restore_target(project_id: str, target_id: str) -> dict:
             return {"error": "project not found"}
         try:
             return {"restored": _restore(s, project_id, target_id)}
+        except ValueError as exc:
+            return {"error": str(exc)}
+
+
+def set_visible(project_id: str, target_id: str, visible: bool = True) -> dict:
+    """REVEAL (visible=true) or re-HIDE (visible=false) one target in the curated graph.
+    Firmware ELF children are HIDDEN by default (unpack registers each so it's searchable
+    and addressable, but a 765-ELF firmware would otherwise flood the graph/Targets pane);
+    recon already enriched them. Revealing materializes the target's recon nodes from the
+    already-stored facts (no re-run) so it joins the graph. Returns
+    {target_id, name, visible, materialized}."""
+    from hexgraph.engine.targets.reveal import set_visible as _set
+
+    with session_scope() as s:
+        if s.get(Project, project_id) is None:
+            return {"error": "project not found"}
+        try:
+            return _set(s, project_id, target_id, visible)
+        except ValueError as exc:
+            return {"error": str(exc)}
+
+
+def reveal_dir(project_id: str, target_id: str, prefix: str = "") -> dict:
+    """REVEAL every HIDDEN child of a firmware whose rootfs path is under `prefix`
+    (e.g. prefix='usr/sbin' reveals all ELFs in /usr/sbin) — the bulk counterpart to
+    target_set_visible for bringing a whole directory of binaries into the curated graph
+    at once. An empty prefix reveals ALL hidden children. Materializes each revealed
+    child's recon nodes from stored facts (no re-run). `target_id` is the firmware.
+    Returns {firmware_target_id, prefix, revealed, target_ids}."""
+    # NB: the catalog advertises this arg as `target_id` (the firmware), and the MCP
+    # server dispatches by KEYWORD (`fn(**arguments)`), so this param name MUST match
+    # the catalog schema — otherwise every MCP call raises TypeError.
+    from hexgraph.engine.targets.reveal import reveal_dir as _reveal
+
+    with session_scope() as s:
+        if s.get(Project, project_id) is None:
+            return {"error": "project not found"}
+        try:
+            return _reveal(s, project_id, target_id, prefix)
         except ValueError as exc:
             return {"error": str(exc)}
 

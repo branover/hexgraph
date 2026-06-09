@@ -39,10 +39,21 @@ _SEV_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 SKELETON_THRESHOLD = 1500
 
 
-def build_graph(session: Session, project_id: str) -> dict:
-    targets = session.query(Target).filter(
+def _live_targets(session: Session, project_id: str, include_hidden: bool = False):
+    """The targets that contribute to the curated graph: never archived, and (unless
+    `include_hidden`) only visible ones. A hidden target — a firmware ELF child that
+    unpack registered but nobody revealed — is recorded + searchable but adds nothing
+    to the graph until revealed."""
+    q = session.query(Target).filter(
         Target.project_id == project_id, Target.archived.is_(False)
-    ).all()
+    )
+    if not include_hidden:
+        q = q.filter(Target.visible.is_(True))
+    return q.all()
+
+
+def build_graph(session: Session, project_id: str, *, include_hidden: bool = False) -> dict:
+    targets = _live_targets(session, project_id, include_hidden)
     live_ids = {t.id for t in targets}
     code_nodes = [
         n for n in session.query(Node).filter(Node.project_id == project_id, Node.archived.is_(False)).all()
@@ -129,12 +140,8 @@ def graph_size(session: Session, project_id: str) -> dict:
     """Cheap node+edge count for the project's live graph, so the client can pick
     skeleton-first vs full load WITHOUT first fetching ~13k nodes. Counts mirror
     build_graph's liveness rules (archived targets/nodes excluded)."""
-    # Live target ids (archived excluded).
-    target_ids = [
-        t.id for t in session.query(Target).filter(
-            Target.project_id == project_id, Target.archived.is_(False)
-        ).all()
-    ]
+    # Live target ids (archived + hidden excluded — they're not in the graph).
+    target_ids = [t.id for t in _live_targets(session, project_id)]
     live = set(target_ids)
     n_nodes = sum(
         1 for n in session.query(Node).filter(
@@ -166,11 +173,7 @@ def graph_stats(session: Session, project_id: str) -> dict:
     mirroring graph_size); the edge tally is the project-wide per-type count (as graph_size's edge
     count is). Returns {targets, findings, nodes_by_type{type:count}, edges_by_type{type:count},
     totals{...}}."""
-    target_ids = [
-        t.id for t in session.query(Target).filter(
-            Target.project_id == project_id, Target.archived.is_(False)
-        ).all()
-    ]
+    target_ids = [t.id for t in _live_targets(session, project_id)]
     live = set(target_ids)
     nodes_by_type: dict[str, int] = {}
     for n in session.query(Node).filter(
@@ -211,10 +214,10 @@ def build_skeleton(session: Session, project_id: str) -> dict:
     (for the size-by-weight + severity-rollup ring), and `has_interior` (whether
     expanding it will fetch anything). Shared sockets (`target_id = null`) are
     emitted as ordinary `node`s so the client renders the network-bus lane.
+    Hidden targets are excluded (mirrors build_graph) — only revealed binaries
+    appear as rooms.
     """
-    targets = session.query(Target).filter(
-        Target.project_id == project_id, Target.archived.is_(False)
-    ).all()
+    targets = _live_targets(session, project_id)
     live_ids = {t.id for t in targets}
 
     nodes = session.query(Node).filter(
