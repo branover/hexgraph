@@ -401,7 +401,8 @@ def verify_callback(session, project, target, spec, runner, nonce, *, is_web, is
         record_egress(session, project_id=project.id, target_id=target.id,
                       dest=f"{bind_host} (callback listener, pre-bind)", allowed=False,
                       tool="callback_listener",
-                      detail="blocked: callback listener requires the bounded-network tier")
+                      detail="blocked: callback listener requires the bounded-network tier",
+                      durable=True)
         raise
 
     listener = CallbackListener(host=bind_host).start()  # loopback/private only (fail-closed)

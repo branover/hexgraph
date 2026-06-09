@@ -78,6 +78,7 @@ def record_observation(
     status: str = "ok",
     content_hash: str | None = None,
     node_refs: list[Any] | None = None,
+    durable: bool = True,
 ) -> tuple[Observation, bool]:
     """Record one tool call, or reuse a fresh identical one.
 
@@ -85,8 +86,51 @@ def record_observation(
     same `(tool, normalized args, content_hash, result_kind)`, returns it with
     `cached=True` and stores nothing new ("analyze once, reuse forever", §5.2).
     Otherwise stores the full `payload` in CAS, sets `result_cas`/`size`, writes the
-    row, and returns `cached=False`. Creates NO graph nodes/edges (curation gate)."""
-    # Only OK results dedup — re-running after an error must be allowed to retry.
+    row, and returns `cached=False`. Creates NO graph nodes/edges (curation gate).
+
+    **Durability (the survive-a-late-failure contract).** An Observation is RAW,
+    reusable tool output — a decompilation/strings/xref/taint/yara result that already
+    succeeded. It must survive a later failure of the *task* that produced it (a DB lock
+    at the task's final commit, a sandbox error in a subsequent step, …): "analyze once,
+    reuse forever" is pointless if a multi-minute decompile is rolled back because a step
+    that ran afterwards failed. The task runner (`engine.worker.run_task_sync`) holds ONE
+    long-lived `session_scope` across the whole task — unpack, decompile, the agent loop,
+    the grounded taint pass — and `session_scope` rolls the WHOLE transaction back on any
+    exception, so without this a lock (or any failure) at the very end discards every
+    Observation the task already produced.
+
+    So with `durable=True` (the default) this **commits the caller's `session` once the
+    Observation row + its always-welcome enrichment are written**, checkpointing all the
+    reusable analysis accumulated so far — the Observation substrate AND the curated-graph
+    enrichment (both are derived from the real bytes and stand on their own) — so a later
+    failure can no longer wipe them. The checkpoint is a plain `session.commit()` (see
+    `_checkpoint` for why it is deliberately NOT wrapped in the commit-level write-retry);
+    `busy_timeout` (5s) is the transient-lock resilience that IS safe here — it makes the
+    commit's flush WAIT for the lock rather than fail immediately.
+
+    Why commit the CALLER's session rather than a separate one: SQLite is single-writer.
+    The task session holds the write lock continuously once it has flushed any pending
+    write, so a second session committing an Observation row concurrently would just hit
+    "database is locked" until that lock frees — which is task-duration away. Committing the
+    caller's own session is the only checkpoint that actually releases + reacquires the
+    lock cleanly mid-task.
+
+    **The synthesized FINDINGS still roll back with a failed task** (the deliberate
+    semantics): a task persists its synthesized/LLM findings in a final phase, AFTER its
+    investigation has recorded all its Observations, so a failure there (or at the task's
+    final commit) rolls back only the post-checkpoint work — the findings — while every
+    earlier-checkpointed Observation survives. (The grounded static-core findings a task
+    persists UP FRONT, before the agent loop, are derived from the real bytes and are by
+    design kept across a later synthesis failure — see `engine.llm_tasks`; checkpointing
+    them here matches that intent.)
+
+    `durable=False` keeps the legacy behavior — the row is written on `session` and only
+    becomes durable when `session` commits — for callers that genuinely want the
+    Observation to share the caller's transaction lifetime (e.g. a unit-of-work test, or a
+    flow whose observation should roll back with it)."""
+    # Only OK results dedup — re-running after an error must be allowed to retry. The
+    # lookup runs on the caller's session so it also sees this task's own just-flushed
+    # rows; the durable checkpoint below is what makes a fresh row survive a later failure.
     if status == "ok":
         existing = _find_fresh(
             session, project_id=project_id, target_id=target_id, tool=tool,
@@ -97,6 +141,8 @@ def record_observation(
 
     project = session.get(Project, project_id)
     blob = json.dumps(payload, sort_keys=True, default=str)
+    # CAS is filesystem-backed (transaction-independent): the payload is durable the
+    # moment it's written, regardless of which session commits the row.
     result_cas = cas.put(project, blob) if project is not None else None
     size = len(blob.encode("utf-8"))
 
@@ -112,7 +158,9 @@ def record_observation(
     # Extract-at-write (design §5.5): distill the always-welcome facts from this
     # payload into the enrichment index, keyed by canonical node identity, and enrich
     # any node/edge that already exists. A node added later pulls the rest at create.
-    # Only OK results carry trustworthy facts; extraction never breaks the call.
+    # Only OK results carry trustworthy facts; extraction never breaks the call. This
+    # runs BEFORE the durable checkpoint so the enrichment (also reusable analysis)
+    # is checkpointed alongside the Observation row.
     if status == "ok":
         from hexgraph.engine.re import enrichment
 
@@ -121,7 +169,32 @@ def record_observation(
             content_hash=content_hash, result_kind=result_kind, payload=payload,
             source_observation_id=obs.id,
         )
+
+    if durable:
+        _checkpoint(session)
     return obs, False
+
+
+def _checkpoint(session: Session) -> None:
+    """Commit the caller's session so the reusable analysis written so far (this
+    Observation + its enrichment, and anything else pending on the session) becomes
+    durable and can no longer be wiped by a later failure of the long-lived task
+    transaction — the durability contract in `record_observation`.
+
+    A plain `session.commit()` ON PURPOSE — NOT wrapped in the write-retry. Retrying a
+    commit/flush on THIS session would be a silent data-loss trap: once `commit()` (or its
+    final autoflush) fails on a lock, SQLAlchemy rolls the transaction back and EXPUNGES
+    the pending objects, so a re-commit would commit an empty transaction and lose the
+    Observation while reporting success (the same reason `session_scope` documents that a
+    commit lock can't be retried in place — the unit must be rebuilt from scratch, which a
+    bare re-commit can't do). The transient-lock resilience that IS safe lives one layer
+    down: `busy_timeout` (5s, db.session pragmas) makes the commit's flush WAIT for the
+    lock rather than fail immediately, which absorbs ordinary cross-process contention (a
+    web-app task vs an MCP server). If the timeout still elapses the lock error propagates
+    and the task fails as it would today — but every Observation an EARLIER checkpoint
+    already committed is safe, which is the whole improvement over the old single
+    end-of-task commit."""
+    session.commit()
 
 
 def _row_dict(obs: Observation) -> dict[str, Any]:

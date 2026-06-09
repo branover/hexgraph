@@ -11,13 +11,22 @@ from hexgraph.db.models import EgressEvent
 
 def record_egress(session: Session, *, project_id: str, dest: str, allowed: bool,
                   tool: str = "", target_id: str | None = None, task_id: str | None = None,
-                  detail: str | None = None) -> EgressEvent:
+                  detail: str | None = None, durable: bool = False) -> EgressEvent:
     """Log one outbound action (allowed or denied). Call this for EVERY egress
-    decision — including denials — so the audit is complete."""
+    decision — including denials — so the audit is complete.
+
+    `durable=True` COMMITS the caller's session so the audit row survives even if the
+    caller then raises (the deny-then-raise path): the worker's failure handler rolls the
+    task transaction back, which would otherwise discard a staged-but-uncommitted denial
+    event and leave the security audit incomplete. A denial is a durable fact about a
+    policy decision (like an Observation) and must outlive the failed task that triggered
+    it. Default False keeps allowed-path / self-contained-session callers transactional."""
     ev = EgressEvent(project_id=project_id, target_id=target_id, task_id=task_id,
                      dest=dest, allowed=bool(allowed), tool=tool, detail=detail)
     session.add(ev)
     session.flush()
+    if durable:
+        session.commit()
     return ev
 
 

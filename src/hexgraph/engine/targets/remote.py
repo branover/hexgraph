@@ -104,7 +104,7 @@ def run_remote(session: Session, project: Project, target: Target, *, op: str,
     except PolicyViolation:
         record_egress(session, project_id=project.id, target_id=target.id, task_id=task_id,
                       dest=dest, allowed=False, tool=f"remote:{op}",
-                      detail="blocked: remote access not permitted by policy")
+                      detail="blocked: remote access not permitted by policy", durable=True)
         raise
     record_egress(session, project_id=project.id, target_id=target.id, task_id=task_id,
                   dest=dest, allowed=True, tool=f"remote:{op}", detail=scope.rationale)
