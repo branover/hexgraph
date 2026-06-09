@@ -210,8 +210,8 @@ live, so don't skim — open the one you need:
   and the journal. Read before recording a hypothesis or journal entry.
 - **static-analysis.md** — reverse engineering: orient → map sinks → read code → taint →
   constant/symbolic recovery; and browsing a firmware's unpacked filesystem.
-- **dynamic-analysis.md** — live surfaces: rehosting, web/raw-TCP/remote assessment, and the
-  `finding_verify_poc` oracle taxonomy (including blind bugs).
+- **dynamic-analysis.md** — live surfaces: rehosting, web/raw-socket (TCP+UDP)/remote
+  assessment, and the `finding_verify_poc` oracle taxonomy (including blind bugs).
 - **fuzzing.md** — building instrumented targets from source and running fuzz campaigns.
 - **proving.md** — the assurance ladder in depth, PoC verification, static reachability, and
   n-day propagation across binaries.
@@ -410,11 +410,17 @@ testing to confirm you stayed in bounds.
   `session` label to keep a cookie jar across calls (log in once, then explore protected routes;
   the response lists the jar). **Gated: features.network.**
 
-## Assess a raw-TCP service
+## Assess a raw-socket service (TCP or UDP)
 - **net_tcp_request(target, port, payload?)** — the non-HTTP `net_http_request`: connect to the
   device's port (through the emulator netns when rehosted), optionally send `payload` bytes,
   read the bounded response. Omit `payload` to banner-grab and fingerprint. **Gated:
   features.network.** (If the service isn't up on a rehosted device, launch it first — below.)
+- **net_udp_request(target, port, payload?)** — the DATAGRAM analogue, for the firmware's large
+  UDP surface (infosvr/9999, SSDP/1900, mDNS/5353, DNS, DHCP, WS-Discovery, vendor discovery
+  responders). Sends one datagram and reads the bounded response (omit `payload` to probe with an
+  empty packet). UDP is connectionless — a silent service just returns no response, which is
+  normal, not a failure. Register the listener with `target_register_service(..., transport="udp")`
+  first (a `udp` socket node materializes for the network map). **Gated: features.network.**
 
 ## Enumerate a live remote device
 The same KINDS of things you'd do to an extracted/rehosted rootfs, but live. **All read-only by
@@ -459,11 +465,13 @@ spec shapes. Pick the oracle by what the bug does:
   your exploit, oracle `{type:"oob_write", channel:"rootfs"|"remote"|"http", path?|request?}` —
   HexGraph reads that location back out-of-band and checks the nonce landed.
 
-For a raw-TCP service the spec is `{transport:"tcp", port, payload:"…{{NONCE}}…", oracle:
-{type:"response_contains", value:"{{NONCE}}"}}` — same anti-forgery (your sent bytes are
-stripped before matching). Cookies carry across multi-step web specs, so login→protected-route
-works in one shot. **Gated: features.network** (web/tcp) — bounded to the target's loopback/
-private host, audited.
+For a raw-socket service the spec is `{transport:"tcp"|"udp", port, payload:"…{{NONCE}}…",
+oracle:{type:"response_contains", value:"{{NONCE}}"}}` — `"udp"` proves a datagram service the
+same way (send the datagram, match the reply), `"tcp"` a stream one; same anti-forgery (your
+sent bytes are stripped before matching), and a verified live-socket PoC earns the same
+`input_reachable/dynamic` rung whichever transport. Cookies carry across multi-step web specs,
+so login→protected-route works in one shot. **Gated: features.network** (web/tcp/udp) — bounded
+to the target's loopback/private host, audited.
 
 ## How this ties into the graph
 Record the route as an `endpoint` node, the injectable field as a `param` (or `input`) node,

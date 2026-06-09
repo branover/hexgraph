@@ -1965,6 +1965,7 @@ def get_schemas() -> dict:
                 "binary": ["output_contains", "exit_code", "exit_nonzero", "crash"],
                 "web": ["body_contains", "status_is", "status_differs"],
                 "tcp": ["response_contains"],
+                "udp": ["response_contains"],  # a {transport:"udp", port, payload, oracle} raw-datagram PoC
             },
             "binary_spec": {
                 "input_fields": "argv (TEXT list) | argv_b64 (RAW-BYTE list, each element base64'd) | "
@@ -2227,11 +2228,13 @@ def register_service(project_id: str, host: str, port: int, name: str | None = N
     log into — do NOT misuse register_remote(transport=telnet) for this).
 
     Once registered you can fuzz it directly — start_fuzz_campaign(target) infers the
-    `network` surface and points boofuzz at this host:port — and probe/prove it with
-    tcp_request / verify_poc({transport:"tcp", port, …}). All on the EXISTING bounded local-
-    network tier: loopback/private host only (refused otherwise), features.network-gated,
-    every send audited. `parent_ref` makes it a child of e.g. a rehosted firmware (the probe
-    then reaches the device on its private IP through the emulator netns)."""
+    `network` surface and points boofuzz at this host:port — and probe/prove it with the
+    matching transport: tcp_request / verify_poc({transport:"tcp", port, …}) for a TCP
+    service, udp_request / verify_poc({transport:"udp", port, …}) for a UDP one. All on the
+    EXISTING bounded local-network tier: loopback/private host only (refused otherwise),
+    features.network-gated, every send audited. `parent_ref` makes it a child of e.g. a
+    rehosted firmware (the probe then reaches the device on its private IP through the
+    emulator netns)."""
     from hexgraph.engine.targets.surfaces import register_service_target
 
     with session_scope() as s:
@@ -2350,6 +2353,35 @@ def tcp_request(target_id: str, port: int, payload: str | None = None,
             return {"error": "target not found"}
         try:
             return run_tcp_probe(s, s.get(Project, t.project_id), t, port=int(port),
+                                 payload=payload, read_bytes=read_bytes)
+        except PolicyViolation as exc:
+            return {"error": f"not permitted: {exc}"}
+        except ValueError as exc:
+            return {"error": str(exc)}
+
+
+def udp_request(target_id: str, port: int, payload: str | None = None,
+                read_bytes: int | None = None) -> dict:
+    """Talk to a raw UDP service on a live device (rehosted surface or `remote` target) — the
+    datagram analogue of tcp_request, for the firmware's large UDP surface (infosvr/9999,
+    SSDP/1900, mDNS/5353, DNS, DHCP, WS-Discovery, a vendor discovery responder). Send one
+    datagram of `payload` bytes to the device's `<port>` (reached through the emulator netns
+    when rehosted) and read the bounded response; omit `payload` to probe with an empty packet.
+    UDP is connectionless, so a silent service just yields no response (not an error). Use it
+    to fingerprint a listening udp `socket`, or to drive a datagram-protocol bug; to PROVE one,
+    use verify_poc with a `udp` spec ({transport:"udp", port, payload:"…{{NONCE}}…",
+    oracle:{type:"response_contains", value:"{{NONCE}}"}}) — the probe strips your sent bytes
+    before matching, so a reflected payload can't forge it. Bounded to the device's
+    loopback/private host:port, audited. Requires features.network."""
+    from hexgraph.engine.targets.surfaces import run_udp_probe
+    from hexgraph.policy import PolicyViolation
+
+    with session_scope() as s:
+        t = s.get(Target, target_id)
+        if t is None:
+            return {"error": "target not found"}
+        try:
+            return run_udp_probe(s, s.get(Project, t.project_id), t, port=int(port),
                                  payload=payload, read_bytes=read_bytes)
         except PolicyViolation as exc:
             return {"error": f"not permitted: {exc}"}

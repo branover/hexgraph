@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-"""Talk to ONE live TCP service from INSIDE the sandbox (bounded egress) — the non-HTTP
-analogue of http_probe, for raw socket services a rehosted/remote device exposes (a bind
-shell, a vendor binary protocol, a custom daemon on some high port).
+"""Talk to ONE live TCP or UDP service from INSIDE the sandbox (bounded egress) — the
+non-HTTP analogue of http_probe, for raw socket services a rehosted/remote device exposes
+(a bind shell, a vendor binary protocol, a custom UDP daemon like infosvr/9999, SSDP/1900,
+mDNS/5353, DNS, DHCP, WS-Discovery on some port).
 
   argv: tcp_probe.py --channel <json>
 
 channel = {host, port, allow: ["host:port", ...], timeout,
-           payload?: str | payload_hex?: hex-str,   # bytes to send (omit → banner grab)
+           transport?: "tcp" | "udp",                 # default "tcp"
+           payload?: str | payload_hex?: hex-str,   # bytes to send (omit → banner/probe)
            read_bytes?: int,                          # cap on response (default 64 KiB)
            oracle?: {"type": "response_contains", "value": "..."}}
 
-→ emits {"tool":"tcp_probe","host","port","ok",
+→ emits {"tool":"tcp_probe"|"udp_probe","host","port","ok",
          "response": <text>, "response_hex"?: <hex if binary>, "response_truncated": bool,
          "verified"?: bool, "detail"?: str}     # verified/detail only when an oracle is given
 
@@ -21,6 +23,12 @@ Defense-in-depth, on top of the host-side policy/allowlist:
   - the oracle STRIPS the bytes we sent from the response before matching, so a service that
     merely echoes our payload (reflection) can't forge a 'verified' result — only output the
     service actually PRODUCED counts (the same unforgeable-{{NONCE}} principle as http_probe).
+
+UDP mode is the same client interaction over a connectionless datagram: a single sendto +
+a bounded recvfrom under the timeout (no handshake — a silent service just yields no
+response, which is normal for a fire-and-forget datagram). The TCP socket-guard backstop
+only covers stream connects (UDP has no connect), so the explicit `ensure_allowed` check
+before the send is the egress chokepoint for the datagram path.
 
 No target bytes are executed; this is a network client interaction, gated by the
 bounded-egress policy tier and audited by the caller. stdlib only.
@@ -104,6 +112,41 @@ def _exchange(host: str, port: int, payload: bytes, timeout: int, cap: int) -> d
     return {"ok": True, "raw": b"".join(chunks)[: cap + 1]}
 
 
+def _exchange_udp(host: str, port: int, payload: bytes, timeout: int, cap: int) -> dict:
+    """Datagram exchange: send one UDP packet (if any) and read up to `cap` bytes of replies
+    under the timeout. UDP is connectionless — there is no handshake and a service that
+    doesn't answer simply yields no datagram (normal for fire-and-forget), so a recv timeout
+    is NOT an error here, just an empty response."""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    chunks: list[bytes] = []
+    got = 0
+    try:
+        sock.settimeout(min(timeout, 5))
+        # A datagram probe always SENDS (even an empty packet) so a request/response service
+        # answers; an empty payload still elicits a reply from e.g. a discovery responder.
+        sock.sendto(payload, (host, port))
+        while got < cap + 1:
+            try:
+                buf, _peer = sock.recvfrom(min(8192, cap + 1 - got))
+            except socket.timeout:
+                break
+            except Exception:  # noqa: BLE001 — port-unreachable ICMP surfaces as an OS error
+                break
+            if not buf:
+                break
+            chunks.append(buf)
+            got += len(buf)
+    finally:
+        try:
+            sock.close()
+        except Exception:  # noqa: BLE001
+            pass
+    return {"ok": True, "raw": b"".join(chunks)[: cap + 1]}
+
+
 def _decode(raw: bytes, cap: int) -> dict:
     truncated = len(raw) > cap
     raw = raw[:cap]
@@ -140,19 +183,23 @@ def main() -> int:
         print(json.dumps({"error": f"bad --channel json: {exc}"}))
         return 2
     host, port = ch.get("host"), int(ch.get("port", 0))
+    transport = (ch.get("transport") or "tcp").lower()
+    tool = "udp_probe" if transport == "udp" else "tcp_probe"
     allow = set(ch.get("allow") or [])
     _egress.install_socket_guard(allow)  # can't-forget backstop on every TCP connect
     try:
-        _egress.ensure_allowed(host, port, allow)  # explicit pre-connect check
+        # The explicit pre-send/connect allowlist check. For UDP this is the egress
+        # chokepoint (the socket guard only patches stream connect; a datagram has none).
+        _egress.ensure_allowed(host, port, allow)
     except _egress.EgressBlocked:
-        print(json.dumps({"tool": "tcp_probe", "ok": False, "error": "destination not in allowlist"}))
+        print(json.dumps({"tool": tool, "ok": False, "error": "destination not in allowlist"}))
         return 0
     timeout = int(ch.get("timeout", 15))
     cap = max(1, min(int(ch.get("read_bytes", MAX_BYTES)), MAX_BYTES))
     payload = _payload_bytes(ch)
 
-    ex = _exchange(host, port, payload, timeout, cap)
-    out: dict = {"tool": "tcp_probe", "host": host, "port": port, "ok": ex["ok"]}
+    ex = (_exchange_udp if transport == "udp" else _exchange)(host, port, payload, timeout, cap)
+    out: dict = {"tool": tool, "host": host, "port": port, "ok": ex["ok"]}
     if not ex["ok"]:
         out["error"] = ex.get("error")
         print(json.dumps(out))

@@ -23,9 +23,11 @@ protocol, a custom daemon, anything reached over a raw TCP or UDP Channel `{kind
 bytes and no credentials. You register one with `target_register_service(project_id, host, port,
 transport="tcp")` over MCP, or with `POST /api/projects/{id}/targets/service`. It links to the shared
 `socket` graph node through a `listens_on` edge, and HexGraph infers the `network` surface from there,
-so `fuzz_start` can point boofuzz straight at `host:port` and `net_tcp_request`/`finding_verify_poc` can
-probe and prove it. Reach for this rather than a `remote`/telnet target when all you have is a bare
-protocol, since `remote` carries SSH/telnet shell semantics that a socket service simply does not have.
+so `fuzz_start` can point boofuzz straight at `host:port` and the matching live tool can probe and prove
+it: `net_tcp_request` for a TCP service, `net_udp_request` for a UDP one (the firmware's UDP surface is
+often large — infosvr, SSDP, mDNS, DNS, DHCP, WS-Discovery), each paired with a `finding_verify_poc`
+spec carrying its transport. Reach for this rather than a `remote`/telnet target when all you have is a
+bare protocol, since `remote` carries SSH/telnet shell semantics that a socket service simply does not have.
 
 ## Bounded, audited live assessment (`features.network`)
 
@@ -64,7 +66,7 @@ the device's private IP. Build the rehosting images first with `just firmae-buil
 When the booted device answers on SSH or telnet, rehosting also auto-registers it as a `remote` child
 target (pinned to the same emulator netns), so you can drive the live device, not just its extracted
 rootfs; using that child still needs `features.remote`. Any other ports it leaves open are recorded for
-raw-TCP testing with `net_tcp_request`/`finding_verify_poc`.
+raw-socket testing with `net_tcp_request`/`net_udp_request` and `finding_verify_poc`.
 
 For a quick guided run, `just vulnrouter` stands up a live vulnrouter web target and a project pointed
 at it.
