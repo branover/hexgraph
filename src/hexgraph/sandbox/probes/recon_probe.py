@@ -144,13 +144,73 @@ _FW_SIGS = (
 )
 
 
+# Each deep-container magic hit must be validated (a bare 4-byte magic collides in a 100s-of-MB
+# image); cap the rescans so a pathological blob full of magic bytes can't spin. 256 validated
+# probes is far more than any real image needs — the rootfs container is among the first valid
+# hits — while still bounding the worst case (a conscious completeness-vs-DoS tradeoff).
+_MAX_CONTAINER_PROBES = 256
+
+
+def _valid_squashfs_superblock(data: bytes, off: int) -> bool:
+    """A genuine little-endian squashfs v4 superblock at `off`, not a coincidental 'hsqs' in
+    random bytes: version-major 4, a known compressor id (1=gzip … 6=zstd), and a self-consistent
+    bytes_used that fits within the image."""
+    if off < 0 or off + 0x30 > len(data) or data[off:off + 4] != b"hsqs":
+        return False
+    comp = int.from_bytes(data[off + 0x14:off + 0x16], "little")
+    vmaj = int.from_bytes(data[off + 0x1c:off + 0x1e], "little")
+    bytes_used = int.from_bytes(data[off + 0x28:off + 0x30], "little")
+    return vmaj == 4 and 1 <= comp <= 6 and 0 < bytes_used <= len(data) - off
+
+
+def _valid_fit_header(data: bytes, off: int) -> bool:
+    """A plausible FIT/FDT header at `off`: the d00dfeed magic plus a totalsize (big-endian u32
+    at +4) that fits within the image — enough to reject a coincidental 4-byte magic match."""
+    if off < 0 or off + 8 > len(data) or data[off:off + 4] != b"\xd0\x0d\xfe\xed":
+        return False
+    total = int.from_bytes(data[off + 4:off + 8], "big")
+    return 0 < total <= len(data) - off
+
+
+def _deep_container(data: bytes) -> str | None:
+    """Scan the WHOLE blob for an embedded rootfs container that sits DEEP behind a proprietary/
+    signed outer wrapper — a modern router image carries its rootfs squashfs 50 MB+ past the
+    header, well beyond the wrapper-header window below. Only the strong, self-validating magics
+    are scanned whole-file (each hit is validated), so a short magic colliding in a large image
+    can never mis-flag an ordinary file as firmware. Returns the format, or None."""
+    off = data.find(b"hsqs")
+    tries = 0
+    while off != -1 and tries < _MAX_CONTAINER_PROBES:
+        if _valid_squashfs_superblock(data, off):
+            return "squashfs"
+        off = data.find(b"hsqs", off + 1)
+        tries += 1
+    # Same bounded-rescan as squashfs (not a single find): a coincidental first d00dfeed whose
+    # totalsize doesn't validate must not hide a genuine FIT header deeper in the image.
+    off = data.find(b"\xd0\x0d\xfe\xed")
+    tries = 0
+    while off != -1 and tries < _MAX_CONTAINER_PROBES:
+        if _valid_fit_header(data, off):
+            return "fit"
+        off = data.find(b"\xd0\x0d\xfe\xed", off + 1)
+        tries += 1
+    return None
+
+
 def _firmware_signature(data: bytes) -> str | None:
-    """Scan a non-ELF blob for an embedded filesystem/container signature."""
-    window = data[: 8 << 20]  # first 8 MB is plenty to spot the container
+    """Detect an embedded filesystem/container in a non-ELF blob so the unpacker carves it.
+
+    Two scans: (1) the original WRAPPER-header window — TRX/uImage/UBI/cramfs/… magics that, by
+    construction, sit at/near the image header, kept to the first 8 MB because some are short and
+    would false-match constantly over a large image; (2) a whole-blob scan for a deep, VALIDATED
+    rootfs container (squashfs superblock / FIT header), which is what a signed vendor wrapper hides
+    tens of MB in — the case a header-only check used to miss (0 children, format=unknown). A blob
+    with neither stays 'unknown' (binwalk no-op)."""
+    window = data[: 8 << 20]
     for sig, fmt in _FW_SIGS:
         if sig in window:
             return fmt
-    return None
+    return _deep_container(data)
 
 
 def _is_disk_image(data: bytes) -> bool:
@@ -210,6 +270,17 @@ def main() -> int:
                 # Sleuth Kit. Treated as firmware so the same unpack→recon flow runs.
                 facts["format"] = "disk_image"
                 facts["kind"] = "firmware_image"
+
+    # G01: still unrecognized. Capture the header bytes so the operator can identify the
+    # container — a vendor-wrapped/signed firmware image the unpacker doesn't know would
+    # otherwise ingest to 0 children with NO signal. A LARGE non-ELF blob with no known
+    # signature is very likely an unsupported firmware/container (not an ordinary data file):
+    # flag it so the pipeline ATTEMPTS a carve and, failing that, says so with these bytes.
+    if facts.get("format") == "unknown":
+        facts["magic_hex"] = data[:16].hex()
+        facts["magic_ascii"] = "".join((chr(b) if 32 <= b < 127 else ".") for b in data[:16])
+        if len(data) >= (1 << 20):  # >= 1 MiB
+            facts["likely_unrecognized_container"] = True
 
     print(json.dumps(facts))
     return 0

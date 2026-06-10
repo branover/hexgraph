@@ -83,10 +83,19 @@ def analyze_target(
     facts = run_recon(session, project, target, runner)
     summary = {"target_id": target.id, "name": target.name, "children": []}
 
-    is_firmware = facts.get("kind") == "firmware_image" or facts.get("format") in _FIRMWARE_FORMATS
+    # G01: a recognized firmware format OR a large blob whose format we couldn't recognize —
+    # in the latter case ATTEMPT a binwalk carve anyway (it often recognizes vendor wrappers our
+    # signature scan misses), and if it yields nothing, say so loudly below instead of silently
+    # returning 0 children.
+    is_firmware = (facts.get("kind") == "firmware_image" or facts.get("format") in _FIRMWARE_FORMATS
+                   or facts.get("likely_unrecognized_container"))
     if is_firmware:
         summary["format"] = facts.get("format")
         _record_progress(session, target, "unpacking", format=facts.get("format"))
+        # unpack_firmware flips the parent's kind to firmware_image; capture the pre-unpack kind so
+        # we can UNDO that for a `likely_unrecognized_container` blob the carve proves is NOT a
+        # container (below), rather than leaving an opaque blob mislabeled as firmware.
+        pre_unpack_kind = target.kind
         # Materialize the child list first so we can report "recon i/N children" with a known N.
         children = list(unpack_firmware(session, project, target, runner))
         total = len(children)
@@ -109,6 +118,27 @@ def analyze_target(
         if packed:
             summary["packed_containers"] = packed[:20]
             summary["packed_containers_count"] = len(packed)
+        # G01: the carve of an unrecognized blob yielded NOTHING analyzable — no ELF child AND no
+        # promotable nested container — so don't return a silent 0-child result that leaves the
+        # operator dead in the water. Surface the header bytes + an "unsupported container" signal so
+        # they can identify it and act. Gate on `not packed`: when the carve DID surface nested
+        # containers, `packed_containers` already says "promote one to go deeper" — emitting the
+        # "unsupported, extract out-of-band" note alongside it would contradict that guidance.
+        if total == 0 and not packed and facts.get("likely_unrecognized_container"):
+            # The carve proved this speculative "container" holds nothing analyzable, so it isn't
+            # firmware — undo the firmware_image label unpack_firmware optimistically set, leaving
+            # the blob with its real (recon-derived) kind instead of a misleading firmware row.
+            target.kind = pre_unpack_kind
+            summary["unrecognized_container"] = {
+                "format": facts.get("format"),
+                "magic_hex": facts.get("magic_hex"),
+                "magic_ascii": facts.get("magic_ascii"),
+                "note": ("the unpacker did not recognize this container and extracted no analyzable "
+                         "binaries — it's likely a vendor-wrapped/signed firmware image whose format "
+                         "isn't supported. Identify it from the magic bytes (host `file`/binwalk), "
+                         "then extract a known inner artifact out-of-band and re-ingest it, or file "
+                         "an issue with the magic so support can be added."),
+            }
     else:
         _maybe_enrich_ghidra(session, project, target, facts)
     summary["children_count"] = len(summary["children"])
