@@ -283,7 +283,12 @@ scoped to the target's exact bytes. The two rules that make this cheap:
   the function — if `re_disassemble`/`re_decompile_at` return "not found" because no function
   is defined at that address (a CFG blind spot, exactly where you most need instruction-level
   sight), disassemble the raw address+length byte range directly: `re_disassemble_range(target,
-  0x67158)` reads the bytes there with no function required. **re_search_decompiled** greps across already-decompiled bodies (no
+  0x67158)` reads the bytes there with no function required. It's also the fast path on a very
+  large monolith (100 MB+, e.g. a firmware's main service daemon or a busybox blob): the first whole-binary
+  decompile pays a one-time analysis cost (HexGraph now grants big artifacts a size-scaled probe
+  budget so that pass isn't cut short, and the persistent project reuses it after), but a raw range
+  needs no analysis at all, so reach for it when you just need the instructions at an address now.
+  **re_search_decompiled** greps across already-decompiled bodies (no
   re-decompile) — decompile the candidates, then grep their bodies for a variable/constant/format
   string. *Truncation is recoverable, never silent*: body-returning tools inline ~6000 chars and
   mark a cut tail; re-call with a bigger `max_chars`, or `obs_get` the Observation in full.

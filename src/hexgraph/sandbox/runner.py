@@ -22,7 +22,11 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from hexgraph.sandbox.resources import ResourceSpec, resource_spec_for
+from hexgraph.sandbox.resources import (
+    ResourceSpec,
+    resource_spec_for,
+    resource_spec_for_artifact,
+)
 
 DEFAULT_IMAGE = "hexgraph-sandbox:latest"
 DEFAULT_TIMEOUT = 300  # seconds
@@ -478,7 +482,14 @@ class SandboxRunner:
             if not artifact.is_file():
                 raise SandboxError(f"artifact not found: {artifact}")
 
-        resources = resources or resource_spec_for("sandbox")
+        # F13: when the caller passes no explicit ResourceSpec, the default's wall-clock
+        # `timeout` scales up for a LARGE artifact so the first whole-binary analysis of a
+        # 100 MB+ ELF isn't killed at 300 s (a normal-size artifact is unchanged; only the
+        # timeout widens, never mem/cpu/pids). An explicit `resources=` (fuzz/poc/build) is
+        # honored verbatim with NO size scaling — those set their budget deliberately. The
+        # detached path (`start_detached`) keeps `resource_spec_for("sandbox")` for the same
+        # reason: its timeout is a hard campaign cap, not a per-analysis budget.
+        resources = resources or resource_spec_for_artifact(artifact, "sandbox")
         timeout = resources.timeout or self.timeout
         name = f"hexgraph-{uuid.uuid4().hex[:12]}"
         cmd = [

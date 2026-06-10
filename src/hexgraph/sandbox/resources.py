@@ -34,7 +34,8 @@ in Settings/the spec, NEVER in `policy.py`.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, replace
 
 # The shipped per-container defaults (historically hardcoded in sandbox/runner.py).
 # These are the FLOOR a normal probe runs under and the DEFAULT a campaign inherits
@@ -45,6 +46,19 @@ DEFAULT_CPUS = 2.0
 DEFAULT_PIDS = 256
 DEFAULT_TMPFS = "512m"
 DEFAULT_TIMEOUT = 300
+
+# F13: a probe's wall-clock budget scales UP for a large artifact so the FIRST whole-binary
+# analysis of a 100 MB+ ELF (a monolithic router-firmware service daemon can run well past that)
+# isn't killed at the 300 s default before it can finish — the persistent Ghidra project means that first pass is paid
+# once and reused, and the same bump lets the strings/recon probe reach the full table instead
+# of falling back to the dynsym sample. A normal-size artifact (≤ the threshold) keeps the base
+# timeout EXACTLY; the size budget is a pure widening for big inputs, never a narrowing, and is
+# bounded by a hard cap so a multi-GB image can't request an unbounded budget. Tunable here only
+# (not user-facing) — a user who needs more sets `resources.sandbox.timeout`, which becomes the
+# base this scales up from.
+SIZE_TIMEOUT_THRESHOLD_BYTES = 32 * 1024 * 1024   # below this, no scaling at all
+SIZE_TIMEOUT_SECONDS_PER_MIB = 5                  # added per MiB of artifact above the threshold
+SIZE_TIMEOUT_CAP_SECONDS = 3600                   # size-scaling alone never pushes the budget past 1 h
 
 # The container types that can carry their own per-type override under `resources.<type>`
 # (each inherits `resources.default` for any key it doesn't set). Rehosting containers are
@@ -144,3 +158,40 @@ def default_resource_spec() -> ResourceSpec:
     through the unified `resources` section (`resources.default` ← `resources.fuzzing`).
     A campaign layers its own per-campaign override on top of this."""
     return resource_spec_for("fuzzing")
+
+
+def size_scaled_timeout(size_bytes: int | None, base_timeout: int) -> int:
+    """The wall-clock budget for a probe over an artifact of `size_bytes`, scaled up from
+    `base_timeout` for a large artifact (F13). Returns `base_timeout` UNCHANGED for a small
+    or unknown artifact (≤ `SIZE_TIMEOUT_THRESHOLD_BYTES`, or `None`/0), so the normal probe
+    path is bit-for-bit untouched. Above the threshold the budget grows linearly
+    (`SIZE_TIMEOUT_SECONDS_PER_MIB` per MiB over it), capped at
+    `max(base_timeout, SIZE_TIMEOUT_CAP_SECONDS)` — the size bonus is bounded, but a user who
+    configured a base above the cap is never shrunk below it. Monotonic in size and never
+    below `base_timeout`: scaling can only widen the budget, never narrow it."""
+    if not size_bytes or size_bytes <= SIZE_TIMEOUT_THRESHOLD_BYTES:
+        return base_timeout
+    over_mib = (size_bytes - SIZE_TIMEOUT_THRESHOLD_BYTES) / (1024 * 1024)
+    scaled = base_timeout + int(over_mib * SIZE_TIMEOUT_SECONDS_PER_MIB)
+    return min(scaled, max(base_timeout, SIZE_TIMEOUT_CAP_SECONDS))
+
+
+def resource_spec_for_artifact(artifact, container_type: str = "sandbox") -> ResourceSpec:
+    """The resolved ResourceSpec for a probe over `artifact`, with a size-aware `timeout` (F13).
+
+    Starts from `resource_spec_for(container_type)` — so a user's `resources.<type>.timeout`
+    override is the base/floor this scales up from — and raises ONLY `timeout`, and only when
+    `artifact` is a large file (per `size_scaled_timeout`). A small file, a `None` artifact (a
+    path-less Channel surface that mounts no bytes), or an unreadable path yields the base spec
+    verbatim: the size budget is a pure widening for big inputs and changes nothing else
+    (mem/cpu/pids/tmpfs are exactly the configured ceilings). Use this for the analysis probes
+    (recon/decompile/strings/binutils/…); the detached fuzz path keeps its own hard-cap timeout."""
+    base = resource_spec_for(container_type)
+    try:
+        size = os.path.getsize(artifact) if artifact is not None else None
+    except OSError:
+        return base
+    scaled = size_scaled_timeout(size, base.timeout)
+    if scaled <= base.timeout:
+        return base
+    return replace(base, timeout=scaled)
