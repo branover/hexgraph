@@ -66,16 +66,26 @@ def api_project(project_id: str, include_hidden: bool = False):
         project = s.get(Project, project_id)
         if project is None:
             raise HTTPException(404, "project not found")
-        tq = s.query(Target).filter(
+        # All NON-archived targets; visibility then splits them into the Targets-pane set
+        # (visible) vs the hidden ELF children (unpack-registered but unrevealed). Findings
+        # on ARCHIVED targets stay hidden either way — that's a deliberate soft-remove.
+        live = s.query(Target).filter(
             Target.project_id == project_id, Target.archived.is_(False)
-        )
-        if not include_hidden:
-            tq = tq.filter(Target.visible.is_(True))
-        targets = tq.all()
+        ).all()
+        hidden_ids = {t.id for t in live if not t.visible}
+        targets = live if include_hidden else [t for t in live if t.visible]
         live_ids = {t.id for t in targets}
-        findings = [
-            f for f in s.query(Finding).filter(Finding.project_id == project_id).all()
-            if f.target_id in live_ids  # hide findings under archived/hidden targets
+        all_findings = s.query(Finding).filter(Finding.project_id == project_id).all()
+        findings = [f for f in all_findings if f.target_id in live_ids]
+        # Findings on hidden children, surfaced as a SEPARATE bucket so the Findings panel
+        # can offer a "show hidden-target findings" toggle WITHOUT flooding the Targets
+        # pane/graph with hundreds of `.so` children. SUBSTANTIVE findings only — `recon`
+        # (one minted per child at ingest, easily hundreds) is excluded so the toggle can't
+        # reintroduce the very flood that hiding children prevents; the full firehose is
+        # still available via `include_hidden=true` (which folds everything into `findings`).
+        # Empty when include_hidden already folded them in above (avoids double-counting).
+        hidden_findings = [] if include_hidden else [
+            f for f in all_findings if f.target_id in hidden_ids and f.finding_type != "recon"
         ]
         tasks = s.query(Task).filter(Task.project_id == project_id).all()
         total_cost = round(sum(t.cost_estimate or 0.0 for t in tasks), 6)
@@ -86,11 +96,18 @@ def api_project(project_id: str, include_hidden: bool = False):
                                             Annotation.node_kind == "finding").all():
             tags.setdefault(a.node_id, []).append(a.value)
         task_types = {t.id: t.type for t in tasks}  # so the UI can spot harness findings
+        enrich = lambda f: {**finding_dict(f), "tags": tags.get(f.id, []),
+                            "task_type": task_types.get(f.task_id)}
+        # Only the hidden targets that actually carry a finding (a handful — NOT the full
+        # hidden tree) so the panel can render their names without bloating the payload.
+        hidden_finding_target_ids = {f.target_id for f in hidden_findings}
+        hidden_targets = [t for t in live if t.id in hidden_finding_target_ids]
         return {
             "project": project_dict(project),
             "targets": [target_dict(t) for t in targets],
-            "findings": [{**finding_dict(f), "tags": tags.get(f.id, []),
-                          "task_type": task_types.get(f.task_id)} for f in findings],
+            "findings": [enrich(f) for f in findings],
+            "hidden_findings": [enrich(f) for f in hidden_findings],
+            "hidden_targets": [target_dict(t) for t in hidden_targets],
             "cost": {
                 "total_usd": total_cost,
                 "cost_source": cost_source,

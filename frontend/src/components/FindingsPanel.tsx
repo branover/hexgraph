@@ -9,9 +9,10 @@ const SEV_VAR: Record<string, string> = {
 // First-class finding management: sort by severity, filter by status/severity/text,
 // group by target. Built to stay usable at hundreds+ of findings.
 export default function FindingsPanel({
-  findings, targets, selectedId, onSelect, onBulk,
+  findings, hiddenFindings, targets, selectedId, onSelect, onBulk,
 }: {
-  findings: Finding[]; targets: TargetNode[]; selectedId?: string; onSelect: (f: Finding) => void;
+  findings: Finding[]; hiddenFindings?: Finding[]; targets: TargetNode[]; selectedId?: string;
+  onSelect: (f: Finding) => void;
   onBulk?: (ids: string[], status: string) => void;
 }) {
   const [q, setQ] = useState("");
@@ -20,8 +21,15 @@ export default function FindingsPanel({
   const [tagF, setTagF] = useState("all");
   const [typeF, setTypeF] = useState("all");
   const [group, setGroup] = useState(true);
-  const allTags = useMemo(() => Array.from(new Set(findings.flatMap((f) => f.tags || []))).sort(), [findings]);
-  const allTypes = useMemo(() => Array.from(new Set(findings.map((f) => f.finding_type).filter(Boolean) as string[])).sort(), [findings]);
+  const [showHidden, setShowHidden] = useState(false);
+  // Findings on hidden firmware children (target not in the Targets pane). Off by default;
+  // the toggle folds them in, badged, so the count matches what's actually in the project.
+  const hidden = hiddenFindings ?? [];
+  const hiddenIds = useMemo(() => new Set((hiddenFindings ?? []).map((f) => f.target_id)), [hiddenFindings]);
+  const shown = useMemo(() => (showHidden && hiddenFindings?.length ? findings.concat(hiddenFindings) : findings),
+                        [findings, hiddenFindings, showHidden]);
+  const allTags = useMemo(() => Array.from(new Set(shown.flatMap((f) => f.tags || []))).sort(), [shown]);
+  const allTypes = useMemo(() => Array.from(new Set(shown.map((f) => f.finding_type).filter(Boolean) as string[])).sort(), [shown]);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const toggle = (id: string) => setPicked((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const bulk = (st: string) => { onBulk?.([...picked], st); setPicked(new Set()); };
@@ -30,7 +38,7 @@ export default function FindingsPanel({
   useEffect(() => { selRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [selectedId]);
 
   const filtered = useMemo(() => {
-    let fs = findings.slice();
+    let fs = shown.slice();
     if (status !== "all") fs = fs.filter((f) => f.status === status);
     if (sev !== "all") fs = fs.filter((f) => f.severity === sev);
     if (tagF !== "all") fs = fs.filter((f) => (f.tags || []).includes(tagF));
@@ -38,13 +46,13 @@ export default function FindingsPanel({
     if (q) fs = fs.filter((f) => (f.title + f.category + (f.tags || []).join(" ")).toLowerCase().includes(q.toLowerCase()));
     fs.sort((a, b) => SEV_ORDER.indexOf(a.severity) - SEV_ORDER.indexOf(b.severity));
     return fs;
-  }, [findings, status, sev, tagF, typeF, q]);
+  }, [shown, status, sev, tagF, typeF, q]);
 
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
-    findings.forEach((f) => (c[f.severity] = (c[f.severity] || 0) + 1));
+    shown.forEach((f) => (c[f.severity] = (c[f.severity] || 0) + 1));
     return c;
-  }, [findings]);
+  }, [shown]);
 
   const groups = useMemo(() => {
     if (!group) return [["", filtered]] as [string, Finding[]][];
@@ -74,6 +82,10 @@ export default function FindingsPanel({
           {f.verified && <span className="tag" style={{ color: "#2ea043" }}>✓ verified</span>}
           <span>{f.category}</span><span>· conf {f.confidence}</span>
           <span className="tag">{f.status}</span>
+          {hiddenIds.has(f.target_id) && (
+            <span className="tag" title="Recorded on a hidden firmware child — reveal that target in the Targets pane to manage it there"
+                  style={{ color: "var(--muted)" }}><Icon name="eye" size={10} /> hidden target</span>
+          )}
           {!group && <span>· {targetName(f.target_id)}</span>}
           {(f.tags || []).map((tg) => <span key={tg} className="tag" style={{ color: "var(--accent)" }}>#{tg}</span>)}
         </div>
@@ -108,6 +120,13 @@ export default function FindingsPanel({
           </select>
         )}
         <button className="btn sm" onClick={() => setGroup(!group)}>{group ? "ungroup" : "group"}</button>
+        {hidden.length > 0 && (
+          <button className={"btn sm" + (showHidden ? " primary" : "")}
+                  title="Show findings recorded on hidden firmware children (unrevealed ELF targets, not in the Targets pane). Reveal a target there to manage its findings normally."
+                  onClick={() => setShowHidden((v) => !v)}>
+            <Icon name="eye" size={12} /> {showHidden ? `${hidden.length} hidden shown` : `+${hidden.length} on hidden`}
+          </button>
+        )}
       </div>
       <div className="sevsummary">
         {SEV_ORDER.filter((s) => counts[s]).map((s) => (
