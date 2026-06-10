@@ -735,6 +735,9 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
                 if r.get("remediation"):
                     line += f"  [fix: {r['remediation']}]"
                 lines.append(line)
+            for g in d.get("gates", []):  # F04: the policy gates (enabled state + tier raised)
+                tier = f" → {g['tier']}" if g.get("tier") else ""
+                lines.append(f"  gate {g['gate']}: {'ON' if g['enabled'] else 'OFF'}{tier}")
             return _clip("\n".join(lines))
         if name in ("list_observations", "get_observation", "search_observations"):
             return _observations(ctx, name, args)

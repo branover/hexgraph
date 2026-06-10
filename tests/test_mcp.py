@@ -632,6 +632,26 @@ def test_check_features_floss_yara_are_availability_only(hg_home, monkeypatch):
     assert "available" in out["summary"]
 
 
+def test_check_features_reports_policy_gates(hg_home, monkeypatch):
+    """F04: check_features also reports the POLICY gates (poc/fuzzing execution, network egress,
+    rehost, live-remote) with each one's enabled state + the policy tier it raises — so a firmware
+    proving run can preflight which tiers are open instead of hitting a refusal mid-run. Sourced
+    from the canonical setup_catalog.FEATURES (policy_changing entries), not hand-typed."""
+    monkeypatch.setattr("hexgraph.agent.mcp_tools._image_smoke",
+                        lambda image, argv, timeout=30: (True, "x"))
+    out = mcp_tools.check_features()
+    gates = {g["gate"]: g for g in out["gates"]}
+    assert {"features.poc.enabled", "features.fuzzing.enabled", "features.network.enabled",
+            "features.rehost.enabled", "features.remote.enabled"} <= set(gates)
+    # off by default, and each carries its policy tier label
+    assert gates["features.poc.enabled"]["enabled"] is False
+    assert "tier 1" in (gates["features.poc.enabled"]["tier"] or "")
+    assert "tier 2" in (gates["features.network.enabled"]["tier"] or "")
+    assert "tier 3" in (gates["features.remote.enabled"]["tier"] or "")
+    # the summary nudges to enable the off gates before the matching run
+    assert "gates OFF" in out["summary"]
+
+
 def test_check_features_floss_yara_broken_when_dep_missing(hg_home, monkeypatch):
     """The stale-image trap for the always-on tools: with the in-image dep MISSING they read
     `broken` (NOT disabled) + an actionable rebuild hint — they're always reachable, so a missing
