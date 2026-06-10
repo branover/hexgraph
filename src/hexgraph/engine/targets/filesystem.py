@@ -33,7 +33,10 @@ def record_manifest(firmware: Target, *, method: str, root_rel: str, files: list
              "child_target_id": f.get("child_target_id"),
              # F07: keep the container-format tag so packed_containers() can flag un-recursed
              # nested filesystems (omitted entirely for ordinary files, so the manifest stays lean).
-             **({"container": f["container"]} if f.get("container") else {})}
+             **({"container": f["container"]} if f.get("container") else {}),
+             # F08: this path is byte-identical to (and reuses the target of) an earlier ELF — the
+             # row was deduped, not cloned. Present only on the duplicate paths.
+             **({"dedup_of": f["dedup_of"]} if f.get("dedup_of") else {})}
             for f in files
         ],
     }
