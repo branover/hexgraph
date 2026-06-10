@@ -114,10 +114,13 @@ def analyze_target(
         if packed:
             summary["packed_containers"] = packed[:20]
             summary["packed_containers_count"] = len(packed)
-        # G01: the carve of an unrecognized blob yielded NO analyzable child — don't return a
-        # silent 0-child result that leaves the operator dead in the water. Surface the header
-        # bytes + an "unsupported container" signal so they can identify it and act.
-        if total == 0 and facts.get("likely_unrecognized_container"):
+        # G01: the carve of an unrecognized blob yielded NOTHING analyzable — no ELF child AND no
+        # promotable nested container — so don't return a silent 0-child result that leaves the
+        # operator dead in the water. Surface the header bytes + an "unsupported container" signal so
+        # they can identify it and act. Gate on `not packed`: when the carve DID surface nested
+        # containers, `packed_containers` already says "promote one to go deeper" — emitting the
+        # "unsupported, extract out-of-band" note alongside it would contradict that guidance.
+        if total == 0 and not packed and facts.get("likely_unrecognized_container"):
             summary["unrecognized_container"] = {
                 "format": facts.get("format"),
                 "magic_hex": facts.get("magic_hex"),

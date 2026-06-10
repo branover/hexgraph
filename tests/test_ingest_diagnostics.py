@@ -68,6 +68,24 @@ def test_unrecognized_container_emits_diagnostic_not_silent_zero(hg_home, tmp_pa
     assert "did not recognize" in uc["note"] and "isn't supported" in uc["note"]
 
 
+def test_carve_with_packed_containers_does_not_emit_contradictory_warning(hg_home, tmp_path):
+    """When the carve of an unrecognized blob surfaces a nested container (squashfs/.pkg) but no
+    top-level ELF, `packed_containers` already tells the operator to "promote one to go deeper" —
+    so the "unsupported, extract out-of-band" warning must NOT also fire (the two contradict)."""
+    blob = tmp_path / "image.bin"; blob.write_bytes(b"\x12\x34\x56\x78" + b"\x00" * 64)
+    files = [{"rel": "0.squashfs", "container": "squashfs", "size": 5_000_000, "is_elf": False}]
+    with session_scope() as s:
+        p = create_project(s, name="uc-packed")
+        t = ingest_file(s, p, blob, name="image.bin")
+        runner = _FakeExecutor({"tool": "recon_probe", "format": "unknown", "kind": "unknown",
+                                "magic_hex": "12345678", "magic_ascii": ".4Vx",
+                                "likely_unrecognized_container": True}, files=files)
+        summary = analyze_target(s, p, t, runner)
+    assert summary["children_count"] == 0
+    assert summary.get("packed_containers")          # the carve DID surface a promotable container
+    assert "unrecognized_container" not in summary   # ...so the contradictory "unsupported" note is suppressed
+
+
 def test_plain_small_unknown_blob_is_not_treated_as_firmware(hg_home, tmp_path):
     """An ordinary small unknown blob (no container flag) takes the non-firmware path — no carve,
     no false 'unsupported container' warning."""
