@@ -190,8 +190,13 @@ export default function Workspace() {
     }
     setDetail(d); setTasks(tk);
     // Refresh the open detail with the reloaded data so triage (Accept/Dismiss,
-    // status pills, annotations) re-renders instead of showing a stale finding.
-    setSelFinding((prev) => (prev ? d.findings.find((f) => f.id === prev.id) ?? prev : prev));
+    // status pills, annotations) re-renders instead of showing a stale finding —
+    // checking the hidden-target bucket too, so a selected hidden finding also re-renders.
+    setSelFinding((prev) => (prev
+      ? d.findings.find((f) => f.id === prev.id)
+        ?? d.hidden_findings?.find((f) => f.id === prev.id)
+        ?? prev
+      : prev));
   }, [projectId]);
 
   // ── Skeleton-first: fetch ONE room's interior on demand and merge it into `graph`.
@@ -757,8 +762,10 @@ export default function Workspace() {
   const renderTabs = (collapsible = false) => (
     <div className="pane-h">
       <div className="rp-tabs">
-        <button className={"btn sm" + (tab === "findings" ? " primary" : " ghost")} onClick={() => { setTab("findings"); setUrl({ tab: undefined }); }}>
+        <button className={"btn sm" + (tab === "findings" ? " primary" : " ghost")} onClick={() => { setTab("findings"); setUrl({ tab: undefined }); }}
+                title={detail.hidden_findings?.length ? `${detail.hidden_findings.length} more on hidden targets — open Findings and toggle "on hidden"` : undefined}>
           <Icon name="bug" size={12} /> Findings · {detail.findings.length}
+          {detail.hidden_findings?.length ? <span style={{ opacity: 0.6 }}> +{detail.hidden_findings.length}</span> : null}
         </button>
         <button className={"btn sm" + (tab === "hypotheses" ? " primary" : " ghost")} onClick={() => { setTab("hypotheses"); setUrl({ tab: "hypotheses" }); }}
                 title="Hypotheses — the research-question worklist">
@@ -788,7 +795,9 @@ export default function Workspace() {
     </div>
   );
   const renderList = () => tab === "findings" ? (
-    <FindingsPanel findings={detail.findings} targets={detail.targets} selectedId={selFinding?.id} onBulk={bulk}
+    <FindingsPanel findings={detail.findings} hiddenFindings={detail.hidden_findings}
+                   targets={detail.hidden_targets?.length ? [...detail.targets, ...detail.hidden_targets] : detail.targets}
+                   selectedId={selFinding?.id} onBulk={bulk}
                    onSelect={(f) => { setSelTask(undefined); setSelNode(null); setSelCampaign(undefined); setSelFinding(f); setSelGraphId(f.id); }} />
   ) : tab === "hypotheses" ? (
     <HypothesesPanel projectId={projectId!} reloadKey={hypReload}
@@ -806,7 +815,10 @@ export default function Workspace() {
   // Open the deliberate LaunchModal for a finding follow-up (prefilled + parent link).
   const openLaunchForFinding = (type: string, opts: { objective?: string; params?: any } = {}) => {
     if (!selFinding) return;
-    const t = detail.targets.find((x) => x.id === selFinding.target_id);
+    // The finding may sit on a hidden child (not in `detail.targets`) — fall back to the
+    // hidden-target names so a follow-up still launches against the right target.
+    const t = detail.targets.find((x) => x.id === selFinding.target_id)
+      ?? detail.hidden_targets?.find((x) => x.id === selFinding.target_id);
     if (t) setLaunchFor({ target: t, type, objective: opts.objective, params: opts.params, parentFindingId: selFinding.id });
   };
 
