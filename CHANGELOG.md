@@ -5,6 +5,50 @@ All notable changes to HexGraph are recorded here. The format loosely follows
 [semantic versioning](https://semver.org/) properly once it reaches 1.0. Until then,
 expect breaking changes between minor versions.
 
+## [0.8.0](https://github.com/branover/hexgraph/compare/hexgraph-v0.7.0...hexgraph-v0.8.0) (2026-06-10)
+
+
+### Features
+
+* expose AFL source-fuzz knobs (bug oracles / path coverage / cmplog) in the Fuzz modal ([#222](https://github.com/branover/hexgraph/issues/222)) ([3061daf](https://github.com/branover/hexgraph/commit/3061daf0d4677c138949b26e5faeb5cf47f91184))
+* hidden-by-default firmware children + recon-as-enrichment + selective reveal ([#229](https://github.com/branover/hexgraph/issues/229)) ([f6d8a76](https://github.com/branover/hexgraph/commit/f6d8a763cc9e5ce986f07d6e6546c1bb8ae5d03c))
+* ingest/promote flag packed containers + report inner children (F07, F09) ([#241](https://github.com/branover/hexgraph/issues/241)) ([85e5403](https://github.com/branover/hexgraph/commit/85e5403da922868406ab87d25ed437719923f6a4))
+* make AFL source-fuzz knobs (bug oracles / path coverage / cmplog) controllable via MCP + settings ([#220](https://github.com/branover/hexgraph/issues/220)) ([4375dc3](https://github.com/branover/hexgraph/commit/4375dc3d663f0c8a8daa9c3354163566b47fa1ee))
+* make target_ingest summary-first and finding_list filterable/paginated ([#225](https://github.com/branover/hexgraph/issues/225)) ([552c7d9](https://github.com/branover/hexgraph/commit/552c7d9d58be9a1e553623c0b369ad60305c6e57))
+* meta_check_features reports the policy gates (F04) ([#243](https://github.com/branover/hexgraph/issues/243)) ([53bfb3f](https://github.com/branover/hexgraph/commit/53bfb3f7e12b978692dc7426cd164fd0755deb72))
+* net_udp_request + verify_poc udp transport — complete the UDP live-surface path (F22) ([#230](https://github.com/branover/hexgraph/issues/230)) ([1948eea](https://github.com/branover/hexgraph/commit/1948eeace1a4bbeed42247bbe237e3930a0953af))
+* paginate + filter fs_list so it's usable on large firmware (F05) ([#240](https://github.com/branover/hexgraph/issues/240)) ([fe5ad41](https://github.com/branover/hexgraph/commit/fe5ad4155a9f195412fcc80aab86e7cb9a08e9de))
+* re_decompile_function surfaces the promoted node id + re_imports/binutils_facts docs (F11, F12) ([#244](https://github.com/branover/hexgraph/issues/244)) ([b92f13c](https://github.com/branover/hexgraph/commit/b92f13ca8bc98415db1750cf5d6e17b1d0d2bca3))
+* re_disassemble_range — raw ADDRESS+LENGTH disassembly for a CFG blind spot (F16) ([#236](https://github.com/branover/hexgraph/issues/236)) ([b7f6cfa](https://github.com/branover/hexgraph/commit/b7f6cfa07a39fbcb1c29740b78dbdd5249286487))
+* re_list_strings filters the FULL string table (binutils), greppable + paginated (F13/F15) ([#235](https://github.com/branover/hexgraph/issues/235)) ([635458c](https://github.com/branover/hexgraph/commit/635458cb3f0fb524efa38487caba8ec655583167))
+* **setup:** `just refresh` sanity-sync + fix silent Ghidra build-arg bug ([#221](https://github.com/branover/hexgraph/issues/221)) ([9d86c5b](https://github.com/branover/hexgraph/commit/9d86c5b693cc2a6021e547e98e23fee3c89267bc))
+* surface findings on hidden targets via a Findings-panel toggle ([#238](https://github.com/branover/hexgraph/issues/238)) ([44281be](https://github.com/branover/hexgraph/commit/44281bed220f8a73f098fcc63adbe40d0e11a583))
+* VR skill — spine + capability sub-files, full-engagement orchestration ([#210](https://github.com/branover/hexgraph/issues/210)) ([707846b](https://github.com/branover/hexgraph/commit/707846b9535e3415b44a91f4f5403494ef1e41bc))
+
+
+### Bug Fixes
+
+* adopt AFL++ v5.00c — remove AFL_SKIP_BIN_CHECK (real root cause of the 5.x abort) ([#219](https://github.com/branover/hexgraph/issues/219)) ([a83df79](https://github.com/branover/hexgraph/commit/a83df79010244d1a87ebde3b465394d9728d9da1))
+* bounded write-retry + sanitize DB errors at the MCP seam ([#224](https://github.com/branover/hexgraph/issues/224)) ([0d06d81](https://github.com/branover/hexgraph/commit/0d06d817064301cd0b6675f53d1b787062f9b07d))
+* capture pipeline runs on system Chrome + a focused journal screenshot ([#209](https://github.com/branover/hexgraph/issues/209)) ([8c1500d](https://github.com/branover/hexgraph/commit/8c1500d337516a8893faccb1c097b2557d081e0e))
+* checkpoint task Observations so a late failure can't discard completed analysis (F11-1b) ([#234](https://github.com/branover/hexgraph/issues/234)) ([bb43971](https://github.com/branover/hexgraph/commit/bb43971c51b95ae70befb5fd17b8bccefeebec41))
+* decompiler & xref fallbacks for stripped firmware ([#226](https://github.com/branover/hexgraph/issues/226)) ([1df37c3](https://github.com/branover/hexgraph/commit/1df37c33d5d738a7b779f2759daad44031818f1f))
+* dogfood papercuts batch (F14, F18, F05, F01, F02, [#226](https://github.com/branover/hexgraph/issues/226)/[#230](https://github.com/branover/hexgraph/issues/230)/[#232](https://github.com/branover/hexgraph/issues/232) nits) ([#233](https://github.com/branover/hexgraph/issues/233)) ([cdfd1bf](https://github.com/branover/hexgraph/commit/cdfd1bfc8342244999b0953e04f83c22f7799251))
+* eliminate the desock/AFL forkserver race (preeny→libdesock) + guard the slow test tier ([#237](https://github.com/branover/hexgraph/issues/237)) ([c11e308](https://github.com/branover/hexgraph/commit/c11e308f3ea1f6bf91125f3bf625c9c6bfaefe90))
+* findings/proving papercuts — reachability sink override, finding_record schema, verified pagination, assurance honesty ([#232](https://github.com/branover/hexgraph/issues/232)) ([b5e04e9](https://github.com/branover/hexgraph/commit/b5e04e9a5d3dcb434c5526cef8573e2c33e74764))
+* hypothesis click opens inspector regardless of graph LOD + export includes hidden children ([#231](https://github.com/branover/hexgraph/issues/231)) ([6bf91f7](https://github.com/branover/hexgraph/commit/6bf91f79177e689214ce6d79813765b32e5efde2))
+* journal polish — UTC timestamps, tab-bar wrap, README, screenshot ([#207](https://github.com/branover/hexgraph/issues/207)) ([2a87b77](https://github.com/branover/hexgraph/commit/2a87b77f5b044eb5085432d7a59cee74fec2999d))
+* open journal node @-mention in the inspector even when not loaded in the graph ([#228](https://github.com/branover/hexgraph/issues/228)) ([30566f6](https://github.com/branover/hexgraph/commit/30566f69984c4144c7bd37a24965903ccedc298d))
+* pin AFL++ to v4.40c in the fuzz image (unblock source-instrumented campaigns) ([#212](https://github.com/branover/hexgraph/issues/212)) ([049f9af](https://github.com/branover/hexgraph/commit/049f9afb562fd060c3bdb8e7c53ac9816b2990d1))
+* stop confident false-positive findings in the angr solver + taint core ([#227](https://github.com/branover/hexgraph/issues/227)) ([a768ad0](https://github.com/branover/hexgraph/commit/a768ad09e0c15ff137051cacc45c991680ea757e))
+* tag the decompiler fallback so r2dec output isn't read as Ghidra (F16) ([#242](https://github.com/branover/hexgraph/issues/242)) ([fe02d4a](https://github.com/branover/hexgraph/commit/fe02d4a29a183f7e28d857abab5b1feeaa746ee2))
+
+
+### Documentation
+
+* dogfood implementation plan (gt-axe11000) ([#223](https://github.com/branover/hexgraph/issues/223)) ([45abc5e](https://github.com/branover/hexgraph/commit/45abc5e9edf01fc37f4928fb1e2a4c7298ba7fac))
+* forbid committing real-engagement information to the public repo ([b307a27](https://github.com/branover/hexgraph/commit/b307a27a6b913af37ba0d807c3d043f69ae987ac))
+
 ## [0.7.0](https://github.com/branover/hexgraph/compare/hexgraph-v0.6.0...hexgraph-v0.7.0) (2026-06-08)
 
 
