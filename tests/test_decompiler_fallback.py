@@ -68,6 +68,21 @@ def test_format_decomp_warns_on_fallback_engine():
     assert "FALLBACK" not in _format_decomp(normal, "main")
 
 
+def test_format_decomp_surfaces_promoted_node_id_for_mention():
+    """F11: _format_decomp renders the promoted node id in the header (truncation-safe) in the
+    journal @-mention syntax, so a just-decompiled function is mention-able without a lookup."""
+    out = {"focus": {"name": "cgi_handler", "address": "0x401200",
+                     "pseudocode": "void cgi_handler(){ body(); }", "callees": []},
+           "focus_node_id": "abc-123-uuid"}
+    text = _format_decomp(out, "cgi_handler")
+    assert "graph node abc-123-uuid" in text
+    assert "@[cgi_handler](node:abc-123-uuid)" in text          # the literal mention syntax
+    assert text.index("abc-123-uuid") < text.index("body()")    # id line precedes the body
+    # no node line when nothing was promoted (e.g. a not-found focus)
+    nomatch = {"focus": {"name": "m", "pseudocode": "x", "callees": []}}
+    assert "graph node" not in _format_decomp(nomatch, "m")
+
+
 def test_ghidra_fallback_does_not_fire_when_ghidra_resolved_the_focus(monkeypatch):
     g = GhidraDecompiler.__new__(GhidraDecompiler)
     g.runner = object()
