@@ -124,8 +124,76 @@ for _var in ("HOME", "TMPDIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HO
 # /scratch via _JAVA_OPTIONS so EVERY writable Ghidra/Java path lands on the one tmpfs the
 # hardened sandbox guarantees, making the probe self-sufficient under bare --read-only +
 # --user 1000 with only /scratch writable. Prepend so a caller-supplied _JAVA_OPTIONS wins.
+#
+# F13: also let the heap scale with the container. The JVM's default max heap is ~25% of the
+# cgroup RAM cap, which OOMs (the "DB buffer" failure) on a 100 MB+ ELF — and the sandbox now
+# grants a large artifact a BIGGER `--memory` cap (sandbox/resources.py size-scaling). A RAM
+# PERCENTAGE (the JDK is cgroup-aware) self-adjusts to whatever cap THIS container got, so there's
+# no hardcoded -Xmx to drift from the cap and it tracks a larger/smaller `resources.sandbox.mem`
+# too. ~45% leaves room for the tmpfs (which counts against the same cap) + JVM native overhead.
+# Tunable per-run via HEXGRAPH_GHIDRA_HEAP_PCT without rebuilding. A caller-supplied -Xmx (appended
+# below) still wins.
+_GHIDRA_HEAP_PCT = os.environ.get("HEXGRAPH_GHIDRA_HEAP_PCT", "45.0")
 _existing_jopts = os.environ.get("_JAVA_OPTIONS", "")
-os.environ["_JAVA_OPTIONS"] = (f"-Djava.io.tmpdir={SCRATCH} {_existing_jopts}").strip()
+os.environ["_JAVA_OPTIONS"] = (
+    f"-Djava.io.tmpdir={SCRATCH} -XX:MaxRAMPercentage={_GHIDRA_HEAP_PCT} {_existing_jopts}"
+).strip()
+
+# F13: bound Ghidra's auto-analysis so a 100 MB+ ELF whose FULL analysis would outrun the
+# container's wall-clock budget stops GRACEFULLY and SAVES partial results (functions, call graph,
+# the postScript still runs) instead of being torn down by the external timeout with nothing
+# persisted. We read the budget the host advertised (HEXGRAPH_PROBE_TIMEOUT_S = run_probe's
+# wall-clock) and leave headroom for import + save + the postScript, so analysis halts BEFORE the
+# kill. Only the COLD import path runs auto-analysis (the warm -process path passes -noanalysis).
+GHIDRA_SAVE_OVERHEAD_S = 180
+
+
+def _analysis_timeout_args() -> list:
+    """`-analysisTimeoutPerFile <s>` sized just under the host's wall-clock budget so analysis
+    stops+saves before the external kill. Returns [] only when no budget is advertised or it's too
+    small to usefully split import/analyze/save (a tiny budget can't run a monolith anyway). For a
+    non-trivial budget we ALWAYS keep a graceful stop: leave the import/save headroom, but never
+    fall below ~half the wall-clock, so lowering `resources.sandbox.timeout` can't silently drop
+    the graceful save it's meant to provide on a large ELF."""
+    try:
+        total = int(float(os.environ.get("HEXGRAPH_PROBE_TIMEOUT_S", "")))
+    except (TypeError, ValueError):
+        return []
+    if total < 120:
+        return []
+    budget = max(int(total * 0.5), total - GHIDRA_SAVE_OVERHEAD_S)
+    return ["-analysisTimeoutPerFile", str(budget)]
+
+
+# F13: above this size, the cold import runs a "fast profile" preScript (below) that turns off the
+# auto-analysis passes that grind for ages on a monolith. Smaller binaries keep FULL analysis.
+GHIDRA_FAST_PROFILE_BYTES = int(float(os.environ.get("HEXGRAPH_GHIDRA_FAST_PROFILE_MB", "100")) * 1024 * 1024)
+
+# A Jython -preScript (runs BEFORE auto-analysis) that disables the passes proven pathological on a
+# 100 MB+ monolith: Call-Fixup Installer (O(n^2) AddressSet — tens of minutes of CPU on a large ELF), the
+# <processor> Constant Reference Analyzer + Scalar Operand References (constant propagation over
+# every function), and the decompile-EVERY-function passes (Decompiler Parameter ID / Switch
+# Analysis) + Aggressive Instruction Finder. The call-graph / reference / function-discovery
+# analyzers are KEPT, so recon still gets functions + call graph + strings + basic xrefs; HexGraph
+# decompiles on demand (re_decompile_function), so the batch decompile passes aren't needed here.
+# Matched by suffix so it's architecture-agnostic ("PowerPC/ARM/x86 … Constant Reference Analyzer").
+FAST_PROFILE_SCRIPT = """# -*- coding: utf-8 -*-
+def _slow(name):
+    if "." in name:
+        return False
+    if name in ("Call-Fixup Installer", "Decompiler Parameter ID", "Decompiler Switch Analysis",
+                "Aggressive Instruction Finder"):
+        return True
+    return name.endswith("Constant Reference Analyzer") or name.endswith("Scalar Operand References")
+
+opts = currentProgram.getOptions("Analyzers")
+for _n in list(opts.getOptionNames()):
+    if _slow(_n):
+        try:
+            opts.setBoolean(_n, False)
+        except:
+            pass
+"""
 
 # Jython postScript Ghidra runs after auto-analysis. It writes JSON to args[0];
 # args[1] (optional) is the focus function to decompile.
@@ -854,6 +922,19 @@ def main() -> int:
     with open(script_path, "w") as fh:
         fh.write(script_body)
 
+    # F13: a LARGE binary's cold import gets the fast-profile preScript (disables the pathological
+    # auto-analysis passes); small binaries keep the FULL analysis (no preScript). The WARM path
+    # runs no auto-analysis, so it never needs it.
+    pre_script_args = []
+    try:
+        _large = artifact is not None and os.path.getsize(artifact) >= GHIDRA_FAST_PROFILE_BYTES
+    except OSError:
+        _large = False
+    if _large:
+        with open(os.path.join(SCRATCH, "hexgraph_fast_profile.py"), "w") as fh:
+            fh.write(FAST_PROFILE_SCRIPT)
+        pre_script_args = ["-preScript", "hexgraph_fast_profile.py"]
+
     # Persistent-project cache (analyze-once / reuse). The host resolves
     # <data_dir>/ghidra/<sha256>__<version>/project and bind-mounts it writable here; if a
     # prior COLD run already imported the program (a non-empty project dir), reuse it via
@@ -897,7 +978,9 @@ def main() -> int:
         cmd = [
             hl, proj_dir, PROJECT_NAME,
             "-import", artifact,
+            *_analysis_timeout_args(),       # F13: stop+save before the wall-clock kill on a monolith
             "-scriptPath", SCRATCH,
+            *pre_script_args,                # F13: fast-profile preScript for a large binary
             "-postScript", script_name, out_path, focus or "", rename_addr, rename_name,
         ]
         if not persistent:
