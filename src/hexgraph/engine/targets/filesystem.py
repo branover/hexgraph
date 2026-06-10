@@ -30,7 +30,10 @@ def record_manifest(firmware: Target, *, method: str, root_rel: str, files: list
         "root_rel": root_rel,
         "files": [
             {"rel": f["rel"], "size": f.get("size"), "is_elf": bool(f.get("is_elf")),
-             "child_target_id": f.get("child_target_id")}
+             "child_target_id": f.get("child_target_id"),
+             # F07: keep the container-format tag so packed_containers() can flag un-recursed
+             # nested filesystems (omitted entirely for ordinary files, so the manifest stays lean).
+             **({"container": f["container"]} if f.get("container") else {})}
             for f in files
         ],
     }
@@ -108,6 +111,18 @@ def list_filesystem(project: Project, firmware: Target, session=None, *,
     if elf_only:
         out["elf_only"] = True
     return out
+
+
+def packed_containers(files: list[dict]) -> list[dict]:
+    """The container-format files in a manifest that were NOT recursed into a child target —
+    the "promote this to go deeper" set (F07). A large vendor firmware image leaves its web UI/SSH
+    runtime in nested .pkg/squashfs that the unpack doesn't auto-recurse; surfacing them stops
+    "N children unpacked" from reading as "fully unpacked". Biggest first (the meaningful
+    surfaces) — the caller caps + counts."""
+    return sorted(
+        ({"rel": f["rel"], "format": f.get("container"), "size": f.get("size")}
+         for f in files if f.get("container") and not f.get("child_target_id")),
+        key=lambda c: c.get("size") or 0, reverse=True)
 
 
 class FilesystemError(ValueError):

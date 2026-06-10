@@ -24,6 +24,32 @@ def _have(tool: str) -> bool:
     return subprocess.run(["which", tool], capture_output=True).returncode == 0
 
 
+# Magic-byte signatures of the nested CONTAINER formats firmware embeds. A packed inner
+# filesystem the unpack didn't recurse into otherwise sits in the tree as opaque bytes with
+# no signal — flagging it lets the ingest summary SAY "promote this to go deeper" (a large vendor
+# firmware image, e.g., leaves the web UI runtime in nested .pkg/squashfs).
+_CONTAINER_MAGICS = (
+    (b"hsqs", "squashfs"), (b"sqsh", "squashfs"), (b"shsq", "squashfs"), (b"qshs", "squashfs"),
+    (b"070701", "cpio"), (b"070702", "cpio"), (b"070707", "cpio"),
+    (b"UBI#", "ubi"), (b"\x31\x18\x10\x06", "ubifs"),
+    (b"\x85\x19", "jffs2"), (b"\x19\x85", "jffs2"),
+    (b"\x45\x3d\xcd\x28", "cramfs"), (b"\x28\xcd\x3d\x45", "cramfs"),
+    (b"-rom1fs-", "romfs"), (b"\xd0\x0d\xfe\xed", "fit"),
+)
+
+
+def _container_format(head: bytes, name: str) -> str | None:
+    """The container format of a file from its magic, or None. Falls back to the extension
+    for a large vendor firmware `.pkg`/`.SPA.pkg` (squashfs/cpio under a signed wrapper the magic misses)."""
+    for magic, fmt in _CONTAINER_MAGICS:
+        if head.startswith(magic):
+            return fmt
+    low = name.lower()
+    if low.endswith(".pkg") or low.endswith(".spa.pkg") or low.endswith(".spa.bin"):
+        return "vendor-pkg"
+    return None
+
+
 def _squashfs(artifact: str, root: str) -> str:
     """Extract a squashfs. Prefer sasquatch (handles vendor/non-standard LZMA that
     stock unsquashfs rejects); fall back to unsquashfs."""
@@ -131,18 +157,20 @@ def _walk_files(root: str) -> list[dict]:
                 continue
             try:
                 with open(abspath, "rb") as fh:
-                    head = fh.read(4)
+                    head = fh.read(8)
                 size = os.path.getsize(abspath)
             except OSError:
                 continue
-            files.append(
-                {
-                    "rel": os.path.relpath(abspath, root),
-                    "container_path": abspath,
-                    "size": size,
-                    "is_elf": head == b"\x7fELF",
-                }
-            )
+            entry = {
+                "rel": os.path.relpath(abspath, root),
+                "container_path": abspath,
+                "size": size,
+                "is_elf": head[:4] == b"\x7fELF",
+            }
+            fmt = _container_format(head, name)
+            if fmt:
+                entry["container"] = fmt
+            files.append(entry)
     return files
 
 
