@@ -30,7 +30,10 @@ def record_manifest(firmware: Target, *, method: str, root_rel: str, files: list
         "root_rel": root_rel,
         "files": [
             {"rel": f["rel"], "size": f.get("size"), "is_elf": bool(f.get("is_elf")),
-             "child_target_id": f.get("child_target_id")}
+             "child_target_id": f.get("child_target_id"),
+             # F07: keep the container-format tag so packed_containers() can flag un-recursed
+             # nested filesystems (omitted entirely for ordinary files, so the manifest stays lean).
+             **({"container": f["container"]} if f.get("container") else {})}
             for f in files
         ],
     }

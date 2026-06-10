@@ -6,7 +6,7 @@ a no-op. Offline: tests the pure helpers (the probe magic-classifier + the manif
 import importlib.util
 import pathlib
 
-from hexgraph.engine.targets.filesystem import packed_containers
+from hexgraph.engine.targets.filesystem import packed_containers, record_manifest
 
 
 def _load_unpack_probe():
@@ -44,3 +44,26 @@ def test_packed_containers_helper_sorts_and_filters():
     assert all(c.get("format") for c in out)
     assert "done.squashfs" not in [c["rel"] for c in out]
     assert packed_containers([]) == []
+
+
+class _FakeTarget:
+    """Minimal stand-in for a Target row — record_manifest only touches metadata_json."""
+    metadata_json: dict | None = None
+
+
+def test_record_manifest_persists_container_tag():
+    """Regression for the F07 manifest round-trip: record_manifest must KEEP the `container`
+    tag the probe emits, else packed_containers (which reads the PERSISTED manifest in
+    pipeline.analyze_target / promote_file) always returns [] and the whole feature is dead.
+    The earlier helper tests pass the tag in directly and never exercise this persistence path."""
+    fw = _FakeTarget()
+    record_manifest(fw, method="binwalk", root_rel="", files=[
+        {"rel": "1CDB94A.squashfs", "container": "squashfs", "size": 999999},
+        {"rel": "usr/sbin/iosd", "is_elf": True, "size": 5000},  # ordinary file → no container key
+    ])
+    persisted = fw.metadata_json["filesystem"]["files"]
+    # the container entry keeps its tag; the ordinary file does not gain a spurious one
+    assert persisted[0].get("container") == "squashfs"
+    assert "container" not in persisted[1]
+    # and the persisted manifest actually feeds packed_containers (the real call path)
+    assert [c["rel"] for c in packed_containers(persisted)] == ["1CDB94A.squashfs"]
