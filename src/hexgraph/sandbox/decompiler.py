@@ -131,6 +131,17 @@ class GhidraDecompiler(Decompiler):
                 artifact, function, address=address, reanalyze=reanalyze, project=project)
             if isinstance(r2, dict) and r2.get("focus"):
                 out["focus"] = r2["focus"]
+                # F16: the focus pseudocode came from radare2 (r2dec/r2ghidra), NOT Ghidra —
+                # Ghidra didn't define this function. TAG it: r2dec is heuristic and can
+                # mis-resolve PLT/args or even fabricate a call (a dogfood agent chased a bogus
+                # strncpy() lead), so a caller must NOT read fallback output as Ghidra-quality.
+                # The whole-program inventory on `out` is still Ghidra's.
+                out["focus_engine"] = R2Decompiler.name
+                out["focus_fallback"] = True
+        # Symmetry: a focus Ghidra DID resolve is tagged too, so provenance is explicit on every
+        # focused result (the caller never has to infer the engine from the absence of a flag).
+        if out.get("focus") and not out.get("focus_fallback"):
+            out["focus_engine"] = self.name
         return out
 
     def _decompile_ghidra(self, artifact: str, function: str | None = None, *,

@@ -48,6 +48,24 @@ def test_ghidra_falls_back_to_r2_for_explicit_focus_it_missed(monkeypatch):
     assert out["functions"] == ["main", "helper"]  # Ghidra's inventory kept
     assert out["calls"] and out["structs"]     # whole-program facts kept on the dict
     assert r2_calls == ["cgi_handler"]         # the r2 fallback fired ONCE for this focus
+    # F16: the focus is TAGGED as a radare2 fallback so the caller knows Ghidra didn't define
+    # it and the pseudocode isn't Ghidra-quality (r2dec can mis-resolve PLT/args / fabricate a call).
+    assert out["focus_engine"] == "radare2"
+    assert out["focus_fallback"] is True
+
+
+def test_format_decomp_warns_on_fallback_engine():
+    """F16: _format_decomp surfaces the fallback-engine warning BEFORE the body, so an agent
+    can't silently read r2dec pseudocode as Ghidra-quality (the dogfood chased a fabricated call)."""
+    fallback = {"focus": {"name": "cgi_handler", "address": "0x401200",
+                          "pseudocode": "void cgi_handler(){ system(x); }", "callees": []},
+                "focus_engine": "radare2", "focus_fallback": True}
+    text = _format_decomp(fallback, "cgi_handler")
+    assert "FALLBACK DECOMPILER" in text and "radare2" in text
+    assert text.index("FALLBACK") < text.index("system(x)")  # warning precedes the body
+    # a normal Ghidra focus carries NO warning
+    normal = {"focus": {"name": "main", "pseudocode": "int main(){}", "callees": []}}
+    assert "FALLBACK" not in _format_decomp(normal, "main")
 
 
 def test_ghidra_fallback_does_not_fire_when_ghidra_resolved_the_focus(monkeypatch):
