@@ -762,8 +762,10 @@ export default function Workspace() {
   const renderTabs = (collapsible = false) => (
     <div className="pane-h">
       <div className="rp-tabs">
-        <button className={"btn sm" + (tab === "findings" ? " primary" : " ghost")} onClick={() => { setTab("findings"); setUrl({ tab: undefined }); }}>
+        <button className={"btn sm" + (tab === "findings" ? " primary" : " ghost")} onClick={() => { setTab("findings"); setUrl({ tab: undefined }); }}
+                title={detail.hidden_findings?.length ? `${detail.hidden_findings.length} more on hidden targets — open Findings and toggle "on hidden"` : undefined}>
           <Icon name="bug" size={12} /> Findings · {detail.findings.length}
+          {detail.hidden_findings?.length ? <span style={{ opacity: 0.6 }}> +{detail.hidden_findings.length}</span> : null}
         </button>
         <button className={"btn sm" + (tab === "hypotheses" ? " primary" : " ghost")} onClick={() => { setTab("hypotheses"); setUrl({ tab: "hypotheses" }); }}
                 title="Hypotheses — the research-question worklist">
