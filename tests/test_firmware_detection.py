@@ -52,6 +52,15 @@ def test_deep_fit_past_the_window_is_detected():
     assert _firmware_signature(blob) == "fit"
 
 
+def test_fit_scan_retries_past_a_coincidental_first_match():
+    # A d00dfeed whose totalsize doesn't validate must not hide a genuine FIT header deeper in
+    # the image (the FIT scan rescans like the squashfs scan, not a single find).
+    bad_fit = b"\xd0\x0d\xfe\xed" + b"\x00\x00\x00\x00"       # totalsize 0 -> invalid
+    blob = b"\x00" * (WINDOW + 500_000) + bad_fit + b"\x00" * 1000 + _fit_header(0x800) + b"\x00" * 4096
+    assert _deep_container(blob) == "fit"
+    assert _firmware_signature(blob) == "fit"
+
+
 def test_squashfs_superblock_validation():
     pad = b"\x00" * 8192  # enough trailing bytes for the superblock's bytes_used to fit the image
     assert _valid_squashfs_superblock(_squashfs_superblock() + pad, 0)

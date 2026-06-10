@@ -144,9 +144,11 @@ _FW_SIGS = (
 )
 
 
-# A squashfs hit must be validated (a bare 4-byte 'hsqs' collides in a 100s-of-MB image); cap the
-# rescans so a pathological blob full of 'hsqs' bytes can't spin.
-_MAX_SQUASHFS_PROBES = 256
+# Each deep-container magic hit must be validated (a bare 4-byte magic collides in a 100s-of-MB
+# image); cap the rescans so a pathological blob full of magic bytes can't spin. 256 validated
+# probes is far more than any real image needs — the rootfs container is among the first valid
+# hits — while still bounding the worst case (a conscious completeness-vs-DoS tradeoff).
+_MAX_CONTAINER_PROBES = 256
 
 
 def _valid_squashfs_superblock(data: bytes, off: int) -> bool:
@@ -178,14 +180,20 @@ def _deep_container(data: bytes) -> str | None:
     can never mis-flag an ordinary file as firmware. Returns the format, or None."""
     off = data.find(b"hsqs")
     tries = 0
-    while off != -1 and tries < _MAX_SQUASHFS_PROBES:
+    while off != -1 and tries < _MAX_CONTAINER_PROBES:
         if _valid_squashfs_superblock(data, off):
             return "squashfs"
         off = data.find(b"hsqs", off + 1)
         tries += 1
+    # Same bounded-rescan as squashfs (not a single find): a coincidental first d00dfeed whose
+    # totalsize doesn't validate must not hide a genuine FIT header deeper in the image.
     off = data.find(b"\xd0\x0d\xfe\xed")
-    if off != -1 and _valid_fit_header(data, off):
-        return "fit"
+    tries = 0
+    while off != -1 and tries < _MAX_CONTAINER_PROBES:
+        if _valid_fit_header(data, off):
+            return "fit"
+        off = data.find(b"\xd0\x0d\xfe\xed", off + 1)
+        tries += 1
     return None
 
 
