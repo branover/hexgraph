@@ -167,6 +167,10 @@ export interface Skeleton { project_id: string; skeleton: true; nodes: GraphNode
 export interface RoomGraph { project_id: string; target_id: string; nodes: GraphNode[]; edges: GraphEdge[]; }
 export interface ProjectDetail {
   project: Project; targets: TargetNode[]; findings: Finding[];
+  // Findings recorded on HIDDEN firmware children (not in `targets`/the graph). Surfaced
+  // separately so the Findings panel can reveal them on a toggle; `hidden_targets` carries
+  // just those children's names (id/name/kind) for grouping — not the full hidden tree.
+  hidden_findings?: Finding[]; hidden_targets?: TargetNode[];
   cost: { total_usd: number; cost_source: string; task_count: number };
 }
 

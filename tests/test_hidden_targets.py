@@ -10,6 +10,9 @@ The recon-dependent cases use the sandbox (Docker); the pure visibility/reveal l
 exercised directly so it runs even without it.
 """
 
+from fastapi.testclient import TestClient
+
+from hexgraph.api.app import create_app
 from hexgraph.db.models import Finding, Node, Observation, Target, TargetKind
 from hexgraph.db.session import session_scope
 from hexgraph.engine.graph.graph import build_graph, graph_size, graph_stats
@@ -121,6 +124,71 @@ def test_set_visible_can_rehide(hg_home):
     with session_scope() as s:
         assert s.get(Target, tid).visible is False
         assert tid not in {n["id"] for n in build_graph(s, pid)["nodes"]}
+
+
+# ── project payload: findings on hidden children come back in a SEPARATE bucket ─────────
+
+def _mk_finding(s, *, project_id, target_id, title, finding_type="vulnerability"):
+    s.add(Finding(project_id=project_id, target_id=target_id, task_id="task",
+                  title=title, severity="high", confidence="high", category="auth",
+                  summary="s", reasoning="r", evidence_json={"function": "f"},
+                  finding_type=finding_type, status="new"))
+
+
+def test_project_payload_splits_hidden_target_findings(hg_home):
+    """GET /api/projects/{id}: findings on VISIBLE targets land in `findings`; findings on
+    HIDDEN children land in `hidden_findings` (with their `hidden_targets` names) so the UI
+    can reveal them on a toggle WITHOUT putting the hidden children in `targets`."""
+    with session_scope() as s:
+        p = create_project(s, name="payload")
+        fw = ingest_file(s, p, fixture_path("synthetic_fw.bin"), name="fw")
+        fw.kind = TargetKind.firmware_image
+        child = ingest_file(s, p, fixture_path("vuln_httpd"), name="lib/security/pam.so",
+                            parent=fw, visible=False)
+        s.flush()
+        _mk_finding(s, project_id=p.id, target_id=fw.id, title="visible-finding")
+        _mk_finding(s, project_id=p.id, target_id=child.id, title="hidden-finding")
+        # A recon finding on the hidden child must NOT leak into the toggle bucket — recon is
+        # the high-volume flood that hiding children exists to suppress.
+        _mk_finding(s, project_id=p.id, target_id=child.id, title="hidden-recon", finding_type="recon")
+        pid, fwid, cid = p.id, fw.id, child.id
+
+    client = TestClient(create_app())
+    body = client.get(f"/api/projects/{pid}").json()
+
+    # `targets` stays visible-only — the hidden child is NOT dumped into the Targets pane.
+    assert {t["id"] for t in body["targets"]} == {fwid}
+    # The visible finding shows; the substantive hidden one is split out, not lost; recon excluded.
+    assert [f["title"] for f in body["findings"]] == ["visible-finding"]
+    assert [f["title"] for f in body["hidden_findings"]] == ["hidden-finding"]
+    # Only the findings-bearing hidden target's name is shipped (for grouping), not the tree.
+    assert {t["id"] for t in body["hidden_targets"]} == {cid}
+    assert next(t for t in body["hidden_targets"] if t["id"] == cid)["name"].endswith("pam.so")
+
+    # include_hidden folds them into `targets`/`findings` (the full firehose, recon and all);
+    # `hidden_findings` is then empty (no double-count) and `hidden_targets` collapses too.
+    full = client.get(f"/api/projects/{pid}?include_hidden=true").json()
+    assert {cid, fwid} <= {t["id"] for t in full["targets"]}
+    assert {f["title"] for f in full["findings"]} == {"visible-finding", "hidden-finding", "hidden-recon"}
+    assert full["hidden_findings"] == [] and full["hidden_targets"] == []
+
+
+def test_project_payload_excludes_archived_target_findings(hg_home):
+    """A finding on an ARCHIVED (soft-removed) target appears in NEITHER bucket — archive is
+    a deliberate removal, distinct from a merely-hidden child."""
+    with session_scope() as s:
+        p = create_project(s, name="arch")
+        fw = ingest_file(s, p, fixture_path("synthetic_fw.bin"), name="fw")
+        fw.kind = TargetKind.firmware_image
+        gone = ingest_file(s, p, fixture_path("vuln_httpd"), name="bin/old", parent=fw, visible=False)
+        gone.archived = True
+        s.flush()
+        _mk_finding(s, project_id=p.id, target_id=gone.id, title="archived-finding")
+        pid = p.id
+
+    body = TestClient(create_app()).get(f"/api/projects/{pid}").json()
+    titles = {f["title"] for f in body["findings"]} | {f["title"] for f in body["hidden_findings"]}
+    assert "archived-finding" not in titles
 
 
 # ── per-directory reveal (no Docker) ────────────────────────────────────────────────────

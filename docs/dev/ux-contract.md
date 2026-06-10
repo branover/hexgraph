@@ -744,6 +744,22 @@ loud only where you are looking; every node/edge/color kept, mute never deletes.
 - Qualitative: filters compose; counts shown per severity option (Feedback).
 - Prereq: findings spanning severities/types/statuses.
 
+**FIND-02b — Reveal findings on hidden targets (toggle)**
+- Steps: with findings recorded on hidden firmware children (unrevealed ELF targets), click the
+  **"+N on hidden"** eye toggle in the filter bar.
+- Functional: those findings fold into the list (and the severity summary), each badged "hidden target";
+  toggling off hides them again. Off by default. The toggle is absent when there are none.
+- 🔌 Backend: `detail.hidden_findings` / `detail.hidden_targets` from `GET /api/projects/{id}` — SUBSTANTIVE
+  findings (recon excluded — it's the per-child flood) on non-archived hidden children, kept OUT of
+  `targets`/the graph (no Targets-pane flood). `include_hidden=true` folds the full firehose into `findings`
+  instead and empties the hidden buckets.
+- Qualitative: discoverable — the count tells the analyst findings exist they aren't seeing (the firmware
+  child was analyzed but never revealed); the badge + tooltip point to revealing the target to manage it
+  normally (Feedback/Honesty). A merely-hidden child is recoverable here; an *archived* target's findings stay
+  gone (distinct from this — see TGT remove).
+- Principle: a finding is never silently dropped because its target isn't in the pane; it's one toggle away.
+- Prereq: at least one finding on a hidden (unrevealed, non-archived) firmware child.
+
 **FIND-03 — Select a finding → Inspector**
 - Steps: click a finding card (in the list, or its diamond in the graph).
 - Functional: the Detail shows the full Inspector — severity/category/confidence/status chips, finding-type,
