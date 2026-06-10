@@ -11,14 +11,21 @@ from hexgraph.sandbox.probes import ghidra_probe as G
 
 
 def test_analysis_timeout_sits_just_under_the_host_budget(monkeypatch):
-    monkeypatch.setenv("HEXGRAPH_PROBE_TIMEOUT_S", "1000")
+    monkeypatch.setenv("HEXGRAPH_PROBE_TIMEOUT_S", "1000")        # large: budget = 1000 - overhead
     assert G._analysis_timeout_args() == ["-analysisTimeoutPerFile", str(1000 - G.GHIDRA_SAVE_OVERHEAD_S)]
 
 
-def test_no_analysis_timeout_when_budget_absent_tiny_or_bad(monkeypatch):
+def test_small_nontrivial_budget_still_gets_a_graceful_stop(monkeypatch):
+    # A lowered resources.sandbox.timeout (e.g. 200s) must NOT silently drop the graceful save:
+    # the budget floors at ~half the wall-clock (here 100s) rather than vanishing.
+    monkeypatch.setenv("HEXGRAPH_PROBE_TIMEOUT_S", "200")
+    assert G._analysis_timeout_args() == ["-analysisTimeoutPerFile", "100"]
+
+
+def test_no_analysis_timeout_when_budget_absent_or_bad(monkeypatch):
     monkeypatch.delenv("HEXGRAPH_PROBE_TIMEOUT_S", raising=False)
     assert G._analysis_timeout_args() == []                       # no budget advertised -> let it run
-    monkeypatch.setenv("HEXGRAPH_PROBE_TIMEOUT_S", "200")         # 200-180 = 20 < 60 -> not worth bounding
+    monkeypatch.setenv("HEXGRAPH_PROBE_TIMEOUT_S", "90")          # < 120 -> too small to split usefully
     assert G._analysis_timeout_args() == []
     monkeypatch.setenv("HEXGRAPH_PROBE_TIMEOUT_S", "not-a-number")
     assert G._analysis_timeout_args() == []

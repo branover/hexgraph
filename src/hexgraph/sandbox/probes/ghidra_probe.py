@@ -149,13 +149,20 @@ GHIDRA_SAVE_OVERHEAD_S = 180
 
 
 def _analysis_timeout_args() -> list:
-    """`-analysisTimeoutPerFile <s>` sized just under the host's wall-clock budget, or [] when the
-    budget is absent/too small to bother bounding (small binaries finish well within it)."""
+    """`-analysisTimeoutPerFile <s>` sized just under the host's wall-clock budget so analysis
+    stops+saves before the external kill. Returns [] only when no budget is advertised or it's too
+    small to usefully split import/analyze/save (a tiny budget can't run a monolith anyway). For a
+    non-trivial budget we ALWAYS keep a graceful stop: leave the import/save headroom, but never
+    fall below ~half the wall-clock, so lowering `resources.sandbox.timeout` can't silently drop
+    the graceful save it's meant to provide on a large ELF."""
     try:
-        budget = int(float(os.environ.get("HEXGRAPH_PROBE_TIMEOUT_S", ""))) - GHIDRA_SAVE_OVERHEAD_S
+        total = int(float(os.environ.get("HEXGRAPH_PROBE_TIMEOUT_S", "")))
     except (TypeError, ValueError):
         return []
-    return ["-analysisTimeoutPerFile", str(budget)] if budget >= 60 else []
+    if total < 120:
+        return []
+    budget = max(int(total * 0.5), total - GHIDRA_SAVE_OVERHEAD_S)
+    return ["-analysisTimeoutPerFile", str(budget)]
 
 
 # F13: above this size, the cold import runs a "fast profile" preScript (below) that turns off the
