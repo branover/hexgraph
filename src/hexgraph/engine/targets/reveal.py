@@ -92,6 +92,23 @@ def reveal_dir(session: Session, project_id: str, firmware_target_id: str, prefi
 
     norm = (prefix or "").strip().strip("/")
     project = session.get(Project, project_id)
+
+    def _under(rel: str) -> bool:
+        # Match the dir prefix: the whole tree ("" matches all), an exact dir
+        # ("usr/sbin" matches "usr/sbin/telnetd"), or an exact file path. Avoid a
+        # bare substring match ("usr/sb" must NOT match "usr/sbnet/x").
+        rel = (rel or "").strip("/")
+        return norm == "" or rel == norm or rel.startswith(norm + "/")
+
+    # F08: a binary deduped to a shared target has no row of its own at its alternate path(s) —
+    # only a `dedup_of` ref in the manifest. Build the path→target map from the manifest so
+    # revealing a directory still reveals every target that lives under it, including via a deduped
+    # path whose keeper's own name sits in a different directory.
+    fs = (fw.metadata_json or {}).get("filesystem") or {}
+    ids_under_prefix = {
+        f.get("child_target_id") for f in fs.get("files", [])
+        if f.get("child_target_id") and _under(f.get("rel"))
+    }
     children = (
         session.query(Target)
         .filter(Target.project_id == project_id, Target.parent_id == firmware_target_id)
@@ -101,11 +118,7 @@ def reveal_dir(session: Session, project_id: str, firmware_target_id: str, prefi
     for c in children:
         if c.visible:
             continue
-        name = (c.name or "").strip("/")
-        # Match the dir prefix: the whole tree ("" matches all), an exact dir
-        # ("usr/sbin" matches "usr/sbin/telnetd"), or an exact file path. Avoid a
-        # bare substring match ("usr/sb" must NOT match "usr/sbnet/x").
-        if norm == "" or name == norm or name.startswith(norm + "/"):
+        if c.id in ids_under_prefix or _under(c.name):   # any manifest path under prefix, or its own name
             c.visible = True
             _materialize_on_reveal(session, project, c)
             revealed_ids.append(c.id)

@@ -13,6 +13,7 @@ from hexgraph.db.models import EdgeType, Project, Target, TargetKind
 from hexgraph.engine.graph.edges import add_edge
 from hexgraph.engine.targets.filesystem import persistent_base, record_manifest
 from hexgraph.engine.targets.ingest import ingest_file
+from hexgraph.engine.targets.targets import file_sha256
 from hexgraph.sandbox.executor import Executor, get_executor
 
 
@@ -45,6 +46,12 @@ def unpack_firmware(
     root = base / root_rel
     files = manifest.get("files", [])
 
+    # F08: a firmware re-packs the SAME binary at several paths (the FIT inner image == the top-level
+    # cpio, a busybox hard-link farm, a package shipped in two layers). Register each unique-bytes ELF
+    # ONCE and point every later byte-identical path at that same target (a `dedup_of` ref in the
+    # manifest) — otherwise one image's hundreds of duplicates each mint a hidden target + contains
+    # edge, doubling the graph for no information. (merge_duplicates folds any that slip through.)
+    seen_sha: dict[str, str] = {}
     for entry in files:
         if not entry.get("is_elf"):
             continue
@@ -52,6 +59,14 @@ def unpack_firmware(
         if not host_path.is_file():
             host_path = root / entry["rel"]
         if not host_path.is_file():
+            continue
+
+        digest = file_sha256(str(host_path))
+        keeper = seen_sha.get(digest)
+        if keeper is not None:
+            # byte-identical to an already-registered sibling — reuse it, don't clone the row/edge.
+            entry["child_target_id"] = keeper
+            entry["dedup_of"] = keeper
             continue
 
         child = ingest_file(session, project, host_path, name=entry["rel"], parent=parent, visible=False)
@@ -62,6 +77,7 @@ def unpack_firmware(
             created_by_tool="unpack", attrs={"path": entry["rel"]},
         )
         entry["child_target_id"] = child.id
+        seen_sha[digest] = child.id
         children.append(child)
 
     if parent.kind != TargetKind.firmware_image:
