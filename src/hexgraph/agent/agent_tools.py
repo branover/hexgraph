@@ -390,9 +390,16 @@ def _format_decomp(out: dict, label: str, *, limit: int = _MAX) -> str:
                        f"pseudocode is from {out.get('focus_engine', 'radare2')} (heuristic — it "
                        f"can mis-resolve PLT/args or even fabricate a call; confirm a suspicious "
                        f"call with re_disassemble_range before trusting it)")
+    # F11: this decompile PROMOTED the function to a graph node — surface its id (in the header,
+    # so a truncation can't hide it) so a journal/finding can @-mention it WITHOUT a graph_list_nodes
+    # lookup (mentions resolve by node UUID, not by name).
+    node_ref = ""
+    if out.get("focus_node_id"):
+        node_ref = (f"\n// graph node {out['focus_node_id']} — "
+                    f"@-mention it as @[{name}](node:{out['focus_node_id']})")
     return _clip_body(
-        f"// {name}{addr} (callees: {', '.join(_callee_names(focus.get('callees')))}){engine_warn}\n"
-        f"{focus.get('pseudocode', '')}{note}",
+        f"// {name}{addr} (callees: {', '.join(_callee_names(focus.get('callees')))})"
+        f"{engine_warn}{node_ref}\n{focus.get('pseudocode', '')}{note}",
         limit=limit, obs_id=out.get("observation_id"))
 
 
@@ -495,9 +502,10 @@ def _decomp(ctx: ToolContext, function: str | None, *,
             result_kind="decompilation", payload=decomp_payload,
             summary=f"decompiled {focus.get('name') or function or address}",
             node_refs=[focus.get("name")] if focus.get("name") else [])
-        promotable = _materialize(ctx, focus)
+        promotable, focus_node_id = _materialize(ctx, focus)
         out["observation_id"] = obs.id if obs is not None else None
         out["promotable_callees"] = promotable
+        out["focus_node_id"] = focus_node_id  # F11: surface the promoted node id so it's mention-able
     else:
         # A pure QUERY: record it, mutate NO graph. Attribute it to the call the agent
         # actually made — a requested-but-not-found focused decompile is a decompile_*
@@ -519,7 +527,7 @@ def _decomp(ctx: ToolContext, function: str | None, *,
     return out
 
 
-def _materialize(ctx: ToolContext, focus: dict) -> list[str]:
+def _materialize(ctx: ToolContext, focus: dict) -> tuple[list[str], str | None]:
     """Promote the decompiled FOCUS function into the graph (the deliberate curation act
     of decompiling THIS function), and draw `calls` edges ONLY to callees that ALREADY
     exist as nodes (the both-endpoints-exist rule, design §5.3). New callees are NOT
@@ -535,7 +543,7 @@ def _materialize(ctx: ToolContext, focus: dict) -> list[str]:
     from hexgraph.engine.graph.nodes import materialize_function
 
     if not focus.get("name"):
-        return []
+        return [], None
     budget = _PROMOTE_BUDGET
     fnode = materialize_function(ctx.session, project_id=ctx.project.id, target_id=ctx.target.id,
                                  name=focus["name"], address=focus.get("address"),
@@ -560,7 +568,7 @@ def _materialize(ctx: ToolContext, focus: dict) -> list[str]:
         add_edge(ctx.session, project_id=ctx.project.id, src=("node", fnode.id), dst=("node", cnode.id),
                  type=EdgeType.calls, origin="tool", confidence=1.0, created_by_tool="agent")
         budget -= 1
-    return promotable
+    return promotable, fnode.id
 
 
 def _disassemble_range(ctx: ToolContext, args: dict) -> str:
