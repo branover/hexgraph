@@ -40,3 +40,6 @@ src/hexgraph/_build_info.py
 !.claude/agents/
 !.claude/hooks/
 !.claude/settings.json
+
+# Potentially sensitive docs
+docs/dev/
