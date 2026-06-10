@@ -381,8 +381,17 @@ def _format_decomp(out: dict, label: str, *, limit: int = _MAX) -> str:
         # deliberate promotion — decompile_function one of these to promote it.
         note = ("\n// callees not yet in the graph (promote any by decompiling it): "
                 + ", ".join(promo))
+    # F16: if Ghidra didn't define this function the focus came from radare2 (r2dec) — flag it
+    # BEFORE the body (so a truncation can't hide it). r2dec is heuristic and can mis-resolve
+    # PLT/args or fabricate a call; never read fallback pseudocode as Ghidra-quality.
+    engine_warn = ""
+    if out.get("focus_fallback"):
+        engine_warn = (f"\n// ⚠ FALLBACK DECOMPILER: Ghidra did not define this function; "
+                       f"pseudocode is from {out.get('focus_engine', 'radare2')} (heuristic — it "
+                       f"can mis-resolve PLT/args or even fabricate a call; confirm a suspicious "
+                       f"call with re_disassemble_range before trusting it)")
     return _clip_body(
-        f"// {name}{addr} (callees: {', '.join(_callee_names(focus.get('callees')))})\n"
+        f"// {name}{addr} (callees: {', '.join(_callee_names(focus.get('callees')))}){engine_warn}\n"
         f"{focus.get('pseudocode', '')}{note}",
         limit=limit, obs_id=out.get("observation_id"))
 
