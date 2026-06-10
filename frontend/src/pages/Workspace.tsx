@@ -190,8 +190,13 @@ export default function Workspace() {
     }
     setDetail(d); setTasks(tk);
     // Refresh the open detail with the reloaded data so triage (Accept/Dismiss,
-    // status pills, annotations) re-renders instead of showing a stale finding.
-    setSelFinding((prev) => (prev ? d.findings.find((f) => f.id === prev.id) ?? prev : prev));
+    // status pills, annotations) re-renders instead of showing a stale finding —
+    // checking the hidden-target bucket too, so a selected hidden finding also re-renders.
+    setSelFinding((prev) => (prev
+      ? d.findings.find((f) => f.id === prev.id)
+        ?? d.hidden_findings?.find((f) => f.id === prev.id)
+        ?? prev
+      : prev));
   }, [projectId]);
 
   // ── Skeleton-first: fetch ONE room's interior on demand and merge it into `graph`.
