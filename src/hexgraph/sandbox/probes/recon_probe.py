@@ -211,6 +211,17 @@ def main() -> int:
                 facts["format"] = "disk_image"
                 facts["kind"] = "firmware_image"
 
+    # G01: still unrecognized. Capture the header bytes so the operator can identify the
+    # container — a vendor-wrapped/signed firmware image the unpacker doesn't know would
+    # otherwise ingest to 0 children with NO signal. A LARGE non-ELF blob with no known
+    # signature is very likely an unsupported firmware/container (not an ordinary data file):
+    # flag it so the pipeline ATTEMPTS a carve and, failing that, says so with these bytes.
+    if facts.get("format") == "unknown":
+        facts["magic_hex"] = data[:16].hex()
+        facts["magic_ascii"] = "".join((chr(b) if 32 <= b < 127 else ".") for b in data[:16])
+        if len(data) >= (1 << 20):  # >= 1 MiB
+            facts["likely_unrecognized_container"] = True
+
     print(json.dumps(facts))
     return 0
 

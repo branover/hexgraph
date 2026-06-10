@@ -2274,6 +2274,15 @@ def ingest(path: str, name: str | None = None, project_id: str | None = None) ->
         }
         if summary.get("format"):
             result["format"] = summary["format"]
+        # G01: a large blob whose container format the unpacker didn't recognize, and the carve
+        # attempt extracted nothing — surface it LOUDLY (a top-level warning + the magic bytes) so
+        # the operator isn't left with a silent 0-child result and no idea why.
+        if summary.get("unrecognized_container"):
+            uc = summary["unrecognized_container"]
+            result["unrecognized_container"] = uc
+            result["warning"] = (
+                f"UNSUPPORTED CONTAINER — ingested 0 analyzable children. format={uc.get('format')}, "
+                f"magic={uc.get('magic_ascii')!r} ({uc.get('magic_hex')}). {uc.get('note')}")
         if summary.get("packed_containers"):
             result["packed_containers"] = summary["packed_containers"]
             result["packed_containers_note"] = (

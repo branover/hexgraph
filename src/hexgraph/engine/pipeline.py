@@ -83,7 +83,12 @@ def analyze_target(
     facts = run_recon(session, project, target, runner)
     summary = {"target_id": target.id, "name": target.name, "children": []}
 
-    is_firmware = facts.get("kind") == "firmware_image" or facts.get("format") in _FIRMWARE_FORMATS
+    # G01: a recognized firmware format OR a large blob whose format we couldn't recognize —
+    # in the latter case ATTEMPT a binwalk carve anyway (it often recognizes vendor wrappers our
+    # signature scan misses), and if it yields nothing, say so loudly below instead of silently
+    # returning 0 children.
+    is_firmware = (facts.get("kind") == "firmware_image" or facts.get("format") in _FIRMWARE_FORMATS
+                   or facts.get("likely_unrecognized_container"))
     if is_firmware:
         summary["format"] = facts.get("format")
         _record_progress(session, target, "unpacking", format=facts.get("format"))
@@ -109,6 +114,20 @@ def analyze_target(
         if packed:
             summary["packed_containers"] = packed[:20]
             summary["packed_containers_count"] = len(packed)
+        # G01: the carve of an unrecognized blob yielded NO analyzable child — don't return a
+        # silent 0-child result that leaves the operator dead in the water. Surface the header
+        # bytes + an "unsupported container" signal so they can identify it and act.
+        if total == 0 and facts.get("likely_unrecognized_container"):
+            summary["unrecognized_container"] = {
+                "format": facts.get("format"),
+                "magic_hex": facts.get("magic_hex"),
+                "magic_ascii": facts.get("magic_ascii"),
+                "note": ("the unpacker did not recognize this container and extracted no analyzable "
+                         "binaries — it's likely a vendor-wrapped/signed firmware image whose format "
+                         "isn't supported. Identify it from the magic bytes (host `file`/binwalk), "
+                         "then extract a known inner artifact out-of-band and re-ingest it, or file "
+                         "an issue with the magic so support can be added."),
+            }
     else:
         _maybe_enrich_ghidra(session, project, target, facts)
     summary["children_count"] = len(summary["children"])
