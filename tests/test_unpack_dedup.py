@@ -53,3 +53,23 @@ def test_byte_identical_children_are_deduped(hg_home, tmp_path):
         assert files["pkg/svc"]["dedup_of"] == keeper_id               # ...and is flagged as a dedup
         assert "dedup_of" not in files["boot/svc"]                     # the keeper is not a dup
         assert "dedup_of" not in files["bin/busybox"]                  # nor is the distinct binary
+
+
+def test_reveal_dir_finds_a_binary_via_its_deduped_path(hg_home, tmp_path):
+    # F08 regression guard: the shared binary's keeper is named "boot/svc", but it also lives at
+    # "pkg/svc" (deduped, no row of its own). Revealing the "pkg" directory must still reveal it —
+    # reveal_dir consults the manifest path map, not just live Target.name.
+    from hexgraph.engine.targets.reveal import reveal_dir
+
+    fw_src = tmp_path / "firmware.bin"
+    fw_src.write_bytes(b"FAKEFW" + b"\x00" * 64)
+    with session_scope() as session:
+        project = create_project(session, name="fw")
+        firmware = ingest_file(session, project, fw_src, name="firmware.bin")
+        unpack_firmware(session, project, firmware, runner=_FakeDupExecutor())
+
+        files = {f["rel"]: f for f in firmware.metadata_json["filesystem"]["files"]}
+        keeper_id = files["boot/svc"]["child_target_id"]
+        res = reveal_dir(session, project.id, firmware.id, "pkg")       # the dir only the DEDUPED path is in
+        assert res["revealed"] == 1 and res["target_ids"] == [keeper_id]
+        assert session.get(Target, keeper_id).visible is True
