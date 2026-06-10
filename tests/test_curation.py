@@ -74,11 +74,14 @@ def test_materialize_promotes_focus_only_not_callees(hg_home):
         focus = {"name": "cgi_handler", "address": "0x401200",
                  "pseudocode": "void cgi_handler(){ system(x); helper(); }",
                  "callees": ["system", "helper", "strcpy"]}
-        promotable = AT._materialize(ctx, focus)
+        promotable, focus_node_id = AT._materialize(ctx, focus)
 
         fns = s.query(Node).filter(Node.node_type == "function", Node.target_id == t.id).all()
         # Only the FOCUS function was promoted — none of the three callees.
         assert {f.name for f in fns} == {"cgi_handler"}
+        # F11: _materialize returns the promoted focus node's id (so a decompile can surface it
+        # for an @-mention without a graph_list_nodes lookup).
+        assert focus_node_id == fns[0].id
         # All callees surface as promotable (none were already curated).
         assert set(promotable) == {"system", "helper", "strcpy"}
         # No `calls` edge to a non-existent endpoint.
@@ -94,7 +97,7 @@ def test_materialize_draws_edge_only_to_existing_callee(hg_home):
         get_or_create_node(s, project_id=p.id, node_type="function", name="helper", target_id=t.id)
         focus = {"name": "cgi_handler", "address": "0x401200",
                  "pseudocode": "x", "callees": ["helper", "ghost"]}
-        promotable = AT._materialize(ctx, focus)
+        promotable, focus_node_id = AT._materialize(ctx, focus)
 
         # ghost was NOT minted; helper got an edge.
         assert promotable == ["ghost"]
@@ -144,7 +147,7 @@ def test_promote_budget_caps_and_reports_overflow(hg_home, monkeypatch):
         for c in callees:
             get_or_create_node(s, project_id=p.id, node_type="function", name=c, target_id=t.id)
         focus = {"name": "root", "address": "0x1", "pseudocode": "x", "callees": callees}
-        promotable = AT._materialize(ctx, focus)
+        promotable, focus_node_id = AT._materialize(ctx, focus)
 
         # Budget 3 = 1 focus node + 2 edges; the remaining 3 callees overflow and are reported.
         edges = s.query(Edge).filter(Edge.type == "calls").all()
