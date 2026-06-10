@@ -72,20 +72,29 @@ def target_facts(target_id: str) -> dict:
                 "dangerous_imports": sorted(set(imports) & _DANGEROUS)}
 
 
-def list_filesystem(target_id: str) -> dict:
+def list_filesystem(target_id: str, path_prefix: str | None = None, offset: int = 0,
+                    limit: int = 200, elf_only: bool = False) -> dict:
     """List a firmware target's unpacked filesystem (paths, sizes, which are ELFs / already
     child targets, and whether those child targets are REVEALED into the graph). Use it to
     find config files, scripts, keys, web assets to inspect — then read_file to view one, or
-    target_set_visible to reveal a hidden ELF child. Returns {unpacked, method,
-    files:[{rel,size,is_elf,added,revealed,child_target_id}]} (added=a child target exists;
-    revealed=it's visible in the graph — unpack registers ELF children hidden)."""
+    target_set_visible to reveal a hidden ELF child.
+
+    PAGINATED + filterable so it stays usable on a big firmware (a real image unpacks to
+    hundreds-to-thousands of files): `path_prefix` scopes to a directory (e.g. "usr/sbin"),
+    `elf_only` lists only binaries, `offset`/`limit` page (default 200, max 2000). The result's
+    `total` + `next_offset` tell you the full size + where to page on. Returns {unpacked, method,
+    files:[{rel,size,is_elf,added,revealed,child_target_id}], total, offset, next_offset,
+    has_more} (added=a child target exists; revealed=it's visible in the graph — unpack registers
+    ELF children hidden)."""
     from hexgraph.engine.targets.filesystem import list_filesystem as _ls
 
     with session_scope() as s:
         t = s.get(Target, target_id)
         if t is None:
             return {"error": "target not found"}
-        return _ls(s.get(Project, t.project_id), t, session=s)
+        return _ls(s.get(Project, t.project_id), t, session=s,
+                   path_prefix=path_prefix or None, offset=max(0, int(offset)),
+                   limit=max(1, min(int(limit), 2000)), elf_only=bool(elf_only))
 
 
 def read_file(target_id: str, path: str) -> dict:
