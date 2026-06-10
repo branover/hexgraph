@@ -60,6 +60,23 @@ SIZE_TIMEOUT_THRESHOLD_BYTES = 32 * 1024 * 1024   # below this, no scaling at al
 SIZE_TIMEOUT_SECONDS_PER_MIB = 5                  # added per MiB of artifact above the threshold
 SIZE_TIMEOUT_CAP_SECONDS = 3600                   # size-scaling alone never pushes the budget past 1 h
 
+# F13 (the OTHER half): a LARGE artifact also needs more container MEMORY and a bigger /scratch
+# tmpfs than the shipped 2 GiB / 512 MiB. Ghidra's import + auto-analysis of a 100 MB+ ELF exhausts
+# the default heap AND fills the tmpfs it writes its DB/recovery into (TMPDIR=/scratch) — the "DB
+# buffer" failure — and the tmpfs counts against the same mem cgroup, squeezing the heap further.
+# Unlike the timeout, raising mem/tmpfs has a real HOST cost, so it starts at a HIGHER threshold,
+# grows linearly per byte over it, and is bounded by BOTH a hard cap and a fraction of host RAM so
+# a big artifact never over-commits the box. Monotonic and never below the configured base — like
+# the timeout, scaling only ever widens. The probe sizes Ghidra's -Xmx from the resulting cgroup
+# cap (sandbox/probes/ghidra_probe.py), so a bigger container automatically yields a bigger heap.
+SIZE_RAM_THRESHOLD_BYTES = 64 * 1024 * 1024       # below this, mem/tmpfs stay the configured defaults
+SIZE_MEM_BYTES_PER_BYTE = 64                      # container mem added per artifact byte over the threshold
+SIZE_TMPFS_BYTES_PER_BYTE = 24                    # /scratch tmpfs added per artifact byte (Ghidra DB/recovery)
+SIZE_MEM_CAP_BYTES = 16 * 1024 ** 3               # hard ceiling on the mem size-bonus
+SIZE_TMPFS_CAP_BYTES = 8 * 1024 ** 3              # hard ceiling on the tmpfs size-bonus
+SIZE_RAM_HOST_FRACTION = 0.75                     # never scale mem past this fraction of host MemTotal
+SIZE_TMPFS_MEM_FRACTION = 0.5                     # tmpfs counts against mem — keep it ≤ half so the heap has room
+
 # The container types that can carry their own per-type override under `resources.<type>`
 # (each inherits `resources.default` for any key it doesn't set). Rehosting containers are
 # privileged full-system emulators and are deliberately NOT resource-capped here.
@@ -176,22 +193,95 @@ def size_scaled_timeout(size_bytes: int | None, base_timeout: int) -> int:
     return min(scaled, max(base_timeout, SIZE_TIMEOUT_CAP_SECONDS))
 
 
-def resource_spec_for_artifact(artifact, container_type: str = "sandbox") -> ResourceSpec:
-    """The resolved ResourceSpec for a probe over `artifact`, with a size-aware `timeout` (F13).
+def _parse_bytes(token) -> int:
+    """A docker size token ('2g', '512m', '2048') → bytes. Lenient; any unparseable token yields 0
+    (the caller then leaves the base unchanged), so a weird Settings value can never crash a probe."""
+    try:
+        s = str(token).strip().lower()
+        for suffix, mult in (("g", 1024 ** 3), ("m", 1024 ** 2), ("k", 1024)):
+            if s.endswith(suffix):
+                return int(float(s[:-1]) * mult)
+        if s.endswith("b"):
+            s = s[:-1]
+        return int(float(s))
+    except (TypeError, ValueError):
+        return 0
 
-    Starts from `resource_spec_for(container_type)` — so a user's `resources.<type>.timeout`
-    override is the base/floor this scales up from — and raises ONLY `timeout`, and only when
-    `artifact` is a large file (per `size_scaled_timeout`). A small file, a `None` artifact (a
-    path-less Channel surface that mounts no bytes), or an unreadable path yields the base spec
-    verbatim: the size budget is a pure widening for big inputs and changes nothing else
-    (mem/cpu/pids/tmpfs are exactly the configured ceilings). Use this for the analysis probes
-    (recon/decompile/strings/binutils/…); the detached fuzz path keeps its own hard-cap timeout."""
+
+def _fmt_mb(nbytes: int) -> str:
+    """Bytes → a docker MiB token (e.g. '6144m'). MiB granularity keeps the value docker-legal and
+    readable; floor at 1 MiB so a tiny value never formats to '0m' (which docker rejects)."""
+    return f"{max(1, nbytes // (1024 * 1024))}m"
+
+
+def _host_mem_total_bytes() -> int | None:
+    """Host RAM (MemTotal) in bytes, or None — used to cap the mem size-bonus so a big artifact
+    never asks docker for more than a fraction of the box."""
+    try:
+        for line in open("/proc/meminfo"):
+            if line.startswith("MemTotal:"):
+                return int(line.split()[1]) * 1024
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def size_scaled_mem(size_bytes: int | None, base_mem: str) -> str:
+    """Container `--memory` for a probe over an artifact of `size_bytes`, scaled up from `base_mem`
+    for a large artifact (F13). Returns `base_mem` UNCHANGED at/below `SIZE_RAM_THRESHOLD_BYTES` (or
+    None/unparseable), so the normal path is untouched. Above it, grows linearly
+    (`SIZE_MEM_BYTES_PER_BYTE` per byte over the threshold), bounded by BOTH `SIZE_MEM_CAP_BYTES`
+    and `SIZE_RAM_HOST_FRACTION` of host RAM so a multi-GB artifact never over-commits the box.
+    Only ever widens, never shrinks below the configured base."""
+    base = _parse_bytes(base_mem)
+    if not size_bytes or size_bytes <= SIZE_RAM_THRESHOLD_BYTES or base <= 0:
+        return base_mem
+    target = base + (size_bytes - SIZE_RAM_THRESHOLD_BYTES) * SIZE_MEM_BYTES_PER_BYTE
+    cap = base + SIZE_MEM_CAP_BYTES
+    host = _host_mem_total_bytes()
+    if host:
+        cap = min(cap, int(host * SIZE_RAM_HOST_FRACTION))
+    scaled = min(target, max(base, cap))
+    return _fmt_mb(scaled) if scaled > base else base_mem
+
+
+def size_scaled_tmpfs(size_bytes: int | None, base_tmpfs: str, mem_bytes: int) -> str:
+    """`/scratch` tmpfs size for a probe over an artifact of `size_bytes`, scaled up from
+    `base_tmpfs` for a large artifact (F13) so Ghidra's DB/recovery have room. Unchanged at/below
+    the threshold. Grows linearly above it, capped by `SIZE_TMPFS_CAP_BYTES` AND
+    `SIZE_TMPFS_MEM_FRACTION` of the container mem — the tmpfs counts against the mem cgroup, so it
+    must stay well under it or the JVM heap has nowhere to live. Only ever widens."""
+    base = _parse_bytes(base_tmpfs)
+    if not size_bytes or size_bytes <= SIZE_RAM_THRESHOLD_BYTES or base <= 0:
+        return base_tmpfs
+    target = base + (size_bytes - SIZE_RAM_THRESHOLD_BYTES) * SIZE_TMPFS_BYTES_PER_BYTE
+    cap = min(base + SIZE_TMPFS_CAP_BYTES, int(mem_bytes * SIZE_TMPFS_MEM_FRACTION))
+    scaled = min(target, max(base, cap))
+    return _fmt_mb(scaled) if scaled > base else base_tmpfs
+
+
+def resource_spec_for_artifact(artifact, container_type: str = "sandbox") -> ResourceSpec:
+    """The resolved ResourceSpec for a probe over `artifact`, size-aware (F13).
+
+    Starts from `resource_spec_for(container_type)` — so a user's `resources.<type>.*` overrides are
+    the base/floor this scales up from — and raises `timeout` (≥32 MiB) and, for a genuinely large
+    artifact (≥64 MiB), `mem` + `tmpfs` so Ghidra's import/auto-analysis of a 100 MB+ ELF doesn't
+    exhaust the heap or fill the DB/recovery tmpfs (the "DB buffer" failure). A small file, a `None`
+    artifact (a path-less Channel surface), or an unreadable path yields the base spec verbatim, and
+    `unconstrained` (the user already gave the container the whole box) is left untouched. Every
+    knob only ever widens, never shrinks. Used as run_probe's default; the probe then sizes Ghidra's
+    -Xmx from the resulting cgroup cap. The detached fuzz path keeps its own hard-cap spec."""
     base = resource_spec_for(container_type)
     try:
         size = os.path.getsize(artifact) if artifact is not None else None
     except OSError:
         return base
-    scaled = size_scaled_timeout(size, base.timeout)
-    if scaled <= base.timeout:
+    timeout = size_scaled_timeout(size, base.timeout)
+    if base.unconstrained:                       # ceilings already dropped — nothing to widen
+        mem, tmpfs = base.mem, base.tmpfs
+    else:
+        mem = size_scaled_mem(size, base.mem)
+        tmpfs = size_scaled_tmpfs(size, base.tmpfs, _parse_bytes(mem))
+    if timeout <= base.timeout and mem == base.mem and tmpfs == base.tmpfs:
         return base
-    return replace(base, timeout=scaled)
+    return replace(base, timeout=timeout, mem=mem, tmpfs=tmpfs)

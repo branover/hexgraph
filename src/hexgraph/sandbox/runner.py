@@ -494,6 +494,11 @@ class SandboxRunner:
         name = f"hexgraph-{uuid.uuid4().hex[:12]}"
         cmd = [
             "docker", "run", "--rm", "--name", name,
+            # Expose THIS run's wall-clock budget to the probe so a long-running tool can stop
+            # itself GRACEFULLY a little before the external kill and save partial work, rather
+            # than being torn down with nothing (Ghidra's `-analysisTimeoutPerFile` uses this on a
+            # huge ELF whose full auto-analysis would outrun the budget — F13). Informational only.
+            "-e", f"HEXGRAPH_PROBE_TIMEOUT_S={timeout}",
             *self._hardening_args(allow_network=allow_network, net_container=net_container,
                                   resources=resources, secret=bool(secret)),
             # A channel probe (live target, no bytes at rest) mounts no artifact.

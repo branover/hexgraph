@@ -81,13 +81,17 @@ def test_spec_unchanged_for_small_artifact(tmp_path):
     assert resource_spec_for_artifact(small, "sandbox") == base                 # identical, timeout incl.
 
 
-def test_spec_only_timeout_widens_for_large_artifact(tmp_path):
+def test_spec_widens_only_timeout_in_the_medium_band(tmp_path):
+    # Between the 32 MiB timeout threshold and the (higher) 64 MiB mem/tmpfs threshold, ONLY the
+    # timeout widens — a medium binary gets more wall-clock but not the heavier mem/tmpfs bump
+    # (those are reserved for genuinely large artifacts, F13 heap-half). 48 MiB sits in that band.
     base = resource_spec_for("sandbox")
-    big = _sparse_file(tmp_path, "big.bin", SIZE_TIMEOUT_THRESHOLD_BYTES + 100 * MIB)
-    spec = resource_spec_for_artifact(big, "sandbox")
-    assert spec.timeout == size_scaled_timeout(SIZE_TIMEOUT_THRESHOLD_BYTES + 100 * MIB, base.timeout)
+    size = SIZE_TIMEOUT_THRESHOLD_BYTES + 16 * MIB        # 48 MiB: > timeout threshold, < ram threshold
+    med = _sparse_file(tmp_path, "med.bin", size)
+    spec = resource_spec_for_artifact(med, "sandbox")
+    assert spec.timeout == size_scaled_timeout(size, base.timeout)
     assert spec.timeout > base.timeout
-    # Everything that is NOT the timeout is byte-for-byte the configured ceiling.
+    # mem/cpu/pids/tmpfs are all byte-for-byte the configured ceiling in this band.
     assert (spec.mem, spec.cpus, spec.pids, spec.tmpfs, spec.unconstrained) == (
         base.mem, base.cpus, base.pids, base.tmpfs, base.unconstrained)
 
