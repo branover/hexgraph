@@ -92,6 +92,10 @@ def analyze_target(
     if is_firmware:
         summary["format"] = facts.get("format")
         _record_progress(session, target, "unpacking", format=facts.get("format"))
+        # unpack_firmware flips the parent's kind to firmware_image; capture the pre-unpack kind so
+        # we can UNDO that for a `likely_unrecognized_container` blob the carve proves is NOT a
+        # container (below), rather than leaving an opaque blob mislabeled as firmware.
+        pre_unpack_kind = target.kind
         # Materialize the child list first so we can report "recon i/N children" with a known N.
         children = list(unpack_firmware(session, project, target, runner))
         total = len(children)
@@ -121,6 +125,10 @@ def analyze_target(
         # containers, `packed_containers` already says "promote one to go deeper" — emitting the
         # "unsupported, extract out-of-band" note alongside it would contradict that guidance.
         if total == 0 and not packed and facts.get("likely_unrecognized_container"):
+            # The carve proved this speculative "container" holds nothing analyzable, so it isn't
+            # firmware — undo the firmware_image label unpack_firmware optimistically set, leaving
+            # the blob with its real (recon-derived) kind instead of a misleading firmware row.
+            target.kind = pre_unpack_kind
             summary["unrecognized_container"] = {
                 "format": facts.get("format"),
                 "magic_hex": facts.get("magic_hex"),

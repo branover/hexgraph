@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 
+from hexgraph.db.models import TargetKind
 from hexgraph.db.session import session_scope
 from hexgraph.engine.pipeline import analyze_target
 from hexgraph.engine.targets.ingest import create_project, ingest_file
@@ -62,10 +63,12 @@ def test_unrecognized_container_emits_diagnostic_not_silent_zero(hg_home, tmp_pa
                                 "magic_hex": "12345678", "magic_ascii": ".4Vx",
                                 "likely_unrecognized_container": True})
         summary = analyze_target(s, p, t, runner)
+        kind_after = t.kind                         # confirmed-not-a-container: kind must be reverted
     assert summary["children_count"] == 0
     uc = summary["unrecognized_container"]          # the carve found nothing -> say so
     assert uc["magic_hex"] == "12345678"
     assert "did not recognize" in uc["note"] and "isn't supported" in uc["note"]
+    assert kind_after == TargetKind.unknown         # NOT left mislabeled firmware_image
 
 
 def test_carve_with_packed_containers_does_not_emit_contradictory_warning(hg_home, tmp_path):
@@ -81,9 +84,11 @@ def test_carve_with_packed_containers_does_not_emit_contradictory_warning(hg_hom
                                 "magic_hex": "12345678", "magic_ascii": ".4Vx",
                                 "likely_unrecognized_container": True}, files=files)
         summary = analyze_target(s, p, t, runner)
+        kind_after = t.kind                          # a real container -> stays firmware_image
     assert summary["children_count"] == 0
     assert summary.get("packed_containers")          # the carve DID surface a promotable container
     assert "unrecognized_container" not in summary   # ...so the contradictory "unsupported" note is suppressed
+    assert kind_after == TargetKind.firmware_image   # genuinely a container -> label kept
 
 
 def test_plain_small_unknown_blob_is_not_treated_as_firmware(hg_home, tmp_path):
