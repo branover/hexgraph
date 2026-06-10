@@ -1855,6 +1855,30 @@ def _feature_health_specs() -> list[dict]:
     ]
 
 
+def _policy_gate_rows() -> list[dict]:
+    """The POLICY GATES — the opt-in features that relax a policy.py tier (PoC/fuzzing execution,
+    network egress, rehost, live-remote) — and whether each is enabled. Unlike the dep checks
+    there's no runtime dep to probe: readiness IS the gate being on, so a proving/fuzzing run can
+    preflight which tiers are open instead of discovering a refusal mid-run (the F04 gap — a
+    firmware proving run cares about poc/fuzzing/network/rehost/remote, none of which the dep
+    health-check covered). Canonical source: setup_catalog.FEATURES (policy_changing entries)."""
+    from hexgraph import settings
+    from hexgraph.setup_catalog import FEATURES, TIER_NAMES
+
+    rows: list[dict] = []
+    for feat in FEATURES:
+        if not feat.policy_changing:
+            continue
+        try:
+            enabled = bool(settings.get(feat.key))
+        except Exception:  # noqa: BLE001 — a settings hiccup reads as "off", never crashes
+            enabled = False
+        rows.append({"gate": feat.key, "label": feat.label, "enabled": enabled,
+                     "tier": (TIER_NAMES.get(feat.tier) if feat.tier is not None else None),
+                     "unlocks": feat.unlocks})
+    return rows
+
+
 def check_features() -> dict:
     """Preflight the features whose runtime dependency can diverge from what's configured —
     so you can tell 'configured but broken' from ready BEFORE spending a run. Each feature
@@ -1864,8 +1888,12 @@ def check_features() -> dict:
     angr, ghidra/emulation — when their features.X.enabled gate is off; nothing to check). The
     always-on static tools floss + yara have no gate, so they're checked unconditionally and
     report availability only. The check is LIGHTWEIGHT (a tiny in-image dep probe, --network
-    none, no target, no analysis) and read-only. Returns {features: [{feature, gate, enabled,
-    state, detail, remediation?}], summary, image_stale}. `image_stale` is a PROACTIVE hint
+    none, no target, no analysis) and read-only. Also returns `gates` — the POLICY gates
+    (poc/fuzzing execution, network egress, rehost, live-remote) with each one's enabled state +
+    the policy tier it raises — so a proving/fuzzing run can preflight which tiers are open instead
+    of hitting a refusal mid-run. Returns {features: [{feature, gate, enabled, state, detail,
+    remediation?}], gates: [{gate, label, enabled, tier, unlocks}], summary, image_stale}.
+    `image_stale` is a PROACTIVE hint
     (tri-state: true = the sandbox image PREDATES docker/sandbox.Dockerfile so a rebuild is
     due; false = up to date; null = unknown) — the per-feature checks above catch a missing
     dep REACTIVELY, this catches an image that's merely old before a tool silently misbehaves.
@@ -1923,7 +1951,11 @@ def check_features() -> dict:
     if image_stale:
         summary += (" The sandbox image is STALE (older than docker/sandbox.Dockerfile) — "
                     "rebuild it: `just sandbox-build`.")
-    return {"features": rows, "summary": summary, "image_stale": image_stale}
+    gates = _policy_gate_rows()
+    off = [g["gate"] for g in gates if not g["enabled"]]
+    if off:
+        summary += (f" Policy gates OFF (enable before the matching run): {', '.join(off)}.")
+    return {"features": rows, "gates": gates, "summary": summary, "image_stale": image_stale}
 
 
 def get_schemas() -> dict:
