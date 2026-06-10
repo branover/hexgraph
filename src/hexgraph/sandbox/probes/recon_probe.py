@@ -144,13 +144,65 @@ _FW_SIGS = (
 )
 
 
+# A squashfs hit must be validated (a bare 4-byte 'hsqs' collides in a 100s-of-MB image); cap the
+# rescans so a pathological blob full of 'hsqs' bytes can't spin.
+_MAX_SQUASHFS_PROBES = 256
+
+
+def _valid_squashfs_superblock(data: bytes, off: int) -> bool:
+    """A genuine little-endian squashfs v4 superblock at `off`, not a coincidental 'hsqs' in
+    random bytes: version-major 4, a known compressor id (1=gzip … 6=zstd), and a self-consistent
+    bytes_used that fits within the image."""
+    if off < 0 or off + 0x30 > len(data) or data[off:off + 4] != b"hsqs":
+        return False
+    comp = int.from_bytes(data[off + 0x14:off + 0x16], "little")
+    vmaj = int.from_bytes(data[off + 0x1c:off + 0x1e], "little")
+    bytes_used = int.from_bytes(data[off + 0x28:off + 0x30], "little")
+    return vmaj == 4 and 1 <= comp <= 6 and 0 < bytes_used <= len(data) - off
+
+
+def _valid_fit_header(data: bytes, off: int) -> bool:
+    """A plausible FIT/FDT header at `off`: the d00dfeed magic plus a totalsize (big-endian u32
+    at +4) that fits within the image — enough to reject a coincidental 4-byte magic match."""
+    if off < 0 or off + 8 > len(data) or data[off:off + 4] != b"\xd0\x0d\xfe\xed":
+        return False
+    total = int.from_bytes(data[off + 4:off + 8], "big")
+    return 0 < total <= len(data) - off
+
+
+def _deep_container(data: bytes) -> str | None:
+    """Scan the WHOLE blob for an embedded rootfs container that sits DEEP behind a proprietary/
+    signed outer wrapper — a modern router image carries its rootfs squashfs 50 MB+ past the
+    header, well beyond the wrapper-header window below. Only the strong, self-validating magics
+    are scanned whole-file (each hit is validated), so a short magic colliding in a large image
+    can never mis-flag an ordinary file as firmware. Returns the format, or None."""
+    off = data.find(b"hsqs")
+    tries = 0
+    while off != -1 and tries < _MAX_SQUASHFS_PROBES:
+        if _valid_squashfs_superblock(data, off):
+            return "squashfs"
+        off = data.find(b"hsqs", off + 1)
+        tries += 1
+    off = data.find(b"\xd0\x0d\xfe\xed")
+    if off != -1 and _valid_fit_header(data, off):
+        return "fit"
+    return None
+
+
 def _firmware_signature(data: bytes) -> str | None:
-    """Scan a non-ELF blob for an embedded filesystem/container signature."""
-    window = data[: 8 << 20]  # first 8 MB is plenty to spot the container
+    """Detect an embedded filesystem/container in a non-ELF blob so the unpacker carves it.
+
+    Two scans: (1) the original WRAPPER-header window — TRX/uImage/UBI/cramfs/… magics that, by
+    construction, sit at/near the image header, kept to the first 8 MB because some are short and
+    would false-match constantly over a large image; (2) a whole-blob scan for a deep, VALIDATED
+    rootfs container (squashfs superblock / FIT header), which is what a signed vendor wrapper hides
+    tens of MB in — the case a header-only check used to miss (0 children, format=unknown). A blob
+    with neither stays 'unknown' (binwalk no-op)."""
+    window = data[: 8 << 20]
     for sig, fmt in _FW_SIGS:
         if sig in window:
             return fmt
-    return None
+    return _deep_container(data)
 
 
 def _is_disk_image(data: bytes) -> bool:
