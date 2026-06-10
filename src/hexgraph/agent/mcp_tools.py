@@ -122,7 +122,13 @@ def promote_file(target_id: str, path: str) -> dict:
     `added` means it's already a target). Real bytes → runs recon in the sandbox when Docker
     is up. Idempotent per path (returns the existing child if already promoted). Use it when
     list_filesystem surfaces an interesting binary (a CGI, a service daemon, a helper) that
-    unpack didn't already register. Returns {id, name, kind, parent_id, arch}."""
+    unpack didn't already register.
+
+    Promoting a CONTAINER (a .pkg/squashfs/cpio) extracts it and registers its inner binaries as
+    HIDDEN child targets — the result then carries `registered_children` + a note (hidden by
+    default; target_list(include_hidden=true) to see them, target_set_visible to analyze one) and
+    `packed_containers` for any still-nested containers to go deeper into.
+    Returns {id, name, kind, parent_id, arch, registered_children?, packed_containers?, note?}."""
     from hexgraph.engine.targets.filesystem import FilesystemError, promote_file as _add
 
     with session_scope() as s:
@@ -133,8 +139,26 @@ def promote_file(target_id: str, path: str) -> dict:
             child = _add(s, s.get(Project, t.project_id), t, path)
         except FilesystemError as exc:
             return {"error": str(exc)}
-        return {"id": child.id, "name": child.name, "kind": child.kind.value,
-                "parent_id": target_id, "arch": (child.metadata_json or {}).get("arch")}
+        result = {"id": child.id, "name": child.name, "kind": child.kind.value,
+                  "parent_id": target_id, "arch": (child.metadata_json or {}).get("arch")}
+        # F09: a container-promote registers inner ELFs HIDDEN, so target_list (without
+        # include_hidden) shows 0 and the promote looks like a no-op. Report what it registered.
+        inner = s.query(Target).filter(Target.parent_id == child.id).all()
+        if inner:
+            hidden = sum(1 for c in inner if not c.visible)
+            result["registered_children"] = len(inner)
+            result["note"] = (
+                f"container — registered {len(inner)} inner target(s)"
+                + (f" ({hidden} hidden by default)" if hidden else "")
+                + ". target_list(include_hidden=true) to see them; target_set_visible / "
+                "target_reveal_dir to pull one into the graph for analysis.")
+        # Any still-packed containers inside this artifact (go deeper).
+        from hexgraph.engine.targets.filesystem import packed_containers
+        cfiles = ((child.metadata_json or {}).get("filesystem") or {}).get("files", [])
+        nested = packed_containers(cfiles)
+        if nested:
+            result["packed_containers"] = nested[:20]
+        return result
 
 
 def list_source_trees(project_id: str) -> dict:
@@ -2217,6 +2241,13 @@ def ingest(path: str, name: str | None = None, project_id: str | None = None) ->
         }
         if summary.get("format"):
             result["format"] = summary["format"]
+        if summary.get("packed_containers"):
+            result["packed_containers"] = summary["packed_containers"]
+            result["packed_containers_note"] = (
+                f"{summary.get('packed_containers_count')} packed container(s) "
+                "(squashfs/cpio/.pkg) are still in the tree and were NOT recursed — the deeper "
+                "service surface (e.g. the IOS-XE runtime: iosd/WebUI/SSH/SNMP) may be inside. "
+                "target_promote_file one to extract + register its inner binaries.")
         if len(children) > _INGEST_CHILD_PREVIEW:
             result["note"] = (f"{len(children)} children unpacked; showing the first "
                               f"{_INGEST_CHILD_PREVIEW}. Use target_list(project_id) for the "

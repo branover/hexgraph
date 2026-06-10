@@ -98,6 +98,17 @@ def analyze_target(
             child_facts = run_recon(session, project, child, runner)
             _maybe_enrich_ghidra(session, project, child, child_facts)
             summary["children"].append({"target_id": child.id, "name": child.name})
+        # F07: flag packed containers the unpack left in the tree (a Cisco IOS-XE image leaves
+        # the real iosd/WebUI/SSH/SNMP runtime in nested .pkg/squashfs that aren't auto-recursed).
+        # Without this, "N children unpacked" reads as "fully unpacked" and a researcher hunts the
+        # boot-only surface. A container entry with no child_target_id wasn't promoted/registered;
+        # surface the biggest few so the agent can promote them (target_promote_file) to go deeper.
+        from hexgraph.engine.targets.filesystem import packed_containers
+        fs_files = ((target.metadata_json or {}).get("filesystem") or {}).get("files", [])
+        packed = packed_containers(fs_files)
+        if packed:
+            summary["packed_containers"] = packed[:20]
+            summary["packed_containers_count"] = len(packed)
     else:
         _maybe_enrich_ghidra(session, project, target, facts)
     summary["children_count"] = len(summary["children"])
