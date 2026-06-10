@@ -96,9 +96,12 @@ def list_filesystem(project: Project, firmware: Target, session=None, *,
     offset = max(0, offset)
     page = matched[offset:] if limit is None else matched[offset:offset + max(0, limit)]
     next_off = offset + len(page)
-    has_more = next_off < total
+    # `and page` guards the degenerate limit<=0 case (empty page, offset<total) from reporting
+    # has_more with a non-advancing next_offset — an infinite-paging trap. (The MCP wrapper also
+    # clamps limit to >=1, so this only bites a direct caller.)
+    has_more = next_off < total and bool(page)
     out = {"unpacked": True, "method": fs.get("method"), "files": page,
-           "total": total, "offset": offset, "returned": len(page),
+           "total": total, "offset": offset,
            "next_offset": next_off if has_more else None, "has_more": has_more}
     if path_prefix:
         out["path_prefix"] = path_prefix
