@@ -1888,8 +1888,9 @@ def check_features() -> dict:
     angr, ghidra/emulation — when their features.X.enabled gate is off; nothing to check). The
     always-on static tools floss + yara have no gate, so they're checked unconditionally and
     report availability only. The check is LIGHTWEIGHT (a tiny in-image dep probe, --network
-    none, no target, no analysis) and read-only. Also returns `gates` — the POLICY gates
-    (poc/fuzzing execution, network egress, rehost, live-remote) with each one's enabled state +
+    none, no target, no analysis) and read-only. Also returns `gates` — every opt-in POLICY gate
+    that relaxes a tier (poc/fuzzing/build execution, network egress, rehost, live-remote, …) with
+    each one's enabled state +
     the policy tier it raises — so a proving/fuzzing run can preflight which tiers are open instead
     of hitting a refusal mid-run. Returns {features: [{feature, gate, enabled, state, detail,
     remediation?}], gates: [{gate, label, enabled, tier, unlocks}], summary, image_stale}.
