@@ -138,6 +138,10 @@ class GhidraDecompiler(Decompiler):
                 # The whole-program inventory on `out` is still Ghidra's.
                 out["focus_engine"] = R2Decompiler.name
                 out["focus_fallback"] = True
+        # Symmetry: a focus Ghidra DID resolve is tagged too, so provenance is explicit on every
+        # focused result (the caller never has to infer the engine from the absence of a flag).
+        if out.get("focus") and not out.get("focus_fallback"):
+            out["focus_engine"] = self.name
         return out
 
     def _decompile_ghidra(self, artifact: str, function: str | None = None, *,
