@@ -88,14 +88,44 @@ active engagement's primary checkout, its `~/.hexgraph`, or the app on :8765.**
   cycle. **Deferred to opportunistic.**
 - **F10 bshell.sh absent.** Note-only (reinforces F07/F09), no action item of its own.
 
-## Status (update as PRs open/merge)
+## Status — final
 
-| PR | Findings | Branch | State |
-|---|---|---|---|
-| 0 plan | — | `docs/cisco-asr920-plan` | this doc |
-| A | F05 | `build/fs-list-pagination` | in progress |
-| B | F07/F08/F09 | tbd | queued |
-| C | F16 | tbd | queued |
-| D | F04 | tbd | queued |
-| E | F11/F12 | tbd | queued |
-| F | F13 | tbd | queued |
+| PR | Findings | State |
+|---|---|---|
+| 0 plan | — | this doc (PR #239) |
+| A | **F05** fs_list pagination | **MERGED** (#240) |
+| B | **F07 + F09** extraction honesty (F08 deferred) | **MERGED** (#241) |
+| C | **F16** decompiler engine tag | **MERGED** (#242) |
+| D | **F04** meta_check_features policy gates | **MERGED** (#243) |
+| E | **F11 + F12** decompile-returns-node-id + re_imports docs | **MERGED** (#244) |
+| F | **F13** size-aware probe timeout | **NOT STARTED — deferred (see below)** |
+
+Six findings shipped across five PRs (#240–#244). One implementation item (F13) and the
+already-documented minor deferrals (F08, F06, F03, F02, F01) remain.
+
+### F13 — deferred, with rationale (the honest call)
+
+F13 (RE tools time out on the 137 MB iosd monolith) is the one MAJOR finding left unimplemented.
+It is **deferred, not refused**, for three reasons:
+
+1. **Its highest-value pieces already exist.** The persistent Ghidra project (analysis paid once
+   per target, reused via `project_mount`/content_hash) and the `re_disassemble_range` raw-byte
+   fallback both shipped in the *prior* dogfood. What remains is the size-aware *timeout bump* so
+   the FIRST whole-binary analysis of a huge ELF isn't killed at the 300 s probe budget
+   (`sandbox/resources.py:DEFAULT_TIMEOUT`) — and that also fixes F14 (the strings probe falling
+   back to the recon sample because it times out on the monolith).
+2. **It's a shared-path change that wants a fresh, careful pass.** Scaling `ResourceSpec.timeout`
+   by artifact size touches the seam every sandbox probe runs through; getting it wrong regresses
+   *all* probe timeouts. That is precisely the kind of change to make at the start of a session
+   with full headroom, not at the tail of a long one — better deferred than rushed.
+3. **The other half of F13 was always out of scope here.** The Ghidra "DB buffer" *import* failure
+   on a 137 MB ELF is a JVM-heap / analysis-option tuning problem in the sandbox image (a
+   Dockerfile/toolchain change with its own validation surface) — a separate, deliberately-scoped
+   follow-up.
+
+**Scoped follow-up for F13 (size-aware timeout):** add a helper that returns a `ResourceSpec` whose
+`timeout` scales with the artifact's size (e.g. `300 s + N·(size/100 MB)`, capped), and thread it
+into the decompiler + recon probe invocations (`sandbox/decompiler.py` `_decompile_ghidra` /
+`run_recon`) so a 100 MB+ ELF gets a proportionate budget; honor a higher `resources.sandbox.timeout`
+override; verify the desock/normal-size path is unchanged. Document `re_disassemble_range` as the
+large-binary fallback in the VR SKILL. Leave the Ghidra-heap import-failure tuning as its own item.
