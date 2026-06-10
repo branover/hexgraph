@@ -40,6 +40,38 @@ def test_list_filesystem(hg_home):
         assert fs["unpacked"] is True and len(fs["files"]) == 2
         assert any(f["rel"] == "usr/sbin/httpd" and f["is_elf"] for f in fs["files"])
         assert all(f["added"] is False for f in fs["files"])
+        # limit=None (the UI path) returns everything + a total, unchanged behavior + new counts.
+        assert fs["total"] == 2 and fs["has_more"] is False and fs["next_offset"] is None
+
+
+def test_list_filesystem_pagination_and_filters(hg_home):
+    """F05: a big firmware unpacks to thousands of files; fs_list must page + filter so it
+    doesn't overflow an agent's context. limit=None still returns all (the UI relies on it)."""
+    with session_scope() as s:
+        p, fw = _firmware_with_fs(s)
+        record_manifest(fw, method="binwalk", root_rel="root", files=[
+            {"rel": "usr/sbin/svcd", "size": 100, "is_elf": True},
+            {"rel": "usr/sbin/snmpd", "size": 200, "is_elf": True},
+            {"rel": "usr/lib/libc.so", "size": 300, "is_elf": True},
+            {"rel": "etc/passwd", "size": 10, "is_elf": False},
+            {"rel": "etc/config.conf", "size": 20, "is_elf": False},
+        ])
+        # limit=None → all 5, no more pages
+        allf = list_filesystem(p, fw)
+        assert allf["total"] == 5 and len(allf["files"]) == 5 and allf["has_more"] is False
+        # paginate
+        pg = list_filesystem(p, fw, limit=2)
+        assert len(pg["files"]) == 2 and pg["total"] == 5 and pg["next_offset"] == 2 and pg["has_more"] is True
+        tail = list_filesystem(p, fw, offset=4, limit=2)
+        assert len(tail["files"]) == 1 and tail["has_more"] is False and tail["next_offset"] is None
+        # path_prefix scopes to a directory
+        sbin = list_filesystem(p, fw, path_prefix="usr/sbin")
+        assert sbin["total"] == 2 and all(f["rel"].startswith("usr/sbin") for f in sbin["files"])
+        # elf_only keeps binaries
+        elves = list_filesystem(p, fw, elf_only=True)
+        assert elves["total"] == 3 and all(f["is_elf"] for f in elves["files"])
+        # combined
+        assert list_filesystem(p, fw, path_prefix="usr", elf_only=True)["total"] == 3
 
 
 def test_promote_file(hg_home, monkeypatch):

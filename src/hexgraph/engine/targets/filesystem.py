@@ -48,17 +48,26 @@ def host_root(project: Project, firmware: Target) -> Path:
     return _host_root(project, firmware)
 
 
-def list_filesystem(project: Project, firmware: Target, session=None) -> dict:
-    """The firmware's file tree for the detail panel (paths/sizes/types + which are
-    already targets, and whether those are revealed into the curated graph).
+def list_filesystem(project: Project, firmware: Target, session=None, *,
+                    path_prefix: str | None = None, offset: int = 0,
+                    limit: int | None = None, elf_only: bool = False) -> dict:
+    """The firmware's file tree (paths/sizes/types + which are already targets, and whether
+    those are revealed into the curated graph).
 
     Every unpacked ELF gets a `child_target_id` at unpack time, but unpack registers
     those children HIDDEN — so `added` (a child exists) is distinct from `revealed`
     (it's visible in the graph/Targets pane). The browser shows "Reveal" for an added
-    but hidden child, and the plain "added" badge once revealed."""
+    but hidden child, and the plain "added" badge once revealed.
+
+    Filter/paginate for big firmware (a large vendor firmware image unpacks to hundreds-to-thousands of
+    files — listing them all overflows an agent's context): `path_prefix` keeps only entries
+    under a directory (e.g. "usr/sbin"), `elf_only` keeps only ELF binaries, and `offset`/`limit`
+    page the (filtered) list. `total`/`next_offset`/`has_more` report the full size + where to
+    page on. **`limit=None` returns everything** — the UI detail panel relies on that, so its
+    call site is unchanged."""
     fs = (firmware.metadata_json or {}).get("filesystem")
     if not fs:
-        return {"unpacked": False, "files": []}
+        return {"unpacked": False, "files": [], "total": 0}
 
     # Map child_target_id → visible, so the listing can distinguish hidden vs revealed.
     # Read it from the live target rows (the manifest doesn't carry mutable visibility).
@@ -68,16 +77,37 @@ def list_filesystem(project: Project, firmware: Target, session=None) -> dict:
                 .filter(Target.project_id == project.id, Target.parent_id == firmware.id).all())
         visible_by_id = {t.id: bool(t.visible) for t in rows}
 
-    out_files = []
+    matched = []
     for f in fs.get("files", []):
+        rel = f["rel"]
+        if path_prefix and not rel.startswith(path_prefix):
+            continue
+        if elf_only and not f.get("is_elf"):
+            continue
         cid = f.get("child_target_id")
         added = bool(cid)
         revealed = bool(cid and visible_by_id.get(cid, True))  # default True when not resolvable
-        out_files.append({
-            "rel": f["rel"], "size": f.get("size"), "is_elf": f.get("is_elf"),
+        matched.append({
+            "rel": rel, "size": f.get("size"), "is_elf": f.get("is_elf"),
             "child_target_id": cid, "added": added, "revealed": revealed,
         })
-    return {"unpacked": True, "method": fs.get("method"), "files": out_files}
+
+    total = len(matched)
+    offset = max(0, offset)
+    page = matched[offset:] if limit is None else matched[offset:offset + max(0, limit)]
+    next_off = offset + len(page)
+    # `and page` guards the degenerate limit<=0 case (empty page, offset<total) from reporting
+    # has_more with a non-advancing next_offset — an infinite-paging trap. (The MCP wrapper also
+    # clamps limit to >=1, so this only bites a direct caller.)
+    has_more = next_off < total and bool(page)
+    out = {"unpacked": True, "method": fs.get("method"), "files": page,
+           "total": total, "offset": offset,
+           "next_offset": next_off if has_more else None, "has_more": has_more}
+    if path_prefix:
+        out["path_prefix"] = path_prefix
+    if elf_only:
+        out["elf_only"] = True
+    return out
 
 
 class FilesystemError(ValueError):
