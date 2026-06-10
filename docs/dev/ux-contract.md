@@ -748,7 +748,9 @@ loud only where you are looking; every node/edge/color kept, mute never deletes.
 - Steps: with findings recorded on hidden firmware children (unrevealed ELF targets), click the
   **"+N on hidden"** eye toggle in the filter bar.
 - Functional: those findings fold into the list (and the severity summary), each badged "hidden target";
-  toggling off hides them again. Off by default. The toggle is absent when there are none.
+  toggling off hides them again. Off by default. The toggle is absent when there are none. The Findings
+  **tab** header also shows a dimmed "+M" after the visible count (M = hidden count) with a tooltip, so the
+  hidden findings are discoverable before the panel is opened.
 - 🔌 Backend: `detail.hidden_findings` / `detail.hidden_targets` from `GET /api/projects/{id}` — SUBSTANTIVE
   findings (recon excluded — it's the per-child flood) on non-archived hidden children, kept OUT of
   `targets`/the graph (no Targets-pane flood). `include_hidden=true` folds the full firehose into `findings`
