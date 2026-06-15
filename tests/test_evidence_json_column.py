@@ -13,7 +13,7 @@ import json
 from fastapi.testclient import TestClient
 
 from hexgraph.api.app import create_app
-from hexgraph.db.models import Finding
+from hexgraph.db.models import Finding, TargetKind
 from hexgraph.db.session import session_scope
 from hexgraph.engine.graph.dedup import dedupe_findings
 from hexgraph.engine.findings.report import build_report_md
@@ -53,6 +53,38 @@ def test_column_coerces_non_dict_evidence_to_dict_on_read(hg_home):
     assert rows["garbage"] == {}                                    # unparseable → empty
     assert rows["listish"] == {}                                    # valid JSON but not an object
     assert rows["normal"] == {"a": 1}                               # untouched
+
+
+def test_project_endpoint_tolerates_nondict_nested_evidence(hg_home):
+    """The reported field crash: evidence is a proper dict, but a nested value
+    (`extra.verification`) is a STRING — an agent wrote prose where a {verified,…} object
+    belongs. The column boundary can't help (extra is intentionally free-form), so the read
+    accessors must navigate defensively. GET /api/projects/{id} must return 200, not 500."""
+    with session_scope() as s:
+        p = create_project(s, name="nested")
+        fw = ingest_file(s, p, fixture_path("synthetic_fw.bin"), name="fw")
+        fw.kind = TargetKind.firmware_image
+        child = ingest_file(s, p, fixture_path("vuln_httpd"), name="lib/x.so", parent=fw, visible=False)
+        s.flush()
+        # extra.verification is prose, not a {verified,…} object (real shape from the field).
+        _add_finding(s, project_id=p.id, target_id=child.id, title="prose-verification",
+                     finding_type="poc",
+                     evidence_json={"function": "f", "extra": {
+                         "verification": "PowerPC disasm prose, not an object",
+                         "assurance": {"standard": "input_reachable"}}})
+        # extra itself a string (more degenerate) on a visible target.
+        _add_finding(s, project_id=p.id, target_id=fw.id, title="prose-extra",
+                     evidence_json={"function": "g", "extra": "a string instead of a dict"})
+        pid = p.id
+
+    resp = TestClient(create_app()).get(f"/api/projects/{pid}")
+    assert resp.status_code == 200  # was 500 (is_verified: 'str' object has no attribute 'get')
+    body = resp.json()
+    # Neither finding is verified; both serialize without error.
+    hidden = next(f for f in body["hidden_findings"] if f["title"] == "prose-verification")
+    assert hidden["verified"] is False
+    visible = next(f for f in body["findings"] if f["title"] == "prose-extra")
+    assert visible["verified"] is False
 
 
 def test_report_build_tolerates_string_evidence(hg_home):

@@ -41,6 +41,24 @@ def coerce_evidence(evidence: object) -> dict:
     return {}
 
 
+def dig_dict(obj: object, *keys: str):
+    """Safely walk nested dicts: return ``obj[k0][k1]…`` but yield ``None`` the moment any
+    level isn't a dict.
+
+    The pervasive ``(d.get(k) or {}).get(k2)`` idiom only guards a *falsy* intermediate — it
+    still crashes when a level is a *truthy non-dict*, e.g. an agent that wrote
+    ``evidence.extra.verification`` as free-text prose instead of the expected object
+    (``'str' object has no attribute 'get'``). The frozen Finding schema's ``extra`` is
+    intentionally free-form, so its children can be any JSON type; read sites must navigate
+    defensively. Use this for any nested read into agent-authored evidence."""
+    cur = obj
+    for k in keys:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(k)
+    return cur
+
+
 class JSONDict(TypeDecorator):
     """A `JSON` column whose Python value is ALWAYS a dict (or `None`) on read.
 
