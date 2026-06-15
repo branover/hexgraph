@@ -17,7 +17,7 @@ import json
 
 from hexgraph.db.models import Finding, Node, Project, Target
 from hexgraph.db.session import session_scope
-from hexgraph.engine.findings.findings import coerce_evidence, is_verified
+from hexgraph.engine.findings.findings import coerce_evidence, dig_dict, is_verified
 from hexgraph.models.finding import Finding as FModel
 
 
@@ -1055,20 +1055,23 @@ def list_findings(project_id: str, limit: int = 100, offset: int = 0,
 
     def _row(f):
         ev = coerce_evidence(f.evidence_json)
-        extra = ev.get("extra") or {}
+        # extra (and its children) are agent-authored free-form — any can be a non-dict, which
+        # the `(x or {}).get` idiom doesn't guard. Treat a non-dict at any level as absent.
+        extra = ev.get("extra")
+        extra = extra if isinstance(extra, dict) else {}
         row = {"id": f.id, "title": f.title, "severity": f.severity, "category": f.category,
                "status": f.status, "finding_type": f.finding_type, "cwe": f.cwe,
                "verified": is_verified(ev), "target_id": f.target_id,
                "function": ev.get("function"),
                "assurance": compact_assurance(assurance_of(ev))}
         ver = extra.get("verification")
-        if ver:
+        if isinstance(ver, dict):
             row["verification"] = {"verified": bool(ver.get("verified")), "detail": ver.get("detail")}
         fz = extra.get("fuzz")
-        if fz:
+        if isinstance(fz, dict):
             # coverage_instrumented=False => a black-box run; don't over-trust dedup.
             row["fuzz"] = {
-                "exploitability": (fz.get("exploitability") or {}).get("rating"),
+                "exploitability": dig_dict(fz, "exploitability", "rating"),
                 "coverage_instrumented": fz.get("coverage_instrumented"),
                 "dupe_count": fz.get("dupe_count"),
             }

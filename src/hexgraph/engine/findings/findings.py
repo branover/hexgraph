@@ -6,7 +6,7 @@ import re
 
 from sqlalchemy.orm import Session
 
-from hexgraph.db.jsontypes import coerce_evidence  # re-exported: the canonical evidence read coercion
+from hexgraph.db.jsontypes import coerce_evidence, dig_dict  # re-exported: canonical evidence read helpers
 from hexgraph.db.models import EdgeType
 from hexgraph.db.models import Finding as FindingRow
 from hexgraph.db.models import FindingStatus, Task
@@ -30,8 +30,9 @@ def is_verified(evidence: dict | str | None) -> bool:
     """True if a PoC verification was attached to this finding's evidence and it
     passed (evidence.extra.verification.verified). The single source for the
     `verified` flag surfaced by the API and MCP read tools."""
-    ev = coerce_evidence(evidence)
-    return bool(((ev.get("extra") or {}).get("verification") or {}).get("verified"))
+    # dig_dict (not `(x or {}).get`): evidence.extra.verification can be a non-dict (an agent
+    # wrote prose where the {verified,…} object belongs), which the `or {}` idiom doesn't guard.
+    return bool(dig_dict(coerce_evidence(evidence), "extra", "verification", "verified"))
 
 
 def classify_finding(task_type: str | None, category: str | None) -> str:

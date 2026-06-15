@@ -17,6 +17,8 @@ recorded in the finding's `evidence.extra` (the DB envelope) — NOT the frozen 
 
 from __future__ import annotations
 
+from hexgraph.db.jsontypes import dig_dict
+
 # Standards (what is claimed)
 CODE_PRESENT = "code_present"        # Standard A — the flaw exists in code
 INPUT_REACHABLE = "input_reachable"  # Standard B — reachable/triggerable via user input
@@ -62,8 +64,14 @@ def assurance_of(evidence: dict | None) -> dict | None:
     """The finding's assurance triple, if any. Canonical location is `evidence.extra.assurance`;
     a PoC also nests it under `evidence.extra.verification.assurance` (verify_poc) — read both so
     callers have one accessor regardless of which path produced the finding."""
-    extra = (evidence or {}).get("extra") or {}
-    return extra.get("assurance") or ((extra.get("verification") or {}).get("assurance"))
+    # Navigate defensively: evidence.extra (and its children) are agent-authored free-form, so
+    # any level can be a non-dict — return the first non-empty assurance dict, else None, so a
+    # malformed `extra`/`verification` (e.g. a string) yields None instead of crashing a caller.
+    extra = dig_dict(evidence, "extra")
+    for candidate in (dig_dict(extra, "assurance"), dig_dict(extra, "verification", "assurance")):
+        if isinstance(candidate, dict) and candidate:
+            return candidate
+    return None
 
 
 def default_for(finding_type: str | None) -> dict | None:
