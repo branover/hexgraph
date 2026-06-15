@@ -17,6 +17,8 @@ from typing import Any
 from sqlalchemy import JSON, DateTime, Enum, Float, ForeignKey, Index, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from hexgraph.db.jsontypes import JSONDict
+
 
 def new_uuid() -> str:
     return str(uuid.uuid4())
@@ -568,7 +570,10 @@ class Finding(Base):
     category: Mapped[str] = mapped_column(String(40))
     summary: Mapped[str] = mapped_column(Text)
     reasoning: Mapped[str] = mapped_column(Text)
-    evidence_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # JSONDict (not plain JSON): a legacy/double-encoded row can deserialize to a string;
+    # coercing at the column-read boundary guarantees every reader sees a dict (or None), so
+    # one bad row can't crash a read. DDL is unchanged JSON → no migration. (hexgraph#250)
+    evidence_json: Mapped[dict[str, Any]] = mapped_column(JSONDict, default=dict)
     suggested_followups_json: Mapped[list[Any]] = mapped_column(JSON, default=list)
     related_target_refs_json: Mapped[list[Any]] = mapped_column(JSON, default=list)
 

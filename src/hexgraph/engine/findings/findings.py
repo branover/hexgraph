@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import re
 
 from sqlalchemy.orm import Session
 
+from hexgraph.db.jsontypes import coerce_evidence  # re-exported: the canonical evidence read coercion
 from hexgraph.db.models import EdgeType
 from hexgraph.db.models import Finding as FindingRow
 from hexgraph.db.models import FindingStatus, Task
@@ -24,26 +24,6 @@ _TYPE_BY_TASK = {
     "poc": "poc",
 }
 FINDING_TYPES = ("vulnerability", "recon", "harness", "fuzz_crash", "poc", "annotation", "other")
-
-
-def coerce_evidence(evidence: object) -> dict:
-    """Normalize a finding's stored evidence to a dict for reading.
-
-    `Finding.evidence_json` is a JSON column, so a well-formed row deserializes to a
-    dict. But a legacy/hand-edited/double-encoded row can come back as a JSON-encoded
-    *string* (or some other scalar), and the many `(evidence or {}).get(...)` read sites
-    would then raise `AttributeError: 'str' object has no attribute 'get'` — one bad row
-    500ing an entire findings listing. Coerce defensively: pass dicts through, best-effort
-    parse a JSON string when it decodes to an object, and treat anything else as empty."""
-    if isinstance(evidence, dict):
-        return evidence
-    if isinstance(evidence, str):
-        try:
-            parsed = json.loads(evidence)
-        except (ValueError, TypeError):
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
 
 
 def is_verified(evidence: dict | str | None) -> bool:
