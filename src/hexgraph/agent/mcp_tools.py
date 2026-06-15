@@ -17,7 +17,7 @@ import json
 
 from hexgraph.db.models import Finding, Node, Project, Target
 from hexgraph.db.session import session_scope
-from hexgraph.engine.findings.findings import is_verified
+from hexgraph.engine.findings.findings import coerce_evidence, is_verified
 from hexgraph.models.finding import Finding as FModel
 
 
@@ -1054,7 +1054,7 @@ def list_findings(project_id: str, limit: int = 100, offset: int = 0,
         limit, offset = 100, 0
 
     def _row(f):
-        ev = f.evidence_json or {}
+        ev = coerce_evidence(f.evidence_json)
         extra = ev.get("extra") or {}
         row = {"id": f.id, "title": f.title, "severity": f.severity, "category": f.category,
                "status": f.status, "finding_type": f.finding_type, "cwe": f.cwe,
@@ -1122,7 +1122,7 @@ def get_finding(finding_id: str) -> dict:
         f = s.get(Finding, finding_id)
         if f is None:
             return {"error": "finding not found"}
-        ev = f.evidence_json or {}
+        ev = coerce_evidence(f.evidence_json)
         verified = is_verified(ev)
         return {"id": f.id, "title": f.title, "severity": f.severity, "confidence": f.confidence,
                 "category": f.category, "status": f.status, "finding_type": f.finding_type,

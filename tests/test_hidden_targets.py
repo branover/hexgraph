@@ -10,6 +10,8 @@ The recon-dependent cases use the sandbox (Docker); the pure visibility/reveal l
 exercised directly so it runs even without it.
 """
 
+import json
+
 from fastapi.testclient import TestClient
 
 from hexgraph.api.app import create_app
@@ -171,6 +173,40 @@ def test_project_payload_splits_hidden_target_findings(hg_home):
     assert {cid, fwid} <= {t["id"] for t in full["targets"]}
     assert {f["title"] for f in full["findings"]} == {"visible-finding", "hidden-finding", "hidden-recon"}
     assert full["hidden_findings"] == [] and full["hidden_targets"] == []
+
+
+def test_project_payload_tolerates_string_evidence_json(hg_home):
+    """Regression: a finding whose `evidence_json` reads back as a *string* (a legacy or
+    hand-edited double-encoded row) must NOT 500 the project endpoint. The read path coerces
+    it to an object — recovering a double-encoded dict where possible — so one malformed
+    finding can't take down the whole listing (the `is_verified` 'str has no .get' crash)."""
+    with session_scope() as s:
+        p = create_project(s, name="strev")
+        fw = ingest_file(s, p, fixture_path("synthetic_fw.bin"), name="fw")
+        fw.kind = TargetKind.firmware_image
+        child = ingest_file(s, p, fixture_path("vuln_httpd"), name="lib/x.so", parent=fw, visible=False)
+        s.flush()
+        # Assigning a str to a JSON column double-encodes it, so it reads back as a str.
+        # A double-encoded dict is recoverable; a non-JSON string degrades to {}.
+        s.add(Finding(project_id=p.id, target_id=child.id, task_id="t", title="dbl-encoded",
+                      severity="high", confidence="high", category="auth", summary="s", reasoning="r",
+                      evidence_json=json.dumps({"extra": {"verification": {"verified": True}}}),
+                      finding_type="poc", status="new"))
+        s.add(Finding(project_id=p.id, target_id=fw.id, task_id="t", title="garbage-ev",
+                      severity="low", confidence="low", category="auth", summary="s", reasoning="r",
+                      evidence_json="not json at all", finding_type="vulnerability", status="new"))
+        pid = p.id
+
+    resp = TestClient(create_app()).get(f"/api/projects/{pid}")
+    assert resp.status_code == 200  # was 500 before the fix
+    body = resp.json()
+    # Visible finding with garbage evidence: coerced to an object, not verified.
+    g = next(f for f in body["findings"] if f["title"] == "garbage-ev")
+    assert g["evidence"] == {} and g["verified"] is False
+    # Hidden double-encoded finding: parsed back, its verification recovered.
+    d = next(f for f in body["hidden_findings"] if f["title"] == "dbl-encoded")
+    assert d["verified"] is True
+    assert d["evidence"]["extra"]["verification"]["verified"] is True
 
 
 def test_project_payload_excludes_archived_target_findings(hg_home):
