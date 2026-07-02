@@ -426,7 +426,8 @@ def build_target(project_id: str, source_tree_id: str, system: str | None = None
     wired instrumented_build_of→ the original — ready for coverage-guided fuzzing. Requires
     features.build (else error)."""
     from hexgraph.engine.build import builds as B
-    from hexgraph.engine.build.build import BuildError, BuildSpec, CROSS_TRIPLES
+    from hexgraph.engine.build.build import (
+        BuildError, BuildSpec, CROSS_TRIPLES, normalize_build_phases)
     from hexgraph.policy import PolicyViolation, assert_allows_build
 
     try:
@@ -444,9 +445,11 @@ def build_target(project_id: str, source_tree_id: str, system: str | None = None
             return {"error": "source tree not found in this project"}
         detected = B.propose_build_spec(tree)
         net = network or "none"
-        fp = fetch_phases
-        if net == "fetch" and fp is None:
-            fp = [ph.to_dict() for ph in B.default_fetch_phases(system or detected["system"])]
+        # Default fetch phases only when the caller supplied none (user-supplied
+        # fetch_phases are validated alongside `phases` in the try below).
+        default_fetch = []
+        if net == "fetch" and fetch_phases is None:
+            default_fetch = [ph.to_dict() for ph in B.default_fetch_phases(system or detected["system"])]
         # Cross-build sysroot: the parent firmware's extracted rootfs (best-effort; native
         # fallback degrades to qemu-mode binary-only fuzzing per §3.4).
         sysroot = None
@@ -466,11 +469,19 @@ def build_target(project_id: str, source_tree_id: str, system: str | None = None
                     except Exception:  # noqa: BLE001
                         sysroot = None
         try:
+            # Validate + normalize user-submitted phases to explicit argv BEFORE building
+            # the spec: a bad shape (a bare string, a dict without argv, an empty phase)
+            # raises a clear BuildError here — returned as {"error": ...} below — instead of
+            # crashing on `'str'.get` or silently running nothing and reporting a fake success.
+            norm_phases = normalize_build_phases(phases) if phases is not None else None
+            norm_fetch = normalize_build_phases(fetch_phases) if fetch_phases is not None else None
             spec = BuildSpec.from_dict({
                 "source_tree_id": tree.id,
                 "system": system or detected["system"],
-                "phases": phases if phases is not None else detected["phases"],
-                "fetch_phases": fp or [],
+                "phases": ([p.to_dict() for p in norm_phases]
+                           if norm_phases is not None else detected["phases"]),
+                "fetch_phases": ([p.to_dict() for p in norm_fetch]
+                                 if norm_fetch is not None else default_fetch),
                 "instrumentation": instrumentation or {},
                 "artifacts": artifacts or [],
                 "env": env or {},

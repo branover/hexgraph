@@ -150,13 +150,16 @@ def main() -> int:
     ok = True
     returncode = 0
     err = None
+    ran_any = False
     for idx, ph in enumerate(phases):
         if isinstance(ph, (list, tuple)):
             argv, shell = list(ph), False
         else:
             argv, shell = list(ph.get("argv") or []), bool(ph.get("shell"))
         if not argv:
+            w(f"[build_probe] phase {idx} has empty argv — skipped")
             continue
+        ran_any = True
         w(f"\n[build_probe] phase {idx}: {'(shell) ' if shell else ''}{argv}")
         try:
             if shell:
@@ -186,6 +189,15 @@ def main() -> int:
             break
 
     duration = time.monotonic() - started
+
+    # Honesty guard: phases were submitted but NONE actually ran (every one had empty argv).
+    # Fail loudly rather than fall through to "succeeded" (or the confusing no-artifact error)
+    # — a recipe that ran zero commands never built anything. The host now validates phases
+    # up front (normalize_build_phases), so this is the last-line defense against a malformed
+    # recipe reporting a fake success.
+    if ok and phases and not ran_any:
+        ok = False
+        err = "no build phases ran — every submitted phase had empty argv (malformed recipe)"
 
     # Capture the requested artifacts (rel paths under the build dir → /out/artifacts/<rel>).
     # Defense-in-depth: an artifact rel is operator/LLM-authored, so refuse absolute paths

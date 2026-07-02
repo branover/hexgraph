@@ -28,6 +28,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -84,10 +85,109 @@ class BuildPhase:
         return {"argv": list(self.argv), "shell": bool(self.shell)}
 
     @classmethod
-    def from_dict(cls, d: dict) -> "BuildPhase":
+    def from_dict(cls, d) -> "BuildPhase":
+        """TOLERANT loader (reads a recorded recipe back from the DB) — TOTAL, never
+        raises: an argv list/tuple, a `{argv, shell}` dict, or a bare command string
+        (shlex-split) all load. It does NOT reject an empty/odd phase (a historical row
+        may carry one) — validation of *user-submitted* phases is `normalize_build_phases`,
+        which raises. Kept total so `BuildSpec.from_dict` can always reload a stored recipe."""
+        if isinstance(d, str):
+            try:
+                return cls(argv=tuple(shlex.split(d)))
+            except ValueError:
+                return cls(argv=(d,))
         if isinstance(d, (list, tuple)):
             return cls(argv=tuple(str(a) for a in d))
-        return cls(argv=tuple(str(a) for a in (d.get("argv") or [])), shell=bool(d.get("shell")))
+        if isinstance(d, dict):
+            argv = d.get("argv")
+            if isinstance(argv, str):
+                try:
+                    argv = shlex.split(argv)
+                except ValueError:
+                    argv = [argv]
+            return cls(argv=tuple(str(a) for a in (argv or [])), shell=bool(d.get("shell")))
+        return cls(argv=())
+
+
+# Shell control operators that a shlex-split of a bare command string would silently
+# mangle into broken argv tokens (`cd x && make` → ["cd","x","&&","make"], exec "cd" → 127).
+# A phase is a single explicit-argv command; a string carrying these is a recipe-authoring
+# mistake we reject with an actionable message instead of a confusing 127 downstream.
+# NB: a single "&" (background/list operator) must be here too — `a & b` shlex-splits to
+# ["a","&","b"], and if `a` ignores its args + exits 0 (e.g. `echo`) the build reports a
+# FALSE success while `b` never ran. "&&"/"|" are matched by "&"/"|" but listed for clarity.
+_SHELL_OPERATORS = ("&&", "||", "|", "&", ";", ">", "<", "`", "$(", "\n")
+
+
+def _parse_phase(item, index: int) -> BuildPhase:
+    """Strict parse of ONE user-submitted phase → a BuildPhase, or raise BuildError with
+    the phase index + the accepted shapes. Accepts an argv list (`["clang","-O1",...]`),
+    a command STRING (shlex-split into argv — the ergonomic form), or an explicit
+    `{"argv": [...], "shell": bool}` dict (`shell=True` runs a recorded build.sh script:
+    argv is `[script-path, ...]`). Rejects an empty phase, a shell-operator string, and any
+    other shape — so a malformed recipe fails LOUDLY here rather than silently running
+    nothing and reporting a fake success."""
+    shapes = ("expected an argv list [\"clang\", \"-O1\", ...], a command string, "
+              "or {\"argv\": [...], \"shell\": false}")
+
+    def _from_string(s: str, *, shell: bool = False) -> BuildPhase:
+        if not shell:
+            hit = next((op for op in _SHELL_OPERATORS if op in s), None)
+            if hit is not None:
+                raise BuildError(
+                    f"build phase {index} is a command string containing the shell operator "
+                    f"{hit!r}: {s!r}. A phase is a single explicit-argv command — split a "
+                    "multi-command/piped step into separate phases, or provide it as an "
+                    "explicit argv list.")
+        try:
+            argv = shlex.split(s)
+        except ValueError as exc:
+            # Unbalanced quotes etc. — raise a catchable BuildError (not a bare ValueError
+            # that would escape the try/except BuildError at every ingest seam) on BOTH the
+            # non-shell and shell=True paths.
+            raise BuildError(f"build phase {index}: could not parse command string {s!r} ({exc})") from exc
+        if not argv:
+            raise BuildError(f"build phase {index} is an empty command string — {shapes}")
+        return BuildPhase(argv=tuple(argv), shell=shell)
+
+    if isinstance(item, str):
+        return _from_string(item)
+    if isinstance(item, (list, tuple)):
+        argv = [str(a) for a in item]
+        if not argv:
+            raise BuildError(f"build phase {index} is an empty list — {shapes}")
+        return BuildPhase(argv=tuple(argv))
+    if isinstance(item, dict):
+        shell = bool(item.get("shell"))
+        argv = item.get("argv")
+        if isinstance(argv, str):
+            return _from_string(argv, shell=shell)
+        if isinstance(argv, (list, tuple)):
+            argv = [str(a) for a in argv]
+            if not argv:
+                raise BuildError(f"build phase {index} has an empty 'argv' — {shapes}")
+            return BuildPhase(argv=tuple(argv), shell=shell)
+        raise BuildError(
+            f"build phase {index} has no usable 'argv' (got keys {sorted(item)}) — {shapes}")
+    raise BuildError(f"build phase {index} has an unsupported type {type(item).__name__} — {shapes}")
+
+
+def normalize_build_phases(raw) -> list[BuildPhase]:
+    """Validate + normalize a list of USER-SUBMITTED phases (the `src_build` `phases` /
+    `fetch_phases` args) into explicit-argv BuildPhases, raising BuildError on the first
+    malformed one. This is the INGEST boundary — the counterpart to the tolerant
+    `BuildPhase.from_dict` DB loader. `raw` must be a list; each item is parsed by
+    `_parse_phase`. An empty list passes through (the caller decides whether to fall back
+    to the system's default phases)."""
+    if raw is None:
+        return []
+    if isinstance(raw, (str, dict)):
+        raise BuildError(
+            f"phases must be a LIST of build steps, not a bare {type(raw).__name__} "
+            "— wrap a single step in a list, e.g. [\"make\"] or [{\"argv\": [\"make\"]}]")
+    if not isinstance(raw, (list, tuple)):
+        raise BuildError(f"phases must be a list of build steps, got {type(raw).__name__}")
+    return [_parse_phase(item, i) for i, item in enumerate(raw)]
 
 
 # Cross-compile target triples per recorded `arch` (design §3.4). clang IS a
