@@ -61,7 +61,7 @@ function PocSteps({ poc }: { poc: any }) {
   if (!poc) return null;
   const lines: string[] = [];
   const oracle = poc.oracle;
-  const steps = poc.steps || (poc.request ? [poc.request] : []);
+  const steps = Array.isArray(poc.steps) ? poc.steps : (poc.request ? [poc.request] : []);
   if (steps.length) {
     steps.forEach((s: any, i: number) => {
       const method = (s.method || "GET").toUpperCase();
@@ -78,7 +78,7 @@ function PocSteps({ poc }: { poc: any }) {
     lines.push(`Send to TCP port ${tcp.port || poc.port}: ${JSON.stringify(tcp.payload ?? poc.payload ?? "")}`);
   } else {
     if (poc.env && Object.keys(poc.env).length) lines.push(`env: ${Object.entries(poc.env).map(([k, v]) => `${k}=${v}`).join(" ")}`);
-    lines.push(`run target ${(poc.argv || []).join(" ")}`.trim());
+    lines.push(`run target ${(Array.isArray(poc.argv) ? poc.argv : []).join(" ")}`.trim());
     if (poc.stdin) lines.push(`stdin: ${poc.stdin}`);
   }
   return (
@@ -217,9 +217,13 @@ export default function Inspector({ finding, projectId, hypotheses = [], onChang
   // suggestions that aren't already covered (deduped by task_type+label) — so the
   // two sources don't show near-identical buttons twice.
   const fuKey = (s: any) => `${s.task_type}|${(s.label || "").toLowerCase()}`;
-  const fuKeys = new Set((finding.suggested_followups || []).map(fuKey));
+  // suggested_followups is agent-authored evidence — tolerate a non-array (same untrusted
+  // shape that made evidence.extra.provenance a bare string): a malformed value yields no
+  // follow-ups rather than crashing the panel.
+  const followups: any[] = Array.isArray(finding.suggested_followups) ? finding.suggested_followups : [];
+  const fuKeys = new Set(followups.map(fuKey));
   const nextSteps = [
-    ...(finding.suggested_followups || []).map((s: any, i: number) => ({ label: s.label, from: "finding" as const, run: () => spawn(i, s) })),
+    ...followups.map((s: any, i: number) => ({ label: s.label, from: "finding" as const, run: () => spawn(i, s) })),
     ...sugg.filter((s) => !fuKeys.has(fuKey(s))).map((s: any) => ({ label: s.label, from: "suggester" as const, run: () => launchSuggested(s) })),
   ];
 

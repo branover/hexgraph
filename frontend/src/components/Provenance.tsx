@@ -10,10 +10,15 @@ const human = (s: string) => String(s || "").replace(/_/g, " ");
 // `attrs.provenance` — the tool calls that produced or enriched it. Each row opens the
 // raw CAS payload. Renders nothing when there's no provenance, so it's safe to mount
 // unconditionally on any detail view.
-export default function Provenance({ ids }: { ids?: string[] }) {
+export default function Provenance({ ids }: { ids?: unknown }) {
   const [rows, setRows] = useState<Record<string, Observation | null>>({});
   const [open, setOpen] = useState<string | null>(null);
-  const list = (ids || []).filter(Boolean);
+  // `ids` is agent-authored (evidence.extra.provenance / node.attrs.provenance) and thus
+  // untrusted: it SHOULD be an array of observation-id strings, but an agent can write a
+  // bare string, an object, or an array with non-string elements. Coerce to just the usable
+  // string ids so a malformed value degrades to "no provenance" instead of throwing
+  // "(x || []).filter is not a function" and white-screening the whole detail panel.
+  const list = (Array.isArray(ids) ? ids : []).filter((x): x is string => typeof x === "string" && x.length > 0);
 
   useEffect(() => {
     let live = true;
