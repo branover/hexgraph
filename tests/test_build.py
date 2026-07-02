@@ -17,7 +17,7 @@ from hexgraph.engine.build import builds as B
 from hexgraph.engine.build import source as src
 from hexgraph.engine.build.build import (
     BuildError, BuildPhase, BuildResult, BuildSpec, Instrumentation, MockBuilder,
-    assert_env_nonsecret, get_builder, instrumentation_env,
+    assert_env_nonsecret, get_builder, instrumentation_env, normalize_build_phases,
 )
 from hexgraph.engine.graph.edges import add_edge
 from hexgraph.engine.targets.ingest import create_project
@@ -380,3 +380,88 @@ def test_mcp_build_target_rejects_secret_env(hg_home, monkeypatch):
         pid, tid = p.id, tree.id
     out = build_target(pid, tid, artifacts=["foo.o"], env={"API_KEY": "leak"})
     assert "error" in out and "secret" in out["error"].lower()
+
+
+# ── phase parsing: ingest validation + tolerant DB loader ──────────────────────────
+# Regression for the src_build phase-parsing bug: a bare-string phase raised an uncaught
+# `'str' object has no attribute 'get'`, and a dict without `argv` was silently coerced to
+# an empty phase → the probe ran nothing → a ~microsecond "failed"/"succeeded" fake result.
+
+def test_from_dict_is_total_and_never_raises_on_odd_input():
+    # The tolerant DB loader must reload ANY recorded shape without raising (it reads
+    # historical rows back), incl. the pre-fix `{"argv": [], "shell": false}` no-op phase.
+    assert BuildPhase.from_dict({"argv": [], "shell": False}).argv == ()
+    assert BuildPhase.from_dict("clang -O1 -o x x.c").argv == ("clang", "-O1", "-o", "x", "x.c")
+    assert BuildPhase.from_dict(["make", "-j4"]).argv == ("make", "-j4")
+    assert BuildPhase.from_dict({"argv": "cc a.c", "shell": False}).argv == ("cc", "a.c")
+    assert BuildPhase.from_dict({"nonsense": 1}).argv == ()      # missing argv → empty, no crash
+    assert BuildPhase.from_dict(42).argv == ()                   # odd type → empty, no crash
+
+
+def test_normalize_accepts_string_list_and_dict_phases():
+    phases = normalize_build_phases([
+        "clang -O1 -g -o harness harness.c -ldl",       # command string → shlex argv
+        ["make", "-j", "4"],                             # explicit argv list
+        {"argv": ["cmake", "--build", "build"]},         # {argv} dict
+        {"argv": ["build.sh"], "shell": True},           # recorded script phase
+    ])
+    assert [p.argv for p in phases] == [
+        ("clang", "-O1", "-g", "-o", "harness", "harness.c", "-ldl"),
+        ("make", "-j", "4"),
+        ("cmake", "--build", "build"),
+        ("build.sh",),
+    ]
+    assert phases[3].shell is True
+    assert normalize_build_phases(None) == [] and normalize_build_phases([]) == []
+
+
+@pytest.mark.parametrize("bad,needle", [
+    ([""], "empty command string"),                      # blank string
+    ([[]], "empty list"),                                # empty argv list
+    ([{"shell": True}], "no usable 'argv'"),             # dict missing argv (the silent no-op)
+    ([{"argv": []}], "empty 'argv'"),                    # dict with empty argv
+    (["cd build && make"], "shell operator"),            # shell operators would mis-split
+    (["cat a.c | cc -x c -"], "shell operator"),
+    (['a "unbalanced'], "could not parse"),              # unbalanced quotes
+    ([123], "unsupported type"),                         # non str/list/dict item
+    ("make", "must be a LIST"),                          # a bare string instead of a list
+])
+def test_normalize_rejects_malformed_phases_with_clear_error(bad, needle):
+    with pytest.raises(BuildError) as ei:
+        normalize_build_phases(bad)
+    assert needle in str(ei.value)
+
+
+def test_mcp_build_target_accepts_string_phase(hg_home, monkeypatch):
+    # A bare-string phase used to crash with `'str'.get`; now it shlex-splits and builds.
+    monkeypatch.setenv("HEXGRAPH_BUILDER", "mock")
+    _enable_build()
+    from hexgraph.agent.mcp_tools import build_target, list_builds
+
+    with session_scope() as s:
+        p = create_project(s, name="mcpstr")
+        tree, _ = _src_tree(s, p, with_target=True)
+        pid, tid = p.id, tree.id
+    out = build_target(pid, tid, system="custom",
+                       phases=["clang -O1 -g -o harness harness.c -ldl"],
+                       artifacts=["harness"])
+    assert out.get("status") == "succeeded", out
+    # The recorded recipe holds the shlex-split argv (recorded verbatim, explicit-argv).
+    spec = list_builds(pid)["build_specs"][0]
+    assert spec["recipe"]["phases"][0]["argv"] == [
+        "clang", "-O1", "-g", "-o", "harness", "harness.c", "-ldl"]
+
+
+def test_mcp_build_target_returns_error_on_malformed_phase(hg_home, monkeypatch):
+    # A malformed phase returns a clean {"error": ...} — not an unhandled exception.
+    monkeypatch.setenv("HEXGRAPH_BUILDER", "mock")
+    _enable_build()
+    from hexgraph.agent.mcp_tools import build_target
+
+    with session_scope() as s:
+        p = create_project(s, name="mcpbad")
+        tree, _ = _src_tree(s, p)
+        pid, tid = p.id, tree.id
+    out = build_target(pid, tid, system="custom",
+                       phases=[{"cmd": "clang x.c"}], artifacts=["x"])
+    assert "error" in out and "phase 0" in out["error"] and "argv" in out["error"]
