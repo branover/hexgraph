@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from hexgraph.db.models import Build, BuildSpec as BuildSpecRow, Project, SourceTree
 from hexgraph.db.session import session_scope
 from hexgraph.engine.build import builds as B
-from hexgraph.engine.build.build import BuildError, BuildSpec
+from hexgraph.engine.build.build import BuildError, BuildSpec, normalize_build_phases
 from hexgraph.policy import PolicyViolation, assert_allows_build
 
 router = APIRouter()
@@ -79,15 +79,23 @@ def _spec_from_body(body: BuildSpecBody, tree: SourceTree, *, session=None, proj
     detected = B.propose_build_spec(tree)
     arch = body.arch or "x86_64"
     network = body.network or "none"
-    fetch_phases = body.fetch_phases
-    if network == "fetch" and fetch_phases is None:
-        fetch_phases = [p.to_dict() for p in B.default_fetch_phases(body.system or detected["system"])]
+    # Validate + normalize user-submitted phases at THIS ingest seam too (the UI Build
+    # modal / REST callers), mirroring agent.mcp_tools.build_target — a malformed phase
+    # raises a clear BuildError the callers turn into HTTP 400, instead of a dict-without-
+    # argv silently recording an empty no-op phase (fake success) or a bare string crashing.
+    norm_phases = normalize_build_phases(body.phases) if body.phases is not None else None
+    norm_fetch = normalize_build_phases(body.fetch_phases) if body.fetch_phases is not None else None
+    default_fetch = []
+    if network == "fetch" and body.fetch_phases is None:
+        default_fetch = [p.to_dict() for p in B.default_fetch_phases(body.system or detected["system"])]
     sysroot = _resolve_sysroot(session, project, tree, arch) if session is not None else None
     return BuildSpec.from_dict({
         "source_tree_id": tree.id,
         "system": body.system or detected["system"],
-        "phases": body.phases if body.phases is not None else detected["phases"],
-        "fetch_phases": fetch_phases or [],
+        "phases": ([p.to_dict() for p in norm_phases]
+                   if norm_phases is not None else detected["phases"]),
+        "fetch_phases": ([p.to_dict() for p in norm_fetch]
+                         if norm_fetch is not None else default_fetch),
         "instrumentation": body.instrumentation or {},
         "artifacts": body.artifacts or [],
         "env": body.env or {},

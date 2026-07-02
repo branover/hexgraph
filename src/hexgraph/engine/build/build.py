@@ -113,7 +113,10 @@ class BuildPhase:
 # mangle into broken argv tokens (`cd x && make` → ["cd","x","&&","make"], exec "cd" → 127).
 # A phase is a single explicit-argv command; a string carrying these is a recipe-authoring
 # mistake we reject with an actionable message instead of a confusing 127 downstream.
-_SHELL_OPERATORS = ("&&", "||", "|", ";", ">", "<", "`", "$(", "\n")
+# NB: a single "&" (background/list operator) must be here too — `a & b` shlex-splits to
+# ["a","&","b"], and if `a` ignores its args + exits 0 (e.g. `echo`) the build reports a
+# FALSE success while `b` never ran. "&&"/"|" are matched by "&"/"|" but listed for clarity.
+_SHELL_OPERATORS = ("&&", "||", "|", "&", ";", ">", "<", "`", "$(", "\n")
 
 
 def _parse_phase(item, index: int) -> BuildPhase:
@@ -136,12 +139,13 @@ def _parse_phase(item, index: int) -> BuildPhase:
                     f"{hit!r}: {s!r}. A phase is a single explicit-argv command — split a "
                     "multi-command/piped step into separate phases, or provide it as an "
                     "explicit argv list.")
-            try:
-                argv = shlex.split(s)
-            except ValueError as exc:
-                raise BuildError(f"build phase {index}: could not parse command string {s!r} ({exc})") from exc
-        else:
+        try:
             argv = shlex.split(s)
+        except ValueError as exc:
+            # Unbalanced quotes etc. — raise a catchable BuildError (not a bare ValueError
+            # that would escape the try/except BuildError at every ingest seam) on BOTH the
+            # non-shell and shell=True paths.
+            raise BuildError(f"build phase {index}: could not parse command string {s!r} ({exc})") from exc
         if not argv:
             raise BuildError(f"build phase {index} is an empty command string — {shapes}")
         return BuildPhase(argv=tuple(argv), shell=shell)

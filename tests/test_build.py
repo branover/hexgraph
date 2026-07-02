@@ -465,3 +465,56 @@ def test_mcp_build_target_returns_error_on_malformed_phase(hg_home, monkeypatch)
     out = build_target(pid, tid, system="custom",
                        phases=[{"cmd": "clang x.c"}], artifacts=["x"])
     assert "error" in out and "phase 0" in out["error"] and "argv" in out["error"]
+
+
+# ── the '&' background operator + shell=True quote handling (review fixes) ──────────
+
+def test_normalize_rejects_single_ampersand_background_operator():
+    # A single '&' (background/list operator) must be rejected too: `echo a & echo b`
+    # shlex-splits to ["echo","a","&","echo","b"], echo exits 0, and the build would
+    # report a FALSE success while the second command never ran.
+    with pytest.raises(BuildError) as ei:
+        normalize_build_phases(["echo built & echo also"])
+    assert "shell operator" in str(ei.value)
+
+
+def test_normalize_shell_true_dict_bad_quotes_raises_buildable_error():
+    # A shell=True dict whose string argv has unbalanced quotes must raise BuildError
+    # (catchable at every ingest seam), never a bare ValueError that escapes the
+    # try/except BuildError in build_target / the REST router.
+    with pytest.raises(BuildError) as ei:
+        normalize_build_phases([{"argv": 'build.sh "unbalanced', "shell": True}])
+    assert "could not parse" in str(ei.value)
+
+
+# ── REST ingest seam validates phases too (parity with the MCP build_target) ───────
+
+def test_api_build_preview_rejects_malformed_phase(hg_home):
+    # The UI Build modal / REST preview must reject a dict-without-argv with a clear 400
+    # instead of silently recording an empty no-op phase (the fake-success bug).
+    app = create_app()
+    with session_scope() as s:
+        p = create_project(s, name="apibad")
+        tree, _ = _src_tree(s, p)
+        pid, tid = p.id, tree.id
+    with TestClient(app) as c:
+        r = c.post(f"/api/projects/{pid}/build/preview",
+                   json={"source_tree_id": tid, "phases": [{"cmd": "clang x.c"}],
+                         "artifacts": ["x"]})
+        assert r.status_code == 400, r.text
+        assert "phase 0" in r.text and "argv" in r.text
+
+
+def test_api_build_preview_accepts_and_splits_string_phase(hg_home):
+    # A bare command-string phase shlex-splits into explicit argv on the REST path too.
+    app = create_app()
+    with session_scope() as s:
+        p = create_project(s, name="apistr")
+        tree, _ = _src_tree(s, p)
+        pid, tid = p.id, tree.id
+    with TestClient(app) as c:
+        r = c.post(f"/api/projects/{pid}/build/preview",
+                   json={"source_tree_id": tid, "system": "custom",
+                         "phases": ["clang -O1 -o harness harness.c"], "artifacts": ["harness"]})
+        assert r.status_code == 200, r.text
+        assert r.json()["phases"][0]["argv"] == ["clang", "-O1", "-o", "harness", "harness.c"]
