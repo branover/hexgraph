@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api, Finding, Graph, GraphNode, ProjectDetail, SavedLens, SettingsView, TargetNode } from "../api";
 import Header from "../components/Header";
+import ErrorBoundary from "../components/ErrorBoundary";
 import GraphView, { NODE_T, EDGE_C, KIND, NODE_SHAPE, FocusSpec, GroupBy } from "../components/GraphView";
 import TableView from "../components/TableView";
 import MatrixView from "../components/MatrixView";
@@ -882,6 +883,9 @@ export default function Workspace() {
                       fuzzingEnabled={fuzzingEnabled} onOpenSource={revealSource} onSelectMention={selectMention}
                       onHighlight={(ids) => ids[0] && setSelGraphId(ids[0])} />;
   };
+  // Keyed so selecting a different (well-formed) entity remounts the boundary clean; a
+  // malformed one stays showing the graceful fallback instead of the same item re-throwing.
+  const detailKey = selFinding?.id ?? (selNode ? `${selNode.type}:${selNode.id}` : undefined) ?? selTask ?? selCampaign ?? "detail";
 
   return (
     <>
@@ -1184,7 +1188,7 @@ export default function Workspace() {
                 </button>
               </div>
               <div style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column" }}>
-                {renderDetail()}
+                <ErrorBoundary key={detailKey} label="this finding">{renderDetail()}</ErrorBoundary>
               </div>
             </div>
           </aside>
@@ -1194,7 +1198,7 @@ export default function Workspace() {
       {maxed && (
         <div className="maxscreen">
           <div className="pane">{renderTabs()}{renderList()}</div>
-          <div className="pane"><div className="pane-h"><span className="ttl">Detail</span></div>{renderDetail()}</div>
+          <div className="pane"><div className="pane-h"><span className="ttl">Detail</span></div><ErrorBoundary key={detailKey} label="this finding">{renderDetail()}</ErrorBoundary></div>
         </div>
       )}
 
