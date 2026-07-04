@@ -192,6 +192,60 @@ def _parse_int(val: str | None) -> int | None:
         return None
 
 
+_DISASM_FALLBACK_COUNT = 64  # raw linear instructions when an address defines no function
+
+
+def _resolve_disasm_seek(r2, subject: str) -> tuple[str | None, bool]:
+    """A seekable, injection-safe target for TARGETED disassembly (no whole-program aaa). A hex
+    address is used as-is; a name is resolved against r2's already-loaded flag table (symbols /
+    imports are known on open, no analysis needed). Returns (seek, is_addr), or (None, False) when
+    a name can't be resolved without analysis (the caller then points at re_analyze)."""
+    if _ADDR.match(subject):
+        return subject, True
+    if not _SAFE_NAME.match(subject):
+        return None, False
+    try:
+        flags = {f["name"] for f in json.loads(r2.cmd("fj") or "[]")
+                 if isinstance(f, dict) and f.get("name")}
+    except (json.JSONDecodeError, TypeError):
+        flags = set()
+    for cand in _name_candidates(subject):
+        if cand in flags:
+            return cand, False
+    return None, False
+
+
+def _targeted_disasm(r2, seek: str, is_addr: bool) -> dict | None:
+    """Disassemble the function at `seek` with ONE-function analysis (`af`) — never a whole-binary
+    `aaa`, never `pdc`. `af` is bounded by the single function's own CFG, so this is cheap on any
+    target size. Falls back to a raw linear disassembly (`pd`) from an address when no function is
+    defined there. `seek` is already validated/resolved, so it can't inject. Returns the focus
+    dict, or None when there's nothing to disassemble."""
+    r2.cmd(f"af @ {seek}")  # analyze JUST this one function (no whole-binary pass)
+    disasm = (r2.cmd(f"pdf @ {seek}") or "").strip()
+    mode = "function"
+    if not disasm and is_addr:
+        disasm = (r2.cmd(f"pd {_DISASM_FALLBACK_COUNT} @ {seek}") or "").strip()
+        mode = "linear"
+    if not disasm:
+        return None
+    name = None
+    addr = None
+    try:
+        info = json.loads(r2.cmd(f"afij @ {seek}") or "[]")
+        if isinstance(info, list) and info and isinstance(info[0], dict):
+            name = info[0].get("name")
+            off = info[0].get("offset")
+            addr = hex(off) if isinstance(off, int) else None
+    except (json.JSONDecodeError, TypeError):
+        pass
+    focus = {"name": name or seek, "address": addr or (seek if is_addr else None),
+             "disasm": disasm, "disasm_mode": mode, "callees": _callees(disasm)}
+    if mode == "function":
+        focus.update(_function_facts(r2, seek))
+    return focus
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print(json.dumps({"error": "usage: decompile_probe.py <artifact> [function|0xADDR] "
@@ -205,7 +259,10 @@ def main() -> int:
     # The address comes as the value AFTER --range (kept off the positionals so it isn't
     # mistaken for a focus). --length / --count bound it (count wins if both given).
     range_addr = _flag_value(rest, "--range")
-    _value_flags = {"--range", "--length", "--count"}  # consume their following value too
+    # TARGETED disassemble mode: `--disasm <name|0xADDR>` disassembles ONE function (via `af`) with
+    # NO whole-binary `aaa` and NO `pdc` — the cheap path for re_disassemble on any target size.
+    disasm_subject = _flag_value(rest, "--disasm")
+    _value_flags = {"--range", "--length", "--count", "--disasm"}  # consume their following value too
     positionals = []
     skip = False
     for tok in rest:
@@ -232,6 +289,20 @@ def main() -> int:
         print(json.dumps({"error": f"radare2 failed to open the target: {exc}"}))
         return 4
     try:
+        if disasm_subject is not None:
+            # TARGETED disassembly: NO whole-binary aaa, NO pdc. Analyze just the one function at
+            # the subject (`af`) and `pdf` it, falling back to a raw linear read at an address.
+            seek, is_addr = _resolve_disasm_seek(r2, disasm_subject)
+            if seek is None:
+                print(json.dumps({"tool": "decompile_probe", "mode": "disasm",
+                                  "subject": disasm_subject, "focus": None,
+                                  "error": "not resolvable without analysis "
+                                           "(pass a hex address, or run re_analyze first)"}))
+                return 0
+            focus = _targeted_disasm(r2, seek, is_addr)
+            print(json.dumps({"tool": "decompile_probe", "mode": "disasm",
+                              "subject": disasm_subject, "focus": focus}))
+            return 0
         if range_addr is not None:
             # RANGE mode: no analysis pass needed — `pD`/`pd` read+disassemble raw bytes,
             # which is the whole point (the function-based paths already failed). Validate

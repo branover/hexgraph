@@ -91,13 +91,15 @@ def test_decompile_at_requires_address(hg_home):
 # --- disassemble by address: a QUERY, no graph mutation -----------------------
 
 def test_disassemble_by_address_records_and_mutates_no_graph(hg_home, monkeypatch):
-    focus = {"name": "cgi_handler", "address": "0x401200",
+    """Disassemble routes through the TARGETED path (disassemble_func → single-function `af`, no
+    whole-binary aaa), records a `disassembly` Observation, and mutates no graph."""
+    focus = {"name": "cgi_handler", "address": "0x401200", "disasm_mode": "function",
              "disasm": "0x401200  push rbp\n0x401201  mov rbp, rsp", "callees": []}
 
     class _FakeR2:
-        def decompile(self, artifact, function=None, *, address=None, reanalyze=False, project=None):
-            assert address == "0x401200"  # routed by address
-            return {"functions": ["cgi_handler"], "focus": focus}
+        def disassemble_func(self, artifact, subject):
+            assert subject == "0x401200"  # routed by address to the targeted verb
+            return {"tool": "decompile_probe", "mode": "disasm", "focus": focus}
 
     monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
     monkeypatch.setattr("hexgraph.sandbox.decompiler.R2Decompiler", _FakeR2)
@@ -106,10 +108,29 @@ def test_disassemble_by_address_records_and_mutates_no_graph(hg_home, monkeypatc
         nb, eb = s.query(Node).count(), s.query(Edge).count()
         out = run_tool(ctx, "disassemble", {"address": "0x401200"})
         assert "push rbp" in out and "cgi_handler" in out
+        assert "raw linear" not in out  # a real function-scoped listing, not the linear fallback
         assert s.query(Node).count() == nb and s.query(Edge).count() == eb
         obs = s.query(Observation).filter(Observation.target_id == t.id,
                                           Observation.result_kind == "disassembly").all()
         assert len(obs) == 1 and (obs[0].args_json or {}).get("address") == "0x401200"
+
+
+def test_disassemble_flags_raw_linear_fallback(hg_home, monkeypatch):
+    """When no function is defined at an address, the probe returns a raw linear disassembly; the
+    tool marks it so the reader knows it isn't a function-scoped listing."""
+    focus = {"name": "0x401337", "address": "0x401337", "disasm_mode": "linear",
+             "disasm": "0x401337  nop\n0x401338  nop", "callees": []}
+
+    class _FakeR2:
+        def disassemble_func(self, artifact, subject):
+            return {"tool": "decompile_probe", "mode": "disasm", "focus": focus}
+
+    monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
+    monkeypatch.setattr("hexgraph.sandbox.decompiler.R2Decompiler", _FakeR2)
+    with session_scope() as s:
+        ctx, _p, _t = _ctx(s)
+        out = run_tool(ctx, "disassemble", {"address": "0x401337"})
+        assert "nop" in out and "raw linear" in out
 
 
 def test_disassemble_requires_a_focus(hg_home):
@@ -118,12 +139,15 @@ def test_disassemble_requires_a_focus(hg_home):
         assert "required" in run_tool(ctx, "disassemble", {})
 
 
-def test_disassemble_miss_records_observation_for_discoverability(hg_home, monkeypatch):
-    """A requested-but-unresolved disassemble still records a discoverable Observation
-    (parity with decompile_at's not-found path) and mutates no graph."""
+def test_disassemble_miss_records_observation_and_surfaces_reason(hg_home, monkeypatch):
+    """A name the targeted path can't resolve without analysis still records a discoverable
+    Observation, mutates no graph, and surfaces the probe's actionable reason (pointing at an
+    address / re_analyze) instead of a bare 'not found'."""
     class _FakeR2:
-        def decompile(self, artifact, function=None, *, address=None, reanalyze=False, project=None):
-            return {"functions": ["main", "helper"], "focus": None}  # nothing resolved
+        def disassemble_func(self, artifact, subject):
+            return {"tool": "decompile_probe", "mode": "disasm", "focus": None,
+                    "error": "not resolvable without analysis "
+                             "(pass a hex address, or run re_analyze first)"}
 
     monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
     monkeypatch.setattr("hexgraph.sandbox.decompiler.R2Decompiler", _FakeR2)
@@ -131,11 +155,11 @@ def test_disassemble_miss_records_observation_for_discoverability(hg_home, monke
         ctx, p, t = _ctx(s)
         nb = s.query(Node).count()
         out = run_tool(ctx, "disassemble", {"function": "ghost"})
-        assert "not found" in out
+        assert "re_analyze" in out          # the actionable reason is surfaced
         assert s.query(Node).count() == nb  # QUERY: no mutation even on a miss
         obs = s.query(Observation).filter(Observation.target_id == t.id,
                                           Observation.tool == "disassemble").all()
-        assert len(obs) == 1 and obs[0].result_kind == "function_list"
+        assert len(obs) == 1 and obs[0].result_kind == "disassembly"
 
 
 # --- reanalyze: raise depth, bust cache, QUERY only ---------------------------

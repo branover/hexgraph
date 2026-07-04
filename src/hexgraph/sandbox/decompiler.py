@@ -98,6 +98,17 @@ class R2Decompiler(Decompiler):
             "decompile_probe.py", artifact,
             extra_args=_range_args(address, length, count))
 
+    def disassemble_func(self, artifact: str, subject: str) -> dict:
+        """TARGETED disassembly of the function at `subject` (a NAME or hex ADDRESS): a single `af`
+        (one-function analysis) + `pdf`, NEVER a whole-binary `aaa` and NEVER `pdc`. `af` is bounded
+        by the one function's own CFG, so it's cheap on any target size — the old path borrowed
+        decompile()'s full pipeline (whole-binary aaa + a discarded pdc) and could run for HOURS on a
+        large binary. Returns the probe's {tool, mode:"disasm", focus} payload — focus.disasm_mode
+        is "function", or a raw "linear" fallback when an address defines no function — or a
+        {..., error} for a name that can't be resolved without analysis."""
+        return self.runner.run_json_probe(
+            "decompile_probe.py", artifact, extra_args=["--disasm", subject])
+
 
 class GhidraDecompiler(Decompiler):
     """Headless Ghidra (`analyzeHeadless`) running in the sandbox image. Emits the

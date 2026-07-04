@@ -151,11 +151,13 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
 - **Query verbs add nothing to the graph.** `re_list_functions`, `re_xrefs`, `re_disassemble`, `re_list_strings`
   and the rest return their results as tool output and quietly record an Observation. They create no
   nodes and no edges. An enumeration is an answer, not a pile of graph objects.
-- **A CFG blind spot has a fallback.** When both `re_disassemble` (which needs a defined function) and
-  `re_decompile_at` (the function containing an address) return "not found" because the call graph has a
-  hole at that address, `re_disassemble_range(target, 0x67158)` disassembles the raw byte range there
-  with no function required, so you can still read the instructions. It is a query like the rest, bytes
-  to instructions clamped to a generous ceiling, recorded as an Observation, and it adds nothing to the graph.
+- **Disassembly is cheap and self-sufficient.** `re_disassemble(target, name_or_0xADDR)` analyzes just
+  the ONE function at that location — never a whole-binary pass, so it's fast on any target size — and
+  disassembles it; at an address with no defined function it falls back to a raw linear read, so a CFG
+  hole no longer comes back as a bare "not found". `re_disassemble_range(target, 0x67158, length=…)`
+  stays for reading an explicit raw byte window (wider than one function, or a spot `re_disassemble`
+  can't frame). Both are queries — bytes to instructions clamped to a generous ceiling, recorded as an
+  Observation, adding nothing to the graph.
 - **Cross-references reuse the warm analysis.** With headless Ghidra as the active backend, `re_xrefs`,
   `re_function_xrefs`, `re_data_xrefs` and `re_call_graph` answer from the persistent Ghidra project's
   reference index, the same analyze-once project the decompile verbs build, instead of re-analyzing the
