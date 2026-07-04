@@ -906,16 +906,44 @@ try:
             out.append(it.next())
         return out
 
+    def _caller_target_addrs(name):
+        # The addresses a call to `name` can reference: every symbol named `name`, PLUS the thunk
+        # stubs that point at any function of that name. This matters for an IMPORTED function: the
+        # call lands on its PLT/GOT thunk, and the external symbol's own only reference is the
+        # thunk linkage -- so without the thunk-stub addresses the real call sites are invisible
+        # (getFunctionThunkAddresses is the thunk-aware bridge; verified on real Ghidra 12.1).
+        addrs = []
+        seen_a = set()
+
+        def _add(a):
+            if a is not None and a.toString() not in seen_a:
+                seen_a.add(a.toString())
+                addrs.append(a)
+
+        for sym in _syms_named(name):
+            a = sym.getAddress()
+            _add(a)
+            f = fm.getFunctionAt(a) if a is not None else None
+            if f is not None:
+                try:
+                    thunk_addrs = f.getFunctionThunkAddresses(True)
+                except:
+                    try:
+                        thunk_addrs = f.getFunctionThunkAddresses()
+                    except:
+                        thunk_addrs = None
+                for ta in (thunk_addrs or []):
+                    _add(ta)
+        return addrs
+
     def _callers_of(name):
-        # Every reference site targeting a symbol named `name`, with the function it lives in,
-        # read from Symbol.getReferences() (the warm reference index). A thunk-origin ref (the
-        # PLT/stub -> external linkage) is dropped so only real callers remain; calls to an
-        # imported function land on its thunk, whose own symbol carries this name, so the real
-        # call sites are still captured.
+        # Real callers of `name`: references TO its addresses (incl. thunk stubs), keeping the
+        # containing function of each, read from the warm reference index. A thunk-origin ref (the
+        # PLT stub -> external linkage) is dropped so only genuine callers remain.
         out = []
         seen = set()
-        for sym in _syms_named(name):
-            for ref in sym.getReferences():
+        for addr in _caller_target_addrs(name):
+            for ref in refmgr.getReferencesTo(addr):
                 frm = ref.getFromAddress()
                 if frm is None:
                     continue
