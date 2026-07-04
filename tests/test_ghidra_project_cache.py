@@ -124,6 +124,31 @@ def test_eviction_never_drops_kept_slot(tmp_path):
     assert (root / "old__v").exists()
 
 
+def test_decompile_never_auto_evicts(tmp_path, monkeypatch):
+    """A persisted analysis is durable researcher knowledge: resolving/using a slot for a decompile
+    must NEVER trigger eviction (an operator lost a 24-hour analysis to a silent LRU cap).
+    Reclaiming the cache is explicit-only, via `hexgraph prune --ghidra-cache-mb`."""
+    from hexgraph.sandbox.decompiler import GhidraDecompiler
+
+    monkeypatch.setattr(gp, "ghidra_version_for_image", lambda *a, **k: "12.1")
+    evicts: list = []
+    monkeypatch.setattr(gp, "evict_to_cap", lambda *a, **k: evicts.append((a, k)) or [])
+    artifact = _write(tmp_path / "bin", b"durable analysis bytes")
+    project = _Project(tmp_path / "data")
+    GhidraDecompiler(runner=_RecordingExecutor()).decompile(str(artifact), "funcA", project=project)
+    assert evicts == []  # decompiling never auto-evicts — analysis is never silently deleted
+
+
+def test_cache_size_mb_reports_total(tmp_path):
+    data_dir = tmp_path / "proj"
+    root = gp.cache_root(data_dir)
+    root.mkdir(parents=True)
+    _make_project(root, "a__v", 3 * 1024 * 1024, mtime=1000)  # ~3 MiB
+    _make_project(root, "b__v", 2 * 1024 * 1024, mtime=2000)  # ~2 MiB
+    assert gp.cache_size_mb(data_dir) == 5              # 3 + 2 MiB
+    assert gp.cache_size_mb(tmp_path / "empty") == 0    # no cache dir → 0
+
+
 def test_eviction_skips_in_use_locked_slot(tmp_path):
     """A slot another process holds the lock on (mid-analysis) must NOT be evicted, even when it
     is the over-cap LRU victim — rmtree'ing it would corrupt the in-flight Ghidra project and

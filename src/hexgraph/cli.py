@@ -206,6 +206,7 @@ def _cmd_graph(args: argparse.Namespace) -> int:
 
 def _cmd_prune(args: argparse.Namespace) -> int:
     from hexgraph.engine import cas
+    from hexgraph.engine.re import ghidra_project as gp
 
     init_db()
     with session_scope() as session:
@@ -214,8 +215,20 @@ def _cmd_prune(args: argparse.Namespace) -> int:
             print(f"error: project {args.project} not found", file=sys.stderr)
             return 1
         report = cas.size_report(project)
+        data_dir = project.data_dir
     print(f"CAS: {report['objects']} objects, {report['bytes']} bytes at {report['dir']}")
-    print("(v1: manual review only; no auto-eviction)")
+    print(f"Ghidra analysis cache: {gp.cache_size_mb(data_dir)} MiB at {gp.cache_root(data_dir)}")
+    # Persisted analysis is durable and NEVER auto-deleted — reclaiming it is explicit only.
+    if args.ghidra_cache_mb is None:
+        print("(no auto-eviction — a persisted analysis is kept until you ask; pass "
+              "--ghidra-cache-mb N to explicitly reclaim the Ghidra cache down to N MiB)")
+        return 0
+    evicted = gp.evict_to_cap(data_dir, args.ghidra_cache_mb, keep=None)
+    if evicted:
+        print(f"evicted {len(evicted)} project(s) to reach {args.ghidra_cache_mb} MiB: "
+              + ", ".join(evicted))
+    else:
+        print(f"nothing evicted (already within {args.ghidra_cache_mb} MiB, or N <= 0)")
     return 0
 
 
@@ -431,8 +444,13 @@ def build_parser() -> argparse.ArgumentParser:
     pg.add_argument("--export", required=True)
     pg.set_defaults(func=_cmd_graph)
 
-    pp = sub.add_parser("prune", help="report the project's content-addressed store size")
+    pp = sub.add_parser("prune", help="report the project's stores; explicitly reclaim the Ghidra "
+                                      "analysis cache with --ghidra-cache-mb")
     pp.add_argument("project")
+    pp.add_argument("--ghidra-cache-mb", type=int, default=None,
+                    help="EXPLICITLY evict oldest Ghidra analyses until the cache is under N MiB. "
+                         "Never happens automatically — a persisted analysis is kept forever "
+                         "unless you run this.")
     pp.set_defaults(func=_cmd_prune)
 
     pd = sub.add_parser("doctor", help="reconcile on-disk project dirs against the DB "

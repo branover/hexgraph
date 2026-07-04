@@ -21,9 +21,11 @@ the sandbox read-only at `/artifact`; this directory is a bounded writable volum
 `/out` bind-mount), and the rest of the hardening (`--read-only` rootfs, `--network none`,
 `--cap-drop ALL`, `--no-new-privileges`, `--user 1000:1000`) is untouched.
 
-Bounded eviction: the total size under `<data_dir>/ghidra` is capped
-(`features.ghidra.project_cache_mb`, default 4096 MiB); when a new project would exceed the cap we
-evict whole projects LRU (by mtime) and LOG each eviction — no silent cap (repo discipline).
+A persisted analysis is DURABLE researcher knowledge and is NEVER auto-deleted to reclaim space
+(an operator lost a 24-hour analysis when an earlier LRU cap silently evicted a project larger than
+the cap). Reclaiming the cache is an EXPLICIT, opt-in act only: `hexgraph prune <project>
+--ghidra-cache-mb N` calls `evict_to_cap` deliberately. `features.ghidra.project_cache_mb` is the
+suggested cap for that command, NOT an automatic ceiling.
 """
 
 from __future__ import annotations
@@ -298,10 +300,12 @@ def _dir_size(path: Path) -> int:
 
 
 def evict_to_cap(data_dir: str | Path, cap_mb: int, *, keep: str | None = None) -> list[str]:
-    """Bounded LRU eviction: drop whole cached projects (oldest mtime first) until the total
-    size under `<data_dir>/ghidra` is within `cap_mb`. `keep` is a cache-key basename never
-    evicted (the project we're about to use). Logs every eviction — no silent cap. Returns the
-    list of evicted keys. cap_mb <= 0 disables eviction (unbounded)."""
+    """EXPLICIT LRU eviction: drop whole cached projects (oldest mtime first) until the total
+    size under `<data_dir>/ghidra` is within `cap_mb`. Called ONLY on an explicit user request
+    (`hexgraph prune --ghidra-cache-mb`) — NEVER automatically, since a persisted analysis is
+    durable and must not be deleted to reclaim space without the user asking. `keep` is a cache-key
+    basename never evicted; an in-use (locked) slot is skipped even here. Logs every eviction — no
+    silent deletion. Returns the list of evicted keys. cap_mb <= 0 is a no-op (unbounded)."""
     if cap_mb <= 0:
         return []
     root = cache_root(data_dir)
@@ -351,6 +355,13 @@ def evict_to_cap(data_dir: str | Path, cap_mb: int, *, keep: str | None = None) 
                     "raising features.ghidra.project_cache_mb",
                     (total - cap_bytes) / (1024 * 1024), cap_mb, len(evicted))
     return evicted
+
+
+def cache_size_mb(data_dir: str | Path) -> int:
+    """Total size (MiB) of the persisted Ghidra project cache under `<data_dir>/ghidra` — for the
+    `hexgraph prune` report, so the operator sees what they're keeping before choosing to reclaim."""
+    root = cache_root(data_dir)
+    return _dir_size(root) // (1024 * 1024) if root.is_dir() else 0
 
 
 def project_cache_mb() -> int:
