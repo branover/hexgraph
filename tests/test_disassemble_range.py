@@ -12,12 +12,16 @@ contract, the clip/truncation marker, the not-found path) plus the probe/seam pu
 real r2 pass. Verified offline-safe with a bogus sandbox image.
 """
 
+import json
+
+import pytest
+
 from hexgraph.db.models import Edge, Node, Observation
 from hexgraph.db.session import session_scope
 from hexgraph.agent.agent_tools import ToolContext, run_tool
 from hexgraph.engine.targets.ingest import create_project, ingest_file
 
-from conftest import fixture_path
+from conftest import SANDBOX_READY, fixture_path
 
 
 def _ctx(s):
@@ -253,3 +257,98 @@ def test_probe_range_argv_keeps_address_off_positionals():
     assert DP._flag_value(rest, "--length") == "256"
     # a dangling flag (no value) is tolerated, not an index error
     assert DP._flag_value(["--range"], "--range") is None
+
+
+# --- targeted disassembly (re_disassemble): one-function `af` + `pdf`, NEVER whole-binary aaa ----
+# `re_disassemble` used to borrow the decompiler pipeline (whole-binary `aaa` + a discarded `pdc`),
+# which could run for HOURS on a large binary. The targeted path analyzes ONLY the one function at
+# the subject (`af`) and disassembles it, falling back to a raw linear read at an address.
+
+def test_seam_disassemble_func_builds_probe_argv():
+    from hexgraph.sandbox.decompiler import R2Decompiler
+
+    class _Runner:
+        def __init__(self):
+            self.calls = []
+
+        def run_json_probe(self, probe, artifact, *, extra_args=None, **kw):
+            self.calls.append((probe, list(extra_args or [])))
+            return {"tool": "decompile_probe", "mode": "disasm", "focus": None}
+
+    run = _Runner()
+    R2Decompiler(runner=run).disassemble_func("/artifact", "cgi_handler")
+    assert run.calls == [("decompile_probe.py", ["--disasm", "cgi_handler"])]
+
+
+def test_probe_resolve_disasm_seek():
+    """A hex address is used as-is; a name resolves against r2's already-loaded flag table (symbols/
+    imports are known on OPEN, no aaa); an unresolvable/unsafe name is refused."""
+    from hexgraph.sandbox.probes import decompile_probe as DP
+
+    class _R2:
+        def __init__(self, flags):
+            self._flags = flags
+
+        def cmd(self, c):
+            return json.dumps([{"name": n} for n in self._flags]) if c == "fj" else ""
+
+    assert DP._resolve_disasm_seek(_R2([]), "0x401200") == ("0x401200", True)
+    r2 = _R2(["sym.cgi_handler", "sym.imp.strcpy"])
+    assert DP._resolve_disasm_seek(r2, "cgi_handler") == ("sym.cgi_handler", False)
+    assert DP._resolve_disasm_seek(r2, "strcpy") == ("sym.imp.strcpy", False)  # import candidate
+    assert DP._resolve_disasm_seek(_R2(["sym.other"]), "ghost") == (None, False)  # not without aaa
+    assert DP._resolve_disasm_seek(_R2([]), "bad; name") == (None, False)  # unsafe → refused
+
+
+def test_probe_targeted_disasm_uses_af_never_aaa():
+    from hexgraph.sandbox.probes import decompile_probe as DP
+
+    class _R2:
+        def __init__(self):
+            self.cmds = []
+
+        def cmd(self, c):
+            self.cmds.append(c)
+            if c.startswith("pdf"):
+                return "0x401200  push rbp\n0x401201  call sym.imp.strcpy"
+            if c.startswith("afij"):
+                return json.dumps([{"name": "sym.cgi_handler", "offset": 0x401200}])
+            return ""  # afvj etc.
+
+    r2 = _R2()
+    focus = DP._targeted_disasm(r2, "0x401200", True)
+    assert focus is not None and focus["disasm_mode"] == "function"
+    assert focus["name"] == "sym.cgi_handler" and focus["address"] == "0x401200"
+    assert "strcpy" in focus["callees"]
+    # ONLY the single-function `af` ran — never a whole-binary aaa/aaaa.
+    assert any(c.startswith("af @") for c in r2.cmds)
+    assert not any(c.strip() in ("aaa", "aaaa") for c in r2.cmds)
+
+
+def test_probe_targeted_disasm_linear_fallback_at_address():
+    """No function at the address → a raw linear `pd` read, flagged disasm_mode='linear'."""
+    from hexgraph.sandbox.probes import decompile_probe as DP
+
+    class _R2:
+        def cmd(self, c):
+            if c.startswith("pdf"):
+                return "   "                 # no function defined here
+            if c.startswith("pd "):
+                return "0x401337  nop\n0x401338  nop"  # raw linear works
+            return ""
+
+    focus = DP._targeted_disasm(_R2(), "0x401337", True)
+    assert focus["disasm_mode"] == "linear" and "nop" in focus["disasm"]
+
+
+@pytest.mark.skipif(not SANDBOX_READY, reason="requires the sandbox image (radare2)")
+def test_targeted_disasm_end_to_end():
+    """Real r2: disassemble cgi_handler by name via one-function `af` — NO whole-binary aaa — and
+    recover its call to strcpy."""
+    from hexgraph.sandbox.decompiler import R2Decompiler
+
+    out = R2Decompiler().disassemble_func(fixture_path("vuln_httpd"), "cgi_handler")
+    focus = out.get("focus") or {}
+    assert focus.get("disasm_mode") == "function", out
+    assert focus.get("disasm"), out
+    assert "strcpy" in (focus.get("callees") or []), out  # cgi_handler calls strcpy

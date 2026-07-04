@@ -788,8 +788,9 @@ def decompile_at(target_id: str, address: str, max_chars: int | None = None) -> 
 
 def disassemble(target_id: str, function: str | None = None, address: str | None = None,
                 max_chars: int | None = None) -> str:
-    """Disassemble one function by name or by address (the address resolves to the
-    function containing it). `max_chars` raises the inlined cap (default 6000, clamped)."""
+    """Disassemble one function by NAME or by ADDRESS — a TARGETED read that analyzes just that one
+    function (never a whole-binary pass), falling back to a raw linear disassembly when an address
+    defines no function. `max_chars` raises the inlined cap (default 6000, clamped)."""
     a = {"address": address} if address else {"function": function}
     if max_chars is not None:
         a["max_chars"] = max_chars

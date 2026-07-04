@@ -662,15 +662,17 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
             if not fn and not addr:
                 return "error: 'function' or 'address' argument is required"
             subj = fn or addr
-            # Always disassemble with radare2 — it gives real instruction listings;
-            # the Ghidra decompiler path returns empty disasm (it's a decompiler). An
-            # address resolves to the function CONTAINING it (analyze-at-address).
+            # TARGETED disassembly via radare2: a single-function `af` + `pdf`, with NO whole-binary
+            # `aaa` and NO discarded `pdc` (the old path borrowed the decompiler pipeline and could
+            # run for HOURS on a large binary). Disassembly stays radare2's job — the Ghidra
+            # decompiler path returns empty disasm; a warm-Ghidra listing read is a later coherence
+            # layer. An address resolves to the function containing it, else a raw linear read.
             from hexgraph.sandbox.decompiler import R2Decompiler
             from hexgraph.sandbox.runner import docker_available
             if not docker_available():
                 return "disassembly unavailable (Docker/sandbox not running)"
             try:
-                out = R2Decompiler().decompile(ctx.target.path, fn, address=addr)
+                out = R2Decompiler().disassemble_func(ctx.target.path, subj)
             except Exception as exc:  # noqa: BLE001
                 return f"disassembly failed: {exc}"
             focus = (out or {}).get("focus")
@@ -678,15 +680,19 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
             # Keyed to the call the agent made (by name or by address).
             obs_args = {"address": addr} if addr else {"function": fn}
             if not disasm:
-                # A requested-but-unresolved focus is still a discoverable disassemble call —
-                # record the available inventory (mirrors decompile_at's not-found path) so the
-                # miss is visible in the index, not silently dropped.
-                fns = (out or {}).get("functions", [])
-                _record_obs(ctx, tool="disassemble", args=obs_args, result_kind="function_list",
-                            payload={"functions": fns},
-                            summary=f"{subj!r} not found; {len(fns)} functions available")
-                return f"{subj!r} not found / no disassembly (functions: {', '.join(fns[:40])})"
+                # No disassembly: an unresolved name (no analysis) or an unmapped address. Record
+                # the miss so it's discoverable, and surface the probe's actionable reason (which
+                # points a name lookup at an address / re_analyze).
+                reason = (out or {}).get("error") or "no disassembly at this location"
+                _record_obs(ctx, tool="disassemble", args=obs_args, result_kind="disassembly",
+                            payload={"function": fn, "address": addr, "disasm": ""},
+                            summary=f"{subj!r}: no disassembly")
+                return f"{subj!r}: {reason}"
             at = f" @ {focus['address']}" if focus.get("address") else ""
+            # A raw linear fallback (no function defined at the address) is flagged so the reader
+            # knows it isn't a function-scoped listing.
+            linear = " (raw linear disassembly — no function defined here)" \
+                if focus.get("disasm_mode") == "linear" else ""
             # Record the disassembly as a QUERY observation (no graph mutation). Capture the
             # obs id so a truncation marker can point the agent at the full body.
             obs, _cached = _record_obs(ctx, tool="disassemble", args=obs_args,
@@ -694,7 +700,7 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
                                        payload={"function": focus.get("name") or subj,
                                                 "address": focus.get("address"), "disasm": disasm},
                                        summary=f"disassembled {focus.get('name') or subj}")
-            return _clip_body(f"// {focus.get('name') or subj}{at} disassembly\n{disasm}",
+            return _clip_body(f"// {focus.get('name') or subj}{at} disassembly{linear}\n{disasm}",
                               limit=_effective_limit(args.get("max_chars")),
                               obs_id=obs.id if obs is not None else None)
         if name == "disassemble_range":
