@@ -218,6 +218,28 @@ class GhidraDecompiler(Decompiler):
                 return {"error": "ghidra project busy (could not lock for rename); try again"}
             return self._run_locked(slot, artifact, args)
 
+    def xrefs(self, artifact: str, *, mode: str, subject: str | None = None, project=None) -> dict:
+        """Serve a cross-reference query from the SAME persistent project as `decompile()` — the
+        program's already-built reference index (`ReferenceManager`) answers warm, so NO
+        re-analysis (an xref on a large target is as fast as a warm decompile, not the cold r2
+        whole-binary `aaa` sweep that times out per call). `mode` is one of callers | function |
+        data | callgraph | sinks; `subject` is the symbol name / hex address it's about (None for
+        callgraph/sinks). The probe emits the SAME JSON shape as the r2 xrefs_probe so the caller
+        formats either backend identically; a symbol the index doesn't know returns an empty result
+        with `not_found` (NOT `error`) so the caller can fast-fail instead of retrying cold on r2.
+
+        Held under the slot lock like every other use of the project (a Ghidra project is not
+        concurrency-safe); falls back to a throwaway project without a persistent cache or on lock
+        timeout (correct, just uncached — that path pays a one-time cold import)."""
+        args = ["--xrefs", mode] + ([subject] if subject else [])
+        slot = self._resolve_slot(artifact, project)
+        if slot is None:
+            return self.runner.run_json_probe("ghidra_probe.py", artifact, extra_args=args)
+        with slot.lock() as locked:
+            if not locked:
+                return self.runner.run_json_probe("ghidra_probe.py", artifact, extra_args=args)
+            return self._run_locked(slot, artifact, args)
+
     def _run_locked(self, slot, artifact: str, args, *, force_cold: bool = False):
         """Run the probe with the slot held exclusively. Decides cold vs warm on the AUTHORITATIVE
         committed marker (`slot.exists()`); cleans a partially-written slot before a cold run; and

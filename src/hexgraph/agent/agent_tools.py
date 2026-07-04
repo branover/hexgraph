@@ -1093,23 +1093,67 @@ def _solve_constraint(ctx: ToolContext, args: dict) -> str:
     return _clip("\n".join(lines))
 
 
+def _ghidra_xrefs_active() -> bool:
+    """True when headless Ghidra is the active decompiler backend, so cross-reference queries are
+    served from its warm persistent project's reference index (analyze-once) instead of the cold r2
+    xrefs sweep. Mirrors `get_taint_analyzer`'s selection; a settings hiccup ⇒ False (stay on the
+    always-available r2 path)."""
+    try:
+        from hexgraph.engine.re.ghidra import ghidra_config
+
+        g = ghidra_config()
+        return bool(g.get("enabled") and (g.get("mode") or "headless") == "headless")
+    except Exception:  # noqa: BLE001 — never let config break xrefs backend selection
+        return False
+
+
+def _ghidra_xrefs(ctx: ToolContext, mode: str, subject: str | None) -> dict | None:
+    """A cross-reference query answered from the warm persistent Ghidra project's reference index
+    (`GhidraDecompiler.xrefs`). Returns the probe dict — SAME shape as the r2 xrefs_probe, with a
+    `not_found` flag for an unknown symbol/address — on a run that COMPLETED (even an empty /
+    not-found one) so the caller trusts it and does NOT fall back to the cold r2 sweep. Returns
+    None ONLY when Ghidra could not run (Docker down, not built into the image, a probe fault, or a
+    top-level `error`), so the caller falls back to r2. Best-effort: never raises into the caller."""
+    from hexgraph.sandbox.runner import docker_available
+
+    if not docker_available():
+        return None
+    from hexgraph.sandbox.decompiler import GhidraDecompiler
+
+    try:
+        out = GhidraDecompiler().xrefs(ctx.target.path, mode=mode, subject=subject or None,
+                                       project=ctx.project)
+    except Exception:  # noqa: BLE001 — a warm-path failure DEGRADES to r2, never aborts the tool
+        return None
+    if not isinstance(out, dict) or out.get("error"):
+        return None
+    return out
+
+
 def _xrefs(ctx: ToolContext, symbol: str | None) -> str:
     """Map call sites of a sink (or all dangerous sinks) — the callers that reach it."""
     key = f"xrefs:{symbol or '*'}"
     if key in ctx.cache:
         return ctx.cache[key]
-    from hexgraph.sandbox.executor import get_executor
-    from hexgraph.sandbox.runner import docker_available
+    # Prefer the warm persistent Ghidra project's reference index when headless Ghidra is active: an
+    # index lookup over the already-analyzed program, NOT a cold whole-binary r2 `aaa` sweep (which
+    # re-analyzes every call and times out on a large target). Fall back to the r2 xrefs probe only
+    # when Ghidra can't run.
+    out = _ghidra_xrefs(ctx, "callers" if symbol else "sinks", symbol) \
+        if _ghidra_xrefs_active() else None
+    if out is None:
+        from hexgraph.sandbox.executor import get_executor
+        from hexgraph.sandbox.runner import docker_available
 
-    if not docker_available():
-        return "xrefs unavailable (Docker/sandbox not running)"
-    try:
-        out = get_executor().run_json_probe(
-            "xrefs_probe.py", ctx.target.path,
-            extra_args=[symbol] if symbol else None,
-        )
-    except Exception as exc:  # noqa: BLE001
-        return f"xrefs failed: {exc}"
+        if not docker_available():
+            return "xrefs unavailable (Docker/sandbox not running)"
+        try:
+            out = get_executor().run_json_probe(
+                "xrefs_probe.py", ctx.target.path,
+                extra_args=[symbol] if symbol else None,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return f"xrefs failed: {exc}"
     # Record the xref result (a QUERY) — the enrichment extractor tags is_sink on any
     # already-curated dangerous-import symbol; no graph nodes are created here.
     _record_obs(ctx, tool="xrefs", args={"symbol": symbol} if symbol else {},
@@ -1156,8 +1200,15 @@ def _xrefs(ctx: ToolContext, symbol: str | None) -> str:
 
 
 def _run_xrefs_probe(ctx: ToolContext, subject: str | None, mode: str):
-    """Run xrefs_probe in `mode`, returning (out, error_text). `mode="callers"` passes no
-    --mode flag (legacy compat); the breadth modes pass `--mode function|data|callgraph`."""
+    """Run a breadth xrefs query in `mode`, returning (out, error_text). Prefers the warm persistent
+    Ghidra project's reference index when headless Ghidra is active (analyze-once, fast on a large
+    target where the cold r2 sweep times out); falls back to the r2 xrefs_probe (`--mode
+    function|data|callgraph`) only when Ghidra can't run. `mode="callers"` passes no --mode flag on
+    the r2 path (legacy compat)."""
+    if _ghidra_xrefs_active():
+        out = _ghidra_xrefs(ctx, mode, subject)
+        if out is not None:
+            return out, None
     from hexgraph.sandbox.executor import get_executor
     from hexgraph.sandbox.runner import docker_available
 
@@ -1215,7 +1266,7 @@ def _function_xrefs(ctx: ToolContext, function: str) -> str:
             source_note = " (from recon substrate)"
         elif err:
             return err
-        elif (out or {}).get("error"):
+        elif (out or {}).get("error") or (out or {}).get("not_found"):
             return f"function {function!r} not found"
     _record_obs(ctx, tool="function_xrefs", args={"function": function},
                 result_kind="function_xrefs", payload=out,
@@ -1246,7 +1297,7 @@ def _data_xrefs(ctx: ToolContext, address: str) -> str:
     out, err = _run_xrefs_probe(ctx, address, "data")
     if err:
         return err
-    if out.get("error"):
+    if out.get("error") or out.get("not_found"):
         return f"no resolvable references to {address!r}"
     refs = out.get("data_refs") or []
     _record_obs(ctx, tool="data_xrefs", args={"address": address},

@@ -842,6 +842,218 @@ fh.close()
 '''
 
 
+# Cross-reference queries served from the WARM persistent project's already-built reference
+# index (ghidra.program.model.symbol.ReferenceManager) — an index lookup over the ALREADY-analyzed
+# program, NO re-analysis, so a warm target answers in the same near-instant timeframe as a warm
+# decompile (unlike the r2 xrefs_probe, which runs a full `aaa` sweep cold on every call and times
+# out on a large binary). Mirrors the r2 xrefs_probe.py output contract key-for-key so the
+# agent-tool handlers format either backend identically. Modes (postScript args[1]):
+#   callers   <symbol>  who references/calls a symbol (call sites + the function each lives in)
+#   function  <fn>      callers AND callees of one function (the bidirectional neighbourhood)
+#   data      <addr>    every reference TO an address (or a symbol that resolves to one)
+#   callgraph           the whole-program call graph as [caller, callee] pairs (bounded)
+#   sinks               (no subject) the dangerous/format/network sink sweep
+# args[2] is the subject (symbol name / hex address), "" for callgraph/sinks. A symbol/address the
+# index doesn't know returns an EMPTY result with `not_found` (NOT a top-level `error`) so the host
+# fast-fails instead of falling back to the cold r2 sweep; a top-level `error` means the query
+# genuinely could not run (Ghidra missing / Jython fault) and the host may fall back.
+XREFS_SCRIPT = r'''# -*- coding: utf-8 -*-
+# Encoding cookie REQUIRED (Jython 2.7 / PEP 263); keep this body ASCII-only -- a compile failure
+# here writes NO output and is undiagnosable.
+import json
+import re
+import traceback
+from ghidra.util.task import ConsoleTaskMonitor
+
+args = getScriptArgs()
+out_path = args[0]
+try:
+    mode = args[1] if len(args) > 1 and args[1] else "sinks"
+    subject = args[2] if len(args) > 2 and args[2] else None
+    monitor = ConsoleTaskMonitor()
+
+    _ADDR = re.compile(r"^0x[0-9a-fA-F]+$")
+    MAX_REFS = 200        # cap one symbol/address ref list (the host shows total + "... N more")
+    MAX_SINK_REFS = 30    # per-sink cap in the sweep (mirrors xrefs_probe _MAX_CALLERS)
+    MAX_GRAPH_FUNCS = 600
+    MAX_GRAPH_EDGES = 2000
+
+    # Sink name lists -- MIRROR sandbox/probes/xrefs_probe.py (_DEFAULT_SINKS / _FORMAT_SINKS /
+    # _NETWORK_SINKS). Keep the two in sync so the two backends sweep the same surface.
+    DEFAULT_SINKS = ["system", "popen", "execl", "execlp", "execle", "execv", "execvp",
+                     "execve", "strcpy", "strcat", "gets", "scanf", "sscanf", "memcpy",
+                     "alloca", "stpcpy"]
+    FORMAT_SINKS = ["printf", "fprintf", "sprintf", "snprintf", "dprintf", "vprintf",
+                    "vfprintf", "vsprintf", "vsnprintf", "syslog", "vsyslog", "asprintf"]
+    NETWORK_SINKS = ["socket", "bind", "listen", "accept", "accept4", "connect", "recv",
+                     "recvfrom", "recvmsg", "read", "send", "sendto", "sendmsg",
+                     "setsockopt", "getaddrinfo", "gethostbyname", "socketpair"]
+
+    st = currentProgram.getSymbolTable()
+    fm = currentProgram.getFunctionManager()
+    refmgr = currentProgram.getReferenceManager()
+
+    def _rt_name(ref):
+        try:
+            return ref.getReferenceType().getName()
+        except:
+            return str(ref.getReferenceType())
+
+    def _syms_named(name):
+        out = []
+        it = st.getSymbols(name)
+        while it.hasNext():
+            out.append(it.next())
+        return out
+
+    def _callers_of(name):
+        # Every reference site targeting a symbol named `name`, with the function it lives in,
+        # read from Symbol.getReferences() (the warm reference index). A thunk-origin ref (the
+        # PLT/stub -> external linkage) is dropped so only real callers remain; calls to an
+        # imported function land on its thunk, whose own symbol carries this name, so the real
+        # call sites are still captured.
+        out = []
+        seen = set()
+        for sym in _syms_named(name):
+            for ref in sym.getReferences():
+                frm = ref.getFromAddress()
+                if frm is None:
+                    continue
+                caller = getFunctionContaining(frm)
+                if caller is None or caller.isThunk():
+                    continue
+                key = (caller.getName(), frm.toString())
+                if key in seen:
+                    continue
+                seen.add(key)
+                try:
+                    caddr = "0x" + caller.getEntryPoint().toString()
+                except:
+                    caddr = None
+                out.append({"caller": caller.getName(), "caller_addr": caddr,
+                            "at": "0x" + frm.toString(), "kind": _rt_name(ref)})
+        return out
+
+    def _resolve_function(subj):
+        if _ADDR.match(subj):
+            try:
+                return getFunctionContaining(toAddr(subj))
+            except:
+                return None
+        for sym in _syms_named(subj):
+            try:
+                f = fm.getFunctionAt(sym.getAddress())
+            except:
+                f = None
+            if f is not None:
+                return f
+        return None
+
+    def _callees_of(func):
+        out = []
+        seen = set()
+        try:
+            called = func.getCalledFunctions(monitor)
+        except:
+            called = []
+        for c in called:
+            nm = c.getName()
+            if nm in seen:
+                continue
+            seen.add(nm)
+            try:
+                addr = "0x" + c.getEntryPoint().toString()
+            except:
+                addr = None
+            out.append({"name": nm, "addr": addr})
+        return out
+
+    if mode == "callgraph":
+        edges = []
+        for f in list(fm.getFunctions(True))[:MAX_GRAPH_FUNCS]:
+            try:
+                for callee in f.getCalledFunctions(monitor):
+                    edges.append([f.getName(), callee.getName()])
+                    if len(edges) >= MAX_GRAPH_EDGES:
+                        break
+            except:
+                pass
+            if len(edges) >= MAX_GRAPH_EDGES:
+                break
+        result = {"mode": "callgraph", "calls": edges, "total": len(edges)}
+
+    elif mode == "function":
+        func = _resolve_function(subject) if subject else None
+        if func is None:
+            result = {"mode": "function", "subject": subject, "callers": [], "callees": [],
+                      "total_callers": 0, "total_callees": 0, "not_found": True}
+        else:
+            callers = _callers_of(func.getName())
+            callees = _callees_of(func)
+            result = {"mode": "function", "subject": subject,
+                      "callers": callers[:MAX_REFS], "callees": callees[:MAX_REFS],
+                      "total_callers": len(callers), "total_callees": len(callees)}
+
+    elif mode == "data":
+        addr = None
+        if subject and _ADDR.match(subject):
+            try:
+                addr = toAddr(subject)
+            except:
+                addr = None
+        if addr is None and subject:
+            for sym in _syms_named(subject):
+                a = sym.getAddress()
+                if a is not None:
+                    addr = a
+                    break
+        if addr is None:
+            result = {"mode": "data", "subject": subject, "data_refs": [], "total": 0,
+                      "not_found": True}
+        else:
+            refs = []
+            seen = set()
+            for ref in refmgr.getReferencesTo(addr):
+                frm = ref.getFromAddress()
+                if frm is None:
+                    continue
+                fn = getFunctionContaining(frm)
+                fname = fn.getName() if fn is not None else "?"
+                key = (fname, frm.toString())
+                if key in seen:
+                    continue
+                seen.add(key)
+                refs.append({"from_function": fname, "at": "0x" + frm.toString(),
+                             "kind": _rt_name(ref)})
+            result = {"mode": "data", "subject": subject,
+                      "data_refs": refs[:MAX_REFS], "total": len(refs)}
+
+    elif mode == "callers":
+        refs = _callers_of(subject) if subject else []
+        result = {"mode": "callers", "symbol": subject,
+                  "callers": refs[:MAX_REFS], "total": len(refs)}
+
+    else:  # the dangerous/format/network sink sweep (no subject)
+        def _sweep(names):
+            grp = {}
+            for s in names:
+                refs = _callers_of(s)
+                if refs:
+                    grp[s] = {"callers": refs[:MAX_SINK_REFS], "total": len(refs)}
+            return grp
+        result = {"mode": "sinks", "sinks": _sweep(DEFAULT_SINKS),
+                  "format_sinks": _sweep(FORMAT_SINKS), "network": _sweep(NETWORK_SINKS)}
+
+    _payload = json.dumps(result)
+except:
+    _payload = json.dumps({"error": "xrefs postscript exception", "tb": traceback.format_exc()})
+
+fh = open(out_path, "w")
+fh.write(_payload)
+fh.close()
+'''
+
+
 def _find_headless() -> str | None:
     cand = os.path.join(GHIDRA_DIR, "support", "analyzeHeadless")
     if os.path.isfile(cand):
@@ -900,6 +1112,19 @@ def main() -> int:
         i = sys.argv.index("--rename")
         if i + 2 < len(sys.argv):
             rename_addr, rename_name = sys.argv[i + 1], sys.argv[i + 2]
+    # --xrefs <mode> [subject] serves a cross-reference query from the warm project's already-built
+    # reference index (XREFS_SCRIPT) instead of a cold whole-binary r2 pass. `mode` is the arg after
+    # --xrefs; the optional `subject` (symbol/address) is the arg after that. Reuses the SAME
+    # persistent project (warm -process) so it pays no re-analysis after a prior decompile.
+    xrefs_mode = "--xrefs" in sys.argv
+    xrefs_kind = "sinks"
+    xrefs_subject = ""
+    if xrefs_mode:
+        i = sys.argv.index("--xrefs")
+        if i + 1 < len(sys.argv) and not sys.argv[i + 1].startswith("--"):
+            xrefs_kind = sys.argv[i + 1]
+        if i + 2 < len(sys.argv) and not sys.argv[i + 2].startswith("--"):
+            xrefs_subject = sys.argv[i + 2]
 
     hl = _find_headless()
     if not hl:
@@ -915,8 +1140,16 @@ def main() -> int:
         script_name, script_body = "hexgraph_emu.py", EMU_SCRIPT
     elif taint_mode:
         script_name, script_body = "hexgraph_taint.py", TAINT_SCRIPT
+    elif xrefs_mode:
+        script_name, script_body = "hexgraph_xrefs.py", XREFS_SCRIPT
     else:
         script_name, script_body = "hexgraph_post.py", POST_SCRIPT
+    # The positional postScript args differ by script: the xrefs query takes (mode, subject); every
+    # other script takes (focus, rename_addr, rename_name). out_path is always args[0].
+    if xrefs_mode:
+        post_args = [xrefs_kind, xrefs_subject]
+    else:
+        post_args = [focus or "", rename_addr, rename_name]
     script_path = os.path.join(SCRATCH, script_name)
     out_path = os.path.join(SCRATCH, "ghidra_out.json")
     with open(script_path, "w") as fh:
@@ -970,7 +1203,7 @@ def main() -> int:
             "-process", prog,
             "-noanalysis",
             "-scriptPath", SCRATCH,
-            "-postScript", script_name, out_path, focus or "", rename_addr, rename_name,
+            "-postScript", script_name, out_path, *post_args,
         ]
     else:
         # COLD: import + analyze. Persist the project (no -deleteProject) only when the
@@ -981,7 +1214,7 @@ def main() -> int:
             *_analysis_timeout_args(),       # F13: stop+save before the wall-clock kill on a monolith
             "-scriptPath", SCRATCH,
             *pre_script_args,                # F13: fast-profile preScript for a large binary
-            "-postScript", script_name, out_path, focus or "", rename_addr, rename_name,
+            "-postScript", script_name, out_path, *post_args,
         ]
         if not persistent:
             cmd.append("-deleteProject")
