@@ -302,9 +302,10 @@ class GhidraDecompiler(Decompiler):
             version = gp.ghidra_version_for_image(sandbox_image(), runner=self.runner)
             slot = gp.resolve(project.data_dir, sha, version)
             slot.prepare()
-            # Evict BEFORE the run so a cold analysis lands within the cap; never evict the
-            # slot we're about to (re)use.
-            gp.evict_to_cap(project.data_dir, gp.project_cache_mb(), keep=slot.root.name)
+            # NO automatic eviction. A persisted analysis is durable researcher knowledge and is
+            # NEVER deleted to reclaim space — an operator lost a 24-hour analysis when the old LRU
+            # cap silently evicted a project larger than the cap. Reclaiming the Ghidra cache is now
+            # an EXPLICIT, opt-in act only (`hexgraph prune <project> --ghidra-cache-mb N`).
             return slot
         except Exception:  # noqa: BLE001 — caching is an optimization, never load-bearing
             return None

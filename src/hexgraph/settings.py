@@ -61,8 +61,9 @@ DEFAULTS: dict[str, Any] = {
             # Persistent Ghidra project cache (analyze-once / reuse, Phase 1). Each
             # analyzed artifact keeps its imported+analyzed project under
             # <data_dir>/ghidra/<sha256>__<ghidra-version>/ so subsequent decompiles
-            # of OTHER functions skip the full re-analysis. Bounded by a total-size cap
-            # (MiB) with LRU eviction (the runner logs every eviction — no silent cap).
+            # of OTHER functions skip the full re-analysis. A persisted analysis is NEVER
+            # auto-deleted; this is only the suggested cap for the EXPLICIT, opt-in
+            # `hexgraph prune <project> --ghidra-cache-mb N` (there is no automatic eviction).
             "project_cache_mb": 4096,
             "bridge": {"host": "127.0.0.1", "port": 4768},
         },
