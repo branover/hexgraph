@@ -817,6 +817,22 @@ def reanalyze(target_id: str) -> str:
     return _tool(target_id, "reanalyze", {})
 
 
+def analyze(target_id: str) -> dict:
+    """START (or attach to) an explicit, DETACHED whole-binary analysis that builds the target's
+    warm Ghidra project ONCE with a generous budget. Idempotent + single-flight: re-call to POLL
+    until state='analyzed'; a second call while it's running attaches, never starts a duplicate.
+    Returns {state, detail, container?} — state is analyzed|running|started|failed|none|unavailable.
+    Once analyzed, the per-call RE tools (re_decompile_*/re_xrefs/…) reuse it instantly. Ghidra
+    headless only for now (r2 persistence is separate)."""
+    from hexgraph.engine.re.analysis import start_analysis
+
+    with session_scope() as s:
+        t = s.get(Target, target_id)
+        if t is None:
+            return {"error": "target not found"}
+        return start_analysis(s.get(Project, t.project_id), t)
+
+
 def list_functions(target_id: str) -> str:
     return _tool(target_id, "list_functions", {})
 

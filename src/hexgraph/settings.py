@@ -65,6 +65,10 @@ DEFAULTS: dict[str, Any] = {
             # auto-deleted; this is only the suggested cap for the EXPLICIT, opt-in
             # `hexgraph prune <project> --ghidra-cache-mb N` (there is no automatic eviction).
             "project_cache_mb": 4096,
+            # re_analyze's OWN budget (s) for a DETACHED whole-binary analysis — deliberately much
+            # larger than the small per-call timeouts, so a monolith's analysis runs to completion
+            # and commits its warm project instead of being killed mid-way (default 6h).
+            "analysis_timeout_s": 21600,
             "bridge": {"host": "127.0.0.1", "port": 4768},
         },
         "emulation": {
@@ -290,6 +294,7 @@ ALLOWED: dict[str, tuple[Any, set | None]] = {
     "features.ghidra.enrich_recon": (bool, None),
     "features.ghidra.timeout": (int, None),
     "features.ghidra.project_cache_mb": (int, None),
+    "features.ghidra.analysis_timeout_s": (int, None),
     "features.ghidra.bridge.host": (str, None),
     "features.ghidra.bridge.port": (int, None),
     "features.emulation.enabled": (bool, None),

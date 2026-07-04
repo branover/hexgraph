@@ -1122,6 +1122,11 @@ def main() -> int:
         return 2
     artifact = sys.argv[1]
     focus = sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith("--") else None
+    # --analyze: a whole-binary analysis-only run (re_analyze's detached path) — cold import +
+    # inventory + COMMIT the warm marker, with NO focus. start_detached appends a /out positional
+    # that would otherwise be read as a focus function name, so force it off.
+    if "--analyze" in sys.argv:
+        focus = None
     # --taint runs the grounded P-Code data-flow analysis (TAINT_SCRIPT) over the analyzed
     # program instead of the decompile/inventory postScript. It reuses the SAME persistent
     # project (warm -process) so it pays no re-analysis cost after a prior decompile run.

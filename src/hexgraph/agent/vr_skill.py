@@ -162,7 +162,11 @@ and unanalyzed nodes so a follow-up run (or the analyst) can continue.
 ## The core static loop (the always-relevant core; full depth in static-analysis.md)
 You DIRECT; HexGraph runs each tool in the sandbox and PERSISTS the result as a reusable
 Observation. Work cheap-to-expensive and check `obs_list(target_id)` before any costly re-run
-(analyze once, reuse forever). The spine of it: get the authoritative facts (`re_binutils_facts`,
+(analyze once, reuse forever). On a LARGE target (a big firmware binary) where the first analysis is
+slow, warm the Ghidra project ONCE up front with `re_analyze` — a DETACHED, single-flight
+whole-binary analysis with a generous budget; poll it (re-call `re_analyze` until state=`analyzed`),
+and then the per-call tools (`re_decompile_*`/`re_xrefs`/…) are instant. The spine of it: get the
+authoritative facts (`re_binutils_facts`,
 `re_list_strings` — GREP the FULL string table, not a sample) → map the sinks and who reaches
 them (`re_xrefs` with no symbol) → read the
 suspect functions (`re_decompile_function`) → trace untrusted input to a dangerous sink,
