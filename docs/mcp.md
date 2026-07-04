@@ -165,13 +165,17 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
   that never finishes, and an unknown symbol comes back as "not found" right away rather than after a long
   wait. With the radare2 backend, or before a first analysis has warmed the project, the verbs fall back to
   a fresh cross-reference pass.
-- **Warm a big target's analysis once, explicitly, with `re_analyze`.** The first Ghidra analysis of a
-  large binary is the one expensive step. `re_analyze(target)` runs it as a **detached** background job
-  with its own generous budget, so it finishes and commits the warm project rather than being cut short by
-  a per-call timeout — and it's **single-flight**: a second `re_analyze` of the same target attaches to the
-  running one instead of launching a duplicate. It's idempotent: re-call it to poll (`state` walks
-  `none → running → analyzed`), and once `analyzed` every per-call verb above is instant. Headless Ghidra
-  only for now.
+- **Analysis is explicit — `re_analyze` first, then the per-call verbs.** With headless Ghidra active, the
+  whole-program tools (`re_decompile_function`/`re_decompile_at`, `re_list_functions`, and the xref family
+  `re_xrefs`/`re_function_xrefs`/`re_data_xrefs`/`re_call_graph`) **require a saved analysis**: on a warm
+  miss they return an actionable error pointing at `re_analyze`, rather than silently launching a cold
+  analysis (which, on a large binary, a per-call timeout would kill before it commits — so the target would
+  never become warm). `re_analyze(target)` runs the analysis as a **detached** background job with its own
+  generous budget, so it finishes and commits the warm project. It's **single-flight** (a second `re_analyze`
+  of the same target attaches to the running one, never a duplicate) and idempotent: re-call it to poll
+  (`state` walks `none → running → analyzed`), and once `analyzed` every gated verb is instant. `re_disassemble`
+  (targeted) and `re_search_decompiled` (reads the store) need no whole-program analysis and are never gated.
+  Headless Ghidra only for now — the radare2 backend isn't gated yet.
 - **Enrichment of existing objects is automatic and free.** When a call recovers something unambiguous
   about an object that is *already* a node, a function's recovered prototype and address, the `is_sink`
   tag on a dangerous import, the call sites on an existing `calls` edge, HexGraph attaches it in place

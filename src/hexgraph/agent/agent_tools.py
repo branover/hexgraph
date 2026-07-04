@@ -629,11 +629,53 @@ def _disassemble_range(ctx: ToolContext, args: dict) -> str:
                       obs_id=obs.id if obs is not None else None)
 
 
+# The per-call tools that need the WHOLE-PROGRAM analysis database. On a warm miss they used to
+# silently launch a cold analysis — which, on a large binary, the per-call timeout kills before it
+# commits, so the target never becomes warm (an operator's incident: evicted analysis re-analyzed
+# cold, killed, re-analyzed…). Gate them on a saved analysis instead. NOT gated: re_disassemble /
+# disassemble_range (targeted/raw, need no whole-program analysis), search_decompiled (reads the
+# Observation store), reanalyze (an explicit force-cold re-analysis).
+_ANALYSIS_GATED_TOOLS = frozenset({
+    "decompile_function", "decompile_at", "list_functions",
+    "xrefs", "call_graph", "function_xrefs", "data_xrefs",
+})
+
+
+def _analysis_gate(ctx: ToolContext) -> str | None:
+    """When headless Ghidra is the active backend, an analysis-dependent tool requires a SAVED
+    analysis: return an actionable error pointing at re_analyze on a warm MISS, else None (proceed).
+    Keys entirely off `analysis_state` — its `unavailable` (Ghidra not the active backend / Docker
+    down / no byte artifact) means "not gated, behave as before", so the radare2 backend and the
+    offline/no-Docker paths are unaffected; only an active, Docker-up, byte-target Ghidra with no
+    warm project is gated. Best-effort: any error ⇒ don't gate."""
+    try:
+        from hexgraph.engine.re.analysis import analysis_state
+
+        st = analysis_state(ctx.project, ctx.target)
+    except Exception:  # noqa: BLE001 — a gate hiccup must never block a tool that could run
+        return None
+    state = st.get("state")
+    if state in ("analyzed", "unavailable"):
+        return None
+    lead = {"none": "No saved analysis for this target yet.",
+            "running": "A whole-binary analysis is already in progress.",
+            "failed": "The last analysis did not finish."}.get(state, "No saved analysis.")
+    return (f"{lead} Run re_analyze(target) first — it builds the warm Ghidra project ONCE with a "
+            "generous budget (detached; re-call re_analyze to poll until state='analyzed'), then "
+            f"retry this tool and it'll be instant. [{st.get('detail', '')}]")
+
+
 def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
     """Execute a tool call and return its result as text (errors as text too)."""
     args = args or {}
     meta = ctx.target.metadata_json or {}
     try:
+        # Analysis gate: the whole-program tools require a saved analysis when Ghidra is active —
+        # they no longer silently launch a cold analysis on a miss (see _ANALYSIS_GATED_TOOLS).
+        if name in _ANALYSIS_GATED_TOOLS:
+            gate = _analysis_gate(ctx)
+            if gate is not None:
+                return gate
         if name == "read_imports":
             return _clip(
                 f"imports: {meta.get('imports', [])}\nlibraries: {meta.get('libraries', [])}\n"
