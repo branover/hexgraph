@@ -83,10 +83,76 @@ class R2Decompiler(Decompiler):
 
     def decompile(self, artifact: str, function: str | None = None, *,
                   address: str | None = None, reanalyze: bool = False, project=None) -> dict:
-        # radare2 has no persistent project; `project` is accepted for seam parity, ignored.
-        return self.runner.run_json_probe(
-            "decompile_probe.py", artifact,
-            extra_args=_focus_args(function, address, reanalyze))
+        """Whole-binary `aaa` + focus decompile. When a `project` is supplied, the analyzed
+        radare2 program is PERSISTED as a named project on that project's data dir and reused
+        across calls (engine.re.r2_project) — the first decompile of an artifact pays the `aaa`,
+        later decompiles of OTHER functions reload it with NO re-analysis, exactly like the Ghidra
+        path. Without a `project` (or on any cache failure) it runs the old throwaway `aaa`-per-call
+        path (correct, just uncached)."""
+        args = _focus_args(function, address, reanalyze)
+        slot = self._resolve_slot(artifact, project)
+        if slot is None:
+            return self.runner.run_json_probe("decompile_probe.py", artifact, extra_args=args)
+        # CROSS-PROCESS lock for the whole use of the slot: the web app and an agent's MCP server
+        # are separate OS processes sharing this data dir, and two r2 instances writing one project
+        # dir is not safe. Lock-and-wait with a timeout; on timeout fall back to a throwaway project
+        # (correct, uncached) rather than block or risk corruption. Different targets → different
+        # slots → still concurrent.
+        with slot.lock() as locked:
+            if not locked:
+                return self.runner.run_json_probe("decompile_probe.py", artifact, extra_args=args)
+            # reanalyze drops the warm slot INSIDE this lock (force_cold) so the clear + deeper
+            # re-analysis is atomic — a concurrent same-target decompile can't re-warm it in the gap.
+            return self._run_locked(slot, artifact, args, force_cold=reanalyze)
+
+    def _run_locked(self, slot, artifact: str, args, *, force_cold: bool = False) -> dict:
+        """Run decompile_probe with the slot held exclusively, bind-mounting it so the probe takes
+        its warm/cold decision off the AUTHORITATIVE committed marker (`slot.exists()`), saves the
+        named project on a cold `aaa`, and reloads it warm. `force_cold` (reanalyze) drops any warm
+        project first so the run re-analyzes cold — an r2 project isn't re-analyzed in place."""
+        if force_cold and slot.exists():
+            log.info("r2 project cache: reanalyze — clearing slot %s to re-analyze cold",
+                     slot.root.name)
+            try:
+                slot.clear_project()
+            except Exception:  # noqa: BLE001 — never break a decompile over a cache clear
+                pass
+        if not slot.exists() and slot.project_dir.is_dir() and any(slot.project_dir.iterdir()):
+            # Non-empty project dir with NO committed marker ⇒ a prior cold run died mid-save. Wipe
+            # it so the probe re-saves cleanly (the probe re-checks the same marker and re-clears).
+            log.info("r2 project cache: clearing a half-written slot %s and re-analyzing cold",
+                     slot.root.name)
+            try:
+                slot.clear_project()
+            except Exception:  # noqa: BLE001
+                pass
+        out = self.runner.run_json_probe(
+            "decompile_probe.py", artifact, extra_args=args, project_mount=str(slot.root))
+        try:
+            slot.touch()  # mark most-recently-used (bookkeeping; never fails a good decompile)
+        except Exception:  # noqa: BLE001
+            pass
+        return out
+
+    def _resolve_slot(self, artifact: str, project):
+        """Resolve, prepare, and return the persistent r2-project slot for this artifact — or None
+        if caching isn't possible (no project / no data dir / any error). Best-effort: a failure
+        falls back to the throwaway `aaa`-per-call path rather than breaking decompilation. NO
+        automatic eviction — a persisted analysis is durable and reclaimed only by `hexgraph prune
+        --r2-cache-mb` (mirrors the Ghidra slot resolver)."""
+        if project is None or not getattr(project, "data_dir", None):
+            return None
+        try:
+            from hexgraph.engine.re import r2_project as rp
+            from hexgraph.sandbox.runner import sandbox_image
+
+            sha = rp.content_hash(artifact)
+            version = rp.r2_version_for_image(sandbox_image(), runner=self.runner)
+            slot = rp.resolve(project.data_dir, sha, version)
+            slot.prepare()
+            return slot
+        except Exception:  # noqa: BLE001 — caching is an optimization, never load-bearing
+            return None
 
     def disassemble_range(self, artifact: str, address: str, *,
                           length: int | None = None, count: int | None = None) -> dict:

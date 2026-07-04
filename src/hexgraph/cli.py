@@ -207,6 +207,7 @@ def _cmd_graph(args: argparse.Namespace) -> int:
 def _cmd_prune(args: argparse.Namespace) -> int:
     from hexgraph.engine import cas
     from hexgraph.engine.re import ghidra_project as gp
+    from hexgraph.engine.re import r2_project as rp
 
     init_db()
     with session_scope() as session:
@@ -218,17 +219,23 @@ def _cmd_prune(args: argparse.Namespace) -> int:
         data_dir = project.data_dir
     print(f"CAS: {report['objects']} objects, {report['bytes']} bytes at {report['dir']}")
     print(f"Ghidra analysis cache: {gp.cache_size_mb(data_dir)} MiB at {gp.cache_root(data_dir)}")
+    print(f"radare2 analysis cache: {rp.cache_size_mb(data_dir)} MiB at {rp.cache_root(data_dir)}")
     # Persisted analysis is durable and NEVER auto-deleted — reclaiming it is explicit only.
-    if args.ghidra_cache_mb is None:
+    if args.ghidra_cache_mb is None and args.r2_cache_mb is None:
         print("(no auto-eviction — a persisted analysis is kept until you ask; pass "
-              "--ghidra-cache-mb N to explicitly reclaim the Ghidra cache down to N MiB)")
+              "--ghidra-cache-mb N and/or --r2-cache-mb N to explicitly reclaim a decompiler "
+              "cache down to N MiB)")
         return 0
-    evicted = gp.evict_to_cap(data_dir, args.ghidra_cache_mb, keep=None)
-    if evicted:
-        print(f"evicted {len(evicted)} project(s) to reach {args.ghidra_cache_mb} MiB: "
-              + ", ".join(evicted))
-    else:
-        print(f"nothing evicted (already within {args.ghidra_cache_mb} MiB, or N <= 0)")
+    for label, mod, cap in (("Ghidra", gp, args.ghidra_cache_mb),
+                            ("radare2", rp, args.r2_cache_mb)):
+        if cap is None:
+            continue
+        evicted = mod.evict_to_cap(data_dir, cap, keep=None)
+        if evicted:
+            print(f"{label}: evicted {len(evicted)} project(s) to reach {cap} MiB: "
+                  + ", ".join(evicted))
+        else:
+            print(f"{label}: nothing evicted (already within {cap} MiB, or N <= 0)")
     return 0
 
 
@@ -444,13 +451,16 @@ def build_parser() -> argparse.ArgumentParser:
     pg.add_argument("--export", required=True)
     pg.set_defaults(func=_cmd_graph)
 
-    pp = sub.add_parser("prune", help="report the project's stores; explicitly reclaim the Ghidra "
-                                      "analysis cache with --ghidra-cache-mb")
+    pp = sub.add_parser("prune", help="report the project's stores; explicitly reclaim a decompiler "
+                                      "analysis cache with --ghidra-cache-mb / --r2-cache-mb")
     pp.add_argument("project")
     pp.add_argument("--ghidra-cache-mb", type=int, default=None,
                     help="EXPLICITLY evict oldest Ghidra analyses until the cache is under N MiB. "
                          "Never happens automatically — a persisted analysis is kept forever "
                          "unless you run this.")
+    pp.add_argument("--r2-cache-mb", type=int, default=None,
+                    help="EXPLICITLY evict oldest radare2 analyses until the cache is under N MiB "
+                         "(the r2 analog of --ghidra-cache-mb; never automatic).")
     pp.set_defaults(func=_cmd_prune)
 
     pd = sub.add_parser("doctor", help="reconcile on-disk project dirs against the DB "

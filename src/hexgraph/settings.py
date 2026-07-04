@@ -71,6 +71,15 @@ DEFAULTS: dict[str, Any] = {
             "analysis_timeout_s": 21600,
             "bridge": {"host": "127.0.0.1", "port": 4768},
         },
+        "re": {
+            # Persistent radare2 project cache (analyze-once / reuse) — the r2 analog of
+            # features.ghidra.project_cache_mb. Each analyzed artifact keeps its named r2 project
+            # under <data_dir>/r2/<sha256>__<r2-version>/ so later decompiles of OTHER functions
+            # skip the whole-binary `aaa`. radare2 itself is the always-on default decompiler (no
+            # gate); this is just its cache pref. A persisted analysis is NEVER auto-deleted — this
+            # is only the suggested cap for the EXPLICIT `hexgraph prune <project> --r2-cache-mb N`.
+            "r2_project_cache_mb": 4096,
+        },
         "emulation": {
             # OFF by default. P-Code emulation for constant/key recovery (Phase 4): runs a
             # self-contained routine inside Ghidra's JVM P-Code interpreter to recover the value
@@ -295,6 +304,7 @@ ALLOWED: dict[str, tuple[Any, set | None]] = {
     "features.ghidra.timeout": (int, None),
     "features.ghidra.project_cache_mb": (int, None),
     "features.ghidra.analysis_timeout_s": (int, None),
+    "features.re.r2_project_cache_mb": (int, None),
     "features.ghidra.bridge.host": (str, None),
     "features.ghidra.bridge.port": (int, None),
     "features.emulation.enabled": (bool, None),
