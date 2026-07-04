@@ -23,7 +23,7 @@ Ghidra-first: `re_analyze` targets the headless-Ghidra warm project. r2 project 
 from __future__ import annotations
 
 import logging
-from pathlib import Path
+import tempfile
 
 log = logging.getLogger(__name__)
 
@@ -67,6 +67,18 @@ def _analysis_timeout() -> int:
 def container_name(content_sha: str) -> str:
     """The single-flight container name for an artifact hash."""
     return f"{CONTAINER_PREFIX}{content_sha[:16]}"
+
+
+def _reap_if_present(ex, name) -> None:
+    """Best-effort: `docker rm` a detached container by name if it still exists — housekeeping so a
+    completed/failed analysis doesn't leave a stopped container behind. Never raises."""
+    if not name:
+        return
+    try:
+        if (ex.poll_detached(name) or {}).get("exists"):
+            ex.stop_detached(name, remove=True)
+    except Exception:  # noqa: BLE001 — reaping is best-effort, never breaks the caller
+        pass
 
 
 def _slot_ctx(project, target, *, runner):
@@ -137,8 +149,13 @@ def start_analysis(project, target, *, runner=None) -> dict:
 
     ex = runner or get_executor()
     state = analysis_state(project, target, runner=ex)
-    if state["state"] in ("analyzed", "running", "unavailable"):
-        return state  # nothing to start: done / in-flight / not applicable
+    if state["state"] == "analyzed":
+        # Completed — reap the exit-0 detached container if it's still lingering, so a done
+        # analysis doesn't leave a stopped container behind per binary (best-effort housekeeping).
+        _reap_if_present(ex, state.get("container"))
+        return state
+    if state["state"] in ("running", "unavailable"):
+        return state  # in-flight / not applicable — nothing to start
 
     ctx = _slot_ctx(project, target, runner=ex)
     if ctx is None:  # (analysis_state already returned unavailable, but be defensive)
@@ -153,8 +170,10 @@ def start_analysis(project, target, *, runner=None) -> dict:
             pass
 
     slot.prepare()
-    # The analysis writes into the project mount, not /out — a throwaway /out dir under the slot.
-    outdir = str(Path(slot.root) / "analyze-out")
+    # The analysis writes its project into the project mount and its JSON to /scratch — /out is
+    # unused under --analyze. Give it a THROWAWAY outdir OUTSIDE the slot so the warm project stays
+    # project-only (the probe keeps the persistent mount lean by design).
+    outdir = tempfile.mkdtemp(prefix="hexgraph-analyze-out-")
     try:
         ex.start_detached(
             "ghidra_probe.py", artifact, name=name, outdir=outdir,

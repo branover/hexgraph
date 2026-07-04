@@ -124,6 +124,17 @@ def test_start_is_noop_when_already_warm(env):
     assert st["state"] == "analyzed" and fake.started == []  # single-flight: nothing launched
 
 
+def test_start_reaps_lingering_container_when_analyzed(env):
+    """Housekeeping: a completed analysis's exit-0 container is reaped on the next re_analyze so a
+    done analysis doesn't leave a stopped container behind — and nothing new is launched."""
+    project, target, art = env
+    _make_warm(project, art)
+    fake = _FakeExec(poll={"exists": True, "running": False, "exit_code": 0})  # lingering exit-0
+    st = A.start_analysis(project, target, runner=fake)
+    assert st["state"] == "analyzed"
+    assert fake.stopped and fake.started == []
+
+
 def test_start_attaches_when_already_running(env):
     project, target, _art = env
     fake = _FakeExec(poll={"exists": True, "running": True, "exit_code": None})
