@@ -81,13 +81,34 @@ _HASH_CHUNK = 1024 * 1024
 _VERSION_CACHE: dict[str, str] = {}
 
 
+# Memoize the content hash by (path, size, mtime_ns): a target's bytes are content-addressed and
+# immutable at a path, so re-hashing on every slot resolution is pure waste — and now that the
+# analysis GATE resolves the slot on every gated tool call, re-hashing a large artifact (a 482 MB
+# binary ≈ 1s) per call would be a real drag. A size/mtime change (a different file at the path)
+# misses and re-hashes, so the cache can't go stale.
+_HASH_CACHE: dict[tuple, str] = {}
+
+
 def content_hash(artifact: str | Path) -> str:
-    """sha256 of the artifact bytes — the content half of the cache key."""
+    """sha256 of the artifact bytes — the content half of the cache key. Memoized by
+    (path, size, mtime) so repeated slot resolutions of the same file don't re-read it."""
+    key = None
+    try:
+        stt = os.stat(artifact)
+        key = (str(artifact), stt.st_size, stt.st_mtime_ns)
+        cached = _HASH_CACHE.get(key)
+        if cached is not None:
+            return cached
+    except OSError:
+        key = None  # can't stat → fall through and hash (don't cache)
     h = hashlib.sha256()
     with open(artifact, "rb") as fh:
         for chunk in iter(lambda: fh.read(_HASH_CHUNK), b""):
             h.update(chunk)
-    return h.hexdigest()
+    digest = h.hexdigest()
+    if key is not None:
+        _HASH_CACHE[key] = digest
+    return digest
 
 
 def _safe_version(version: str | None) -> str:
