@@ -645,6 +645,7 @@ class SandboxRunner:
         net_container: str | None = None,
         disable_aslr: bool = False,
         extra_env: dict[str, str] | None = None,
+        project_mount: str | Path | None = None,
     ) -> DetachedHandle:
         """Launch a probe as a DETACHED, long-lived container (`docker run -d`), same
         hardening as run_probe. `disable_aslr` (the ASan source-fuzz path only) swaps in
@@ -699,6 +700,15 @@ class SandboxRunner:
             *(["-v", f"{artifact}:/artifact:ro"] if artifact is not None else []),
             "-v", f"{outdir}:/out:rw",
         ]
+        if project_mount is not None:
+            # The persistent Ghidra/r2 project: a bounded writable bind-mount of HexGraph's OWN
+            # data (not target bytes), made writable for the --user 1000 container exactly like
+            # /out. Lets a DETACHED analysis (re_analyze) write the warm project into the slot and
+            # commit its marker, so the slot is warm when the container exits. Mirrors run_probe.
+            project_mount = Path(project_mount).resolve()
+            project_mount.mkdir(parents=True, exist_ok=True)
+            _ensure_outdir_writable(project_mount)
+            cmd += ["-v", f"{project_mount}:{CONTAINER_PROJECT_DIR}:rw"]
         probe_args = (["/artifact"] if artifact is not None else []) + ["/out"]
         for host, cont in (extra_ro_mounts or []):
             cmd += ["-v", f"{Path(host).resolve()}:{cont}:ro"]
