@@ -156,6 +156,13 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
   hole at that address, `re_disassemble_range(target, 0x67158)` disassembles the raw byte range there
   with no function required, so you can still read the instructions. It is a query like the rest, bytes
   to instructions clamped to a generous ceiling, recorded as an Observation, and it adds nothing to the graph.
+- **Cross-references reuse the warm analysis.** With headless Ghidra as the active backend, `re_xrefs`,
+  `re_function_xrefs`, `re_data_xrefs` and `re_call_graph` answer from the persistent Ghidra project's
+  reference index, the same analyze-once project the decompile verbs build, instead of re-analyzing the
+  whole binary on every call. On a large target that is the difference between an instant answer and a query
+  that never finishes, and an unknown symbol comes back as "not found" right away rather than after a long
+  wait. With the radare2 backend, or before a first analysis has warmed the project, the verbs fall back to
+  a fresh cross-reference pass.
 - **Enrichment of existing objects is automatic and free.** When a call recovers something unambiguous
   about an object that is *already* a node, a function's recovered prototype and address, the `is_sink`
   tag on a dangerous import, the call sites on an existing `calls` edge, HexGraph attaches it in place

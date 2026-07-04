@@ -366,3 +366,159 @@ def test_data_xrefs_resolves_named_symbol_end_to_end(hg_home, tmp_path):
     assert refs, out  # resolved BY NAME and found at least one reference
     # The reference lives in verify() (which does memcmp(in, KEY_ENC, ...)).
     assert any("verify" in (r.get("from_function") or "") for r in refs), out
+
+
+# --- warm-project Ghidra xrefs routing ----------------------------------------
+# When headless Ghidra is the active backend, the four xrefs tools serve from the warm persistent
+# project's reference index (GhidraDecompiler.xrefs) instead of the cold r2 xrefs_probe sweep that
+# re-analyzes the whole binary every call. The routing + fallback are unit-tested here with a fake
+# warm backend; the Jython reference-index emit itself is exercised by the sandbox/live tier.
+
+class _FakeGhidra:
+    """Stands in for GhidraDecompiler: `xrefs` returns a canned per-mode result (the warm
+    reference-index probe payload) and records how it was called."""
+
+    def __init__(self, results, calls):
+        self._results = results
+        self._calls = calls
+
+    def xrefs(self, artifact, *, mode, subject=None, project=None):
+        self._calls.append((mode, subject))
+        return self._results.get(mode)
+
+
+class _NoR2Xrefs:
+    """A stand-in executor that FAILS the test if the cold r2 xrefs_probe is reached (it must not be
+    when the warm Ghidra path served), while tolerating any incidental non-xrefs probe."""
+
+    def run_json_probe(self, probe, artifact, *, extra_args=None, **kw):
+        if probe == "xrefs_probe.py":
+            raise AssertionError("cold r2 xrefs_probe must NOT run when the warm Ghidra path served")
+        return {}
+
+
+def _wire_ghidra(monkeypatch, results, *, forbid_r2=True):
+    """Route xrefs through a fake warm Ghidra backend: force the gate on, Docker up, and swap in a
+    _FakeGhidra. With forbid_r2, the r2 executor asserts if reached (proving the warm path served).
+    Returns the list that records (mode, subject) per warm call."""
+    calls = []
+    monkeypatch.setattr(AT, "_ghidra_xrefs_active", lambda: True)
+    monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
+    monkeypatch.setattr("hexgraph.sandbox.decompiler.GhidraDecompiler",
+                        lambda: _FakeGhidra(results, calls))
+    if forbid_r2:
+        monkeypatch.setattr("hexgraph.sandbox.executor.get_executor", lambda *a, **k: _NoR2Xrefs())
+    return calls
+
+
+def test_gate_reflects_headless_ghidra_setting(hg_home, monkeypatch):
+    """The routing gate is ON only for enabled HEADLESS Ghidra — off by default, off for bridge
+    mode (which has no persistent-project warm path here)."""
+    from hexgraph.engine.re import ghidra as G
+
+    monkeypatch.setattr(G, "ghidra_config", lambda: {"enabled": False, "mode": "headless"})
+    assert AT._ghidra_xrefs_active() is False
+    monkeypatch.setattr(G, "ghidra_config", lambda: {"enabled": True, "mode": "headless"})
+    assert AT._ghidra_xrefs_active() is True
+    monkeypatch.setattr(G, "ghidra_config", lambda: {"enabled": True, "mode": "bridge"})
+    assert AT._ghidra_xrefs_active() is False
+
+
+def test_xrefs_symbol_served_from_warm_ghidra(hg_home, monkeypatch):
+    calls = _wire_ghidra(monkeypatch, {"callers": {
+        "mode": "callers", "symbol": "system",
+        "callers": [{"caller": "handle_req", "caller_addr": "0x401000", "at": "0x401040"}],
+        "total": 1}})
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        out = run_tool(ctx, "xrefs", {"symbol": "system"})
+        assert "handle_req" in out and "0x401040" in out
+        assert calls == [("callers", "system")]        # served from the warm reference index
+        obs = s.query(Observation).filter(Observation.target_id == t.id,
+                                          Observation.result_kind == "xrefs").all()
+        assert len(obs) == 1                             # still records the QUERY Observation
+
+
+def test_xrefs_sink_sweep_served_from_warm_ghidra(hg_home, monkeypatch):
+    calls = _wire_ghidra(monkeypatch, {"sinks": {
+        "mode": "sinks",
+        "sinks": {"system": {"callers": [{"caller": "run_cmd"}], "total": 1}},
+        "format_sinks": {}, "network": {}}})
+    with session_scope() as s:
+        ctx, _p, _t = _ctx(s)
+        out = run_tool(ctx, "xrefs", {})               # no symbol => the sink sweep
+        assert "system" in out and "run_cmd" in out
+        assert calls == [("sinks", None)]
+
+
+def test_xrefs_unknown_symbol_fast_fails_without_r2(hg_home, monkeypatch):
+    """An unknown symbol comes back EMPTY from the warm index (fast) — the tool reports 'no callers'
+    and never falls through to the cold r2 sweep (the 42-minute failure this fix removes)."""
+    calls = _wire_ghidra(monkeypatch, {"callers": {"mode": "callers", "symbol": "sub_bogus",
+                                                   "callers": [], "total": 0}})
+    with session_scope() as s:
+        ctx, _p, _t = _ctx(s)
+        out = run_tool(ctx, "xrefs", {"symbol": "sub_bogus"})
+        assert "no callers" in out
+        assert calls == [("callers", "sub_bogus")]     # warm path answered; r2 forbidden, never hit
+
+
+def test_xrefs_falls_back_to_r2_when_ghidra_cannot_run(hg_home, monkeypatch):
+    """Ghidra active but unable to run (not built into the image => a top-level `error`) degrades to
+    the r2 probe rather than failing."""
+    monkeypatch.setattr(AT, "_ghidra_xrefs_active", lambda: True)
+    monkeypatch.setattr("hexgraph.sandbox.decompiler.GhidraDecompiler",
+                        lambda: _FakeGhidra({"callers": {"error": "Ghidra not installed"}}, []))
+    fake = _wire(monkeypatch, {"tool": "xrefs_probe", "symbol": "system",
+                               "callers": [{"caller": "main", "caller_addr": "0x1", "at": "0x2"}],
+                               "total": 1})
+    with session_scope() as s:
+        ctx, _p, _t = _ctx(s)
+        out = run_tool(ctx, "xrefs", {"symbol": "system"})
+        assert "main" in out                            # the r2 result surfaced
+        assert fake.calls[-1] == ("xrefs_probe.py", ["system"])   # r2 probe WAS the fallback
+
+
+def test_function_xrefs_served_from_warm_ghidra(hg_home, monkeypatch):
+    calls = _wire_ghidra(monkeypatch, {"function": {
+        "mode": "function", "subject": "cgi_handler",
+        "callers": [{"caller": "router", "caller_addr": "0x400100", "at": "0x400120"}],
+        "callees": [{"name": "system", "addr": "0x400500"}],
+        "total_callers": 1, "total_callees": 1}})
+    with session_scope() as s:
+        ctx, _p, _t = _ctx(s)
+        out = run_tool(ctx, "function_xrefs", {"function": "cgi_handler"})
+        assert "router" in out and "system" in out
+        assert calls == [("function", "cgi_handler")]
+
+
+def test_function_xrefs_not_found_via_warm_ghidra(hg_home, monkeypatch):
+    """A function the warm index doesn't define returns `not_found` (fast) => 'not found', no cold
+    r2 retry."""
+    _wire_ghidra(monkeypatch, {"function": {"mode": "function", "subject": "nope",
+                                            "callers": [], "callees": [],
+                                            "total_callers": 0, "total_callees": 0,
+                                            "not_found": True}})
+    with session_scope() as s:
+        ctx, _p, _t = _ctx(s)
+        out = run_tool(ctx, "function_xrefs", {"function": "nope"})
+        assert "not found" in out
+
+
+def test_data_xrefs_not_found_via_warm_ghidra(hg_home, monkeypatch):
+    _wire_ghidra(monkeypatch, {"data": {"mode": "data", "subject": "0xdead",
+                                        "data_refs": [], "total": 0, "not_found": True}})
+    with session_scope() as s:
+        ctx, _p, _t = _ctx(s)
+        out = run_tool(ctx, "data_xrefs", {"address": "0xdead"})
+        assert "no resolvable references" in out
+
+
+def test_call_graph_served_from_warm_ghidra(hg_home, monkeypatch):
+    calls = _wire_ghidra(monkeypatch, {"callgraph": {
+        "mode": "callgraph", "calls": [["a", "b"], ["b", "c"]], "total": 2}})
+    with session_scope() as s:
+        ctx, _p, _t = _ctx(s)
+        out = run_tool(ctx, "call_graph", {})
+        assert "a → b" in out and "b → c" in out
+        assert calls == [("callgraph", None)]

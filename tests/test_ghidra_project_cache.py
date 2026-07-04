@@ -264,6 +264,43 @@ def test_decompiler_no_project_no_mount(tmp_path):
     assert fake.calls[0]["project_mount"] is None  # no project ⇒ throwaway path
 
 
+def test_xrefs_threads_project_mount_and_reuses_warm(tmp_path, monkeypatch):
+    """`GhidraDecompiler.xrefs` runs ghidra_probe with `--xrefs <mode> [subject]` over the SAME
+    persistent project as decompile: the mount is threaded (so the query reads the warm reference
+    index) and a second call of any mode reuses that one slot — analyze once, xref many."""
+    from hexgraph.sandbox.decompiler import GhidraDecompiler
+
+    monkeypatch.setattr(gp, "ghidra_version_for_image", lambda *a, **k: "12.1")
+    artifact = _write(tmp_path / "bin", b"a real-ish binary")
+    project = _Project(tmp_path / "data")
+    fake = _RecordingExecutor()
+    dec = GhidraDecompiler(runner=fake)
+
+    # COLD call (a symbol query): the mount is threaded and the probe argv is the xrefs verb.
+    dec.xrefs(str(artifact), mode="callers", subject="system", project=project)
+    assert fake.calls[0]["extra_args"] == ["--xrefs", "callers", "system"]
+    mount = fake.calls[0]["project_mount"]
+    assert mount is not None and Path(mount).is_dir()
+    assert fake.calls[0]["cached"] is False  # cold import
+
+    # WARM call, a DIFFERENT mode with no subject: SAME mount reused, subject omitted from argv.
+    dec.xrefs(str(artifact), mode="callgraph", project=project)
+    assert fake.calls[1]["extra_args"] == ["--xrefs", "callgraph"]
+    assert fake.calls[1]["project_mount"] == mount  # analyze once, reuse
+    assert fake.calls[1]["cached"] is True          # warm -process, no re-analysis
+
+
+def test_xrefs_no_project_no_mount(tmp_path):
+    """Without a persistent project, `xrefs` falls back to a throwaway probe run (no mount) —
+    correct, just uncached (mirrors decompile's no-project path)."""
+    from hexgraph.sandbox.decompiler import GhidraDecompiler
+
+    fake = _RecordingExecutor()
+    GhidraDecompiler(runner=fake).xrefs(str(_write(tmp_path / "b", b"x")), mode="sinks")
+    assert fake.calls[0]["project_mount"] is None
+    assert fake.calls[0]["extra_args"] == ["--xrefs", "sinks"]
+
+
 @pytest.mark.parametrize("version", ["12.1", "11.1.2"])
 def test_decompiler_version_partitions_cache(tmp_path, monkeypatch, version):
     """A Ghidra version change routes to a DIFFERENT mount (so an upgrade re-analyzes)."""

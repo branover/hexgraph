@@ -15,7 +15,10 @@ HOME/TMPDIR/XDG_* pinned at scratch). A decompile that fails here is a real, shi
 breakage of `hexgraph` decompilation — which is the whole point of the gate.
 
 It then asserts the result is REAL Ghidra C decompilation (a recovered C function with the
-`strcpy` call from the fixture), not radare2 pseudo-asm and not an error.
+`strcpy` call from the fixture), not radare2 pseudo-asm and not an error. Finally it runs the
+warm-project cross-reference query (`--xrefs callers strcpy`, the ReferenceManager path the
+re_xrefs family serves from the warm project) and asserts cgi_handler is among strcpy's callers —
+the only CI coverage of that Jython, since the offline tier has no Ghidra.
 
 Usage:
     ci_ghidra_decompile_check.py [IMAGE] [FIXTURE]
@@ -107,6 +110,26 @@ def main() -> int:
     print(pseudo)
     print(f"\nPASS: Ghidra decompiled {FOCUS} to real C "
           f"({len(funcs)} functions recovered) via SandboxRunner.run_probe.")
+
+    # Also exercise the cross-reference path's Jython (ghidra_probe.py XREFS_SCRIPT) end to end on
+    # REAL Ghidra: this is the reference-index query the re_xrefs / re_function_xrefs / re_call_graph
+    # verbs serve from the warm project, and the offline tier has no Ghidra to run it. cgi_handler
+    # does `strcpy(buf, token)`, so "who calls strcpy" (ReferenceManager.getReferencesTo, filtered
+    # to the containing function) MUST include cgi_handler. Drives the SAME production run_probe path
+    # (a cold throwaway project here, which still imports+analyzes then runs XREFS_SCRIPT).
+    try:
+        xr = runner.run_json_probe("ghidra_probe.py", str(fixture),
+                                   extra_args=["--xrefs", "callers", "strcpy"])
+    except SandboxError as exc:
+        _fail(f"ghidra xrefs probe failed under production hardening: {exc}")
+    if "error" in xr:
+        _fail(f"xrefs probe reported an error: {xr['error']}")
+    callers = [c.get("caller") for c in (xr.get("callers") or [])]
+    if FOCUS not in callers:
+        _fail(f"xrefs(callers of strcpy) did not include {FOCUS!r} — the warm-project reference "
+              f"index is wrong or empty: {callers[:30]}")
+    print(f"PASS: Ghidra xrefs (ReferenceManager) found {FOCUS} among callers of strcpy "
+          f"({len(callers)} caller site(s)) via SandboxRunner.run_probe.")
     return 0
 
 
