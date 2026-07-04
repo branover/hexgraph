@@ -83,18 +83,20 @@ def _containing_function(addr: int, funcs: list[dict]) -> dict | None:
     return None
 
 
-def _function_facts(r2, seek: str) -> dict:
+def _function_facts(r2, seek: str, info=None) -> dict:
     """Rich, always-welcome function facts for the focus — recovered prototype/signature,
     calling convention, and arg/local variables — from r2's function info (`afij`: the
     signature, calling convention, arg/local counts) and variables (`afvj`). `seek` is the
     same already-validated flag/address used for the `pdc`/`pdf` seek, so this adds no new
-    injection surface. Best-effort: every field is guarded, so a missing/odd shape just
-    omits that fact rather than failing the decompile."""
+    injection surface. `info` is an optional pre-fetched `afij` result (the targeted-disasm path
+    already has it) reused to avoid a second identical `afij` call; fetched here when None.
+    Best-effort: every field is guarded, so a missing/odd shape just omits that fact."""
     facts: dict = {}
-    try:
-        info = json.loads(r2.cmd(f"afij @ {seek}") or "[]")
-    except (json.JSONDecodeError, TypeError):
-        info = []
+    if info is None:
+        try:
+            info = json.loads(r2.cmd(f"afij @ {seek}") or "[]")
+        except (json.JSONDecodeError, TypeError):
+            info = []
     if isinstance(info, list) and info and isinstance(info[0], dict):
         fi = info[0]
         sig = fi.get("signature")
@@ -229,20 +231,22 @@ def _targeted_disasm(r2, seek: str, is_addr: bool) -> dict | None:
         mode = "linear"
     if not disasm:
         return None
-    name = None
-    addr = None
+    info = []
     try:
         info = json.loads(r2.cmd(f"afij @ {seek}") or "[]")
-        if isinstance(info, list) and info and isinstance(info[0], dict):
-            name = info[0].get("name")
-            off = info[0].get("offset")
-            addr = hex(off) if isinstance(off, int) else None
     except (json.JSONDecodeError, TypeError):
-        pass
+        info = []
+    name = None
+    addr = None
+    if isinstance(info, list) and info and isinstance(info[0], dict):
+        name = info[0].get("name")
+        off = info[0].get("offset")
+        addr = hex(off) if isinstance(off, int) else None
     focus = {"name": name or seek, "address": addr or (seek if is_addr else None),
              "disasm": disasm, "disasm_mode": mode, "callees": _callees(disasm)}
     if mode == "function":
-        focus.update(_function_facts(r2, seek))
+        # Reuse the afij we already fetched — no second identical call on the function path.
+        focus.update(_function_facts(r2, seek, info=info))
     return focus
 
 
