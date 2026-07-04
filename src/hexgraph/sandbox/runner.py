@@ -30,6 +30,15 @@ from hexgraph.sandbox.resources import (
 
 DEFAULT_IMAGE = "hexgraph-sandbox:latest"
 DEFAULT_TIMEOUT = 300  # seconds
+# The container enforces its OWN wall-clock budget with coreutils `timeout(1)`, in addition to the
+# host-side `subprocess.run(timeout=)` + `docker kill`. Without it, a `docker run --rm` container
+# whose LAUNCHING process dies (crash / OOM / a closed agent session) is orphaned by the Docker
+# daemon and runs UNBOUNDED — an operator hit a multi-hour radare2 `aaa` zombie exactly this way.
+# The container budget sits a touch ABOVE the host budget so the host-side kill still wins (with a
+# clean SandboxTimeout error) when the launcher is alive; the container timeout is the orphan
+# backstop. GRACE is the margin; KILL_AFTER is how long `timeout` waits after SIGTERM before SIGKILL.
+CONTAINER_TIMEOUT_GRACE_S = 30
+CONTAINER_TIMEOUT_KILL_AFTER = "10s"
 PROBES_DIR = Path(__file__).resolve().parent / "probes"
 CONTAINER_PROBES = "/opt/hexgraph"
 # The persistent Ghidra-project bind-mount point inside the container (analyze-once / reuse,
@@ -535,7 +544,19 @@ class SandboxRunner:
         if PROBES_DIR.is_dir() and os.environ.get("HEXGRAPH_SANDBOX_NO_MOUNT") != "1":
             cmd += ["-v", f"{PROBES_DIR}:{CONTAINER_PROBES}:ro"]
 
-        cmd += [image or self.image, "python3", f"{CONTAINER_PROBES}/{probe}", *probe_args]
+        # Container-side self-timeout (see CONTAINER_TIMEOUT_GRACE_S): wrap the probe in
+        # `timeout(1)` so an ORPHANED container (its launcher died) still stops at its budget
+        # instead of running unbounded. When `timeout` kills the probe (its direct child), the
+        # container's PID1 (docker-init, from --init) exits and the kernel tears down the PID
+        # namespace, killing any grandchild (radare2 / analyzeHeadless). Sits above the host
+        # budget so the host-side kill wins with a clean error when the launcher is alive.
+        # HEXGRAPH_NO_CONTAINER_TIMEOUT=1 opts out for an image lacking coreutils `timeout`.
+        probe_cmd = ["python3", f"{CONTAINER_PROBES}/{probe}", *probe_args]
+        if os.environ.get("HEXGRAPH_NO_CONTAINER_TIMEOUT") != "1":
+            container_budget = int(timeout) + CONTAINER_TIMEOUT_GRACE_S
+            probe_cmd = ["timeout", "-k", CONTAINER_TIMEOUT_KILL_AFTER,
+                         f"{container_budget}s", *probe_cmd]
+        cmd += [image or self.image, *probe_cmd]
 
         run_env = None
         if secret:
