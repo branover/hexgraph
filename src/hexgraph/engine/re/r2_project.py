@@ -340,7 +340,7 @@ def cache_size_mb(data_dir: str | Path) -> int:
 
 def r2_version_for_image(image: str, *, runner=None) -> str | None:
     """The radare2 version of `image`, memoized per image (the toolchain half of the cache key).
-    Reads it from `binutils_probe.py --r2-version` (a no-target run). None if unavailable — the
+    Reads it from `decompile_probe.py --r2-version` (a no-target run). None if unavailable — the
     caller then uses an 'unknown' token (cold path still works). Never raises."""
     if image in _VERSION_CACHE:
         return _VERSION_CACHE[image] or None
