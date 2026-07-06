@@ -148,9 +148,11 @@ prevent.
 What that means for an agent driving HexGraph over MCP comes down to a few rules the tool descriptions
 already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and `observations` sections:
 
-- **Query verbs add nothing to the graph.** `re_list_functions`, `re_xrefs`, `re_disassemble`, `re_list_strings`
-  and the rest return their results as tool output and quietly record an Observation. They create no
-  nodes and no edges. An enumeration is an answer, not a pile of graph objects.
+- **Query verbs add nothing to the graph.** `re_list_functions`, `re_xrefs`, `re_disassemble`, `re_list_strings`,
+  the navigation verbs (`re_symbol` name→address, `re_resolve` address→symbol, `re_function_info`, `re_hexdump`),
+  the whole-image searches (`re_search_code`, `re_search_decompiled`, `re_search_symbols_project`) and the rest
+  return their results as tool output and quietly record an Observation. They create no nodes and no edges. An
+  enumeration is an answer, not a pile of graph objects.
 - **Disassembly is cheap and self-sufficient.** `re_disassemble(target, name_or_0xADDR)` analyzes just
   the ONE function at that location — never a whole-binary pass, so it's fast on any target size — and
   disassembles it; at an address with no defined function it falls back to a raw linear read, so a CFG
@@ -190,6 +192,17 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
   It needs a saved Ghidra analysis first (`re_analyze`) and **`features.network`** (the container is reached on
   a loopback/private address, audited). While a bridge is live it *owns* the project, so every Ghidra op routes
   to it rather than a conflicting headless open. Also on the CLI: `hexgraph ghidra-bridge start|stop|status <target>`.
+- **`re_script` is the escape hatch over the warm analysis DB (gated, off by default).** The curated `re_*`
+  verbs answer the common questions; the full Ghidra analysis holds more than any fixed verb exposes.
+  `re_script(target, script=…)` runs an agent-supplied **Python 3** script in the sandbox against the same warm
+  program, opened **read-only** (`getReadOnlyDomainObject` — it queries everything but cannot mutate or save the
+  project, and never executes the target). The namespace exposes `program`/`currentProgram`, a `flat`
+  `FlatProgramAPI`, `monitor`, and `out_path`; results come back as JSON written to `out_path` (or an assigned
+  `result`), the script body is capped at 64 KiB and delivered off the argv, and long output truncates to
+  `max_chars` (recover it with `obs_get`). It's **warm-only** (run `re_analyze` first) and **Ghidra-only**, and
+  gated behind **`features.ghidra.scripting`** — OFF by default, which HIDES the tool from the list until an
+  operator enables it. Full Ghidra-API reach (data-flow slices, stack-frame layout, dispatch-table recovery,
+  BSim/FunctionID naming, info-leak hunts) without a bespoke tool per query, and no sandbox boundary relaxed.
 - **Enrichment of existing objects is automatic and free.** When a call recovers something unambiguous
   about an object that is *already* a node, a function's recovered prototype and address, the `is_sink`
   tag on a dangerous import, the call sites on an existing `calls` edge, HexGraph attaches it in place
