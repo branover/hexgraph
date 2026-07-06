@@ -165,20 +165,20 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
   that never finishes, and an unknown symbol comes back as "not found" right away rather than after a long
   wait. With the radare2 backend, or before a first analysis has warmed the project, the verbs fall back to
   a fresh cross-reference pass.
-- **Analysis is explicit — `re_analyze` first, then the per-call verbs.** With headless Ghidra active, the
-  whole-program tools (`re_decompile_function`/`re_decompile_at`, `re_list_functions`, and the xref family
+- **Analysis is explicit — `re_analyze` first, then the per-call verbs.** The whole-program tools
+  (`re_decompile_function`/`re_decompile_at`, `re_list_functions`, and the xref family
   `re_xrefs`/`re_function_xrefs`/`re_data_xrefs`/`re_call_graph`) **require a saved analysis**: on a warm
   miss they return an actionable error pointing at `re_analyze`, rather than silently launching a cold
   analysis (which, on a large binary, a per-call timeout would kill before it commits — so the target would
   never become warm). `re_analyze(target)` runs the analysis as a **detached** background job with its own
-  generous budget, so it finishes and commits the warm project. It's **single-flight** (a second `re_analyze`
-  of the same target attaches to the running one, never a duplicate) and idempotent: re-call it to poll
-  (`state` walks `none → running → analyzed`), and once `analyzed` every gated verb is instant. `re_disassemble`
-  (targeted) and `re_search_decompiled` (reads the store) need no whole-program analysis and are never gated.
-  The radare2 backend now **persists its analysis the same way** — the first whole-binary decompile builds a
-  warm r2 project (a named project under `dir.projects`) and later decompiles of other functions reuse it with
-  no re-`aaa`, reclaimable only via `hexgraph prune --r2-cache-mb`. It isn't *gated* yet, though, so on a cache
-  miss it still analyzes on demand rather than erroring; the explicit-`re_analyze` gate is headless-Ghidra-only for now.
+  generous, size-scaled budget, so it finishes and commits the warm project. It's **single-flight** (a second
+  `re_analyze` of the same target attaches to the running one, never a duplicate) and idempotent: re-call it to
+  poll (`state` walks `none → running → analyzed`), and once `analyzed` every gated verb is instant.
+  `re_disassemble` (targeted) and `re_search_decompiled` (reads the store) need no whole-program analysis and
+  are never gated. This is **backend-aware**: it covers both headless Ghidra (a warm Ghidra project) and
+  radare2 (a warm r2 project, reclaimable via `hexgraph prune --r2-cache-mb`), each with its own persistent
+  slot. Only the Ghidra *bridge* backend — which attaches to a Ghidra you already have open — has nothing to
+  build here, so it reports `unavailable` and isn't gated.
 - **Enrichment of existing objects is automatic and free.** When a call recovers something unambiguous
   about an object that is *already* a node, a function's recovered prototype and address, the `is_sink`
   tag on a dangerous import, the call sites on an existing `calls` edge, HexGraph attaches it in place
