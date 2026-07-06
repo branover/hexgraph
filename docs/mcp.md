@@ -179,6 +179,16 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
   radare2 (a warm r2 project, reclaimable via `hexgraph prune --r2-cache-mb`), each with its own persistent
   slot. Only the Ghidra *bridge* backend — which attaches to a Ghidra you already have open — has nothing to
   build here, so it reports `unavailable` and isn't gated.
+- **A persistent Ghidra bridge makes repeated decompiles resident and fast.** With headless Ghidra, each
+  `re_decompile_*` opens the target's project fresh — cheap on a small binary, but seconds per call on a large
+  one (the warm cache skips *re-analysis*, not the per-call *open*). `re_bridge_start(target)` launches a
+  long-lived sandbox container that opens the project **once** and keeps it resident behind an RPC server;
+  after that, `re_decompile_function`/`re_decompile_at`/`re_list_functions` for that target reuse it and return
+  in a fraction of a second. Poll `re_bridge_status` (it may take a moment to open a huge project); stop it with
+  `re_bridge_stop`. It needs a saved Ghidra analysis first (`re_analyze`) and **`features.network`** (the
+  container is reached on a loopback/private address, audited). While a bridge is live it *owns* the project, so
+  `re_xrefs` falls back to radare2 and emulation/rename are unavailable until you stop it (these run over the
+  bridge in a later release). Also on the CLI: `hexgraph ghidra-bridge start|stop|status <target>`.
 - **Enrichment of existing objects is automatic and free.** When a call recovers something unambiguous
   about an object that is *already* a node, a function's recovered prototype and address, the `is_sink`
   tag on a dangerous import, the call sites on an existing `calls` edge, HexGraph attaches it in place

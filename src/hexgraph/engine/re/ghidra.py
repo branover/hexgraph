@@ -215,6 +215,12 @@ def propagate_function_rename(session, node, new_name: str) -> dict:
     if not docker_available():
         return {"propagated": False, "reason": "Docker/sandbox not running"}
 
+    from hexgraph.engine.re.bridge import blocking_message
+
+    _msg = blocking_message(target, "rename")
+    if _msg:  # a live bridge holds the project; a headless rename would conflict on the lock
+        return {"propagated": False, "reason": _msg}
+
     from hexgraph.sandbox.decompiler import GhidraDecompiler
 
     try:

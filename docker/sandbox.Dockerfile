@@ -109,6 +109,17 @@ RUN if [ "$WITH_GHIDRA" = "1" ]; then \
         # headless the classic way and want Jython to own `.py`, so drop the PyGhidra
         # feature. (radare2 remains the default decompiler; Ghidra is the opt-in upgrade.)
         && rm -rf /opt/ghidra/Ghidra/Features/PyGhidra \
+        # Ghidra Bridge (features.ghidra bridge / re_bridge_*): a long-lived analyzeHeadless can
+        # host a ghidra_bridge RPC server, keeping an analyzed project RESIDENT so repeated
+        # decompile/xref/taint/emulate calls for a target skip the per-call project open. The
+        # server runs in Ghidra's Jython (2.7); bake its server scripts + jfx_bridge into a fixed
+        # dir that the harness (sandbox/probes/ghidra_bridge_serve.py, a mounted probe) adds to
+        # sys.path. Pure-Python, Jython-importable; --break-system-packages for PEP 668.
+        && python3 -m pip install --no-cache-dir --break-system-packages ghidra_bridge \
+        && mkdir -p /opt/ghidra-bridge \
+        && cp "$(python3 -c 'import ghidra_bridge, os; print(os.path.dirname(ghidra_bridge.__file__))')"/server/*.py /opt/ghidra-bridge/ \
+        && cp -r "$(python3 -c 'import jfx_bridge, os; print(os.path.dirname(jfx_bridge.__file__))')" /opt/ghidra-bridge/jfx_bridge \
+        && chmod -R a+rX /opt/ghidra-bridge \
         # --- Build-time JDK ↔ Ghidra assertion -------------------------------------
         # Fail the build NOW if the installed JDK can't run this Ghidra, so a future
         # version bump cannot ship broken (as it did twice). Cross-check two facts:

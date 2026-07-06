@@ -52,7 +52,7 @@ def _gather_decompilation(target: Target, ctx: TaskContext, project: Project | N
     try:
         from hexgraph.sandbox.decompiler import get_decompiler
 
-        return get_decompiler().decompile(target.path, ctx.function, project=project)
+        return get_decompiler(target=target).decompile(target.path, ctx.function, project=project)
     except Exception:  # noqa: BLE001 — decompilation is best-effort enrichment
         return None
 
