@@ -101,7 +101,8 @@ def test_run_tool_does_not_gate_targeted_disassemble(hg_home, monkeypatch):
 def test_gated_set_is_exactly_the_whole_program_tools():
     g = AT._ANALYSIS_GATED_TOOLS
     for t in ("decompile_function", "decompile_at", "list_functions",
-              "xrefs", "call_graph", "function_xrefs", "data_xrefs"):
+              "xrefs", "call_graph", "function_xrefs", "data_xrefs",
+              "run_script"):  # re_script is warm-only → gated so a warm miss returns the re_analyze lead
         assert t in g
     for t in ("disassemble", "disassemble_range", "search_decompiled", "reanalyze"):
         assert t not in g  # targeted/raw/store-reading/explicit — not gated

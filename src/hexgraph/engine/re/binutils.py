@@ -17,12 +17,18 @@ to recon's tight import/string caps).
 
 from __future__ import annotations
 
+import re
+
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Project, Target
 from hexgraph.engine import observations as O
 
 RESULT_KIND = "binutils_facts"
+
+# search_symbols_project caps (mirrors the single-target grep's no-silent-flood discipline).
+_SEARCH_MATCH_CAP = 500
+_SEARCH_PATTERN_MAX = 512
 
 _REUSE_HINT = (
     "binutils facts persist as a binutils_facts Observation on this target; they do NOT "
@@ -127,3 +133,164 @@ def apply_mitigations_to_target(target: Target, facts: dict) -> bool:
     meta["mitigations"] = merged
     target.metadata_json = meta
     return True
+
+
+# --- project-wide symbol/function NAME search (the name analogue of yara_sweep) ------
+# Cross-target, engine-level: iterate every non-archived target and test a NAME pattern
+# against its symbol/function set — reading ALREADY-stored substrate (recon metadata +
+# prior binutils_facts / function_list Observations), NEVER running a probe or a decompile.
+# So it locates which binary in a firmware DEFINES/IMPORTS a shared helper without paying a
+# per-target sweep. The feasibility caveat (surfaced in the result): a target whose symbols
+# were never collected can't be searched — reported as `targets_without_symbols`.
+
+def _symbol_source_for_target(session: Session, target: Target) -> dict | None:
+    """The name sets to search for one target: {imports, exports, functions}. Prefers the
+    cached binutils_facts Observation (facts.symbols/imports/exports), falls back to the
+    recon metadata imports/exports, and adds function names from a prior function_list
+    Observation when present. Returns None when NO symbol source exists for this target
+    (so a miss on it isn't read as authoritative — it's counted in targets_without_symbols)."""
+    imports: set[str] = set()
+    exports: set[str] = set()
+    functions: set[str] = set()
+    have_source = False
+
+    # 1) the authoritative binutils_facts Observation (newest), when one was collected.
+    rows = O.list_observations(session, target.id, kind=RESULT_KIND, limit=1)
+    if rows:
+        full = O.get_observation(session, rows[0]["id"]) or {}
+        facts = full.get("payload") if isinstance(full.get("payload"), dict) else None
+        if isinstance(facts, dict):
+            have_source = True
+            imports.update(str(n) for n in (facts.get("imports") or []) if n)
+            exports.update(str(n) for n in (facts.get("exports") or []) if n)
+            # facts.symbols carries nm rows {name,type,address}; an UND (U/w) row is an import,
+            # a defined row is an export/definition. Fold both so a defined symbol not in the
+            # `exports` list (a local T) is still searchable.
+            for sym in (facts.get("symbols") or []):
+                name = sym.get("name") if isinstance(sym, dict) else None
+                if not name:
+                    continue
+                typ = (sym.get("type") or "").strip() if isinstance(sym, dict) else ""
+                (imports if typ in ("U", "w", "v") else exports).add(str(name))
+
+    # 2) recon metadata imports/exports — the cheap fallback (present without a facts probe).
+    meta = target.metadata_json or {}
+    m_imports = [str(n) for n in (meta.get("imports") or []) if n]
+    m_exports = [str(n) for n in (meta.get("exports") or []) if n]
+    if m_imports or m_exports:
+        have_source = True
+        imports.update(m_imports)
+        exports.update(m_exports)
+
+    # 3) function names from a prior function_list Observation (optional; the decompiler's
+    # whole-program inventory — a name that's neither an import nor an export can still match).
+    frows = O.list_observations(session, target.id, kind="function_list", limit=1)
+    if frows:
+        ffull = O.get_observation(session, frows[0]["id"]) or {}
+        fpayload = ffull.get("payload") if isinstance(ffull.get("payload"), dict) else None
+        if isinstance(fpayload, dict):
+            fns = [str(n) for n in (fpayload.get("functions") or []) if n]
+            if fns:
+                have_source = True
+                functions.update(fns)
+
+    if not have_source:
+        return None
+    return {"imports": imports, "exports": exports, "functions": functions}
+
+
+def search_symbols_project(
+    session: Session, project: Project, *, pattern: str,
+    kind: str | None = None, regex: bool = False, limit: int | None = None,
+) -> dict:
+    """Search a symbol/function NAME pattern across ALL non-archived targets in a project —
+    which target(s) DEFINE or IMPORT a match. Reads per-target recon metadata + prior
+    binutils_facts / function_list Observations (no probe, no per-target decompile), so it
+    mirrors yara_sweep's cross-target roll-up over already-computed substrate.
+
+    `kind` scopes to imports|exports|defined|all (default all; `defined`==exports here).
+    `regex=true` matches a regex (guarded — a too-long/un-compilable pattern falls back to a
+    case-insensitive substring test, never raises). Returns {pattern, matches:[{target_id,
+    name, kind(import|export|function), address?}], scanned, hits, targets_without_symbols}.
+    A target with NO stored symbol source is counted in `targets_without_symbols` (run
+    re_binutils_facts on it first) so a miss there isn't mistaken for the whole-project truth."""
+    pat = (pattern or "").strip()
+    if not pat:
+        return {"error": "pattern is required"}
+    scope = (kind or "all").lower()
+    if scope not in ("imports", "exports", "defined", "all"):
+        return {"error": "kind must be one of imports|exports|defined|all "
+                         f"(got {kind!r})"}
+
+    # A cheap, SAFE matcher (mirrors agent_tools._compile_grep): case-insensitive regex when
+    # asked and it compiles, else a case-insensitive substring test.
+    if regex and len(pat) <= _SEARCH_PATTERN_MAX:
+        try:
+            rx = re.compile(pat, re.IGNORECASE)
+            def match(name: str) -> bool:
+                return bool(rx.search(name))
+        except re.error:
+            low = pat.lower()
+            def match(name: str) -> bool:  # bad regex -> substring, no crash
+                return low in name.lower()
+    else:
+        low = pat.lower()
+        def match(name: str) -> bool:
+            return low in name.lower()
+
+    want_imports = scope in ("imports", "all")
+    want_exports = scope in ("exports", "defined", "all")
+
+    targets = (
+        session.query(Target)
+        .filter(Target.project_id == project.id, Target.archived.is_(False))
+        .all()
+    )
+    matches: list[dict] = []
+    scanned = 0
+    without: list[dict] = []
+    capped = False
+    for t in targets:
+        src = _symbol_source_for_target(session, t)
+        if src is None:
+            without.append({"target_id": t.id, "name": t.name})
+            continue
+        scanned += 1
+        # (name, kind) rows for this target, de-duped, scoped by `kind`. A name that is both an
+        # import and an export is reported once per role it satisfies within the requested scope.
+        seen: set[tuple] = set()
+        buckets = []
+        if want_imports:
+            buckets.append(("import", src["imports"]))
+        if want_exports:
+            buckets.append(("export", src["exports"]))
+        # Function names only broaden an `all` search (they're neither an import nor export role).
+        if scope == "all":
+            buckets.append(("function", src["functions"]))
+        for role, names in buckets:
+            for name in names:
+                if not match(name):
+                    continue
+                key = (name, role)
+                if key in seen:
+                    continue
+                seen.add(key)
+                matches.append({"target_id": t.id, "name": name, "kind": role})
+                if len(matches) >= (limit or _SEARCH_MATCH_CAP):
+                    capped = True
+                    break
+            if capped:
+                break
+        if capped:
+            break
+
+    return {
+        "pattern": pat,
+        "kind": scope,
+        "regex": bool(regex),
+        "matches": matches,
+        "scanned": scanned,
+        "hits": len(matches),
+        "targets_without_symbols": without,
+        "capped": capped,
+    }

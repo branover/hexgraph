@@ -65,6 +65,49 @@ _PROMOTE_BUDGET = 50
 _STRINGS_PAGE = 200
 _STRINGS_PAGE_MAX = 1000
 
+# list_functions / resolve_symbol pagination: same bounded-page discipline as list_strings —
+# a broad grep of the whole discovered-function list (a large binary has thousands) or the
+# symbol table is clipped to a page that reports the total + the next offset.
+_FUNCS_PAGE = 200
+_FUNCS_PAGE_MAX = 1000
+_SYMBOLS_PAGE = 200
+_SYMBOLS_PAGE_MAX = 1000
+
+# resolve_symbol pattern-length guard: a regex `pattern` longer than this is rejected (falls
+# back to substring) so a pathological pattern can't wedge re.compile — mirrors the cheap-
+# regex guard the function-list grep uses.
+_MAX_PATTERN_LEN = 512
+
+# The nm dynamic-symbol cap the binutils probe applies (`binutils_probe._MAX_SYMBOLS`). When
+# facts.symbols hits this, resolve_symbol flags the table as CAPPED so a miss on a huge binary
+# isn't read as authoritative (the no-silent-caps discipline).
+_NM_SYMBOL_CAP = 4000
+
+# hexdump default byte count when the agent doesn't pass `length`; the ceiling is
+# `elf_layout.HEXDUMP_MAX` (4096) — a bounded window so a fat-fingered length can't pull the
+# whole binary into the context (the no-silent-caps discipline: the tool says when it clamped).
+_HEXDUMP_DEFAULT = 256
+
+# function_info opportunistically reads prototype/calling-convention off a PRIOR decompilation
+# Observation (so it stays no-decompile but returns rich data when the fn was already decompiled).
+# Its callers/callees sample is truncated to this so it's a strict superset of re_function_xrefs'
+# value without re-printing the whole listing (the design note on re_function_info).
+_FUNCINFO_SAMPLE = 20
+
+# search_code: the decompile-on-demand grep is BOUNDED by the caller-named `functions` set so a
+# whole-binary decompile (the exact cost the persistent project avoids) is never triggered; this
+# caps how many named functions one call will decompile. The byte/immediate scan pages like the
+# other greps (total + next offset reported, no silent clip).
+_SEARCH_FUNCS_MAX = 50
+_SEARCH_PAGE = 100
+_SEARCH_PAGE_MAX = 500
+
+# re_script (run_script): the max size (bytes, UTF-8) of an agent-supplied PyGhidra/Jython script.
+# Enforced host-side for a fast, clear rejection; the PROBE re-checks the SAME cap on the decoded
+# body (defence in depth — never trust the host). Kept in lockstep with
+# ghidra_probe.USER_SCRIPT_MAX_BYTES.
+_SCRIPT_MAX_BYTES = 64 * 1024
+
 
 @dataclass
 class ToolContext:
@@ -77,11 +120,62 @@ class ToolContext:
 # --- specs (advertised to the model) ------------------------------------------
 
 _STATIC_SPECS = [
-    ToolSpec("list_functions", "List the function names discovered in the target binary. QUERY: "
-             "returns the inventory and records an Observation; does NOT add graph nodes — the "
-             "enumeration is an answer, not a graph object. Promote a function deliberately by "
-             "decompiling it.",
-             {"type": "object", "properties": {}}),
+    ToolSpec("list_functions", "GREP the FULL discovered function-name list for a substring "
+             "`pattern` (or a regex with regex=true) — the fast function-name search. Server-side "
+             "filtered + PAGINATED like list_strings: pass `pattern` to filter by name, "
+             "`offset`/`limit` to page (default 200, max 1000); the result reports the total match "
+             "count + the next offset. With no `pattern` it pages the whole list. QUERY: records a "
+             "function_list Observation; does NOT add graph nodes — promote a function deliberately "
+             "by decompiling it.",
+             {"type": "object", "properties": {
+                 "pattern": {"type": "string", "description": "substring to grep the function names for"},
+                 "regex": {"type": "boolean", "description": "treat pattern as a regex (falls back to substring if it doesn't compile)"},
+                 "offset": {"type": "integer", "description": "page start index into the matches (default 0)"},
+                 "limit": {"type": "integer", "description": "max names to return (default 200, clamped 1–1000)"}}}),
+    ToolSpec("resolve_symbol", "Resolve/SEARCH the symbol table (dynamic imports + exports + "
+             "defined funcs/data) by name substring (or regex=true) — the name->address hop that "
+             "turns a symbol into a decompile_at/xrefs target. Returns {name, address, type, bind, "
+             "defined|UND, section} rows, server-side filtered + PAGINATED (default 200, max 1000) "
+             "like list_strings. `kind` scopes to imports|exports|defined|undefined|all (default "
+             "all). Sourced from binutils facts; a substring query is prefix-agnostic, so a bare "
+             "name like strcpy also surfaces vendor-wrapped/aliased forms (a *_strcpy copy). "
+             "QUERY: records an Observation; adds no graph nodes.",
+             {"type": "object", "properties": {
+                 "pattern": {"type": "string", "description": "substring (or regex) to match against symbol names"},
+                 "kind": {"type": "string", "description": "scope the table: imports|exports|defined|undefined|all (default all)"},
+                 "regex": {"type": "boolean", "description": "treat pattern as a regex"},
+                 "offset": {"type": "integer", "description": "page start index into the matches (default 0)"},
+                 "limit": {"type": "integer", "description": "max rows to return (default 200, clamped 1–1000)"}}}),
+    ToolSpec("resolve_address", "Triage a hex ADDRESS (a crash address, a pointer, a DAT_ label) "
+             "WITHOUT a full decompile: returns {nearest_symbol + offset, section, "
+             "containing_function (name+bounds when the symbol table knows it)}. Assembled "
+             "server-side from the symbol + section tables (pyelftools over the on-disk ELF) — "
+             "cheap orientation before you spend a decompile_at. On a stripped binary it still "
+             "resolves the section + nearest symbol (a FUN_ name needs a decompile). QUERY: "
+             "records an Observation; adds no graph nodes.",
+             {"type": "object", "properties": {
+                 "address": {"type": "string", "description": "hex address, e.g. 0x401200"}},
+              "required": ["address"]}),
+    ToolSpec("hexdump", "Dump raw BYTES at a virtual ADDRESS as hex + ascii (bounded — default 256, "
+             "max 4096) — inspect a DAT_ table, an embedded key, a struct, or a string constant's "
+             "exact bytes. Maps the vaddr to a file offset via the ELF program headers and reads the "
+             "on-disk artifact server-side (no decompile, no Docker). Bytes in a .bss/zero-fill region "
+             "read as 00 with a note; an unmapped address is reported, not faked. QUERY: records an "
+             "Observation; adds no graph nodes. (For the INSTRUCTIONS at an address use "
+             "disassemble_range; this is the raw-bytes view.)",
+             {"type": "object", "properties": {
+                 "address": {"type": "string", "description": "hex virtual address, e.g. 0x4c1000"},
+                 "length": {"type": "integer", "description": "bytes to dump (default 256, clamped 1-4096)"}},
+              "required": ["address"]}),
+    ToolSpec("function_info", "Lightweight metadata for a function (by NAME or ADDRESS) WITHOUT a "
+             "full decompile: address, size, prototype/signature + calling convention (when known — "
+             "from the symbol table, a prior decompilation, or recon), and #callers / #callees (from "
+             "the call graph). The cheap 'what is this function' triage before deciding to "
+             "decompile_function it. Fields not yet recovered are marked unknown (decompile to "
+             "recover). QUERY: records an Observation; adds no graph nodes.",
+             {"type": "object", "properties": {
+                 "function": {"type": "string", "description": "function name (or pass address)"},
+                 "address": {"type": "string", "description": "hex address in the function (or pass function)"}}}),
     ToolSpec("decompile_function", "Decompile one function to pseudo-C and list its callees. "
              "Use this to read the actual code before judging a vulnerability. PROMOTE: this "
              "deliberately adds THIS function to the graph (enriched in place with its recovered "
@@ -174,6 +268,20 @@ _STATIC_SPECS = [
              {"type": "object", "properties": {"query": {"type": "string"},
                                                "max_chars": {"type": "integer", "description": _MAX_CHARS_DESC}},
               "required": ["query"]}),
+    ToolSpec("search_code", "Search the WHOLE binary's code (not just already-decompiled bodies — "
+             "search_decompiled covers those): a BYTE/opcode pattern (`bytes_pattern`, hex pairs) or "
+             "an IMMEDIATE constant (`immediate`) scanned across the mapped image (each hit mapped to "
+             "its function), OR a decompile-on-demand GREP (`query`) over a BOUNDED candidate set you "
+             "name in `functions` (so YOU control the cost — an unbounded whole-binary decompile is "
+             "intentionally NOT offered). To find CALLERS of a symbol/sink use xrefs (whole-program, "
+             "indexed) — this does not duplicate it. Paginated. QUERY: records an Observation; adds no "
+             "graph nodes.",
+             {"type": "object", "properties": {
+                 "bytes_pattern": {"type": "string", "description": "hex byte pattern to scan for, e.g. 'deadbeef' or '48 8b'"},
+                 "immediate": {"type": "string", "description": "an immediate/constant value to find (hex or decimal)"},
+                 "functions": {"type": "array", "description": "bound the decompile-on-demand grep to these functions (with `query`)"},
+                 "query": {"type": "string", "description": "substring to grep in the decompiled bodies of `functions`"},
+                 "offset": {"type": "integer"}, "limit": {"type": "integer"}}}),
     ToolSpec("check_decompiler", "Verify the decompiler decompile_function/disassemble use ACTUALLY "
              "works (not just the configured name): radare2 needs the sandbox image up; Ghidra needs "
              "WITH_GHIDRA=1 (headless) or a reachable bridge. Run it if a decompile fails so you don't "
@@ -280,10 +388,34 @@ _SOLVE_CONSTRAINT_SPEC = ToolSpec(
 )
 
 
+# re_script is advertised ONLY when features.ghidra.scripting is on (like the solve_* verbs behind
+# features.angr): it runs arbitrary agent code in the sandbox, so it stays out of the tool list
+# until opted in. The dispatch also refuses it when off (defence in depth).
+_SCRIPT_SPEC = ToolSpec(
+    "run_script", "ESCAPE-HATCH: run an AGENT-SUPPLIED PyGhidra Python-3 script against this target's "
+    "already-built WARM Ghidra project and get its JSON output — full Ghidra-API power (data-flow "
+    "slicing, BSim/FID, stack-frame analysis, custom P-Code walks) for a query the other tools "
+    "don't cover. GHIDRA-ONLY (radare2 unsupported). Runs in the SAME hardened sandbox every probe "
+    "uses (--network none, read-only rootfs, --cap-drop ALL, non-root) and opens the warm project "
+    "READ-ONLY, so your script inspects but never mutates it; the target is NEVER executed. "
+    "WARM-ONLY: errors → run re_analyze first if there's no warm project (never runs a cold "
+    "analysis). CONTRACT (same as the built-in postScripts): your script receives "
+    "out_path = getScriptArgs()[0] and MUST write its JSON result there; HexGraph reads it back. "
+    "Example: import json; fm = currentProgram.getFunctionManager(); "
+    "open(getScriptArgs()[0],'w').write(json.dumps({'n': len(list(fm.getFunctions(True)))})). "
+    "Records a `script` Observation; adds no graph nodes. Long output truncates to max_chars.",
+    {"type": "object", "properties": {
+        "script": {"type": "string", "description": "PyGhidra Python-3 source; write JSON to out_path (or getScriptArgs()[0]), or assign the `result` variable"},
+        "max_chars": {"type": "integer", "description": _MAX_CHARS_DESC}},
+     "required": ["script"]},
+)
+
+
 def available_tools(ctx: ToolContext) -> list[ToolSpec]:
     """Tool specs for this target. FLOSS + YARA are ALWAYS offered (always-on static tools,
     like binutils — they relax no boundary); fuzz_function only when the policy permits
-    execution (fuzzing enabled in Settings); the solve_* verbs only when features.angr is."""
+    execution (fuzzing enabled in Settings); the solve_* verbs only when features.angr is;
+    run_script only when features.ghidra.scripting is."""
     specs = [*_STATIC_SPECS, _FLOSS_SPEC, _YARA_SPEC]
     try:
         from hexgraph.policy import current_policy
@@ -300,6 +432,8 @@ def available_tools(ctx: ToolContext) -> list[ToolSpec]:
             specs.append(_SOLVE_CONSTRAINT_SPEC)
     except Exception:  # noqa: BLE001
         pass
+    if _scripting_enabled():
+        specs.append(_SCRIPT_SPEC)
     return specs
 
 
@@ -638,6 +772,9 @@ def _disassemble_range(ctx: ToolContext, args: dict) -> str:
 _ANALYSIS_GATED_TOOLS = frozenset({
     "decompile_function", "decompile_at", "list_functions",
     "xrefs", "call_graph", "function_xrefs", "data_xrefs",
+    # re_script runs an agent script over the WARM Ghidra project — a warm miss must return the
+    # re_analyze lead (the probe is warm-only and would otherwise error deep in the sandbox).
+    "run_script",
 })
 
 
@@ -695,10 +832,17 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
         if name == "solve_constraint":
             return _solve_constraint(ctx, args)
         if name == "list_functions":
-            out = _decomp(ctx, None)
-            if out.get("error"):
-                return out["error"]
-            return _clip("functions:\n" + "\n".join(out.get("functions", [])[:300]))
+            # GREP the whole discovered-function list with offset/limit pagination (server-side
+            # filter, a clone of list_strings) — supersedes the old hard `functions[:300]` truncate.
+            return _list_functions(ctx, args)
+        if name == "resolve_symbol":
+            return _resolve_symbol(ctx, args)
+        if name == "resolve_address":
+            return _resolve_address(ctx, args)
+        if name == "hexdump":
+            return _hexdump(ctx, args)
+        if name == "function_info":
+            return _function_info_tool(ctx, args)
         if name == "disassemble":
             fn = args.get("function")
             addr = args.get("address")
@@ -817,6 +961,10 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
             if not q:
                 return "error: 'query' argument is required"
             return _search_decompiled(ctx, q, limit=_effective_limit(args.get("max_chars")))
+        if name == "search_code":
+            return _search_code(ctx, args)
+        if name == "run_script":
+            return _run_script(ctx, args)
         if name == "fuzz_function":
             return _fuzz(ctx, args)
         return f"error: unknown tool {name!r}"
@@ -953,6 +1101,542 @@ def _list_strings(ctx: ToolContext, args: dict) -> str:
     if budget > 0 and len(body) > budget:
         body = body[:budget] + "\n…[strings truncated — obs_get for the full page]"
     return f"{prefix}{body}{tail}"
+
+
+def _bound_page(val, default, lo, hi) -> int:
+    """Clamp a paging arg (offset/limit) to [lo, hi], defaulting to `default` on a
+    bad/missing value — the same inline clamp `_list_strings` uses, shared so the
+    function/symbol grep paginate identically (the no-silent-caps discipline)."""
+    try:
+        v = int(val) if val is not None else default
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(v, hi))
+
+
+def _compile_grep(pattern: str, *, regex: bool):
+    """A cheap, SAFE name matcher for the function/symbol greps. Returns a predicate
+    `name -> bool`. When `regex` is set the pattern is compiled case-insensitively
+    (guarded: a too-long or un-compilable pattern silently FALLS BACK to a case-
+    insensitive substring test — never raises), mirroring how `_list_strings` stays
+    substring-only but the caller opts into regex as a bonus."""
+    pat = pattern or ""
+    if regex and pat and len(pat) <= _MAX_PATTERN_LEN:
+        try:
+            rx = re.compile(pat, re.IGNORECASE)
+            return lambda name: bool(rx.search(name))
+        except re.error:
+            pass  # bad regex → fall through to substring (no crash)
+    low = pat.lower()
+    return lambda name: low in name.lower()
+
+
+def _list_functions(ctx: ToolContext, args: dict) -> str:
+    """List/grep the target's FULL discovered function-name list (the decompiler's whole-
+    program inventory), server-side filtered by an optional substring/regex `pattern` with
+    offset/limit PAGINATION — a direct clone of `_list_strings` over the name list. QUERY:
+    records a function_list_page Observation keyed by the page; adds no graph nodes. Bounded —
+    reports the total match count + next offset rather than silently clipping.
+
+    Reuses `_decomp(ctx, None)` (which caches the decompiler inventory per focus). That path
+    records its own `function_list` Observation for the raw inventory; this function records the
+    FILTERED PAGE under a DISTINCT `function_list_page` kind (keyed by pattern/offset/limit), so a
+    paged grep is independently discoverable without conflating it with the raw `function_list`
+    that search_symbols_project reads as the whole-program name set."""
+    out = _decomp(ctx, None)
+    if isinstance(out, dict) and out.get("error"):
+        return out["error"]
+    names = [str(f) for f in (out.get("functions", []) or [])]
+
+    pat = args.get("pattern") or ""
+    use_regex = bool(args.get("regex"))
+    match = _compile_grep(pat, regex=use_regex)
+    matches = [n for n in names if match(n)] if pat else names
+    total = len(matches)
+
+    offset = _bound_page(args.get("offset"), 0, 0, max(0, total))
+    limit = _bound_page(args.get("limit"), _FUNCS_PAGE, 1, _FUNCS_PAGE_MAX)
+    page = matches[offset:offset + limit]
+    next_offset = offset + len(page)
+    more = next_offset < total
+
+    pat_note = f" matching {pat!r}" if pat else ""
+    # Record the page actually returned (keyed by pattern+offset+limit so a different page is its
+    # own row) under a DISTINCT kind from the raw `function_list` inventory _decomp wrote — else
+    # search_symbols_project (which reads the newest `function_list` as a target's whole-program
+    # name set) would see only this filtered page and under-report its function names.
+    _record_obs(ctx, tool="list_functions",
+                args={k: v for k, v in (("pattern", pat), ("offset", offset),
+                                        ("limit", limit)) if v},
+                result_kind="function_list_page",
+                payload={"functions": page, "total": total, "offset": offset, "limit": limit},
+                summary=f"{total} functions{pat_note}; page {offset}-{next_offset}")
+
+    header = f"functions{pat_note} ({total} total, showing {offset}-{next_offset})"
+    body = "\n".join(page) or "(none)"
+    tail = ""
+    if more:
+        tail = (f"\n…[{total - next_offset} more — re-call with offset={next_offset}"
+                + (f", limit={limit}" if limit != _FUNCS_PAGE else "") + "]")
+    prefix = f"{header}:\n"
+    budget = _MAX - len(prefix) - len(tail)
+    if budget > 0 and len(body) > budget:
+        body = body[:budget] + "\n…[functions truncated — obs_get for the full page]"
+    return f"{prefix}{body}{tail}"
+
+
+# Coarse ELF symbol classification from the nm type-LETTER alone (design note: name/addr/
+# defined-or-UND/coarse-type are server-side TODAY over binutils facts.symbols; precise ELF
+# bind/type/section — GLOBAL/LOCAL/WEAK, FUNC/OBJECT/IFUNC/TLS, section-name — are DEFERRED to
+# an additive readelf `--dyn-syms` probe field (binutils_probe), reused by re_resolve later).
+# nm letters: T/t=text(FUNC), D/d/B/b/R/r/G/S=data(OBJECT), U=undefined(import), w/v/V=weak.
+def _classify_symbol(sym: dict) -> dict:
+    """Derive {name, address, type, bind, defined, section} for one nm symbol row (coarse —
+    from the nm type-LETTER; see the note above for what's server-side vs. deferred)."""
+    name = sym.get("name")
+    letter = (sym.get("type") or "").strip()
+    up = letter.upper()
+    # Undefined (imported) symbols: nm prints 'U' (global undef) or 'w'/'v' (weak undef).
+    is_undef = letter in ("U", "w", "v")
+    if up in ("T", "I"):
+        typ = "FUNC"
+    elif up in ("D", "B", "R", "G", "S"):
+        typ = "OBJECT"
+    elif is_undef:
+        typ = "UND"
+    else:
+        typ = "UNKNOWN"
+    # Bind: nm lower-case letter => LOCAL, upper-case => GLOBAL; 'w'/'v' => WEAK.
+    if letter in ("w", "v", "V", "W"):
+        bind = "WEAK"
+    elif letter and letter.islower():
+        bind = "LOCAL"
+    else:
+        bind = "GLOBAL"
+    return {"name": name, "address": sym.get("address"), "type": typ, "bind": bind,
+            "defined": not is_undef, "section": ("UND" if is_undef else "unknown")}
+
+
+def _resolve_symbol(ctx: ToolContext, args: dict) -> str:
+    """Search/resolve the symbol table (imports + exports + defined syms) by name substring/
+    regex, returning coarse {name, address, type, bind, defined, section} rows, server-side
+    filtered over binutils facts.symbols with offset/limit PAGINATION — mirrors `_list_strings`.
+    QUERY: records a symbol_resolve Observation keyed by the page; adds no graph nodes.
+
+    Coarse type/bind are derived from the nm type-LETTER (see `_classify_symbol`); precise ELF
+    bind/type/section are DEFERRED to an additive readelf probe field. A substring query is
+    prefix-agnostic, so a bare name like `strcpy` also surfaces vendor-wrapped/aliased forms
+    (e.g. a `*_strcpy` copy) already present in the symbol table."""
+    facts = _symbol_facts(ctx)
+    if isinstance(facts, str):  # an error string from the facts fetch
+        return facts
+    symbols = facts.get("symbols", []) or []
+    capped = len(symbols) >= _NM_SYMBOL_CAP
+
+    kind = (args.get("kind") or "all").lower()
+    if kind not in ("imports", "exports", "defined", "undefined", "all"):
+        return ("error: 'kind' must be one of imports|exports|defined|undefined|all "
+                f"(got {args.get('kind')!r})")
+
+    rows = [_classify_symbol(sym) for sym in symbols if sym.get("name")]
+    # kind scopes the table: undefined==imports (an import is an UND symbol), defined==exports.
+    if kind in ("imports", "undefined"):
+        rows = [r for r in rows if not r["defined"]]
+    elif kind in ("exports", "defined"):
+        rows = [r for r in rows if r["defined"]]
+
+    pat = args.get("pattern") or ""
+    use_regex = bool(args.get("regex"))
+    if pat:
+        match = _compile_grep(pat, regex=use_regex)
+        # A substring/regex match is prefix-agnostic, so a bare name like 'strcpy' already
+        # surfaces any vendor-wrapped/aliased copy (a '*_strcpy') the symbol table carries.
+        matched = [r for r in rows if match(r["name"])]
+    else:
+        matched = rows
+    total = len(matched)
+
+    offset = _bound_page(args.get("offset"), 0, 0, max(0, total))
+    limit = _bound_page(args.get("limit"), _SYMBOLS_PAGE, 1, _SYMBOLS_PAGE_MAX)
+    page = matched[offset:offset + limit]
+    next_offset = offset + len(page)
+    more = next_offset < total
+
+    pat_note = f" matching {pat!r}" if pat else ""
+    kind_note = "" if kind == "all" else f" [{kind}]"
+    cap_note = (f" [table CAPPED at {_NM_SYMBOL_CAP} nm symbols — a miss may be past the cap; "
+                "re_binutils_facts for the full probe]") if capped else ""
+    _record_obs(ctx, tool="resolve_symbol",
+                args={k: v for k, v in (("pattern", pat), ("kind", kind if kind != "all" else None),
+                                        ("offset", offset), ("limit", limit)) if v},
+                result_kind="symbol_resolve",
+                payload={"symbols": page, "total": total, "offset": offset, "limit": limit,
+                         "kind": kind, "capped": capped},
+                summary=f"{total} symbols{pat_note}{kind_note}; page {offset}-{next_offset}")
+
+    header = (f"symbols{pat_note}{kind_note} ({total} total, showing {offset}-{next_offset})"
+              f"{cap_note}")
+    lines = [
+        f"- {r['name']}  {r['address'] or '(no addr)'}  {r['type']}/{r['bind']}  "
+        f"{'defined' if r['defined'] else 'UND'}"
+        + (f"  section={r['section']}" if r['section'] not in ("unknown",) else "")
+        for r in page
+    ]
+    body = "\n".join(lines) or "(none)"
+    tail = ""
+    if more:
+        tail = (f"\n…[{total - next_offset} more — re-call with offset={next_offset}"
+                + (f", limit={limit}" if limit != _SYMBOLS_PAGE else "") + "]")
+    prefix = f"{header}:\n"
+    budget = _MAX - len(prefix) - len(tail)
+    if budget > 0 and len(body) > budget:
+        body = body[:budget] + "\n…[symbols truncated — obs_get for the full page]"
+    return f"{prefix}{body}{tail}"
+
+
+def _symbol_facts(ctx: ToolContext):
+    """The binutils facts dict for resolve_symbol to read facts.symbols from — sourced from
+    `collect_binutils_facts` (which records/dedups its own binutils_facts Observation by
+    content_hash, so this does NOT re-run the probe when a cached facts obs exists) and CACHED
+    on the ToolContext so repeated paged/filtered calls don't re-resolve. Returns the facts
+    dict, or an error STRING when the sandbox is down / the artifact isn't an analyzable ELF."""
+    cached = ctx.cache.get("symbol_facts")
+    if cached is not None:
+        return cached
+    if not str(ctx.target.path or "").strip():
+        return "resolve_symbol needs a byte artifact (a Channel-reached surface has no ELF)"
+    from hexgraph.engine.re.binutils import collect_binutils_facts
+
+    out = collect_binutils_facts(ctx.session, ctx.project, ctx.target, source="agent")
+    if out.get("error"):
+        return out["error"]
+    facts = out.get("facts", {}) or {}
+    ctx.cache["symbol_facts"] = facts
+    return facts
+
+
+def _symbol_index(ctx: ToolContext) -> list[dict]:
+    """The target's ADDRESSED symbols as `{name, address(int)}` sorted by address — the shared
+    server-side symbol index for the address->name hop (re_resolve's degraded fallback + the
+    address selector in re_function_info). Sourced from the SAME binutils facts.symbols
+    resolve_symbol reads (nm rows carry name+address but NOT a size), so this is the no-pyelftools,
+    no-decompile floor: name + address only, over symbols that HAVE an address (defined funcs/data;
+    a bare UND import has none). Cached on the ToolContext. Returns [] when facts are unavailable
+    (the caller degrades) — never raises."""
+    cached = ctx.cache.get("symbol_index")
+    if cached is not None:
+        return cached
+    facts = _symbol_facts(ctx)
+    rows: list[dict] = []
+    if isinstance(facts, dict):
+        for sym in facts.get("symbols", []) or []:
+            name = sym.get("name")
+            addr = sym.get("address")
+            if not name or not addr:
+                continue
+            try:
+                rows.append({"name": name, "address": int(str(addr), 16)})
+            except (TypeError, ValueError):
+                continue  # a non-hex address row is skipped, not fatal
+    rows.sort(key=lambda r: r["address"])
+    ctx.cache["symbol_index"] = rows
+    return rows
+
+
+def _nearest_symbol_over_index(index: list[dict], vaddr: int) -> dict | None:
+    """The nearest indexed symbol AT-OR-BELOW `vaddr` as `{name, address, offset}`, via a binary
+    search over the address-sorted `_symbol_index` — the symbols-only nearest-symbol answer shared
+    by re_resolve's degraded path and re_function_info. None when the index is empty / all above."""
+    if not index:
+        return None
+    import bisect
+    values = [r["address"] for r in index]
+    idx = bisect.bisect_right(values, vaddr) - 1
+    if idx < 0:
+        return None
+    sym = index[idx]
+    return {"name": sym["name"], "address": sym["address"], "offset": vaddr - sym["address"]}
+
+
+def _resolve_address(ctx: ToolContext, args: dict) -> str:
+    """Triage a hex ADDRESS WITHOUT a decompile: {nearest_symbol + offset, section,
+    containing_function} — a crash-addr / pointer / DAT_ orientation. QUERY: records an
+    Observation; adds no graph nodes.
+
+    Assembled server-side from the on-disk ELF via pyelftools (`elf_layout.resolve_layout`):
+    section (always, when the address is mapped) + nearest defined symbol + the containing FUNC
+    when the symbol table knows it. PARTIAL by design — on a STRIPPED binary a private FUN_* has
+    no symtab entry, so `containing_function` is None and only the section + nearest dynsym come
+    back (a FUN_ name needs the warm decompiler). When pyelftools isn't installed in this venv
+    (it's probe-only per pyproject) it DEGRADES to a symbols-only nearest over the binutils
+    facts.symbols index — never a decompile, never a crash. Kept OUT of _ANALYSIS_GATED_TOOLS: it
+    must answer without a warm Ghidra project."""
+    addr = args.get("address")
+    if not addr:
+        return "error: 'address' argument is required (a hex address, e.g. 0x401200)"
+    if not _HEX_ADDR.match(str(addr)):
+        return f"error: invalid address {addr!r} — expected a hex address like 0x401200"
+    vaddr = int(str(addr), 16)
+    if not str(ctx.target.path or "").strip():
+        return "resolve_address needs a byte artifact (a Channel-reached surface has no ELF)"
+
+    from hexgraph.engine.re import elf_layout as _elf
+
+    layout = _elf.resolve_layout(ctx.target.path, vaddr)
+    section = layout.get("section")
+    nearest = layout.get("nearest_symbol")
+    containing = layout.get("containing_function")
+    degraded = bool(layout.get("degraded"))
+    note = ""
+    if degraded:
+        # pyelftools missing / the artifact isn't a readable ELF: fall back to the symbols-only
+        # nearest over binutils facts (name+addr, no section/containment — those need the ELF).
+        nearest = _nearest_symbol_over_index(_symbol_index(ctx), vaddr)
+        note = (" [degraded: pyelftools unavailable — nearest symbol only; "
+                f"{layout.get('error', 'no ELF layout')}]")
+
+    _record_obs(ctx, tool="resolve_address", args={"address": addr},
+                result_kind="address_resolve",
+                payload={"address": addr, "section": section, "nearest_symbol": nearest,
+                         "containing_function": containing, "degraded": degraded},
+                summary=(f"{addr}: "
+                         + (f"{nearest['name']}+{nearest['offset']:#x}" if nearest else "no symbol")
+                         + (f" in {section}" if section else "")))
+
+    lines = [f"resolve {addr}:{note}"]
+    if containing:
+        lines.append(f"- containing_function: {containing['name']} "
+                     f"[{containing['address']:#x}-{containing['end']:#x}, size {containing['size']}]")
+    else:
+        lines.append("- containing_function: (unknown — a stripped FUN_ needs a decompile)"
+                     if not degraded else "- containing_function: (unavailable — needs pyelftools)")
+    if nearest:
+        lines.append(f"- nearest_symbol: {nearest['name']} @ {nearest['address']:#x} "
+                     f"(+{nearest['offset']:#x})")
+    else:
+        lines.append("- nearest_symbol: (none at or below this address)")
+    lines.append(f"- section: {section}" if section else "- section: (not mapped / no section)")
+    return _clip("\n".join(lines))
+
+
+def _hexdump(ctx: ToolContext, args: dict) -> str:
+    """Dump raw BYTES at a virtual ADDRESS as hex + ascii (bounded — default 256, max 4096) — the
+    raw-bytes view of a DAT_ table / embedded key / struct / string constant. QUERY: records an
+    Observation; adds no graph nodes.
+
+    Maps the vaddr to a file offset via the ELF program headers and reads the on-disk artifact
+    server-side (`elf_layout.read_bytes`) — NO decompile, NO Docker. A .bss/zero-fill address reads
+    as 00 with a note; an unmapped address is REPORTED, not faked. When pyelftools isn't installed
+    (probe-only per pyproject) it DEGRADES to an error pointing at re_disassemble_range (which reads
+    raw bytes via r2), never silently returning wrong bytes. Kept OUT of _ANALYSIS_GATED_TOOLS."""
+    addr = args.get("address")
+    if not addr:
+        return "error: 'address' argument is required (a hex virtual address, e.g. 0x4c1000)"
+    if not _HEX_ADDR.match(str(addr)):
+        return f"error: invalid address {addr!r} — expected a hex address like 0x4c1000"
+    vaddr = int(str(addr), 16)
+    if not str(ctx.target.path or "").strip():
+        return "hexdump needs a byte artifact (a Channel-reached surface has no ELF)"
+
+    from hexgraph.engine.re import elf_layout as _elf
+
+    # Clamp the length to [1, HEXDUMP_MAX] and SAY when we clamped (the no-silent-caps discipline).
+    req = args.get("length")
+    length = _bound_page(req, _HEXDUMP_DEFAULT, 1, _elf.HEXDUMP_MAX)
+    clamp_note = ""
+    if req is not None:
+        try:
+            if int(req) > _elf.HEXDUMP_MAX:
+                clamp_note = f" [length clamped to {_elf.HEXDUMP_MAX}]"
+        except (TypeError, ValueError):
+            pass
+
+    out = _elf.read_bytes(ctx.target.path, vaddr, length)
+    if out.get("error"):
+        if out.get("degraded"):
+            # pyelftools missing / non-ELF: point at the r2 raw-bytes path rather than fake bytes.
+            return (f"hexdump unavailable ({out['error']}). Use re_disassemble_range(address="
+                    f"{addr}) for the raw bytes/instructions at this address (it reads via r2 in "
+                    "the sandbox).")
+        # A mapped-vs-unmapped miss: reported, never faked.
+        return f"{out['error']} ({addr})"
+
+    data = out.get("data") or b""
+    zero_fill = bool(out.get("zero_fill"))
+    zf_note = " [.bss/zero-fill region — bytes are 00, backed by no file data]" if zero_fill else ""
+    _record_obs(ctx, tool="hexdump", args={"address": addr, "length": length},
+                result_kind="hexdump",
+                payload={"address": addr, "length": len(data), "zero_fill": zero_fill,
+                         "hex": data.hex()},
+                summary=f"{len(data)} bytes at {addr}" + (" (.bss)" if zero_fill else ""))
+    header = f"hexdump @ {addr} ({len(data)} bytes){clamp_note}{zf_note}"
+    return _clip(f"{header}:\n{_elf.render_hexdump(data, vaddr)}")
+
+
+def _prior_decompilation_facts(ctx: ToolContext, name: str | None) -> dict | None:
+    """The focus facts (prototype/calling_convention/param_count/size/address) from an EXISTING
+    `decompilation` Observation for `name`, or None — so re_function_info returns a rich answer
+    when the function was ALREADY decompiled WITHOUT triggering a new decompile. Matches by
+    NORMALIZED name against the Observation's node_refs / focus name. Read-only over the store."""
+    if not name:
+        return None
+    from hexgraph.engine import observations as O
+    from hexgraph.engine.graph.nodes import normalize_symbol_name as _norm
+
+    key = _norm(name)
+    rows = O.list_observations(ctx.session, ctx.target.id, kind="decompilation")
+    for row in rows:
+        full = O.get_observation(ctx.session, row["id"]) or {}
+        focus = (full.get("payload") or {}).get("focus") or {}
+        fname = focus.get("name")
+        if fname and _norm(fname) == key:
+            return focus
+    return None
+
+
+def _nearest_name_hint(name: str, index: list[dict]) -> str | None:
+    """The index symbol name most like `name` for a 'not found' hint: the one sharing the LONGEST
+    common prefix (min 2 chars) with the query, so a truncated/typo'd `parse_XXX` hints
+    `parse_request`; falls back to a substring match either direction. None when nothing's close."""
+    if not index:
+        return None
+    from hexgraph.engine.graph.nodes import normalize_symbol_name as _norm
+
+    q = (_norm(name) or "").lower()
+    if not q:
+        return None
+
+    def _common_prefix_len(a: str, b: str) -> int:
+        n = 0
+        for ca, cb in zip(a, b):
+            if ca != cb:
+                break
+            n += 1
+        return n
+
+    best, best_len = None, 0
+    for r in index:
+        cand = r["name"]
+        cn = (_norm(cand) or "").lower()
+        cpl = _common_prefix_len(q, cn)
+        if cpl > best_len:
+            best, best_len = cand, cpl
+    if best is not None and best_len >= 2:
+        return best
+    # No useful shared prefix: try a substring match either way (a distinctive fragment).
+    for r in index:
+        cn = (_norm(r["name"]) or "").lower()
+        if q in cn or cn in q:
+            return r["name"]
+    return None
+
+
+def _function_info_tool(ctx: ToolContext, args: dict) -> str:
+    """Lightweight metadata for a function by NAME or ADDRESS WITHOUT a full decompile: address,
+    size, prototype/signature + calling convention (when known), and #callers / #callees. QUERY:
+    records an Observation; adds no graph nodes.
+
+    No-decompile floor (always available): #callers/#callees from the recon call-graph Observation
+    (`_recon_function_xrefs`, the same read-only substrate re_function_xrefs uses) + address from
+    the binutils symbol index. RICHER when free: prototype/calling_convention/param_count/size come
+    OPPORTUNISTICALLY from an EXISTING `decompilation` Observation for this function (if it was
+    already decompiled) — never by triggering a new decompile. Fields not recovered are marked
+    'unknown (decompile to recover)'. PARTIAL by design: precise size/prototype for a not-yet-
+    decompiled function need a decompile or an additive readelf-size probe field (DEFERRED)."""
+    function = args.get("function")
+    address = args.get("address")
+    if not function and not address:
+        return "error: 'function' or 'address' argument is required"
+
+    index = _symbol_index(ctx)
+    name: str | None = function
+    addr_int: int | None = None
+    sym_size: int | None = None
+
+    # Resolve the function name + address. By-NAME: look it up in the symbol index for its address.
+    # By-ADDRESS: the nearest symbol at-or-below names the function (mirrors decompile_at's
+    # analyze-at-address, but server-side over the symbol table — no probe).
+    if address:
+        if not _HEX_ADDR.match(str(address)):
+            return f"error: invalid address {address!r} — expected a hex address like 0x401200"
+        addr_int = int(str(address), 16)
+        near = _nearest_symbol_over_index(index, addr_int)
+        if near is not None and not name:
+            name = near["name"]
+    if name:
+        from hexgraph.engine.graph.nodes import normalize_symbol_name as _norm
+        key = _norm(name)
+        for r in index:
+            if _norm(r["name"]) == key:
+                addr_int = r["address"] if addr_int is None else addr_int
+                break
+
+    # #callers / #callees from the recon call-graph substrate (read-only; no decompile).
+    callers, callees = _recon_function_xrefs(ctx, name) if name else ([], [])
+
+    # A function we can neither find in the symbol index NOR the call graph is "not found" — offer
+    # the nearest name as a hint (mirrors the resolve/xrefs not-found style). "Nearest" = the index
+    # name sharing the longest common prefix with the query (so a typo'd/truncated `parse_XXX` hints
+    # `parse_request`), falling back to a substring match either direction.
+    known = (addr_int is not None) or callers or callees
+    if name and not known:
+        near = _nearest_name_hint(name, index)
+        hint = f" (nearest name: {near})" if near else ""
+        _record_obs(ctx, tool="function_info", args={k: v for k, v in
+                    (("function", function), ("address", address)) if v},
+                    result_kind="function_info",
+                    payload={"function": name, "found": False},
+                    summary=f"{name!r} not found")
+        return f"function {name!r} not found{hint}"
+
+    # OPPORTUNISTIC prototype/conv/size from a PRIOR decompilation Observation (free — no decompile).
+    focus = _prior_decompilation_facts(ctx, name)
+    prototype = (focus or {}).get("prototype") or (focus or {}).get("signature")
+    calling_convention = (focus or {}).get("calling_convention")
+    param_count = (focus or {}).get("param_count")
+    if focus:
+        # A decompile knows the address + size precisely; prefer them over the symbol index.
+        f_addr = focus.get("address")
+        if f_addr:
+            try:
+                addr_int = int(str(f_addr), 16) if isinstance(f_addr, str) else int(f_addr)
+            except (TypeError, ValueError):
+                pass
+        if isinstance(focus.get("size"), int) and focus["size"] > 0:
+            sym_size = focus["size"]
+
+    addr_str = f"{addr_int:#x}" if addr_int is not None else None
+    unknown = "unknown (decompile to recover)"
+    _record_obs(ctx, tool="function_info",
+                args={k: v for k, v in (("function", function), ("address", address)) if v},
+                result_kind="function_info",
+                payload={"function": name, "found": True, "address": addr_str, "size": sym_size,
+                         "prototype": prototype, "calling_convention": calling_convention,
+                         "param_count": param_count, "num_callers": len(callers),
+                         "num_callees": len(callees), "from_decompilation": bool(focus)},
+                summary=f"{name or address}: {len(callers)} callers, {len(callees)} callees")
+
+    src = " (prototype/size from a prior decompilation)" if focus else ""
+    lines = [f"function_info: {name or address}{src}",
+             f"- address: {addr_str or unknown}",
+             f"- size: {sym_size if sym_size is not None else unknown}",
+             f"- prototype: {prototype or unknown}",
+             f"- calling_convention: {calling_convention or unknown}",
+             f"- param_count: {param_count if param_count is not None else unknown}",
+             f"- callers: {len(callers)}", f"- callees: {len(callees)}"]
+    # A truncated caller/callee SAMPLE so this is a strict superset of re_function_xrefs' value
+    # without re-printing the whole listing (see the design note on re_function_info).
+    if callers:
+        sample = callers[:_FUNCINFO_SAMPLE]
+        more = f" … +{len(callers) - len(sample)} more" if len(callers) > len(sample) else ""
+        lines.append(f"  callers: {', '.join(sample)}{more}")
+    if callees:
+        sample = callees[:_FUNCINFO_SAMPLE]
+        more = f" … +{len(callees) - len(sample)} more" if len(callees) > len(sample) else ""
+        lines.append(f"  callees: {', '.join(sample)}{more}")
+    if not prototype:
+        lines.append("  (re_decompile_function to recover the prototype/size/calling convention)")
+    return _clip("\n".join(lines))
 
 
 def _binutils(ctx: ToolContext) -> str:
@@ -1180,6 +1864,127 @@ def _ghidra_xrefs(ctx: ToolContext, mode: str, subject: str | None) -> dict | No
     if not isinstance(out, dict) or out.get("error"):
         return None
     return out
+
+
+def _scripting_enabled() -> bool:
+    """True iff `features.ghidra.scripting` is on. re_script is an arbitrary-code-in-sandbox
+    surface, so the dispatch refuses it when off (defence in depth on top of the catalog gate that
+    hides it). A settings hiccup ⇒ False (fail-closed — never run the escape-hatch when the gate
+    can't be read)."""
+    try:
+        from hexgraph import settings as st
+
+        return bool(st.resolved().get("features", {}).get("ghidra", {}).get("scripting"))
+    except Exception:  # noqa: BLE001 — never let a settings read enable the gated tool
+        return False
+
+
+def _resolve_warm_ghidra_slot(ctx: ToolContext):
+    """Resolve the target's WARM Ghidra project slot, or None. Mirrors `analysis._slot_ctx` /
+    `GhidraDecompiler._resolve_slot`: the slot dir is HexGraph's OWN data (bind-mounted at
+    /ghidra-project), NOT target bytes. Only used by re_script, which is warm-only (the analysis
+    gate already returned the re_analyze lead on a cold miss), so a resolve failure is treated as
+    'no warm project'. Best-effort: never raises."""
+    project = ctx.project
+    target = ctx.target
+    artifact = getattr(target, "path", None)
+    data_dir = getattr(project, "data_dir", None)
+    if not artifact or not str(artifact).strip() or not data_dir:
+        return None
+    try:
+        from hexgraph.engine.re import ghidra_project as gp
+        from hexgraph.sandbox.runner import sandbox_image
+
+        sha = gp.content_hash(artifact)
+        version = gp.ghidra_version_for_image(sandbox_image())
+        slot = gp.resolve(data_dir, sha, version)
+        slot.prepare()
+        return slot
+    except Exception:  # noqa: BLE001 — a resolve failure reads as 'no warm slot'
+        return None
+
+
+def _run_script(ctx: ToolContext, args: dict) -> str:
+    """re_script: run an AGENT-SUPPLIED PyGhidra/Jython script over the target's WARM Ghidra project
+    READ-ONLY, in the same hardened sandbox every probe uses, and return its JSON output. Ghidra-only
+    (radare2 has no P-Code/warm-project surface — mirror how re_analyze rejects a non-Ghidra
+    backend). Gated behind features.ghidra.scripting (defence in depth: the catalog already hides
+    the tool when off). Records ONE `script` Observation; adds NO graph nodes. The target binary is
+    NEVER executed — Ghidra statically analyzes.
+
+    The script body rides `HEXGRAPH_USER_SCRIPT_B64` (base64) so it stays OFF the world-readable
+    docker argv; the probe decodes it, opens the warm project `-readOnly`, and runs it as the
+    -postScript under the SAME contract as HexGraph's built-in postScripts (out_path =
+    getScriptArgs()[0], write JSON there)."""
+    # Defence-in-depth gate check (the catalog gate hides the tool; this refuses it if it's still
+    # somehow dispatched while off).
+    if not _scripting_enabled():
+        return ("re_script is disabled. Enable features.ghidra.scripting in Settings to run an "
+                "agent-supplied Ghidra script (it's an arbitrary-code-in-sandbox surface, so it's "
+                "off by default).")
+    # Ghidra-only: radare2 has no warm-project / P-Code surface for a script to query. Mirror how
+    # re_analyze/xrefs select the headless-Ghidra backend.
+    if not _ghidra_xrefs_active():
+        return ("re_script needs headless Ghidra as the active decompiler backend (radare2 is not "
+                "supported — it has no warm project / P-Code API for a script). Enable "
+                "features.ghidra (mode=headless).")
+    script = args.get("script")
+    if not script or not str(script).strip():
+        return ("error: 'script' argument is required — a PyGhidra/Jython script that writes its "
+                "JSON result to getScriptArgs()[0].")
+    script = str(script)
+    nbytes = len(script.encode("utf-8"))
+    if nbytes > _SCRIPT_MAX_BYTES:
+        return (f"error: script is {nbytes} bytes, over the {_SCRIPT_MAX_BYTES}-byte cap for "
+                "re_script — trim it or split the query.")
+
+    from hexgraph.sandbox.runner import docker_available
+
+    if not docker_available():
+        return "re_script unavailable (Docker/sandbox not running)"
+    # Resolve the WARM slot (the analysis gate already returned the re_analyze lead on a cold miss,
+    # so reaching here means state='analyzed'). A resolve miss is still handled gracefully.
+    slot = _resolve_warm_ghidra_slot(ctx)
+    if slot is None or not slot.exists():
+        return ("re_script found no warm Ghidra project for this target. Run re_analyze(target) "
+                "first to build it ONCE (detached; poll until state='analyzed'), then retry — "
+                "re_script is warm-only and never runs a cold analysis.")
+
+    import base64
+
+    script_b64 = base64.b64encode(script.encode("utf-8")).decode("ascii")
+    from hexgraph.sandbox.executor import get_executor
+
+    try:
+        # SAME read-only sandbox seam every probe uses: run_json_probe defaults
+        # requires_execution=False + allow_network=False ⇒ --network none, --read-only, --cap-drop
+        # ALL, --user 1000. The script body is delivered via extra_env (off the argv); the warm
+        # project is bind-mounted and opened -readOnly IN THE PROBE, so the script cannot mutate it.
+        out = get_executor().run_json_probe(
+            "ghidra_probe.py", ctx.target.path,
+            extra_args=["--script"],
+            extra_env={"HEXGRAPH_USER_SCRIPT_B64": script_b64},
+            project_mount=str(slot.root),
+        )
+    except Exception as exc:  # noqa: BLE001 — surface a reason, let the agent recover
+        return f"re_script failed: {exc}"
+    if not isinstance(out, dict):
+        return f"re_script returned an unexpected result: {out!r}"
+
+    import json as _json
+
+    # Record ONE `script` Observation (a QUERY — zero graph nodes). The full payload is the
+    # script's own JSON; the summary notes success/error so obs_list is scannable.
+    err = out.get("error") if isinstance(out.get("error"), str) else None
+    summary = f"re_script error: {err}" if err else "re_script ran an agent Ghidra script"
+    obs, _cached = _record_obs(
+        ctx, tool="run_script", args={"script_bytes": nbytes},
+        result_kind="script", payload=out,
+        summary=summary, status=("error" if err else "ok"))
+    body = _json.dumps(out, default=str)
+    header = "// re_script output" + (" (error)" if err else "") + "\n"
+    return _clip_body(header + body, limit=_effective_limit(args.get("max_chars")),
+                      obs_id=obs.id if obs is not None else None)
 
 
 def _xrefs(ctx: ToolContext, symbol: str | None) -> str:
@@ -1485,6 +2290,149 @@ def _search_decompiled(ctx: ToolContext, query: str, *, limit: int = _MAX) -> st
     lines += [f"- {h['function']}: …{h['snippet']}…" for h in hits]
     return _clip_body("\n".join(lines), limit=limit,
                       obs_id=obs.id if obs is not None else None)
+
+
+def _search_code(ctx: ToolContext, args: dict) -> str:
+    """Search the WHOLE binary's code — code NOT necessarily decompiled yet (re_search_decompiled
+    covers already-decompiled bodies). Three sub-capabilities, each server-side orchestration:
+
+      • a BYTE pattern (`bytes_pattern`, hex) or an IMMEDIATE constant (`immediate`) scanned across the
+        mapped image via the r2 `--mode search` probe (`/xj`//`/vj`), each hit mapped to its
+        containing function — the genuinely-new capability;
+      • a decompile-on-demand GREP (`query`) over a BOUNDED candidate set the caller names in
+        `functions` — pure orchestration over the existing decompiler, bounded so an unbounded
+        whole-binary decompile (the cost the persistent project avoids) is NEVER triggered.
+
+    CALLERS of a symbol/sink are re_xrefs' job (whole-program, indexed) — this does NOT duplicate
+    it. A full pseudo-C grep over the WHOLE binary is DEFERRED: decompiling every function of a
+    large (hundreds-of-MB) service daemon is exactly that avoided cost, so it is intentionally
+    not offered.
+
+    QUERY: records a search_code Observation; adds no graph nodes."""
+    bytes_pat = args.get("bytes_pattern")
+    immediate = args.get("immediate")
+    functions = args.get("functions")
+    query = args.get("query")
+
+    if bytes_pat or immediate is not None:
+        return _search_code_scan(ctx, args, bytes_pat=bytes_pat, immediate=immediate)
+    if query is not None:
+        return _search_code_grep(ctx, args, query=query, functions=functions)
+    # Nothing actionable was asked — point at the three modes AND route callers-of-symbol to
+    # re_xrefs (never an unbounded whole-binary run).
+    return ("search_code needs one of: `bytes_pattern` (a hex byte/opcode pattern) or `immediate` (a "
+            "constant) to scan the whole image, OR `query` + `functions` (a decompile-on-demand "
+            "grep over the candidate functions you name — an unbounded whole-binary decompile is "
+            "not offered). To find the CALLERS of a symbol/sink, use re_xrefs instead (whole-"
+            "program, indexed).")
+
+
+def _search_code_grep(ctx: ToolContext, args: dict, *, query: str, functions) -> str:
+    """The decompile-on-demand grep: decompile ONLY the caller-named `functions` and grep their
+    pseudo-C for `query`. BOUNDED by `functions` (capped at _SEARCH_FUNCS_MAX) so the cost stays
+    the caller's to control — an empty/missing `functions` returns a clear 'name candidates'
+    message, NEVER an unbounded whole-binary decompile. QUERY: records an Observation."""
+    names = [str(f) for f in (functions or []) if str(f).strip()]
+    if not names:
+        return ("search_code(query=…) needs `functions` — name the candidate functions to grep "
+                "so the decompile cost is bounded and yours to control (an unbounded whole-binary "
+                "decompile is intentionally not offered). Use re_list_functions to pick candidates, "
+                "then pass them here; to search ALREADY-decompiled bodies with no new decompile use "
+                "re_search_decompiled, and to find CALLERS of a symbol use re_xrefs.")
+    clipped = len(names) > _SEARCH_FUNCS_MAX
+    names = names[:_SEARCH_FUNCS_MAX]
+
+    q = query.lower()
+    hits: list[dict] = []
+    decompiled = 0
+    misses: list[str] = []
+    for fn in names:
+        out = _decomp(ctx, fn)
+        if isinstance(out, dict) and out.get("error"):
+            misses.append(f"{fn} ({out['error']})")
+            continue
+        focus = out.get("focus") if isinstance(out, dict) else None
+        body = (focus or {}).get("pseudocode") if focus else None
+        if not body:
+            misses.append(f"{fn} (no body — unresolved or no analysis)")
+            continue
+        decompiled += 1
+        matched = [ln.strip() for ln in body.splitlines() if q in ln.lower()]
+        if matched:
+            hits.append({"function": focus.get("name") or fn, "lines": matched})
+
+    _record_obs(ctx, tool="search_code",
+                args={k: v for k, v in (("query", query), ("functions", names)) if v},
+                result_kind="search_code",
+                payload={"mode": "grep", "query": query, "functions": names,
+                         "decompiled": decompiled, "hits": hits, "misses": misses},
+                summary=f"grep {query!r} over {len(names)} function(s): "
+                        f"{len(hits)} matched (decompiled {decompiled})")
+
+    header = (f"search_code grep {query!r} over {len(names)} named function(s) "
+              f"(decompiled {decompiled}):")
+    note = (f"\n[bounded to the first {_SEARCH_FUNCS_MAX} of your {len(functions)} functions]"
+            if clipped else "")
+    lines = [header + note]
+    if hits:
+        for h in hits:
+            lines.append(f"- {h['function']}:")
+            lines += [f"    {ln}" for ln in h["lines"]]
+    else:
+        lines.append(f"(no line in the decompiled bodies of the named functions contains {query!r})")
+    if misses:
+        lines.append(f"not decompiled: {', '.join(misses)}")
+    return _clip("\n".join(lines))
+
+
+def _search_code_scan(ctx: ToolContext, args: dict, *, bytes_pat, immediate) -> str:
+    """The byte/immediate scan: run the r2 `--mode search` probe (`/xj`//`/vj`) over the mapped
+    image and map each hit to its containing function, PAGINATED (total + next offset reported,
+    the no-silent-caps discipline). QUERY: records an Observation; adds no graph nodes."""
+    from hexgraph.sandbox.executor import get_executor
+    from hexgraph.sandbox.runner import docker_available
+
+    if not docker_available():
+        return "search_code byte/immediate scan unavailable (Docker/sandbox not running)"
+    extra = ["--mode", "search"]
+    if bytes_pat:
+        extra += ["--bytes", str(bytes_pat)]
+        subj = f"bytes {bytes_pat!r}"
+    else:
+        extra += ["--imm", str(immediate)]
+        subj = f"immediate {immediate!r}"
+    try:
+        out = get_executor().run_json_probe("xrefs_probe.py", ctx.target.path, extra_args=extra)
+    except Exception as exc:  # noqa: BLE001
+        return f"search_code scan failed: {exc}"
+    if isinstance(out, dict) and out.get("error"):
+        return f"search_code: {out['error']}"
+
+    all_hits = (out or {}).get("hits") or []
+    total = len(all_hits)
+    offset = _bound_page(args.get("offset"), 0, 0, max(0, total))
+    limit = _bound_page(args.get("limit"), _SEARCH_PAGE, 1, _SEARCH_PAGE_MAX)
+    page = all_hits[offset:offset + limit]
+    next_offset = offset + len(page)
+    more = next_offset < total
+
+    _record_obs(ctx, tool="search_code",
+                args={k: v for k, v in (("bytes_pattern", bytes_pat), ("immediate", immediate),
+                                        ("offset", offset), ("limit", limit)) if v is not None and v != 0},
+                result_kind="search_code",
+                payload={"mode": "scan", "bytes_pattern": bytes_pat, "immediate": immediate,
+                         "hits": page, "total": total, "offset": offset, "limit": limit},
+                summary=f"scan {subj}: {total} hit(s); page {offset}-{next_offset}")
+
+    header = f"search_code scan for {subj} ({total} hit(s), showing {offset}-{next_offset}):"
+    body = "\n".join(
+        f"- {h['addr']}" + (f"  in {h['in_function']}" if h.get("in_function") else "  (no function)")
+        for h in page) or "(none)"
+    tail = ""
+    if more:
+        tail = (f"\n…[{total - next_offset} more — re-call with offset={next_offset}"
+                + (f", limit={limit}" if limit != _SEARCH_PAGE else "") + "]")
+    return _clip(f"{header}\n{body}{tail}")
 
 
 def _fuzz(ctx: ToolContext, args: dict) -> str:

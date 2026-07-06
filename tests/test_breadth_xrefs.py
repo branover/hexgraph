@@ -330,6 +330,20 @@ def test_probe_mode_and_injection_helpers():
     assert XP._resolve_seek("bad; name", set()) is None  # refused (unsafe → unfound)
 
 
+def test_search_mode_validators_and_helpers():
+    """The new byte/immediate SEARCH mode's validators (injection-safe) and the arg parsing."""
+    from hexgraph.sandbox.probes import xrefs_probe as XP
+
+    # byte patterns: even-length hex only (a hexpairs scan); an odd/garbage value is rejected upstream
+    assert XP._HEXPAIRS.match("deadbeef") and XP._HEXPAIRS.match("488b")
+    assert not XP._HEXPAIRS.match("0xdead")        # no 0x prefix for a byte pattern
+    assert not XP._HEXPAIRS.match("de ad")         # caller strips spaces; the regex itself is strict
+    # immediates: a hex (0x..) or decimal value; nothing that could inject
+    assert XP._IMM.match("0x1337") and XP._IMM.match("4919")
+    assert not XP._IMM.match("4919; rm -rf /")
+    assert not XP._IMM.match("deadbeef")           # bare hex w/o 0x is ambiguous -> not an immediate
+
+
 # --- NE: data_xrefs resolves a local/static symbol NAME via the symbol table -----------
 
 class _SymR2:
