@@ -198,6 +198,7 @@ def test_gated_tools_name_their_feature_in_the_description():
     gated = ["target_register_service", "target_register_remote", "target_rehost",
              "re_recover_constant", "finding_verify_poc", "net_http_request", "net_tcp_request",
              "net_remote_list_files", "net_remote_read_file", "net_remote_run", "net_remote_launch",
-             "src_build", "src_save_revision", "fuzz_start", "fuzz_list_environments"]
+             "src_build", "src_save_revision", "fuzz_start", "fuzz_list_environments",
+             "re_bridge_start", "re_bridge_stop", "re_bridge_status"]
     for name in gated:
         assert "features." in by_name[name], f"{name} doesn't name its features.* gate"

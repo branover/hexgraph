@@ -262,15 +262,18 @@ def blocking_message(target, op: str = "this operation") -> str | None:
 
 
 def bridge_endpoint(target) -> tuple[str, int] | None:
-    """For decompiler routing: `(ip, port)` when the target has a LIVE bridge, else None. Reads the
-    metadata entry (fast — the target is already in scope; the common no-bridge case does no docker
-    call) and confirms the port still accepts; a dead entry returns None (caller falls back to
-    headless; bridge_status will reap it). Never raises."""
+    """For decompiler routing: `(ip, port)` when the target has a LIVE bridge, else None. The common
+    no-bridge case (no metadata entry) does NO docker call and returns immediately. When an entry
+    exists, re-inspect the container BY NAME for its CURRENT ip — NOT the stored ip: a dead bridge's
+    Docker ip can be recycled by another container, which a bare port check alone wouldn't catch. A
+    gone container yields no ip → None (caller falls back to headless; bridge_status reaps the entry).
+    Never raises."""
     try:
         meta = bridge_meta(target)
         if not meta:
             return None
-        ip, port = meta.get("ip"), int(meta.get("port") or BRIDGE_PORT)
+        port = int(meta.get("port") or BRIDGE_PORT)
+        ip = _container_ip(meta.get("container")) if meta.get("container") else meta.get("ip")
         if ip and _serving(ip, port, timeout=1.0):
             return ip, port
     except Exception:  # noqa: BLE001 — routing must never break decompilation

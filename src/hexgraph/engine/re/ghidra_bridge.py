@@ -155,9 +155,15 @@ class GhidraBridgeDecompiler(Decompiler):
     def decompile(self, artifact: str, function: str | None = None, *,
                   address: str | None = None, reanalyze: bool = False, project=None) -> dict:
         # The bridge talks to a Ghidra you already have open (your project IS the cache);
-        # `project`/`reanalyze` are accepted for seam parity and ignored (re-analysis is
-        # the analyst's to drive in their live Ghidra). An address focus is passed through
+        # `project` is accepted for seam parity and ignored. An address focus is passed through
         # for the bridge to resolve.
+        if reanalyze:
+            # A resident bridge holds the project; re-analysis is a COLD re-import that can't run
+            # over the bridge (and would conflict with a headless re-import). Surface it rather than
+            # silently no-op the reanalyze — the caller (re_reanalyze) sees the actionable error.
+            return {"functions": [], "focus": None,
+                    "error": "a resident Ghidra bridge holds this target — re_bridge_stop first to "
+                             "re-analyze (a cold re-import), then restart the bridge"}
         return self._resolve().decompile(program=None, function=function or address)
 
 
