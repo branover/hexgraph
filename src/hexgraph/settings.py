@@ -69,6 +69,13 @@ DEFAULTS: dict[str, Any] = {
             # larger than the small per-call timeouts, so a monolith's analysis runs to completion
             # and commits its warm project instead of being killed mid-way (default 6h).
             "analysis_timeout_s": 21600,
+            # OFF by default. re_script — the escape-hatch that runs an AGENT-SUPPLIED
+            # PyGhidra/Jython script over the target's WARM project (READ-ONLY) inside the SAME
+            # hardened sandbox every probe uses (--network none, --read-only rootfs, --cap-drop
+            # ALL, non-root, no exec of the target). It relaxes NO sandbox boundary — but it is an
+            # arbitrary-code-in-sandbox surface, so it is opt-in: the tool is HIDDEN from the MCP
+            # catalog and refused by the dispatch unless this is on.
+            "scripting": False,
             "bridge": {"host": "127.0.0.1", "port": 4768},
         },
         "re": {
@@ -304,6 +311,7 @@ ALLOWED: dict[str, tuple[Any, set | None]] = {
     "features.ghidra.timeout": (int, None),
     "features.ghidra.project_cache_mb": (int, None),
     "features.ghidra.analysis_timeout_s": (int, None),
+    "features.ghidra.scripting": (bool, None),
     "features.re.r2_project_cache_mb": (int, None),
     "features.ghidra.bridge.host": (str, None),
     "features.ghidra.bridge.port": (int, None),

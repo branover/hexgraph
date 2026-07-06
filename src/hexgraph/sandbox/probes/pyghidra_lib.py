@@ -95,12 +95,42 @@ def _commit_marker() -> None:
 
 
 @contextlib.contextmanager
-def open_target(artifact, *, cold_analyze=True):
+def _read_only_program(project, prog_name):
+    """Open the warm program IMMUTABLE via DomainFile.getReadOnlyDomainObject — the returned
+    Program cannot be saved back into the persistent project (Ghidra rejects a write on a read-only
+    domain object). Used by the re_script path so an AGENT-SUPPLIED script can query the warm
+    project but NEVER mutate/corrupt it (the equivalent of the Jython path's analyzeHeadless
+    `-readOnly`). The consumer is released on exit; the project is closed by the caller."""
+    from ghidra.framework.model import DomainFile
+    from ghidra.program.model.listing import Program
+    from ghidra.util.task import ConsoleTaskMonitor
+
+    consumer = object()
+    df = project.getProjectData().getFile("/" + prog_name)
+    if df is None:
+        raise FileNotFoundError(f"program /{prog_name} not found in the warm project")
+    dobj = df.getReadOnlyDomainObject(consumer, DomainFile.DEFAULT_VERSION, ConsoleTaskMonitor())
+    if not Program.class_.isAssignableFrom(dobj.getClass()):
+        with contextlib.suppress(Exception):
+            dobj.release(consumer)
+        raise TypeError(f"/{prog_name} exists but is not a Program")
+    try:
+        yield dobj
+    finally:
+        with contextlib.suppress(Exception):
+            dobj.release(consumer)
+
+
+@contextlib.contextmanager
+def open_target(artifact, *, cold_analyze=True, read_only=False):
     """Yield `(program, flat, cached)` for the target. WARM (a committed slot at PROJECT_MOUNT):
     open the resident project + program, NO re-analysis. COLD: import + analyze; persist into the
     slot (+ commit the marker) when the mount is present, else a throwaway /scratch project.
 
-    `cached` is True on the warm path. The Program is closed / the project released on exit."""
+    `read_only` (re_script) opens the WARM program IMMUTABLE (getReadOnlyDomainObject) so an
+    agent-supplied script can query but never write the persistent project; it also forces warm-only
+    (no cold analysis for a read-only query) — a cold miss raises so the probe returns the re_analyze
+    lead. `cached` is True on the warm path. The Program is closed / the project released on exit."""
     import pyghidra
     from ghidra.program.flatapi import FlatProgramAPI
 
@@ -110,14 +140,20 @@ def open_target(artifact, *, cold_analyze=True):
     if proj_dir and _is_warm(proj_dir):
         project = pyghidra.open_project(proj_dir, PROJECT_NAME)
         try:
-            with pyghidra.program_context(project, "/" + prog_name) as program:
-                yield program, FlatProgramAPI(program), True
+            if read_only:
+                with _read_only_program(project, prog_name) as program:
+                    yield program, FlatProgramAPI(program), True
+            else:
+                with pyghidra.program_context(project, "/" + prog_name) as program:
+                    yield program, FlatProgramAPI(program), True
         finally:
             with contextlib.suppress(Exception):
                 project.close()
         return
 
-    if not cold_analyze:
+    if read_only or not cold_analyze:
+        # re_script is warm-only: never pay a cold import for a read-only query. The caller maps
+        # this to the re_analyze lead (mirrors the Jython --script warm-only refusal).
         raise RuntimeError("no warm analysis for this target (run re_analyze first)")
 
     # COLD import + analyze. Persist into the slot when mounted; else a throwaway.
@@ -716,7 +752,7 @@ _XREF_NETWORK_SINKS = ["socket", "bind", "listen", "accept", "accept4", "connect
 
 def xrefs_core(program, flat, monitor, mode, subject) -> dict:
     """Cross-reference queries served from the program's already-built ReferenceManager index
-    (ported 1:1 from XREFS_SCRIPT). Mirrors the r2 xrefs_probe output contract key-for-key.
+    (ported from XREFS_SCRIPT). Mirrors the r2 xrefs_probe output contract key-for-key.
     `mode` is callers | function | data | callgraph | sinks; `subject` a symbol/address (None for
     callgraph/sinks). A symbol the index doesn't know returns `not_found` (NOT a top-level error)."""
     MAX_REFS, MAX_SINK_REFS = 200, 30
@@ -733,9 +769,20 @@ def xrefs_core(program, flat, monitor, mode, subject) -> dict:
             return str(ref.getReferenceType())
 
     def _syms_named(name):
-        out, it = [], st.getSymbols(name)
-        while it.hasNext():
-            out.append(it.next())
+        # Resolve the symbol by name off the built symbol table. A leading '.' (a section-relative
+        # or thunk decoration) is stripped so a bare name still resolves.
+        base = (name or "").lstrip(".")
+        forms = [base] if base else []
+        out, seen = [], set()
+        for form in forms:
+            it = st.getSymbols(form)
+            while it.hasNext():
+                sym = it.next()
+                key = id(sym)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(sym)
         return out
 
     def _caller_target_addrs(name):
@@ -880,6 +927,80 @@ def xrefs_core(program, flat, monitor, mode, subject) -> dict:
 
     return {"mode": "sinks", "sinks": _sweep(_XREF_DEFAULT_SINKS),
             "format_sinks": _sweep(_XREF_FORMAT_SINKS), "network": _sweep(_XREF_NETWORK_SINKS)}
+
+
+# --- re_script: run an AGENT-SUPPLIED Python-3 script over the WARM program READ-ONLY -----------
+# The escape-hatch (gated OFF by default). Since the PyGhidra re-platform the agent's script is real
+# Python 3 (not a Jython postScript), so it runs IN-PROCESS against the resident program via exec()
+# in a controlled namespace — no analyzeHeadless, no -postScript, no subprocess. The program is
+# opened READ-ONLY by the caller (open_target(read_only=True) → getReadOnlyDomainObject) so the
+# script can query the warm project but never mutate/corrupt it. Delivery is unchanged from the
+# Jython path (HEXGRAPH_USER_SCRIPT_B64 → the probe → here); only the runtime moved in-process.
+
+def script_core(program, flat, monitor, user_script, *, out_path=None) -> dict:
+    """Run the agent-supplied Python-3 `user_script` body against the RESIDENT (read-only) program
+    and return its JSON result. The script's namespace exposes:
+
+        program  — the Ghidra Program (read-only DomainObject; writes are rejected by Ghidra)
+        flat     — a FlatProgramAPI over it
+        monitor  — a TaskMonitor
+        out_path — a scratch file path; write your JSON result there (the built-in-core convention)
+        getScriptArgs() — a shim returning [out_path] (so a script written to the postScript
+                          `out_path = getScriptArgs()[0]` contract keeps working unchanged)
+        result   — OR: assign a JSON-serializable object to `result` instead of writing out_path
+
+    The result is taken from an explicit `result` binding if the script set one, else parsed from
+    whatever the script wrote to `out_path` (JSON). Any exception in the body is caught and returned
+    as `{"error": ...}` (never propagated) so one bad script can't take down the probe/bridge. The
+    body runs with normal Python builtins — the ISOLATION is the sandbox (no network, --read-only
+    rootfs, dropped caps, non-root) + the read-only program, NOT a Python-level sandbox (which is
+    not a real boundary); the same trust model as every other probe running in the hardened cell."""
+    import traceback
+
+    if out_path is None:
+        out_path = os.path.join(SCRATCH, "hexgraph_user_script_out.json")
+    # Start each run from a clean out_path so a stale prior file can't be mistaken for this result.
+    with contextlib.suppress(OSError):
+        if os.path.exists(out_path):
+            os.remove(out_path)
+
+    def _get_script_args():
+        # Back-compat shim for scripts written to the Jython postScript contract (out_path = args[0]).
+        return [out_path]
+
+    ns = {
+        "__name__": "hexgraph_user_script",
+        "__builtins__": __builtins__,
+        "program": program,
+        "currentProgram": program,  # Ghidra-habit alias for the same read-only program
+        "flat": flat,
+        "monitor": monitor,
+        "out_path": out_path,
+        "getScriptArgs": _get_script_args,
+        "result": None,
+    }
+    try:
+        exec(compile(user_script, "<hexgraph_user_script>", "exec"), ns)  # noqa: S102 — see docstring
+    except Exception as exc:  # noqa: BLE001 — a script fault is DATA, never a crash of the probe
+        return {"tool": "ghidra_script", "error": f"user script exception: {exc}",
+                "tb": traceback.format_exc()}
+
+    # Prefer an explicit `result` binding; otherwise read the JSON the script wrote to out_path.
+    res = ns.get("result")
+    if res is not None:
+        out = res if isinstance(res, dict) else {"result": res}
+    else:
+        try:
+            with open(out_path) as fh:
+                out = json.load(fh)
+        except (OSError, ValueError) as exc:
+            return {"tool": "ghidra_script",
+                    "error": ("user script produced no result — assign a JSON-serializable object to "
+                              f"`result` or write JSON to out_path ({exc})")}
+    if not isinstance(out, dict):
+        out = {"result": out}
+    out.setdefault("tool", "ghidra_script")
+    return out
 
 
 def ghidra_version() -> str | None:

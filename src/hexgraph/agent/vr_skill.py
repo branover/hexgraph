@@ -284,7 +284,25 @@ scoped to the target's exact bytes. The two rules that make this cheap:
   neighbourhood around one function out to `depth`); `re_function_xrefs` is both directions for
   one function (callers + callees); `re_data_xrefs` finds every reference to an address or
   symbol (run it after a string/decompile surfaces an interesting datum).
-- **re_list_functions** then **re_decompile_function** — read the suspect functions as
+- **re_symbol** / **re_resolve** / **re_function_info** — fast navigation, NO decompile.
+  **re_symbol** searches the symbol table by name/regex (imports, exports, defined), returning
+  each hit's address, type, bind, and section — the name→address lookup to run before
+  `re_decompile_at`. Because the match is a substring, `re_symbol strcpy` also surfaces any
+  vendor-wrapped copy (a `*_strcpy`) the symbol table carries (see the sink note below).
+  **re_resolve** is the
+  inverse — an address → its containing function, nearest symbol+offset, and section (turn a
+  crash PC or a raw pointer into a name). **re_function_info** is one function's metadata (size,
+  prototype, callers, callees) without paying for its pseudo-C.
+- **re_hexdump** — raw bytes at a virtual address (ELF program-header mapped). Read a `DAT_`
+  table, an embedded key/blob, or a struct the decompiler renders as an opaque pointer.
+- **re_search_code** — scan the WHOLE image for a byte pattern or an immediate (r2 `/x`//`/v`),
+  plus a bounded decompile-on-demand grep: find every site that loads a magic constant or a
+  known opcode sequence, even where no function is defined yet.
+- **re_search_symbols_project** — search symbol NAMES across EVERY target in the project (the
+  name analogue of `re_yara_sweep`): which loaded library defines or imports `system`, an
+  `EVP_*`, a vendor helper — routes you to the right binary before you decompile.
+- **re_list_functions** (name/regex `pattern` + `offset`/`limit` paging — not a blunt top-N
+  dump) then **re_decompile_function** — read the suspect functions as
   pseudo-C. **re_decompile_at** when you have an address (from `re_xrefs`, a string, a crash
   backtrace) but no name. **re_disassemble** when you need instruction-level detail the
   decompiler smooths over. **re_disassemble_range** is the fallback when *both* backends miss
@@ -308,7 +326,10 @@ Reverse engineering for VR is taint reasoning. You're answering: *can attacker-c
 reach a dangerous operation without adequate validation?*
 1. **Enumerate sinks** with `re_xrefs` (no symbol). Memory-unsafe copies (strcpy/memcpy/sprintf),
    command execution (system/popen/exec*), format strings, and the bind/recv sites are your
-   candidates.
+   candidates. *If a bare sink name has no callers, the real symbol may be vendor-wrapped* — some
+   firmware toolchains expose their libc copies under a prefix (e.g. a `*_strcpy`). `re_symbol
+   strcpy` (substring) surfaces those wrapped forms with their addresses; then `re_xrefs <that
+   symbol>` lists the callers.
 2. **Find the sources.** Network reads, CGI/env (`getenv`, `QUERY_STRING`), argv, file/NVRAM
    reads. The firmware filesystem (below) often hands you the source directly (a CGI script's
    parameter, an nvram key).
@@ -343,6 +364,38 @@ reach a dangerous operation without adequate validation?*
   live PoC). Heavy but bounded (its own angr image), so check `obs_list(target, kind='solver')`
   before re-running. **Gated: features.angr** — and these two tools are HIDDEN from your tool
   list until the gate is on, so if you don't see them, the operator hasn't enabled angr.
+
+## Run a custom query against the warm analysis DB (gated)
+The curated `re_*` verbs answer the common questions, but the full Ghidra analysis — the P-Code,
+the recovered CFG, the data types, the whole symbol table — holds far more than any fixed verb
+exposes. **re_script(target, script=…)** is the escape hatch: an agent-supplied **Python 3**
+script run *inside the sandbox* against the SAME warm, fully-analysed program the other verbs
+reuse, opened **READ-ONLY** (it queries everything but can never mutate or save the project, and
+the target is never executed). Full Ghidra-API reach without waiting for a bespoke tool per
+question.
+- **The point: mine the analysis you already paid for.** A big binary's analysis is expensive
+  exactly once (a large monolith can take many hours); every `re_script` call then queries that
+  resident database in seconds. Reach for it when the fixed verbs can't phrase the question: a backward data-flow
+  slice from a sink's size argument, a function's exact stack-frame layout (buffer offset vs.
+  saved-canary vs. return-address — the arithmetic behind an overflow), the switch/dispatch
+  table behind an indirect call, every reference to one structure field, a BSim/FunctionID pass
+  to put names on `FUN_*` bodies, or an info-leak hunt for a routine that copies uninitialised
+  stack into a reply.
+- **The contract.** The namespace exposes `program`/`currentProgram` (the analysed `Program`),
+  `flat` (a `FlatProgramAPI`), `monitor`, and `out_path`; `import ghidra.*` freely. Return
+  results by writing JSON to `out_path` (or assigning a JSON-serialisable `result`) — that becomes
+  the tool output (truncates to `max_chars`; recover the tail with `obs_get`). The script body is
+  capped at 64 KiB and delivered off the argv; it records ONE `script` Observation, no graph nodes.
+  A compact example — dump a function's stack frame to see the overflow math:
+
+      f = flat.getFunctionContaining(flat.toAddr(0x00abc123))   # or getFunction("FUN_00abc123")
+      rows = [{"name": v.getName(), "off": v.getStackOffset(), "size": v.getLength()}
+              for v in f.getStackFrame().getStackVariables()]
+      import json; open(out_path, "w").write(json.dumps(rows))
+- **Warm-only, Ghidra-only, gated.** Run `re_analyze(target)` first; unavailable on a
+  radare2-only project. **Gate: features.ghidra.scripting** — OFF by default, and the tool is
+  HIDDEN from your list until the operator enables it. If you don't see `re_script`, scripting
+  isn't on: use the curated verbs, or ask the operator to enable it for a one-off deep query.
 
 ## Browse a firmware's unpacked filesystem (configs, scripts, keys — not just code)
 A firmware target unpacks into a filesystem, and a large share of real findings live in its

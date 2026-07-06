@@ -9,6 +9,11 @@ or a hex address) and an optional `--mode`:
   --mode function   callers AND callees of one function (the bidirectional view).
   --mode data       data/string/code xrefs TO an address (who references it).
   --mode callgraph  the whole-program call graph as [caller, callee] pairs.
+  --mode search     scan the mapped image for a BYTE pattern (`--bytes <hexpairs>`,
+        r2 `/xj`) or an IMMEDIATE value (`--imm <value>`, r2 `/vj`), each hit mapped
+        to the function that contains it. The "reach code NOT yet decompiled" verb
+        (callers-of-a-symbol is `--mode callers` / re_xrefs; this is the constant/opcode
+        scan re_search_decompiled and the call-graph can't answer).
 
 This is the "find the path from input to a dangerous sink" accelerator, plus the
 breadth verbs (a function's neighbours, references to an address, the call graph).
@@ -28,9 +33,15 @@ _ADDR = re.compile(r"^0x[0-9a-fA-F]+$")
 # A symbol/function name interpolated into `axffj @ <name>`; only real symbol-name
 # characters, so an unresolved name can't reach the shell (mirrors decompile_probe).
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9_.@$:]+$")
+# A byte pattern for `/xj` — hex pairs (whitespace tolerated), and an immediate value
+# for `/vj`. Both are validated STRICTLY before interpolation into the r2 command so a
+# search argument can never inject (mirrors the address/name discipline above).
+_HEXPAIRS = re.compile(r"^[0-9A-Fa-f]{2,}$")
+_IMM = re.compile(r"^(?:0x[0-9A-Fa-f]+|[0-9]+)$")
 
 _MAX_GRAPH_FUNCS = 600   # bound the call-graph sweep (mirrors the Ghidra POST_SCRIPT caps)
 _MAX_GRAPH_EDGES = 2000
+_MAX_SEARCH_HITS = 200   # bound a byte/immediate scan so a common pattern can't flood
 
 # Memory-unsafe + command/exec sinks: untrusted data reaching any of these is
 # almost always a bug regardless of context.
@@ -191,17 +202,68 @@ def _call_graph(r2) -> list[list[str]]:
     return edges
 
 
+def _fn_at(r2, off: int) -> str | None:
+    """The name of the function CONTAINING address `off`, via `afij @ <off>` (bounded to a
+    single function). None when no function is defined there — a hit in raw data/padding."""
+    try:
+        info = json.loads(r2.cmd(f"afij @ {off}") or "[]")
+    except json.JSONDecodeError:
+        return None
+    if isinstance(info, list) and info:
+        return info[0].get("name")
+    return None
+
+
+def _search(r2, *, bytes_pat: str | None, imm: str | None) -> dict:
+    """Scan the mapped image for a byte pattern (`/xj <hexpairs>`) or an immediate value
+    (`/vj <value>`), returning hits [{addr, in_function}] (each mapped to its containing
+    function). The pattern/value is validated by the caller, so it can't inject here."""
+    if bytes_pat is not None:
+        cmd, term = f"/xj {bytes_pat}", {"kind": "bytes", "pattern": bytes_pat}
+    else:
+        cmd, term = f"/vj {imm}", {"kind": "immediate", "value": imm}
+    try:
+        raw = json.loads(r2.cmd(cmd) or "[]")
+    except json.JSONDecodeError:
+        raw = []
+    hits: list[dict] = []
+    seen: set[int] = set()
+    for h in raw:
+        # r2 `/xj` and `/vj` report the match address under `addr`; accept `offset` too so a
+        # future r2 output shape (or a `/j`-family alias) still resolves.
+        off = h.get("addr")
+        if not isinstance(off, int):
+            off = h.get("offset")
+        if not isinstance(off, int) or off in seen:
+            continue
+        seen.add(off)
+        hits.append({"addr": hex(off), "in_function": _fn_at(r2, off)})
+        if len(hits) >= _MAX_SEARCH_HITS:
+            break
+    return {"tool": "xrefs_probe", "mode": "search", **term,
+            "hits": hits, "total": len(seen)}
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print(json.dumps({"error": "usage: xrefs_probe.py <artifact> [subject] [--mode MODE]"}))
         return 2
     path = sys.argv[1]
     rest = sys.argv[2:]
-    mode = "callers"
-    if "--mode" in rest:
-        i = rest.index("--mode")
-        mode = rest[i + 1] if i + 1 < len(rest) else "callers"
-        rest = rest[:i] + rest[i + 2:]
+
+    def _take_flag(name: str) -> str | None:
+        # Pull a `--flag value` pair out of `rest` (like --mode), returning its value or None.
+        nonlocal rest
+        if name in rest:
+            i = rest.index(name)
+            val = rest[i + 1] if i + 1 < len(rest) else None
+            rest = rest[:i] + rest[i + 2:]
+            return val
+        return None
+
+    mode = _take_flag("--mode") or "callers"
+    bytes_pat = _take_flag("--bytes")
+    imm = _take_flag("--imm")
     positionals = [a for a in rest if not a.startswith("--")]
     subject = positionals[0] if positionals else None
 
@@ -220,7 +282,26 @@ def main() -> int:
         except json.JSONDecodeError:
             pass
 
-        if mode == "callgraph":
+        if mode == "search":
+            # Validate the pattern/value STRICTLY before it reaches the r2 command (injection
+            # safety, same discipline as _ADDR/_SAFE_NAME). Exactly one of --bytes/--imm.
+            clean = bytes_pat.replace(" ", "") if bytes_pat else None
+            if clean is not None:
+                if not _HEXPAIRS.match(clean) or len(clean) % 2:
+                    print(json.dumps({"tool": "xrefs_probe", "mode": "search",
+                                      "error": "bytes must be an even-length hex string, e.g. 'deadbeef'"}))
+                    return 0
+                print(json.dumps(_search(r2, bytes_pat=clean, imm=None)))
+            elif imm is not None:
+                if not _IMM.match(imm):
+                    print(json.dumps({"tool": "xrefs_probe", "mode": "search",
+                                      "error": "immediate must be a hex (0x..) or decimal value"}))
+                    return 0
+                print(json.dumps(_search(r2, bytes_pat=None, imm=imm)))
+            else:
+                print(json.dumps({"tool": "xrefs_probe", "mode": "search",
+                                  "error": "search needs --bytes <hexpairs> or --imm <value>"}))
+        elif mode == "callgraph":
             edges = _call_graph(r2)
             print(json.dumps({"tool": "xrefs_probe", "mode": "callgraph",
                               "calls": edges, "total": len(edges)}))

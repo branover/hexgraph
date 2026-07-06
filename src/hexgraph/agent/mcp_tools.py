@@ -871,8 +871,71 @@ def bridge_status(target_id: str) -> dict:
         return _bridge_status(s, s.get(Project, t.project_id), t)
 
 
-def list_functions(target_id: str) -> str:
-    return _tool(target_id, "list_functions", {})
+def list_functions(target_id: str, pattern: str | None = None,
+                   offset: int | None = None, limit: int | None = None,
+                   regex: bool | None = None) -> str:
+    """GREP the target's FULL discovered function list (name search) with offset/limit
+    pagination — mirrors list_strings."""
+    a: dict = {}
+    if pattern:
+        a["pattern"] = pattern
+    if offset is not None:
+        a["offset"] = offset
+    if limit is not None:
+        a["limit"] = limit
+    if regex:
+        a["regex"] = True
+    return _tool(target_id, "list_functions", a)
+
+
+def resolve_symbol(target_id: str, pattern: str | None = None,
+                   kind: str | None = None, offset: int | None = None,
+                   limit: int | None = None, regex: bool | None = None) -> str:
+    """Search/resolve the symbol table (imports + exports + defined syms) by name
+    substring/regex -> {name,address,type,bind,defined|UND,section}. Server-side over
+    binutils facts."""
+    a: dict = {}
+    if pattern:
+        a["pattern"] = pattern
+    if kind:
+        a["kind"] = kind
+    if offset is not None:
+        a["offset"] = offset
+    if limit is not None:
+        a["limit"] = limit
+    if regex:
+        a["regex"] = True
+    return _tool(target_id, "resolve_symbol", a)
+
+
+def resolve_address(target_id: str, address: str) -> str:
+    """Given a hex ADDRESS, return {containing_function?, nearest_symbol+offset, section}
+    WITHOUT a full decompile — lightweight crash-addr / pointer / DAT_ triage. Assembled
+    server-side from the symbol + section tables (pyelftools over the on-disk ELF)."""
+    return _tool(target_id, "resolve_address", {"address": address})
+
+
+def hexdump(target_id: str, address: str, length: int | None = None) -> str:
+    """Raw bytes at a virtual ADDRESS as hex+ascii (bounded, default 256, max 4096) —
+    for inspecting DAT_ tables/keys/structs. Maps vaddr->file offset via ELF program
+    headers and reads the on-disk artifact server-side."""
+    a: dict = {"address": address}
+    if length is not None:
+        a["length"] = length
+    return _tool(target_id, "hexdump", a)
+
+
+def function_info(target_id: str, function: str | None = None,
+                  address: str | None = None) -> str:
+    """Lightweight metadata for a function by NAME or ADDRESS: address, size,
+    prototype/signature (if known), calling convention, #callers, #callees — WITHOUT
+    a full decompile."""
+    a: dict = {}
+    if function:
+        a["function"] = function
+    if address:
+        a["address"] = address
+    return _tool(target_id, "function_info", a)
 
 
 def read_imports(target_id: str) -> str:
@@ -912,6 +975,22 @@ def yara_sweep(project_id: str, ruleset: str | None = None) -> dict:
         if p is None:
             return {"error": "project not found"}
         return sweep_project(s, p, ruleset=ruleset, source="agent")
+
+
+def search_symbols_project(project_id: str, pattern: str,
+                           kind: str | None = None, regex: bool | None = None,
+                           limit: int | None = None) -> dict:
+    """Search a symbol/function NAME pattern across ALL targets in a project -> which
+    target(s) define/import it (the name analogue of yara_sweep). Engine-level; reads
+    per-target recon metadata + binutils/function Observations, no probe."""
+    from hexgraph.engine.re.binutils import search_symbols_project as _search
+
+    with session_scope() as s:
+        p = s.get(Project, project_id)
+        if p is None:
+            return {"error": "project not found"}
+        return _search(s, p, pattern=pattern, kind=kind,
+                       regex=bool(regex), limit=limit)
 
 
 def list_strings(target_id: str, pattern: str | None = None,
@@ -964,6 +1043,41 @@ def search_decompiled(target_id: str, query: str, max_chars: int | None = None) 
     if max_chars is not None:
         a["max_chars"] = max_chars
     return _tool(target_id, "search_decompiled", a)
+
+
+def search_code(target_id: str, bytes_pattern: str | None = None,
+                immediate: str | None = None, functions: list | None = None,
+                query: str | None = None, offset: int | None = None,
+                limit: int | None = None) -> str:
+    """Search the WHOLE binary's code: a byte/opcode pattern (bytes_pattern, hex),
+    an immediate/constant (immediate), or a decompile-on-demand grep (query) over a
+    bounded candidate set (functions). Callers-of-a-symbol -> use re_xrefs."""
+    a: dict = {}
+    if bytes_pattern:
+        a["bytes_pattern"] = bytes_pattern
+    if immediate is not None:
+        a["immediate"] = immediate
+    if functions:
+        a["functions"] = functions
+    if query:
+        a["query"] = query
+    if offset is not None:
+        a["offset"] = offset
+    if limit is not None:
+        a["limit"] = limit
+    return _tool(target_id, "search_code", a)
+
+
+def run_script(target_id: str, script: str, max_chars: int | None = None) -> str:
+    """Run an AGENT-SUPPLIED PyGhidra/Jython `script` against a target's WARM Ghidra project and
+    return its JSON output — the escape-hatch for a Ghidra-API query no pre-built tool covers
+    (data-flow slicing, BSim/FID, stack-frame analysis). See the catalog description for the
+    out_path/getScriptArgs()[0] JSON contract; Ghidra-only, gated, warm-only, read-only, never
+    runs the target. `max_chars` raises the inlined-output cap (default 6000, clamped)."""
+    a: dict = {"script": script}
+    if max_chars is not None:
+        a["max_chars"] = max_chars
+    return _tool(target_id, "run_script", a)
 
 
 def _node_dict(n: Node) -> dict:

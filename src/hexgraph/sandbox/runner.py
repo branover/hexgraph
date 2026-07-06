@@ -429,6 +429,7 @@ class SandboxRunner:
         network_gate: str = "network",
         image: str | None = None,
         project_mount: str | Path | None = None,
+        extra_env: dict[str, str] | None = None,
     ) -> RunResult:
         """Run a probe script over `artifact` inside the sandbox.
 
@@ -470,6 +471,12 @@ class SandboxRunner:
         ghidra path adds; EVERY other hardening flag (`--read-only` rootfs, `--network none`,
         `--cap-drop ALL`, `--no-new-privileges`, `--user 1000:1000`) is unchanged. The dir is
         made writable for the container uid exactly like /out (`_ensure_outdir_writable`).
+
+        `extra_env` passes HexGraph-set probe env vars as separate `-e K=V` argv (no shell
+        interpolation — see `_hardening_args`), the SAME channel `start_detached` already exposes.
+        NOT a security relaxation: it only injects env into the already-hardened container (the
+        re_script path uses it to deliver the agent's script body out-of-band via
+        HEXGRAPH_USER_SCRIPT_B64, off the world-readable argv). Every hardening flag is untouched.
         """
         if requires_execution:
             from hexgraph.policy import assert_allows_execution
@@ -509,7 +516,7 @@ class SandboxRunner:
             # huge ELF whose full auto-analysis would outrun the budget — F13). Informational only.
             "-e", f"HEXGRAPH_PROBE_TIMEOUT_S={timeout}",
             *self._hardening_args(allow_network=allow_network, net_container=net_container,
-                                  resources=resources, secret=bool(secret)),
+                                  resources=resources, secret=bool(secret), extra_env=extra_env),
             # A channel probe (live target, no bytes at rest) mounts no artifact.
             *(["-v", f"{artifact}:/artifact:ro"] if artifact is not None else []),
         ]
@@ -592,12 +599,14 @@ class SandboxRunner:
         allow_network: bool = False,
         resources: ResourceSpec | None = None,
         project_mount: str | Path | None = None,
+        extra_env: dict[str, str] | None = None,
     ) -> dict:
         """Run a probe whose stdout is a single JSON object, and parse it."""
         result = self.run_probe(
             probe, artifact, outdir=outdir, extra_args=extra_args,
             requires_execution=requires_execution, extra_ro_mounts=extra_ro_mounts,
             allow_network=allow_network, resources=resources, project_mount=project_mount,
+            extra_env=extra_env,
         )
         try:
             return json.loads(result.stdout)

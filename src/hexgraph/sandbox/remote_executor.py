@@ -230,7 +230,7 @@ class RemoteDockerExecutor(SandboxRunner):
     def run_probe(self, probe, artifact, *, outdir=None, extra_args=None,
                   requires_execution=False, extra_ro_mounts=None, allow_network=False,
                   net_container=None, secret=None, resources=None, network_gate="network",
-                  image=None, project_mount=None) -> RunResult:
+                  image=None, project_mount=None, extra_env=None) -> RunResult:
         if project_mount is not None:
             # The persistent Ghidra project cache (engine.re.ghidra_project) lives on the LOCAL
             # data dir; a writable cross-host project mount is not wired for the staged-volume
@@ -259,7 +259,7 @@ class RemoteDockerExecutor(SandboxRunner):
         wrap = self._wrap_cmd(probe, extras=staged.extras, probe_args=probe_args)
         cmd = ["run", "--rm", "--name", name,
                *self._hardening_args(allow_network=allow_network, net_container=net_container,
-                                     resources=resources, secret=bool(secret)),
+                                     resources=resources, secret=bool(secret), extra_env=extra_env),
                *self._tmpfs_for_extras(staged.extras),
                "-v", f"{staged.vol}:/stage", image or self.image, *wrap]
         # HG_CHANNEL_SECRET rides the docker subprocess env (the `-e` flag was declared by
@@ -294,11 +294,12 @@ class RemoteDockerExecutor(SandboxRunner):
 
     def run_json_probe(self, probe, artifact, *, outdir=None, extra_args=None,
                        requires_execution=False, extra_ro_mounts=None, allow_network=False,
-                       resources=None, project_mount=None) -> dict:
+                       resources=None, project_mount=None, extra_env=None) -> dict:
         result = self.run_probe(probe, artifact, outdir=outdir, extra_args=extra_args,
                                 requires_execution=requires_execution,
                                 extra_ro_mounts=extra_ro_mounts, allow_network=allow_network,
-                                resources=resources, project_mount=project_mount)
+                                resources=resources, project_mount=project_mount,
+                                extra_env=extra_env)
         try:
             return json.loads(result.stdout)
         except json.JSONDecodeError as exc:
