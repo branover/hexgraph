@@ -239,19 +239,31 @@ class GhidraBridgeDecompiler(Decompiler):
     # The rest of the Ghidra op surface, served by the MANAGED bridge (routed via
     # `sandbox.decompiler.ghidra_op_backend`). Same signatures as `GhidraDecompiler`'s so a call site
     # can ask either backend identically; `project` is accepted for seam parity and ignored (a live
-    # bridge IS the warm project). Only reachable with `_ManagedOps` (never the researcher-Ghidra
-    # `_RemoteOps`), which implements each op.
+    # bridge IS the warm project).
+    def _managed(self) -> "_ManagedOps":
+        """These ops are served ONLY by the managed per-target bridge; a bare
+        GhidraBridgeDecompiler() in researcher-`bridge` mode drives the jfx `_RemoteOps`, which has no
+        such methods. Guard with a clear error rather than an opaque AttributeError. Not reachable
+        today — every call site routes via `ghidra_op_backend`, which only builds it with a
+        `connect_managed` ops — but keeps the seam honest if that changes."""
+        ops = self._resolve()
+        if not isinstance(ops, _ManagedOps):
+            raise BridgeUnavailable(
+                "this Ghidra op is served only by a managed per-target bridge (re_bridge_start); "
+                "the researcher-Ghidra bridge is decompile-only")
+        return ops
+
     def xrefs(self, artifact: str, *, mode: str, subject: str | None = None, project=None) -> dict:
-        return self._resolve().xrefs(mode, subject)
+        return self._managed().xrefs(mode, subject)
 
     def run_taint(self, artifact: str, *, project=None) -> dict:
-        return self._resolve().run_taint()
+        return self._managed().run_taint()
 
     def run_emulate(self, artifact: str, function: str, *, project=None) -> dict:
-        return self._resolve().run_emulate(function)
+        return self._managed().run_emulate(function)
 
     def rename_function(self, artifact: str, *, address: str, new_name: str, project=None) -> dict:
-        return self._resolve().rename_function(address, new_name)
+        return self._managed().rename_function(address, new_name)
 
 
 def list_open_programs(ops: BridgeOps | None = None) -> list[dict]:

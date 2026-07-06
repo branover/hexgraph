@@ -237,6 +237,12 @@ def _apply_rename(program, flat, addr, new_name) -> bool:
     finally:
         program.endTransaction(txid, ok)
     if ok:
+        # Persist the rename. On the WARM path (a resident bridge, or a warm headless rename) this
+        # explicit save is what makes it durable — open_target's warm branch closes the project
+        # WITHOUT saving, and a resident bridge never exits. On the rare COLD headless rename (slot
+        # not yet analyzed) auto-analysis leaves the DB transaction settling, so this save raises and
+        # is suppressed — but there the rename still persists via open_program's context-exit
+        # project.save (the #265 cold-analyze mechanism). Either way the rename sticks.
         with contextlib.suppress(Exception):
             program.save("hexgraph rename", ConsoleTaskMonitor())
     return ok
@@ -930,8 +936,10 @@ def bridge_dispatch(program, flat, monitor, req) -> dict:
         if op == "emulate":
             return emulate_core(program, flat, monitor, req.get("focus"))
         if op == "rename":
-            result = decompile_core(program, flat, monitor,
-                                    rename=(req.get("address"), req.get("new_name")))
+            address, new_name = req.get("address"), req.get("new_name")
+            if not address or not new_name:
+                return {"error": "rename requires 'address' and 'new_name'"}
+            result = decompile_core(program, flat, monitor, rename=(address, new_name))
             result["tool"] = "ghidra_bridge"
             return result
         return {"error": f"unknown bridge op {op!r}"}
