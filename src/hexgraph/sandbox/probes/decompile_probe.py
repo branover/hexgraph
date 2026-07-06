@@ -394,7 +394,11 @@ def main() -> int:
         if tok.startswith("--"):
             continue
         positionals.append(tok)
-    focus_arg = positionals[0] if positionals else None
+    # --analyze: the DETACHED whole-binary analysis run (re_analyze's r2 path) — a full `aaa` + `Ps`
+    # + commit-the-warm-marker, with NO focus. start_detached appends a /out positional the probe
+    # would otherwise treat as a focus function name, so force it off (mirrors ghidra_probe --analyze).
+    analyze_mode = "--analyze" in rest
+    focus_arg = None if analyze_mode else (positionals[0] if positionals else None)
 
     try:
         import r2pipe

@@ -1,28 +1,34 @@
 """Explicit, detached whole-binary analysis — `re_analyze` (the analyze half of the
 analyze/decompile split).
 
-Analysis (Ghidra import + auto-analysis) is the ONE expensive step. The per-call tools
-(decompile / xref / list_functions / call_graph / taint / emulate) must NOT trigger it
-implicitly — they gate on a saved analysis and point here (that gating is a follow-up). `re_analyze`
-runs the analysis as a DETACHED background container with its OWN generous budget, so it actually
-runs to completion and COMMITS the warm project — unlike a per-call cold analysis, which the
-size-scaled per-call timeout kills before it can commit (an operator hit exactly that: repeated
-40-minute cold analyses that never became warm).
+Analysis — Ghidra's import + auto-analysis, or radare2's whole-binary `aaa` — is the ONE expensive
+step. The per-call tools (decompile / xref / list_functions / call_graph / taint / emulate) must NOT
+trigger it implicitly — they gate on a saved analysis and point here. `re_analyze` runs the analysis
+as a DETACHED background container with its OWN generous budget, so it actually runs to completion
+and COMMITS the warm project — unlike a per-call cold analysis, which the size-scaled per-call
+timeout kills before it can commit (an operator hit exactly that: repeated 40-minute cold analyses
+that never became warm).
 
-**Single-flight.** The detached container is named deterministically from the artifact's content
-hash (`hexgraph-analyze-<sha16>`). A second `re_analyze` of the same target ATTACHES to the running
-one instead of starting a duplicate — docker container names are host-global, so this dedups across
-sessions and processes AND survives the launching process (unlike the fcntl slot lock, whose release
-on a dead launcher caused the incident's duplicate cold analyses). The warm marker the probe commits
-as its last step is the completion signal: container-exit + `slot.exists()` == analyzed.
+**Backend-aware.** Both persistent backends are covered: headless Ghidra (the `ghidra_project` warm
+project, `ghidra_probe --analyze`) and radare2 (the `r2_project` named project, `decompile_probe
+--analyze`). The active decompiler (env `HEXGRAPH_DECOMPILER` > Ghidra settings > radare2 default)
+picks the slot + probe; ghidra_bridge attaches to a running Ghidra and has no on-disk warm project to
+build here, so it reads as `unavailable`.
 
-Ghidra-first: `re_analyze` targets the headless-Ghidra warm project. r2 project persistence (and its
-`re_analyze` path) rides with a separate change.
+**Single-flight.** The detached container is named deterministically from the backend + the
+artifact's content hash (`hexgraph-analyze-<backend>-<sha16>`). A second `re_analyze` of the same
+target ATTACHES to the running one instead of starting a duplicate — docker container names are
+host-global, so this dedups across sessions and processes AND survives the launching process (unlike
+the fcntl slot lock, whose release on a dead launcher caused the incident's duplicate cold analyses).
+The backend is in the name so a Ghidra and an r2 analysis of the same target (different slots) never
+collide. The warm marker the probe commits as its last step is the completion signal: container-exit
++ `slot.exists()` == analyzed.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import tempfile
 
 log = logging.getLogger(__name__)
@@ -33,20 +39,33 @@ CONTAINER_PREFIX = "hexgraph-analyze-"
 # Generous default analysis budget (seconds). NOT the per-call size-scaled timeout — analysis is a
 # deliberate long operation and gets its own budget so it finishes + commits. Ghidra reads it as
 # `-analysisTimeoutPerFile` (via HEXGRAPH_PROBE_TIMEOUT_S), so a monolith's analysis stops+saves
-# within budget rather than being torn down with nothing.
+# within budget rather than being torn down with nothing. (radare2's `aaa` has no such knob and
+# ignores it; the detached container simply runs to completion.)
 _ANALYSIS_TIMEOUT_DEFAULT = 6 * 3600
 
 
-def _ghidra_active() -> bool:
-    """True when headless Ghidra is the active backend (the only backend with a persistent warm
-    project today). A settings hiccup ⇒ False."""
-    try:
-        from hexgraph.engine.re.ghidra import ghidra_config
+def _active_backend() -> str | None:
+    """The active decompiler backend that HAS a persistent warm slot: 'ghidra' | 'radare2', or None.
+    Mirrors decompiler._resolve_name — env `HEXGRAPH_DECOMPILER` > Ghidra settings > radare2 default.
+    ghidra_bridge attaches to a running Ghidra (no on-disk warm project to build here), so it maps to
+    None → `unavailable`. A settings hiccup falls back to radare2 (the always-available default)."""
+    name = (os.environ.get("HEXGRAPH_DECOMPILER") or "").strip().lower()
+    if not name:
+        try:
+            from hexgraph.engine.re.ghidra import ghidra_config
 
-        g = ghidra_config()
-        return bool(g.get("enabled") and (g.get("mode") or "headless") == "headless")
-    except Exception:  # noqa: BLE001
-        return False
+            g = ghidra_config()
+            if g.get("enabled"):
+                name = "ghidra_bridge" if (g.get("mode") == "bridge") else "ghidra"
+            else:
+                name = "radare2"
+        except Exception:  # noqa: BLE001 — a config hiccup falls back to the default backend
+            name = "radare2"
+    if name in ("radare2", "r2"):
+        return "radare2"
+    if name == "ghidra":
+        return "ghidra"
+    return None  # ghidra_bridge / unknown → no persistent slot to build
 
 
 def _analysis_timeout() -> int:
@@ -64,9 +83,21 @@ def _analysis_timeout() -> int:
     return _ANALYSIS_TIMEOUT_DEFAULT
 
 
-def container_name(content_sha: str) -> str:
-    """The single-flight container name for an artifact hash."""
-    return f"{CONTAINER_PREFIX}{content_sha[:16]}"
+def container_name(content_sha: str, backend: str = "ghidra") -> str:
+    """The single-flight container name for an artifact hash + backend. Backend-scoped so a Ghidra
+    analysis and an r2 analysis of the SAME target (which persist to DIFFERENT slots) never collide
+    on the name (docker names are host-global)."""
+    return f"{CONTAINER_PREFIX}{backend}-{content_sha[:16]}"
+
+
+def _analyze_outdir() -> str:
+    """A single SHARED throwaway `/out` dir for detached analyses. `/out` is bind-mounted but UNUSED
+    under `--analyze` (both probes write their project into the persistent mount and any JSON to
+    /scratch), so one shared dir is safe and avoids leaking an empty tempdir per analyzed target
+    (the per-call `mkdtemp` residual from #260). Created once under the system tempdir."""
+    d = os.path.join(tempfile.gettempdir(), "hexgraph-analyze-out")
+    os.makedirs(d, exist_ok=True)
+    return d
 
 
 def _reap_if_present(ex, name) -> None:
@@ -82,37 +113,53 @@ def _reap_if_present(ex, name) -> None:
 
 
 def _slot_ctx(project, target, *, runner):
-    """Resolve `(slot, artifact_path, container_name)` for a target's Ghidra analysis, or None when
-    it isn't applicable (no byte artifact / no data dir / resolve failure)."""
+    """Resolve `(slot, artifact_path, container_name, probe)` for the ACTIVE backend's analysis of
+    `target`, or None when it isn't applicable (no byte artifact / no data dir / no persistent-slot
+    backend / resolve failure). `probe` is the detached whole-binary analysis probe for that backend
+    (`ghidra_probe.py` / `decompile_probe.py`, both run with `--analyze`)."""
     artifact = getattr(target, "path", None)
     data_dir = getattr(project, "data_dir", None)
     if not artifact or not data_dir:
         return None
+    backend = _active_backend()
+    if backend is None:
+        return None
     try:
-        from hexgraph.engine.re import ghidra_project as gp
         from hexgraph.sandbox.runner import sandbox_image
 
-        sha = gp.content_hash(artifact)
-        version = gp.ghidra_version_for_image(sandbox_image(), runner=runner)
-        slot = gp.resolve(data_dir, sha, version)
-        return slot, artifact, container_name(sha)
+        image = sandbox_image()
+        if backend == "ghidra":
+            from hexgraph.engine.re import ghidra_project as gp
+
+            sha = gp.content_hash(artifact)
+            version = gp.ghidra_version_for_image(image, runner=runner)
+            slot = gp.resolve(data_dir, sha, version)
+            probe = "ghidra_probe.py"
+        else:  # radare2
+            from hexgraph.engine.re import r2_project as rp
+
+            sha = rp.content_hash(artifact)
+            version = rp.r2_version_for_image(image, runner=runner)
+            slot = rp.resolve(data_dir, sha, version)
+            probe = "decompile_probe.py"
+        return slot, artifact, container_name(sha, backend), probe
     except Exception:  # noqa: BLE001 — analysis is best-effort; a resolve failure reads as n/a
         return None
 
 
 def analysis_state(project, target, *, runner=None) -> dict:
-    """Read-only: the analysis state of `target`'s Ghidra warm project. Starts nothing. Returns
-    ``{state, detail, container?}`` where state is one of:
-      analyzed    — a committed warm project is ready (per-call tools will be instant)
+    """Read-only: the analysis state of `target` for the ACTIVE backend's warm slot. Starts nothing.
+    Returns ``{state, detail, container?}`` where state is one of:
+      analyzed    — a committed warm analysis is ready (per-call tools will be instant)
       running     — a detached analysis is in progress (attach / keep polling)
-      failed      — the analysis container exited WITHOUT committing a warm project
+      failed      — the analysis container exited WITHOUT committing a warm analysis
       none        — no saved analysis and nothing running (call re_analyze to build it)
-      unavailable — Ghidra isn't the active backend / Docker down / no byte artifact
+      unavailable — no persistent-slot backend (ghidra_bridge) / Docker down / no byte artifact
     """
-    if not _ghidra_active():
+    if _active_backend() is None:
         return {"state": "unavailable",
-                "detail": "explicit analysis is Ghidra-only for now (headless Ghidra is not the "
-                          "active backend); radare2 project persistence is coming separately"}
+                "detail": "the active decompiler has no persistent analysis to build "
+                          "(Ghidra bridge mode, or an unknown backend)"}
     from hexgraph.sandbox.runner import docker_available
 
     if not docker_available():
@@ -121,9 +168,9 @@ def analysis_state(project, target, *, runner=None) -> dict:
     if ctx is None:
         return {"state": "unavailable",
                 "detail": "this target has no byte artifact / data dir to analyze"}
-    slot, _artifact, name = ctx
+    slot, _artifact, name, _probe = ctx
     if slot.exists():
-        return {"state": "analyzed", "detail": "warm Ghidra project is ready", "container": name}
+        return {"state": "analyzed", "detail": "warm analysis is ready", "container": name}
 
     from hexgraph.sandbox.executor import get_executor
 
@@ -134,17 +181,17 @@ def analysis_state(project, target, *, runner=None) -> dict:
     if poll.get("exists"):
         return {"state": "failed",
                 "detail": f"the analysis container exited (code {poll.get('exit_code')}) without "
-                          "committing a warm project — re_analyze will retry it",
+                          "committing a warm analysis — re_analyze will retry it",
                 "container": name}
     return {"state": "none", "detail": "no saved analysis for this target — run re_analyze to "
                                        "build it", "container": name}
 
 
 def start_analysis(project, target, *, runner=None) -> dict:
-    """Start OR attach to a detached whole-binary analysis. Idempotent and single-flight:
-    already-warm ⇒ no-op ``analyzed``; already-running ⇒ ``running`` (attach); otherwise launch a
-    detached Ghidra analysis and return ``started``. A failed prior container is reaped and retried.
-    Poll by calling this (or `analysis_state`) again until state is ``analyzed``."""
+    """Start OR attach to a detached whole-binary analysis for the ACTIVE backend. Idempotent and
+    single-flight: already-warm ⇒ no-op ``analyzed``; already-running ⇒ ``running`` (attach);
+    otherwise launch the detached analysis and return ``started``. A failed prior container is reaped
+    and retried. Poll by calling this (or `analysis_state`) again until state is ``analyzed``."""
     from hexgraph.sandbox.executor import get_executor
 
     ex = runner or get_executor()
@@ -160,7 +207,7 @@ def start_analysis(project, target, *, runner=None) -> dict:
     ctx = _slot_ctx(project, target, runner=ex)
     if ctx is None:  # (analysis_state already returned unavailable, but be defensive)
         return {"state": "unavailable", "detail": "this target has no byte artifact to analyze"}
-    slot, artifact, name = ctx
+    slot, artifact, name, probe = ctx
 
     if state["state"] == "failed":
         # Reap the exited-but-not-warm container so a fresh analysis can take the name.
@@ -170,18 +217,28 @@ def start_analysis(project, target, *, runner=None) -> dict:
             pass
 
     slot.prepare()
-    # The analysis writes its project into the project mount and its JSON to /scratch — /out is
-    # unused under --analyze. Give it a THROWAWAY outdir OUTSIDE the slot so the warm project stays
-    # project-only (the probe keeps the persistent mount lean by design).
-    outdir = tempfile.mkdtemp(prefix="hexgraph-analyze-out-")
+    # `/out` is unused under --analyze (the project lives on the persistent mount); a SHARED throwaway
+    # outdir avoids leaking an empty dir per analyzed target.
+    outdir = _analyze_outdir()
+    # A monolith's whole-binary analysis needs the SIZE-SCALED mem/tmpfs (e.g. ~18 GB for a ~500 MB
+    # ELF, so the decompiler DB buffer doesn't OOM) — NOT the 2 GB base spec. start_detached defaults
+    # to resource_spec_for("sandbox") (base) because its only other callers (fuzz) pass their own
+    # spec; re_analyze passes the size-scaled one for EITHER backend (a Ghidra import or an r2 `aaa`
+    # over a huge binary both need it). The detached path ignores the spec's `timeout` (no outer
+    # kill); the analysis budget is HEXGRAPH_PROBE_TIMEOUT_S below.
+    from hexgraph.sandbox.resources import resource_spec_for_artifact
+
+    analysis_resources = resource_spec_for_artifact(artifact, "sandbox")
     try:
         ex.start_detached(
-            "ghidra_probe.py", artifact, name=name, outdir=outdir,
+            probe, artifact, name=name, outdir=outdir,
             project_mount=str(slot.root),
-            # `--analyze`: full cold import + inventory + COMMIT, no focus (start_detached appends
-            # a /out positional the probe would otherwise treat as a focus).
+            resources=analysis_resources,
+            # `--analyze`: full cold analysis + COMMIT the warm slot, no focus (start_detached
+            # appends a /out positional the probe would otherwise treat as a focus — BOTH the Ghidra
+            # and r2 probes force focus off under --analyze).
             extra_args=["--analyze"],
-            # Ghidra's own analysis cap (-analysisTimeoutPerFile) — the generous analysis budget.
+            # The analysis budget: Ghidra reads it as -analysisTimeoutPerFile; r2 ignores it.
             extra_env={"HEXGRAPH_PROBE_TIMEOUT_S": str(_analysis_timeout())},
         )
     except Exception as exc:  # noqa: BLE001

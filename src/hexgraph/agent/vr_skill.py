@@ -162,10 +162,10 @@ and unanalyzed nodes so a follow-up run (or the analyst) can continue.
 ## The core static loop (the always-relevant core; full depth in static-analysis.md)
 You DIRECT; HexGraph runs each tool in the sandbox and PERSISTS the result as a reusable
 Observation. Work cheap-to-expensive and check `obs_list(target_id)` before any costly re-run
-(analyze once, reuse forever). With headless Ghidra active, ANALYZE FIRST: the whole-program tools
-(`re_decompile_*`, `re_list_functions`, the `re_xrefs` family, `re_call_graph`) require a saved
-analysis and will tell you to run `re_analyze(target)` on a miss — a DETACHED, single-flight
-whole-binary analysis with a generous budget that a per-call timeout can't cut short. Kick it off,
+(analyze once, reuse forever). ANALYZE FIRST (with either persistent backend — headless Ghidra or
+radare2): the whole-program tools (`re_decompile_*`, `re_list_functions`, the `re_xrefs` family,
+`re_call_graph`) require a saved analysis and will tell you to run `re_analyze(target)` on a miss — a
+DETACHED, single-flight whole-binary analysis with a generous budget that a per-call timeout can't cut short. Kick it off,
 poll it (re-call `re_analyze` until state=`analyzed`), and then those per-call tools are instant.
 (`re_disassemble` and `re_binutils_facts`/`re_list_strings` need no analysis — use them freely while
 it warms.) The spine of it: get the authoritative facts (`re_binutils_facts`,

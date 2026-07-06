@@ -1,8 +1,9 @@
-"""The analysis gate (C3): the whole-program per-call tools require a SAVED analysis when headless
-Ghidra is active — they error → re_analyze on a warm miss instead of silently launching a cold
-analysis (the behavior that cascaded an operator's incident). Targeted/store-reading tools are NOT
-gated. radare2 / Docker-down / no-artifact ⇒ `analysis_state` reports `unavailable` ⇒ not gated
-(unchanged behavior).
+"""The analysis gate (C3): the whole-program per-call tools require a SAVED analysis for the active
+persistent backend — they error → re_analyze on a warm miss instead of silently launching a cold
+analysis (the behavior that cascaded an operator's incident). Since C1b, `analysis_state` is
+backend-aware, so this gates BOTH headless Ghidra and radare2 (a warm r2 project miss also errors
+→ re_analyze). Targeted/store-reading tools are NOT gated. Only a no-persistent-slot backend
+(Ghidra bridge) / Docker-down / no-artifact ⇒ `analysis_state` reports `unavailable` ⇒ not gated.
 """
 
 import pytest

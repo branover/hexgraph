@@ -642,12 +642,12 @@ _ANALYSIS_GATED_TOOLS = frozenset({
 
 
 def _analysis_gate(ctx: ToolContext) -> str | None:
-    """When headless Ghidra is the active backend, an analysis-dependent tool requires a SAVED
-    analysis: return an actionable error pointing at re_analyze on a warm MISS, else None (proceed).
-    Keys entirely off `analysis_state` — its `unavailable` (Ghidra not the active backend / Docker
-    down / no byte artifact) means "not gated, behave as before", so the radare2 backend and the
-    offline/no-Docker paths are unaffected; only an active, Docker-up, byte-target Ghidra with no
-    warm project is gated. Best-effort: any error ⇒ don't gate."""
+    """An analysis-dependent tool requires a SAVED analysis for the ACTIVE persistent backend:
+    return an actionable error pointing at re_analyze on a warm MISS, else None (proceed). Keys
+    entirely off `analysis_state` — backend-aware since C1b, so it gates BOTH headless Ghidra and
+    radare2 (each with its own warm slot). `unavailable` (no persistent-slot backend — Ghidra bridge
+    — / Docker down / no byte artifact) means "not gated, behave as before", so those paths are
+    unaffected. Best-effort: any error ⇒ don't gate."""
     try:
         from hexgraph.engine.re.analysis import analysis_state
 
@@ -660,9 +660,9 @@ def _analysis_gate(ctx: ToolContext) -> str | None:
     lead = {"none": "No saved analysis for this target yet.",
             "running": "A whole-binary analysis is already in progress.",
             "failed": "The last analysis did not finish."}.get(state, "No saved analysis.")
-    return (f"{lead} Run re_analyze(target) first — it builds the warm Ghidra project ONCE with a "
-            "generous budget (detached; re-call re_analyze to poll until state='analyzed'), then "
-            f"retry this tool and it'll be instant. [{st.get('detail', '')}]")
+    return (f"{lead} Run re_analyze(target) first — it builds the warm analysis (a Ghidra or radare2 "
+            "project) ONCE with a generous budget (detached; re-call re_analyze to poll until "
+            f"state='analyzed'), then retry this tool and it'll be instant. [{st.get('detail', '')}]")
 
 
 def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
