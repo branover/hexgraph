@@ -1,8 +1,8 @@
 """Phase 4 — P-Code emulation for constant/key recovery (engine.re.emulation + the
-ghidra_probe --emulate pass).
+ghidra_probe --emulate pass, now pyghidra_lib.emulate_core).
 
-Offline tests pin the opt-in gate, the graceful-degrade contract, and the EMU_SCRIPT's
-Jython safety. The Docker+Ghidra integration test (WITH_GHIDRA lane) proves the emulator
+Offline tests pin the opt-in gate, the graceful-degrade contract, and the emulate core's
+arg-dependent guard. The Docker+Ghidra integration test (WITH_GHIDRA lane) proves the emulator
 recovers a runtime-derived constant on the keyderive fixture, matching a native run, and
 records/annotates it.
 """
@@ -22,18 +22,6 @@ from hexgraph import settings as st
 from hexgraph.policy import PolicyViolation, assert_allows_emulation
 
 from conftest import SANDBOX_READY, fixture_path
-
-
-# ── offline: the EMU_SCRIPT must compile (a Jython syntax/encoding error writes no output) ──
-
-def test_emu_script_is_jython_safe():
-    from hexgraph.sandbox.probes import ghidra_probe as GP
-
-    src = GP.EMU_SCRIPT
-    first = src.lstrip("\n").splitlines()[0]
-    has_cookie = "coding" in first and ("utf-8" in first.lower() or "latin" in first.lower())
-    assert has_cookie or all(ord(c) < 128 for c in src), "EMU_SCRIPT non-ASCII without a cookie"
-    compile(src, "<emu_script>", "exec")
 
 
 # ── offline: the opt-in gate ──────────────────────────────────────────────────────────
@@ -115,13 +103,16 @@ def test_emulate_constant_no_signature_falls_through(hg_home, monkeypatch):
         assert out["available"] is True
 
 
-def test_emu_script_guards_arg_dependent_functions():
-    """The authoritative in-probe guard (EMU_SCRIPT) bails on getParameterCount() > 0 before
-    the step loop — the cold-path fallback when no signature is recorded on the node."""
-    from hexgraph.sandbox.probes import ghidra_probe as GP
+def test_emulate_core_guards_arg_dependent_functions():
+    """The authoritative in-probe guard (pyghidra_lib.emulate_core) bails on getParameterCount() > 0
+    before the step loop — the cold-path fallback when no signature is recorded on the node."""
+    import inspect
 
-    assert "getParameterCount() > 0" in GP.EMU_SCRIPT
-    assert "arg_dependent" in GP.EMU_SCRIPT
+    from hexgraph.sandbox.probes import pyghidra_lib as L
+
+    src = inspect.getsource(L.emulate_core)
+    assert "getParameterCount() > 0" in src
+    assert "arg_dependent" in src
 
 
 # ── the MCP agent surface (recover_constant) ──────────────────────────────────────────

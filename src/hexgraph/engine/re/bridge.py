@@ -1,10 +1,10 @@
 """Persistent per-target Ghidra bridge lifecycle (`re_bridge_*` / `hexgraph ghidra-bridge`).
 
-A bridge is a LONG-LIVED sandbox container running headless Ghidra with the target's WARM slot
-opened (`ghidra_bridge_probe.py` -> `-process` + the `ghidra_bridge_serve.py` postScript), kept
-resident behind a `ghidra_bridge` RPC server. While it's up, decompiles for that target reuse the
-resident project instead of re-opening it per call (~15s on a 6GB project). Decompiler routing
-(`sandbox/decompiler.get_decompiler`) prefers a live bridge for the target.
+A bridge is a LONG-LIVED sandbox container running a resident PyGhidra process with the target's
+WARM slot opened once (`ghidra_bridge_probe.py` -> `pyghidra_lib.open_target` + `serve_bridge`), kept
+resident behind a small line-delimited JSON RPC server. While it's up, decompiles for that target
+reuse the resident project instead of re-opening it per call (~15s on a 6GB project). Decompiler
+routing (`sandbox/decompiler.get_decompiler`) prefers a live bridge for the target.
 
 Design mirrors `re_analyze` (engine.re.analysis): single-flight by a deterministic container name,
 detached via `start_detached`, status by polling. The per-target registry is a `bridge` entry on
@@ -12,9 +12,8 @@ detached via `start_detached`, status by polling. The per-target registry is a `
 is already in scope) and confirms liveness, self-healing a dead entry to the headless fallback.
 
 Networking: the bridge container runs with `allow_network=True` (`--network bridge`) and the host
-connects to its private bridge IP directly (jfx_bridge is bidirectional and does NOT survive a
-docker-proxy `-p` publish). Gated on `features.network` (the container IP is RFC1918-private) and
-audited to `EgressEvent`.
+connects to its private bridge IP directly (the simplest routing — no docker-proxy `-p` publish).
+Gated on `features.network` (the container IP is RFC1918-private) and audited to `EgressEvent`.
 """
 
 from __future__ import annotations
@@ -58,7 +57,7 @@ def _ghidra_slot(project, target, *, runner):
 
 def _container_ip(name: str) -> str | None:
     """The container's private bridge IP (`docker inspect`), or None. The host reaches the bridge
-    server here (a published port doesn't work for jfx_bridge)."""
+    server here — the simplest routing, no docker-proxy `-p` publish needed."""
     try:
         out = subprocess.run(
             ["docker", "inspect", "-f",

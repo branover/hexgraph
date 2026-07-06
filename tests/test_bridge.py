@@ -155,8 +155,9 @@ def test_start_starting_when_not_yet_serving(env, monkeypatch):
 def test_get_decompiler_routes_to_live_bridge(env, monkeypatch):
     s, p, t = env
     B.start_bridge(s, p, t, runner=_FakeExec())  # records the endpoint
-    # connect_ops is offline-unavailable; stub it so routing returns the bridge decompiler.
-    monkeypatch.setattr("hexgraph.engine.re.ghidra_bridge.connect_ops",
+    # The managed bridge routes via connect_managed (HexGraph's own JSON RPC); stub it so routing
+    # returns the bridge decompiler without a live server.
+    monkeypatch.setattr("hexgraph.engine.re.ghidra_bridge.connect_managed",
                         lambda host, port: types.SimpleNamespace(host=host, port=port))
     from hexgraph.sandbox.decompiler import get_decompiler
     from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler

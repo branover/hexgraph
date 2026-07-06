@@ -1,47 +1,50 @@
 #!/usr/bin/env python3
-"""Entrypoint for a persistent Ghidra bridge container (engine.re.bridge).
+"""Entrypoint for a persistent Ghidra bridge container (engine.re.bridge) — PyGhidra edition.
 
 `start_detached` runs this as `python3 /opt/hexgraph/ghidra_bridge_probe.py /artifact` in a
-long-lived (`docker run -d`) container. It opens the target's WARM slot with
-`analyzeHeadless -process` (no -import, no re-analysis) and runs `ghidra_bridge_serve.py` as the
-postScript, then `execvp`s so analyzeHeadless REPLACES this process and becomes the container's
-long-lived PID: the harness blocks (`server.run()`), keeping the JVM + the opened program resident
-to serve ghidra_bridge RPC calls. So repeated re_decompile/re_xrefs/... for the target skip the
-per-call project open the headless path pays every time (~15s on a 6GB project).
+long-lived (`docker run -d`) container. It opens the target's WARM Ghidra slot ONCE via pyghidra
+(no re-analysis) and keeps it resident behind a plain line-delimited JSON RPC server
+(`pyghidra_lib.serve_bridge`) — so repeated re_decompile for the target skip the per-call project
+open (~15s on a 6GB project) that the headless path pays every time.
 
-Importing `ghidra_probe` pins every writable Ghidra/Java path at the /scratch tmpfs (its
-module-level env setup) and reuses the exact warm-invocation helpers, so the bridge open matches
-the headless warm path byte-for-byte (same project name, program name, -noanalysis).
-"""
+Replaces the Jython `analyzeHeadless -postScript ghidra_bridge_serve.py` + jfx_bridge harness: the
+server is now HexGraph's OWN stdlib-socket RPC calling the SAME in-process cores as `ghidra_probe`,
+so no ghidra_bridge/jfx_bridge is baked into the image. Binds 0.0.0.0 so the container's private
+bridge IP is reachable from the host (the host connects to <container-ip>:GHIDRA_BRIDGE_PORT). MUST
+run from /opt/hexgraph (a read-only mount) — pyghidra's namespace finder recurses on a writable
+sys.path[0]; the runner invokes `python3 /opt/hexgraph/ghidra_bridge_probe.py`, so that holds."""
 import os
 import sys
 
-import ghidra_probe as gp  # module import pins HOME/TMPDIR/XDG_*/_JAVA_OPTIONS at /scratch
+try:  # bare import when RUN from /opt/hexgraph; package path when IMPORTED as a module (tests)
+    import pyghidra_lib as L
+except ModuleNotFoundError:  # pragma: no cover
+    from hexgraph.sandbox.probes import pyghidra_lib as L
+
+PORT = int(os.environ.get("GHIDRA_BRIDGE_PORT", "4768"))
 
 
 def main() -> int:
     artifact = sys.argv[1] if len(sys.argv) > 1 else "/artifact"
-    hl = gp._find_headless()
-    if not hl:
-        sys.stderr.write("ghidra_bridge_probe: analyzeHeadless not found "
-                         "(build the sandbox image WITH_GHIDRA=1)\n")
+    try:
+        L.start()
+    except Exception as exc:  # noqa: BLE001
+        sys.stderr.write(f"ghidra_bridge_probe: pyghidra failed to start: {exc}\n")
         return 3
-    proj_dir = os.path.join(gp.PROJECT_MOUNT, "project")
-    if not (os.path.isdir(proj_dir) and os.listdir(proj_dir)):
-        sys.stderr.write("ghidra_bridge_probe: no warm project at %s "
-                         "(run re_analyze first)\n" % proj_dir)
+    try:
+        # WARM open REQUIRED (start_bridge gates on slot.exists()); cold_analyze=False so a missing
+        # slot fails fast here rather than silently kicking off a huge cold analysis in the bridge.
+        with L.open_target(artifact, cold_analyze=False) as (program, flat, cached):
+            from ghidra.util.task import ConsoleTaskMonitor
+
+            sys.stderr.write(f"ghidra_bridge_probe: project resident (cached={cached}); "
+                             f"serving JSON RPC on 0.0.0.0:{PORT}\n")
+            sys.stderr.flush()
+            L.serve_bridge("0.0.0.0", PORT, program, flat, ConsoleTaskMonitor())  # blocks forever
+    except Exception as exc:  # noqa: BLE001
+        sys.stderr.write(f"ghidra_bridge_probe: {exc}\n")
         return 4
-    prog = gp._program_name(artifact)
-    scripts = os.path.dirname(os.path.abspath(__file__))  # /opt/hexgraph (the mounted probes)
-    # WARM open (matches ghidra_probe's -process path) + the bridge-server harness as the postScript.
-    cmd = [hl, proj_dir, gp.PROJECT_NAME, "-process", prog, "-noanalysis",
-           "-scriptPath", scripts, "-postScript", "ghidra_bridge_serve.py"]
-    sys.stderr.write("ghidra_bridge_probe: exec %s\n" % " ".join(cmd))
-    sys.stderr.flush()
-    # Replace this process: analyzeHeadless becomes the container's long-lived PID; the harness
-    # blocks in-thread, so the container stays up until stop_detached kills it.
-    os.execvp(cmd[0], cmd)
-    return 0  # unreachable (execvp replaces the image)
+    return 0
 
 
 if __name__ == "__main__":

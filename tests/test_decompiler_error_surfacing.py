@@ -1,10 +1,9 @@
-"""Phase 0: a failing decompiler probe must surface its REAL reason, not a bare
-`exit N`. Two defects this guards against:
+"""A failing decompiler probe must surface its REAL reason, not a bare `exit N`. Guards:
 
-1. The runner's swallow point dropped the probe's stdout JSON `{error: ...}` on a
-   non-zero exit and surfaced only the (often empty) stderr.
-2. ghidra_probe's exit-4 path read `proc.stderr`, but analyzeHeadless logs to
-   STDOUT, so the captured reason was blank.
+1. The runner's swallow point (`_probe_failure_message`) must lift the probe's stdout JSON
+   `{error: ...}` on a non-zero exit, not surface only the (often empty) stderr.
+2. The pyghidra ghidra_probe must always emit STRUCTURED JSON on failure (deps missing -> exit 3,
+   in-process Ghidra fault -> exit 4), never a silent bare exit.
 """
 
 from __future__ import annotations
@@ -13,7 +12,6 @@ import json
 import os
 import subprocess
 import sys
-import textwrap
 from pathlib import Path
 
 import pytest
@@ -112,53 +110,34 @@ def test_run_json_probe_propagates_real_reason(monkeypatch, tmp_path):
     assert "analyzeHeadless produced no output" in str(ei.value)
 
 
-# ── ghidra_probe exit-4 reads STDOUT (where analyzeHeadless logs), not stderr ─────
+# ── the pyghidra probe always emits STRUCTURED JSON, never a silent failure ───────
 
 
-def test_ghidra_probe_exit4_captures_stdout_log(tmp_path, monkeypatch):
-    """Run the real probe against a FAKE analyzeHeadless that logs to stdout then
-    exits without producing the output file. The probe must capture that stdout log
-    in its error JSON (the old code read the empty stderr)."""
-    # A fake Ghidra install: support/analyzeHeadless that logs to stdout + a version file.
+def test_ghidra_probe_never_fails_silently(tmp_path):
+    """Run the real (pyghidra) probe against a Ghidra dir that LOOKS present (a Ghidra/ subtree +
+    version file) but isn't a working install. Whether pyghidra is host-importable or not, the probe
+    must exit with a structured JSON error carrying an actionable reason — never a bare non-zero exit
+    with empty output (the old undiagnosable failure). Since the re-platform there is no
+    analyzeHeadless subprocess: a missing dependency is exit 3, an in-process Ghidra fault is exit 4,
+    and BOTH print `{error: ...}` to stdout."""
     ghidra_dir = tmp_path / "ghidra"
-    support = ghidra_dir / "support"
-    support.mkdir(parents=True)
-    fake_headless = support / "analyzeHeadless"
-    fake_headless.write_text(textwrap.dedent("""\
-        #!/usr/bin/env python3
-        import sys
-        # analyzeHeadless logs to STDOUT, not stderr.
-        print("INFO  HeadlessAnalyzer - REPORT: load failed: unknown ELF arch MIPS-R6")
-        print("ERROR HeadlessAnalyzer - Import failed for file")
-        sys.exit(1)
-    """))
-    fake_headless.chmod(0o755)
-    # application.properties for _version()
     props_dir = ghidra_dir / "Ghidra"
-    props_dir.mkdir()
-    (props_dir / "application.properties").write_text("application.version=12.0\n")
+    props_dir.mkdir(parents=True)
+    (props_dir / "application.properties").write_text("application.version=12.1\n")
 
     artifact = tmp_path / "fw.bin"
     artifact.write_bytes(b"\x7fELF binary")
-
     scratch = tmp_path / "scratch"
     scratch.mkdir()
 
-    env = {
-        **os.environ,
-        "GHIDRA_INSTALL_DIR": str(ghidra_dir),
-        "TMPDIR": str(scratch),
-    }
+    env = {**os.environ, "GHIDRA_INSTALL_DIR": str(ghidra_dir), "TMPDIR": str(scratch)}
     r = subprocess.run(
         [sys.executable, str(GHIDRA_PROBE), str(artifact)],
         capture_output=True, text=True, env=env,
     )
-    assert r.returncode == 4
-    out = json.loads(r.stdout)
-    # The captured reason carries the analyzeHeadless STDOUT log tail — the fix.
-    assert "analyzeHeadless produced no output" in out["error"]
-    assert "load failed" in out["error"]
-    assert "MIPS-R6" in out["error"]
+    assert r.returncode in (3, 4)          # deps missing (3) or in-process Ghidra fault (4)
+    out = json.loads(r.stdout)             # structured — NOT a silent bare exit
+    assert out.get("error")               # carries a reason, always
 
 
 def test_ghidra_probe_missing_ghidra_actionable(tmp_path):
