@@ -150,8 +150,9 @@ class _ManagedOps:
     DISTINCT from `_RemoteOps` (which drives a researcher's live Ghidra via ghidra_bridge/jfx_bridge
     remote_eval): here HexGraph controls both ends, so the wire is a small vetted protocol — the
     client sends a structured request, the resident server runs the matching `pyghidra_lib` core and
-    returns JSON. No client library, no remote code eval. Op scope matches the headless-parity #264
-    bridge: decompile + list."""
+    returns JSON. No client library, no remote code eval. Serves every Ghidra op the headless path
+    does — decompile, list, xrefs, taint, emulate, and rename (the one write, persisted server-side
+    into the resident project)."""
 
     def __init__(self, host: str, port: int, timeout: float = 600.0) -> None:
         self.host, self.port, self.timeout = host, port, timeout
@@ -190,6 +191,21 @@ class _ManagedOps:
         return {"functions": (resp.get("functions") or [])[:400], "focus": focus,
                 "tool": "ghidra_bridge"}
 
+    # The remaining Ghidra ops, each a single RPC to the resident program (the server runs the
+    # matching core and returns the SAME JSON the headless probe would). Payloads mirror the
+    # `ghidra_probe.py` argv: xrefs (mode, subject) · taint · emulate (focus) · rename (addr, name).
+    def xrefs(self, mode: str, subject: str | None) -> dict:
+        return self._rpc({"op": "xrefs", "mode": mode, "subject": subject})
+
+    def run_taint(self) -> dict:
+        return self._rpc({"op": "taint"})
+
+    def run_emulate(self, function: str | None) -> dict:
+        return self._rpc({"op": "emulate", "focus": function})
+
+    def rename_function(self, address: str, new_name: str) -> dict:
+        return self._rpc({"op": "rename", "address": address, "new_name": new_name})
+
 
 def connect_managed(host: str, port: int) -> BridgeOps:
     """Ops for HexGraph's managed resident bridge (custom JSON RPC). Unlike `connect_ops`, needs NO
@@ -219,6 +235,23 @@ class GhidraBridgeDecompiler(Decompiler):
                     "error": "a resident Ghidra bridge holds this target — re_bridge_stop first to "
                              "re-analyze (a cold re-import), then restart the bridge"}
         return self._resolve().decompile(program=None, function=function or address)
+
+    # The rest of the Ghidra op surface, served by the MANAGED bridge (routed via
+    # `sandbox.decompiler.ghidra_op_backend`). Same signatures as `GhidraDecompiler`'s so a call site
+    # can ask either backend identically; `project` is accepted for seam parity and ignored (a live
+    # bridge IS the warm project). Only reachable with `_ManagedOps` (never the researcher-Ghidra
+    # `_RemoteOps`), which implements each op.
+    def xrefs(self, artifact: str, *, mode: str, subject: str | None = None, project=None) -> dict:
+        return self._resolve().xrefs(mode, subject)
+
+    def run_taint(self, artifact: str, *, project=None) -> dict:
+        return self._resolve().run_taint()
+
+    def run_emulate(self, artifact: str, function: str, *, project=None) -> dict:
+        return self._resolve().run_emulate(function)
+
+    def rename_function(self, artifact: str, *, address: str, new_name: str, project=None) -> dict:
+        return self._resolve().rename_function(address, new_name)
 
 
 def list_open_programs(ops: BridgeOps | None = None) -> list[dict]:

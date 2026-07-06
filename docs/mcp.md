@@ -183,12 +183,13 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
   `re_decompile_*` opens the target's project fresh — cheap on a small binary, but seconds per call on a large
   one (the warm cache skips *re-analysis*, not the per-call *open*). `re_bridge_start(target)` launches a
   long-lived sandbox container that opens the project **once** and keeps it resident behind an RPC server;
-  after that, `re_decompile_function`/`re_decompile_at`/`re_list_functions` for that target reuse it and return
-  in a fraction of a second. Poll `re_bridge_status` (it may take a moment to open a huge project); stop it with
-  `re_bridge_stop`. It needs a saved Ghidra analysis first (`re_analyze`) and **`features.network`** (the
-  container is reached on a loopback/private address, audited). While a bridge is live it *owns* the project, so
-  `re_xrefs` falls back to radare2 and emulation/rename are unavailable until you stop it (these run over the
-  bridge in a later release). Also on the CLI: `hexgraph ghidra-bridge start|stop|status <target>`.
+  after that, **every** Ghidra op for that target reuses it and returns in a fraction of a second — not just
+  `re_decompile_function`/`re_decompile_at`/`re_list_functions`, but also `re_xrefs`/`re_function_xrefs`, the
+  taint pass, `re_recover_constant` (P-Code emulation), and function rename (persisted back into the resident
+  project). Poll `re_bridge_status` (it may take a moment to open a huge project); stop it with `re_bridge_stop`.
+  It needs a saved Ghidra analysis first (`re_analyze`) and **`features.network`** (the container is reached on
+  a loopback/private address, audited). While a bridge is live it *owns* the project, so every Ghidra op routes
+  to it rather than a conflicting headless open. Also on the CLI: `hexgraph ghidra-bridge start|stop|status <target>`.
 - **Enrichment of existing objects is automatic and free.** When a call recovers something unambiguous
   about an object that is *already* a node, a function's recovered prototype and address, the `is_sink`
   tag on a dangerous import, the call sites on an existing `calls` edge, HexGraph attaches it in place

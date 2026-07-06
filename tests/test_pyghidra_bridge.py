@@ -70,6 +70,51 @@ def test_dispatch_decompile_delegates_to_the_core(monkeypatch):
     assert resp["focus"] == {"name": "x"} and resp["tool"] == "ghidra_bridge"
 
 
+def test_dispatch_xrefs_delegates_to_the_core(monkeypatch):
+    seen = {}
+
+    def _fake(program, flat, monitor, mode, subject):
+        seen.update(mode=mode, subject=subject)
+        return {"mode": mode, "callers": []}
+
+    monkeypatch.setattr(L, "xrefs_core", _fake)
+    resp = L.bridge_dispatch(_FakeProgram([]), object(), object(),
+                             {"op": "xrefs", "mode": "callers", "subject": "foo"})
+    assert seen == {"mode": "callers", "subject": "foo"} and resp["mode"] == "callers"
+
+
+def test_dispatch_taint_delegates_to_the_core(monkeypatch):
+    monkeypatch.setattr(L, "taint_core", lambda p, f, m: {"taint": {"flows": [], "analyzed": 3}})
+    resp = L.bridge_dispatch(_FakeProgram([]), object(), object(), {"op": "taint"})
+    assert resp["taint"]["analyzed"] == 3
+
+
+def test_dispatch_emulate_delegates_to_the_core(monkeypatch):
+    seen = {}
+
+    def _fake(program, flat, monitor, focus):
+        seen["focus"] = focus
+        return {"emulation": {"function": focus}}
+
+    monkeypatch.setattr(L, "emulate_core", _fake)
+    resp = L.bridge_dispatch(_FakeProgram([]), object(), object(), {"op": "emulate", "focus": "keyfn"})
+    assert seen["focus"] == "keyfn" and resp["emulation"]["function"] == "keyfn"
+
+
+def test_dispatch_rename_delegates_to_decompile_core_with_rename(monkeypatch):
+    seen = {}
+
+    def _fake(program, flat, monitor, *, focus=None, rename=None):
+        seen["rename"] = rename
+        return {"functions": [], "focus": {"name": "renamed"}}
+
+    monkeypatch.setattr(L, "decompile_core", _fake)
+    resp = L.bridge_dispatch(_FakeProgram([]), object(), object(),
+                             {"op": "rename", "address": "0x1000", "new_name": "renamed"})
+    assert seen["rename"] == ("0x1000", "renamed")
+    assert resp["focus"] == {"name": "renamed"} and resp["tool"] == "ghidra_bridge"
+
+
 def test_dispatch_unknown_op_is_a_structured_error():
     resp = L.bridge_dispatch(_FakeProgram([]), None, None, {"op": "nope"})
     assert "unknown bridge op" in resp["error"]
@@ -162,6 +207,45 @@ def test_managed_ops_list_programs_via_ping():
     rows = _ManagedOps("127.0.0.1", port).list_programs()
     t.join(timeout=5)
     assert captured["req"] == {"op": "ping"} and rows[0]["functions"] == 7
+
+
+def test_managed_ops_xrefs_round_trip():
+    from hexgraph.engine.re.ghidra_bridge import _ManagedOps
+
+    port, captured, t = _one_shot_server({"mode": "callers", "callers": [], "total": 0})
+    out = _ManagedOps("127.0.0.1", port).xrefs("callers", "foo")
+    t.join(timeout=5)
+    assert captured["req"] == {"op": "xrefs", "mode": "callers", "subject": "foo"}
+    assert out["mode"] == "callers"
+
+
+def test_managed_ops_taint_round_trip():
+    from hexgraph.engine.re.ghidra_bridge import _ManagedOps
+
+    port, captured, t = _one_shot_server({"taint": {"flows": [], "analyzed": 5}})
+    out = _ManagedOps("127.0.0.1", port).run_taint()
+    t.join(timeout=5)
+    assert captured["req"] == {"op": "taint"} and out["taint"]["analyzed"] == 5
+
+
+def test_managed_ops_emulate_round_trip():
+    from hexgraph.engine.re.ghidra_bridge import _ManagedOps
+
+    port, captured, t = _one_shot_server({"emulation": {"value": "0x2a", "reached_ret": True}})
+    out = _ManagedOps("127.0.0.1", port).run_emulate("keyfn")
+    t.join(timeout=5)
+    assert captured["req"] == {"op": "emulate", "focus": "keyfn"}
+    assert out["emulation"]["value"] == "0x2a"
+
+
+def test_managed_ops_rename_round_trip():
+    from hexgraph.engine.re.ghidra_bridge import _ManagedOps
+
+    port, captured, t = _one_shot_server({"focus": {"name": "renamed"}, "tool": "ghidra_bridge"})
+    out = _ManagedOps("127.0.0.1", port).rename_function("0x1200", "renamed")
+    t.join(timeout=5)
+    assert captured["req"] == {"op": "rename", "address": "0x1200", "new_name": "renamed"}
+    assert out["focus"]["name"] == "renamed"
 
 
 def test_managed_ops_unreachable_raises_bridge_unavailable():

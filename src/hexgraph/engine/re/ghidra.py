@@ -215,16 +215,12 @@ def propagate_function_rename(session, node, new_name: str) -> dict:
     if not docker_available():
         return {"propagated": False, "reason": "Docker/sandbox not running"}
 
-    from hexgraph.engine.re.bridge import blocking_message
+    from hexgraph.sandbox.decompiler import ghidra_op_backend
 
-    _msg = blocking_message(target, "rename")
-    if _msg:  # a live bridge holds the project; a headless rename would conflict on the lock
-        return {"propagated": False, "reason": _msg}
-
-    from hexgraph.sandbox.decompiler import GhidraDecompiler
-
+    # A live bridge OWNS the project → rename over it (persisted into the resident project via the
+    # server's mid-life save); else headless. Both persist, so every future decompile sees the name.
     try:
-        out = GhidraDecompiler().rename_function(
+        out = ghidra_op_backend(target).rename_function(
             target.path, address=str(node.address), new_name=new_name, project=project)
     except Exception as exc:  # noqa: BLE001 — propagation must never break the graph rename
         return {"propagated": False, "reason": f"rename probe failed: {exc}"}

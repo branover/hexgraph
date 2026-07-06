@@ -425,3 +425,25 @@ def get_decompiler(name: str | None = None, *, target=None) -> Decompiler:
 
         return GhidraBridgeDecompiler()
     raise ValueError(f"unknown decompiler {resolved!r}")
+
+
+def ghidra_op_backend(target=None) -> Decompiler:
+    """The Ghidra backend for a target's NON-decompile ops (xrefs / taint / emulate / rename): the
+    live MANAGED bridge if one is up for the target — reusing the resident project, no per-call open
+    and no conflict on Ghidra's project lock — else headless `GhidraDecompiler`. These ops are
+    Ghidra-specific (radare2 has no equivalent), so call sites use THIS rather than `get_decompiler`
+    (which defaults to radare2). Best-effort: a dead/unreachable bridge falls through to headless, so
+    routing never breaks the op. While a bridge OWNS the target's slot, a headless op on it would
+    conflict on the project lock — routing here is what lets the bridge serve every op instead."""
+    if target is not None:
+        try:
+            from hexgraph.engine.re.bridge import bridge_endpoint
+
+            ep = bridge_endpoint(target)
+            if ep:
+                from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler, connect_managed
+
+                return GhidraBridgeDecompiler(ops=connect_managed(host=ep[0], port=ep[1]))
+        except Exception:  # noqa: BLE001 — routing is an optimization, never load-bearing
+            pass
+    return GhidraDecompiler()

@@ -214,19 +214,42 @@ def _clear_partial(proj_dir: str) -> None:
 
 # --- Cores (ported from the Jython scripts; the Ghidra Java API is identical) ---------------
 
+def _apply_rename(program, flat, addr, new_name) -> bool:
+    """Rename the function CONTAINING `addr` to `new_name` and PERSIST it (a transaction-wrapped
+    write + save). Shared by the headless `--rename` path and the bridge `rename` op — a warm-opened
+    program has no lingering analysis transaction, so `program.save()` commits cleanly mid-life
+    (a resident bridge keeps serving from the same program afterward). Returns True on a rename."""
+    from ghidra.program.model.symbol import SourceType
+    from ghidra.util.task import ConsoleTaskMonitor
+
+    fn = None
+    with contextlib.suppress(Exception):
+        fn = flat.getFunctionContaining(flat.toAddr(addr))
+    if fn is None:
+        return False
+    txid = program.startTransaction("hexgraph rename")
+    ok = False
+    try:
+        fn.setName(new_name, SourceType.USER_DEFINED)
+        ok = True
+    except Exception:  # noqa: BLE001 — a bad name leaves the program unchanged
+        ok = False
+    finally:
+        program.endTransaction(txid, ok)
+    if ok:
+        with contextlib.suppress(Exception):
+            program.save("hexgraph rename", ConsoleTaskMonitor())
+    return ok
+
+
 def decompile_core(program, flat, monitor, *, focus=None, rename=None) -> dict:
     """Ported POST_SCRIPT: whole-program inventory (functions/calls/structs) + a focused decompile
     with recovered facts. `focus` is a function NAME or hex ADDRESS; `rename` is (addr, new_name).
     The actual decompilation lives in `_focus_facts` (which opens its own DecompInterface)."""
     if rename:
-        from ghidra.program.model.symbol import SourceType
-
         addr, new_name = rename
-        with contextlib.suppress(Exception):
-            fn = flat.getFunctionContaining(flat.toAddr(addr))
-            if fn is not None:
-                fn.setName(new_name, SourceType.USER_DEFINED)
-                focus = addr
+        if _apply_rename(program, flat, addr, new_name):
+            focus = addr
 
     fm = program.getFunctionManager()
     funcs = list(fm.getFunctions(True))
@@ -658,7 +681,9 @@ def emulate_core(program, flat, monitor, focus) -> dict:
     if not reached_ret and steps >= MAX_STEPS:
         emu_out["error"] = "step budget exhausted before return (%d)" % MAX_STEPS
     if reached_ret and ret_reg is not None:
-        raw = int(emu.readRegister(ret_reg)) & 0xFFFFFFFFFFFFFFFF
+        # readRegister returns a java.math.BigInteger; under jpype (unlike Jython) `int()` can't
+        # consume it directly, so go via its decimal string. The mask normalizes to unsigned 64-bit.
+        raw = int(str(emu.readRegister(ret_reg))) & 0xFFFFFFFFFFFFFFFF
         emu_out["value_hex"] = "0x%x" % raw
         if ret_size and ret_size < 8:
             mask = (1 << (ret_size * 8)) - 1
@@ -875,10 +900,16 @@ def ghidra_version() -> str | None:
 # remote_eval of Ghidra internals (a smaller surface than the researcher-Ghidra `_RemoteOps` path).
 
 def bridge_dispatch(program, flat, monitor, req) -> dict:
-    """Map one bridge request to a core call over the RESIDENT program. Ops: `ping` (liveness +
-    function count) | `list` (function inventory) | `decompile` (focus = name or 0xADDR). READS
-    only — a live bridge OWNS the project, and write ops (rename) stay on the headless path (see
-    engine.re.bridge.blocking_message); this matches the #264 managed-bridge op scope."""
+    """Map one bridge request to a core call over the RESIDENT program. A live bridge OWNS the
+    project, so EVERY Ghidra op for the target routes here instead of a conflicting headless open:
+      `ping`     liveness + function count
+      `list`     function inventory
+      `decompile`  focus = name or 0xADDR
+      `xrefs`    mode (callers|function|data|callgraph|sinks) + optional subject
+      `taint`    grounded source->sink flows
+      `emulate`  focus = a parameterless routine (constant recovery)
+      `rename`   address + new_name — the one WRITE, persisted into the resident project via
+                 `_apply_rename`'s mid-life save (so it sticks for future reads over the bridge)."""
     import traceback
 
     op = (req or {}).get("op")
@@ -890,6 +921,17 @@ def bridge_dispatch(program, flat, monitor, req) -> dict:
             return {"functions": names[:400], "tool": "ghidra_bridge"}
         if op == "decompile":
             result = decompile_core(program, flat, monitor, focus=req.get("focus"))
+            result["tool"] = "ghidra_bridge"
+            return result
+        if op == "xrefs":
+            return xrefs_core(program, flat, monitor, req.get("mode", "sinks"), req.get("subject"))
+        if op == "taint":
+            return taint_core(program, flat, monitor)
+        if op == "emulate":
+            return emulate_core(program, flat, monitor, req.get("focus"))
+        if op == "rename":
+            result = decompile_core(program, flat, monitor,
+                                    rename=(req.get("address"), req.get("new_name")))
             result["tool"] = "ghidra_bridge"
             return result
         return {"error": f"unknown bridge op {op!r}"}
