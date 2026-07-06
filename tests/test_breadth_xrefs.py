@@ -42,10 +42,19 @@ class _FakeExec:
         return self.result
 
 
+def _gate_ok(monkeypatch):
+    """Neutralize the analysis gate (C1b): pretend a warm analysis exists so the whole-program tools
+    run. These tests exercise TOOL behavior with a mocked executor — not the re_analyze gate, which
+    since C1b fires for radare2 too (the default backend) when Docker is up and no analysis is saved."""
+    monkeypatch.setattr("hexgraph.engine.re.analysis.analysis_state",
+                        lambda *a, **k: {"state": "analyzed", "detail": "test", "container": "c"})
+
+
 def _wire(monkeypatch, result):
     fake = _FakeExec(result)
     monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
     monkeypatch.setattr("hexgraph.sandbox.executor.get_executor", lambda *a, **k: fake)
+    _gate_ok(monkeypatch)
     return fake
 
 
@@ -71,7 +80,8 @@ def test_function_xrefs_records_observation_and_mutates_no_graph(hg_home, monkey
         assert len(obs) == 1 and obs[0].content_hash == "abc123"
 
 
-def test_function_xrefs_requires_function(hg_home):
+def test_function_xrefs_requires_function(hg_home, monkeypatch):
+    _gate_ok(monkeypatch)  # arg-validation error must surface, not the analysis gate
     with session_scope() as s:
         ctx, _p, _t = _ctx(s)
         assert "required" in run_tool(ctx, "function_xrefs", {})
@@ -163,6 +173,7 @@ def test_decompilation_observation_payload_is_focus_only(hg_home, monkeypatch):
     monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
     monkeypatch.setattr("hexgraph.sandbox.decompiler.get_decompiler",
                         lambda *a, **k: _FakeDecompiler())
+    _gate_ok(monkeypatch)
     with session_scope() as s:
         ctx, _p, t = _ctx(s)
         run_tool(ctx, "decompile_function", {"function": "cgi_handler"})
@@ -198,7 +209,8 @@ def test_data_xrefs_records_observation_and_mutates_no_graph(hg_home, monkeypatc
         assert len(obs) == 1
 
 
-def test_data_xrefs_requires_address(hg_home):
+def test_data_xrefs_requires_address(hg_home, monkeypatch):
+    _gate_ok(monkeypatch)  # arg-validation error must surface, not the analysis gate
     with session_scope() as s:
         ctx, _p, _t = _ctx(s)
         assert "required" in run_tool(ctx, "data_xrefs", {})

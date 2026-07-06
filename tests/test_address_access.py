@@ -36,9 +36,18 @@ class _FakeDecompiler:
         return {"functions": list(self.functions), "focus": self.focus}
 
 
+def _gate_ok(monkeypatch):
+    """Neutralize the analysis gate (C1b): pretend a warm analysis exists so the whole-program tools
+    run. These tests exercise TOOL behavior with a mocked decompiler — not the re_analyze gate, which
+    since C1b fires for radare2 too (the default backend) when Docker is up and no analysis is saved."""
+    monkeypatch.setattr("hexgraph.engine.re.analysis.analysis_state",
+                        lambda *a, **k: {"state": "analyzed", "detail": "test", "container": "c"})
+
+
 def _wire(monkeypatch, decompiler):
     monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
     monkeypatch.setattr("hexgraph.sandbox.decompiler.get_decompiler", lambda *a, **k: decompiler)
+    _gate_ok(monkeypatch)
 
 
 # --- decompile_at: promote the function CONTAINING an address ------------------
@@ -82,7 +91,8 @@ def test_decompile_at_address_not_found_records_under_decompile_at(hg_home, monk
         assert len(obs) == 1 and obs[0].result_kind == "function_list"
 
 
-def test_decompile_at_requires_address(hg_home):
+def test_decompile_at_requires_address(hg_home, monkeypatch):
+    _gate_ok(monkeypatch)  # arg-validation error must surface, not the analysis gate
     with session_scope() as s:
         ctx, _p, _t = _ctx(s)
         assert "required" in run_tool(ctx, "decompile_at", {})
