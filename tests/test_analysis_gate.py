@@ -47,8 +47,8 @@ def test_gate_blocks_on_running_or_failed(hg_home, monkeypatch, state):
 
 @pytest.mark.parametrize("state", ["analyzed", "unavailable"])
 def test_gate_proceeds_when_analyzed_or_unavailable(hg_home, monkeypatch, state):
-    """analyzed ⇒ warm, proceed fast; unavailable ⇒ Ghidra off / Docker down / no artifact ⇒
-    behave as before (radare2 backend is never gated)."""
+    """analyzed ⇒ warm, proceed fast; unavailable ⇒ no persistent-slot backend (Ghidra bridge) /
+    Docker down / no artifact ⇒ behave as before (not gated)."""
     _fake_state(monkeypatch, state)
     with session_scope() as s:
         assert AT._analysis_gate(_ctx(s)) is None

@@ -670,8 +670,9 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
     args = args or {}
     meta = ctx.target.metadata_json or {}
     try:
-        # Analysis gate: the whole-program tools require a saved analysis when Ghidra is active —
-        # they no longer silently launch a cold analysis on a miss (see _ANALYSIS_GATED_TOOLS).
+        # Analysis gate: the whole-program tools require a saved analysis for the active persistent
+        # backend (Ghidra OR radare2) — they no longer silently launch a cold analysis on a miss
+        # (see _ANALYSIS_GATED_TOOLS).
         if name in _ANALYSIS_GATED_TOOLS:
             gate = _analysis_gate(ctx)
             if gate is not None:

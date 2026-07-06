@@ -90,14 +90,20 @@ def container_name(content_sha: str, backend: str = "ghidra") -> str:
     return f"{CONTAINER_PREFIX}{backend}-{content_sha[:16]}"
 
 
+_ANALYZE_OUTDIR: str | None = None
+
+
 def _analyze_outdir() -> str:
-    """A single SHARED throwaway `/out` dir for detached analyses. `/out` is bind-mounted but UNUSED
-    under `--analyze` (both probes write their project into the persistent mount and any JSON to
-    /scratch), so one shared dir is safe and avoids leaking an empty tempdir per analyzed target
-    (the per-call `mkdtemp` residual from #260). Created once under the system tempdir."""
-    d = os.path.join(tempfile.gettempdir(), "hexgraph-analyze-out")
-    os.makedirs(d, exist_ok=True)
-    return d
+    """A throwaway `/out` dir for detached analyses. `/out` is bind-mounted but UNUSED under
+    `--analyze` (both probes write their project into the persistent mount and any JSON to /scratch).
+    Created ONCE per process via `mkdtemp` — an unpredictable, self-owned path, NOT a fixed
+    `/tmp/hexgraph-analyze-out` a foreign user on a shared host could pre-create with hostile perms
+    (which would make the runner's outdir chmod raise) — and reused, so re_analyze leaks no empty
+    tempdir per analyzed target (the per-call `mkdtemp` residual from #260)."""
+    global _ANALYZE_OUTDIR
+    if _ANALYZE_OUTDIR is None or not os.path.isdir(_ANALYZE_OUTDIR):
+        _ANALYZE_OUTDIR = tempfile.mkdtemp(prefix="hexgraph-analyze-out-")
+    return _ANALYZE_OUTDIR
 
 
 def _reap_if_present(ex, name) -> None:
