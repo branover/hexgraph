@@ -109,8 +109,9 @@ just sandbox-build 1                                  # bundle headless Ghidra (
 hexgraph config set features.ghidra.enabled true     # then re-run a decompile/recon task
 ```
 
-Two Ghidra modes are set with `features.ghidra.mode`: `headless` runs analyzeHeadless in the sandbox,
-and `bridge` connects to a running Ghidra over `ghidra_bridge` (covered next). The separate
+Two Ghidra modes are set with `features.ghidra.mode`: `headless` runs Ghidra in the sandbox (driven
+in-process through PyGhidra), and `bridge` connects to a running Ghidra over `ghidra_bridge` (covered
+next). The separate
 `features.ghidra.enrich_recon` toggle materializes functions, the call graph, and structs into the
 substrate. With Ghidra off, HexGraph degrades to radare2.
 

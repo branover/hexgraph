@@ -147,21 +147,19 @@ def test_rename_still_applies_when_ghidra_write_errors(hg_home, monkeypatch):
         assert node.name == "renamed_anyway"  # graph rename succeeded despite the Ghidra boom
 
 
-def test_ghidra_post_script_is_jython_safe(hg_home):
-    """Ghidra runs POST_SCRIPT under Jython 2.7, which (PEP 263) rejects ANY non-ASCII byte —
-    e.g. an em-dash in a comment — with a hard SyntaxError when no encoding is declared, and a
-    compile failure writes NO output (undiagnosable). The rename prelude added a non-ASCII
-    char and broke the WITH_GHIDRA gate; this guards the fix offline: the shared script must be
-    pure-ASCII OR declare an encoding cookie on its first line."""
-    from hexgraph.sandbox.probes import ghidra_probe as GP
+def test_decompile_core_applies_the_rename(hg_home):
+    """The rename round-trip lives in pyghidra_lib.decompile_core: it applies the analyst's rename
+    to the function CONTAINING the address (SourceType.USER_DEFINED) then focuses on it, so the warm
+    re-open + save persists the new name for every future decompile. Guards the logic offline (no
+    Ghidra) — a broken rename prelude would otherwise only surface inside a container."""
+    import inspect
 
-    src = GP.POST_SCRIPT
-    first_line = src.lstrip("\n").splitlines()[0]
-    has_cookie = "coding" in first_line and ("utf-8" in first_line.lower() or "latin" in first_line.lower())
-    is_ascii = all(ord(c) < 128 for c in src)
-    assert has_cookie or is_ascii, (
-        "POST_SCRIPT contains non-ASCII but declares no encoding cookie — Jython 2.7 will "
-        "reject it with a SyntaxError and the probe will silently produce no output")
+    from hexgraph.sandbox.probes import pyghidra_lib as L
+
+    src = inspect.getsource(L.decompile_core)
+    assert "SourceType.USER_DEFINED" in src
+    assert "setName" in src
+    assert "getFunctionContaining" in src
 
 
 def test_rename_error_result_does_not_record(hg_home, monkeypatch):

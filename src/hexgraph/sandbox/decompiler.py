@@ -408,9 +408,11 @@ def get_decompiler(name: str | None = None, *, target=None) -> Decompiler:
 
             ep = bridge_endpoint(target)
             if ep:
-                from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler, connect_ops
+                from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler, connect_managed
 
-                return GhidraBridgeDecompiler(ops=connect_ops(host=ep[0], port=ep[1]))
+                # The MANAGED bridge speaks HexGraph's own JSON RPC (connect_managed), not the
+                # researcher-Ghidra jfx_bridge (connect_ops); both drive a GhidraBridgeDecompiler.
+                return GhidraBridgeDecompiler(ops=connect_managed(host=ep[0], port=ep[1]))
         except Exception:  # noqa: BLE001 — routing is an optimization, never load-bearing
             pass
     resolved = _resolve_name(name)

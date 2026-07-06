@@ -22,20 +22,18 @@ from hexgraph import settings as st
 from conftest import SANDBOX_READY, fixture_path
 
 
-# ── offline: the TAINT_SCRIPT must compile (Jython 2.7 runs it; a syntax/encoding error
-#    writes NO output and is undiagnosable) ────────────────────────────────────────────
+# ── offline: the taint core recognizes the sinks + sources it grounds flows on ─────────
 
-def test_taint_script_is_jython_safe():
-    from hexgraph.sandbox.probes import ghidra_probe as GP
+def test_taint_core_defines_sinks_and_sources():
+    """The grounded taint pass (pyghidra_lib.taint_core) keys on the command-exec + unbounded-copy
+    SINKS and the untrusted SOURCES it propagates from. Guards the sets offline (no Ghidra); a
+    behavioral end-to-end pass is in the WITH_GHIDRA lane."""
+    from hexgraph.sandbox.probes import pyghidra_lib as L
 
-    src = GP.TAINT_SCRIPT
-    first_line = src.lstrip("\n").splitlines()[0]
-    has_cookie = "coding" in first_line and ("utf-8" in first_line.lower() or "latin" in first_line.lower())
-    is_ascii = all(ord(c) < 128 for c in src)
-    assert has_cookie or is_ascii, "TAINT_SCRIPT is non-ASCII without an encoding cookie"
-    # Catches the gross syntax errors Python 3 and Jython 2.7 share (a broken edit here would
-    # otherwise only surface as a silent no-output failure inside Ghidra).
-    compile(src, "<taint_script>", "exec")
+    assert {"system", "popen", "execve"} <= L._SINK_EXEC
+    assert {"strcpy", "strcat", "sprintf"} <= L._SINK_OVERFLOW
+    assert "getenv" in L._SOURCE_RET and "fgets" in L._SOURCE_BUF
+    assert callable(L.taint_core)
 
 
 # ── offline: the seam selects by Settings, degrades gracefully ───────────────────────

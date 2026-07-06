@@ -72,9 +72,10 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 
 # Ghidra is opt-in (large; pulls a JDK 21 + the Ghidra distribution). The
 # R2Decompiler stays the always-available default; GhidraDecompiler is selected
-# only when enabled in Settings. analyzeHeadless lands at $GHIDRA_INSTALL_DIR.
+# only when enabled in Settings. Ghidra lands at $GHIDRA_INSTALL_DIR and is driven
+# IN-PROCESS via PyGhidra (jpype), not the analyzeHeadless CLI.
 ENV GHIDRA_INSTALL_DIR=/opt/ghidra
-# Temurin lands at a versioned path; point JAVA_HOME/PATH at it so analyzeHeadless
+# Temurin lands at a versioned path; point JAVA_HOME/PATH at it so PyGhidra's JVM
 # (and any `java`) resolve to JDK 21, not some other JVM. Harmless when WITH_GHIDRA=0
 # (the path simply won't exist and nothing in the static-only image invokes java).
 ENV JAVA_HOME=/usr/lib/jvm/temurin-21-jdk-amd64
@@ -91,35 +92,29 @@ RUN if [ "$WITH_GHIDRA" = "1" ]; then \
         && unzip -q /tmp/ghidra.zip -d /opt \
         && mv /opt/ghidra_* /opt/ghidra \
         && rm -f /tmp/ghidra.zip \
-        # Install the bundled Jython extension so classic `.py` postScripts run under
-        # analyzeHeadless. Ghidra 11.x+ no longer bundles Jython enabled by default and
-        # routes `.py` scripts through PyGhidra (which needs a separate launcher); our
-        # ghidra_probe.py uses the classic `-postScript hexgraph_post.py` path, so without
-        # this the run aborts with "Ghidra was not started with PyGhidra. Python is not
-        # available" and produces no output. The Jython extension restores `.py` support
-        # in-place; ship it so headless decompilation actually works.
-        && JYTHON_ZIP="$(ls /opt/ghidra/Extensions/Ghidra/*Jython*.zip | head -n1)" \
-        && if [ -z "$JYTHON_ZIP" ]; then echo "FATAL: bundled Jython extension not found" >&2; exit 1; fi \
-        && mkdir -p /opt/ghidra/Ghidra/Extensions \
-        && unzip -q "$JYTHON_ZIP" -d /opt/ghidra/Ghidra/Extensions \
-        # PyGhidra's script provider claims `.py` ahead of Jython, but it can only run
-        # when Ghidra is launched through the separate `pyghidra` launcher (a pip install
-        # + jpype bridge) — under plain `analyzeHeadless` it aborts every `.py` postScript
-        # with "Ghidra was not started with PyGhidra. Python is not available". We launch
-        # headless the classic way and want Jython to own `.py`, so drop the PyGhidra
-        # feature. (radare2 remains the default decompiler; Ghidra is the opt-in upgrade.)
-        && rm -rf /opt/ghidra/Ghidra/Features/PyGhidra \
-        # Ghidra Bridge (features.ghidra bridge / re_bridge_*): a long-lived analyzeHeadless can
-        # host a ghidra_bridge RPC server, keeping an analyzed project RESIDENT so repeated
-        # decompile/xref/taint/emulate calls for a target skip the per-call project open. The
-        # server runs in Ghidra's Jython (2.7); bake its server scripts + jfx_bridge into a fixed
-        # dir that the harness (sandbox/probes/ghidra_bridge_serve.py, a mounted probe) adds to
-        # sys.path. Pure-Python, Jython-importable; --break-system-packages for PEP 668.
-        && python3 -m pip install --no-cache-dir --break-system-packages ghidra_bridge \
-        && mkdir -p /opt/ghidra-bridge \
-        && cp "$(python3 -c 'import ghidra_bridge, os; print(os.path.dirname(ghidra_bridge.__file__))')"/server/*.py /opt/ghidra-bridge/ \
-        && cp -r "$(python3 -c 'import jfx_bridge, os; print(os.path.dirname(jfx_bridge.__file__))')" /opt/ghidra-bridge/jfx_bridge \
-        && chmod -R a+rX /opt/ghidra-bridge \
+        # Drive Ghidra IN-PROCESS via PyGhidra (CPython 3 over jpype), NOT analyzeHeadless + Jython:
+        # the probe (sandbox/probes/ghidra_probe.py) and the resident bridge import `pyghidra` and
+        # call the Ghidra Java API directly (each analysis core ports ~1:1 from its former Jython
+        # postScript, now in sandbox/probes/pyghidra_lib.py). Ghidra ships the PyGhidra module under
+        # Features/PyGhidra — KEEP it (earlier images deleted it to force Jython to own `.py`) and
+        # install its Python package so `import pyghidra` works. Prefer the BUNDLED wheel (version-
+        # locked to THIS Ghidra) over PyPI so a Ghidra bump can't drift the API; jpype1 (the only
+        # native dep) resolves from a prebuilt PyPI wheel (no compiler). --break-system-packages for
+        # PEP 668. NO Jython and NO ghidra_bridge/jfx_bridge: the managed bridge is now HexGraph's
+        # own stdlib-socket JSON RPC (pyghidra_lib.serve_bridge), and radare2 remains the default
+        # decompiler (Ghidra is the opt-in upgrade).
+        && PYGHIDRA_WHL="$(ls /opt/ghidra/Ghidra/Features/PyGhidra/pypkg/dist/pyghidra-*.whl 2>/dev/null | head -n1)" \
+        && if [ -n "$PYGHIDRA_WHL" ]; then \
+               echo "Installing bundled PyGhidra wheel: $PYGHIDRA_WHL"; \
+               python3 -m pip install --no-cache-dir --break-system-packages "$PYGHIDRA_WHL"; \
+           else \
+               echo "NOTE: no bundled PyGhidra wheel found; installing pyghidra from PyPI"; \
+               python3 -m pip install --no-cache-dir --break-system-packages pyghidra; \
+           fi \
+        # Fail the build NOW if the module or its Ghidra-side jar is missing (a silent absence would
+        # otherwise only surface as a per-call probe error at runtime).
+        && python3 -c "import pyghidra" \
+        && test -f /opt/ghidra/Ghidra/Features/PyGhidra/lib/PyGhidra.jar \
         # --- Build-time JDK ↔ Ghidra assertion -------------------------------------
         # Fail the build NOW if the installed JDK can't run this Ghidra, so a future
         # version bump cannot ship broken (as it did twice). Cross-check two facts:

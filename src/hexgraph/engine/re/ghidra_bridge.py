@@ -143,6 +143,60 @@ def connect_ops(host: str | None = None, port: int | None = None) -> BridgeOps:
     return _RemoteOps(bridge)
 
 
+class _ManagedOps:
+    """Ops backed by HexGraph's OWN managed resident bridge (engine.re.bridge) — a pyghidra process
+    holding the target's warm project open behind a plain line-delimited JSON RPC over TCP.
+
+    DISTINCT from `_RemoteOps` (which drives a researcher's live Ghidra via ghidra_bridge/jfx_bridge
+    remote_eval): here HexGraph controls both ends, so the wire is a small vetted protocol — the
+    client sends a structured request, the resident server runs the matching `pyghidra_lib` core and
+    returns JSON. No client library, no remote code eval. Op scope matches the headless-parity #264
+    bridge: decompile + list."""
+
+    def __init__(self, host: str, port: int, timeout: float = 600.0) -> None:
+        self.host, self.port, self.timeout = host, port, timeout
+
+    def _rpc(self, req: dict) -> dict:
+        import json
+        import socket
+
+        try:
+            with socket.create_connection((self.host, self.port), timeout=self.timeout) as sock:
+                sock.sendall((json.dumps(req) + "\n").encode("utf-8"))
+                line = sock.makefile("rb").readline()
+        except OSError as exc:
+            raise BridgeUnavailable(
+                f"managed Ghidra bridge at {self.host}:{self.port} unreachable: {exc}") from exc
+        if not line:
+            raise BridgeUnavailable("managed Ghidra bridge closed the connection with no response")
+        return json.loads(line.decode("utf-8"))
+
+    def list_programs(self) -> list[dict]:
+        # One resident program; shape the row like _RemoteOps for a uniform caller.
+        resp = self._rpc({"op": "ping"})
+        return [{"name": "artifact", "path": None, "language": None,
+                 "functions": resp.get("functions_total")}]
+
+    def executable_path(self, program: str) -> str | None:
+        return None
+
+    def decompile(self, program: str | None, function: str | None) -> dict:
+        req: dict = {"op": "decompile"}
+        if function:
+            req["focus"] = function
+        resp = self._rpc(req)
+        # An error / not-found focus reads as no focus, mirroring the headless probe.
+        focus = None if resp.get("error") else resp.get("focus")
+        return {"functions": (resp.get("functions") or [])[:400], "focus": focus,
+                "tool": "ghidra_bridge"}
+
+
+def connect_managed(host: str, port: int) -> BridgeOps:
+    """Ops for HexGraph's managed resident bridge (custom JSON RPC). Unlike `connect_ops`, needs NO
+    client library — HexGraph controls both ends. Used by decompiler routing for a live bridge."""
+    return _ManagedOps(host, port)
+
+
 class GhidraBridgeDecompiler(Decompiler):
     name = "ghidra_bridge"
 
