@@ -32,8 +32,6 @@ _ADDR = re.compile(r"^0x[0-9a-fA-F]+$")
 # but the O(n^2) / decompile-every-function passes don't grind for tens of minutes. Smaller binaries
 # keep FULL analysis. (Ported from ghidra_probe.GHIDRA_FAST_PROFILE_BYTES.)
 _FAST_PROFILE_BYTES = int(float(os.environ.get("HEXGRAPH_GHIDRA_FAST_PROFILE_MB", "100")) * 1024 * 1024)
-# Headroom (s) left below the host's wall-clock budget so analysis stops+saves before the kill.
-_SAVE_OVERHEAD_S = 180
 
 
 def _setup_env() -> None:
@@ -131,19 +129,19 @@ def open_target(artifact, *, cold_analyze=True):
         loc = os.path.join(SCRATCH, "ghidra_proj")
         name = PROJECT_NAME
         os.makedirs(loc, exist_ok=True)
-    # open_program imports (analyze=False so WE drive analysis with fast-profile + a timeout monitor)
-    # into loc/name and yields the FlatProgramAPI; the program is saved into the project on a clean
-    # exit (so a warm re-open finds it).
+    # open_program imports (analyze=False so WE drive analysis with the fast profile) into loc/name
+    # and yields the FlatProgramAPI. PERSISTENCE is handled by open_program's own context exit
+    # (`project.save(program)`), NOT an explicit `program.save()`: auto-analysis leaves the program's
+    # DB transaction settling, and `project.save` handles that the way analyzeHeadless does, whereas a
+    # direct `program.save()` raises "Unable to lock due to active transaction" on any non-trivial
+    # binary. The marker is committed only AFTER a clean exit (save succeeded), so a failed analysis
+    # leaves no committed marker and the host re-analyzes.
     with pyghidra.open_program(artifact, project_location=loc, project_name=name,
                                program_name=prog_name, analyze=False,
                                nested_project_location=False) as flat:
         program = flat.getCurrentProgram()
         _analyze(program, artifact)
-        try:
-            yield program, flat, False
-        finally:
-            if persist:
-                _save_program(program)
+        yield program, flat, False
     if persist:
         _commit_marker()
 
@@ -176,41 +174,19 @@ def _apply_fast_profile(program) -> None:
         program.endTransaction(txid, True)
 
 
-def _analysis_budget() -> int | None:
-    """The auto-analysis timeout budget in seconds, or None (unbounded), from the host's advertised
-    wall-clock (HEXGRAPH_PROBE_TIMEOUT_S). PURE / host-testable (no Ghidra). Mirrors the Jython
-    `_analysis_timeout_args`: absent/bad or below ~2 min -> None (a tiny budget can't split a
-    monolith); otherwise leave import/save headroom but never below half the wall-clock."""
-    try:
-        total = int(float(os.environ.get("HEXGRAPH_PROBE_TIMEOUT_S", "")))
-    except (TypeError, ValueError):
-        return None
-    if total < 120:
-        return None
-    return max(int(total * 0.5), total - _SAVE_OVERHEAD_S)
-
-
-def _analysis_monitor():
-    """A TimeoutTaskMonitor sized at `_analysis_budget()` so analysis stops+saves before the
-    external kill on a monolith; a plain ConsoleTaskMonitor when no budget is advertised."""
-    from ghidra.util.task import ConsoleTaskMonitor
-
-    budget = _analysis_budget()
-    if budget is None:
-        return ConsoleTaskMonitor()
-    from java.util.concurrent import TimeUnit
-    from ghidra.util.task import TimeoutTaskMonitor
-
-    return TimeoutTaskMonitor.timeoutIn(budget, TimeUnit.SECONDS)
-
-
 def _analyze(program, artifact) -> None:
-    """Run Ghidra auto-analysis over a freshly-imported program: fast-profile for a large binary,
-    then AutoAnalysisManager under the timeout monitor (a graceful stop+save on a monolith, vs the
-    per-call cold analysis that the external timeout used to kill before it could commit). Marks the
-    program analyzed so a warm re-open skips analysis."""
+    """Run Ghidra auto-analysis over a freshly-imported program to completion: the fast profile for
+    a large binary (disables the passes pathological on a monolith), then AutoAnalysisManager, then
+    mark the program analyzed so a warm re-open skips analysis.
+
+    NO in-process timeout: the Jython `-analysisTimeoutPerFile` graceful-partial-save doesn't port
+    cleanly (cancelling AutoAnalysisManager mid-pass corrupts the DB transaction, so the partial
+    can't be saved), and it's superseded anyway — `re_analyze` runs this DETACHED with a generous
+    budget, and the fast profile is the real bound on a monolith. A pathological binary that outruns
+    even the detached budget is stopped by the operator (re_bridge/re_analyze), not silently."""
     from ghidra.app.plugin.core.analysis import AutoAnalysisManager
     from ghidra.program.util import GhidraProgramUtilities
+    from ghidra.util.task import ConsoleTaskMonitor
 
     large = False
     with contextlib.suppress(OSError):
@@ -221,10 +197,7 @@ def _analyze(program, artifact) -> None:
     mgr = AutoAnalysisManager.getAnalysisManager(program)
     mgr.initializeOptions()
     mgr.reAnalyzeAll(None)
-    try:
-        mgr.startAnalysis(_analysis_monitor())
-    except Exception:  # noqa: BLE001 — a timeout/cancel stops analysis; save the partial result
-        pass
+    mgr.startAnalysis(ConsoleTaskMonitor())  # synchronous; persistence is open_program's exit save
     with contextlib.suppress(Exception):
         GhidraProgramUtilities.markProgramAnalyzed(program)
 
@@ -239,21 +212,12 @@ def _clear_partial(proj_dir: str) -> None:
     os.makedirs(proj_dir, exist_ok=True)
 
 
-def _save_program(program) -> None:
-    """Persist the analyzed program back into its project (so a warm re-open reuses it)."""
-    from ghidra.util.task import ConsoleTaskMonitor
-
-    with contextlib.suppress(Exception):
-        program.save("hexgraph analyze", ConsoleTaskMonitor())
-
-
 # --- Cores (ported from the Jython scripts; the Ghidra Java API is identical) ---------------
 
 def decompile_core(program, flat, monitor, *, focus=None, rename=None) -> dict:
     """Ported POST_SCRIPT: whole-program inventory (functions/calls/structs) + a focused decompile
-    with recovered facts. `focus` is a function NAME or hex ADDRESS; `rename` is (addr, new_name)."""
-    from ghidra.app.decompiler import DecompInterface
-
+    with recovered facts. `focus` is a function NAME or hex ADDRESS; `rename` is (addr, new_name).
+    The actual decompilation lives in `_focus_facts` (which opens its own DecompInterface)."""
     if rename:
         from ghidra.program.model.symbol import SourceType
 

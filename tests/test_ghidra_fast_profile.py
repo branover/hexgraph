@@ -1,36 +1,17 @@
-"""Ghidra's analysis of a 100 MB+ monolith is bounded two ways — (1) a fast profile disables the
-passes proven pathological on a huge binary (Call-Fixup Installer's O(n^2) AddressSet, the
-per-processor Constant Reference Analyzer, the decompile-every-function passes) while KEEPING the
-call-graph/reference analyzers; (2) auto-analysis is told to stop+save just under the host's
-wall-clock budget. Since the PyGhidra re-platform these are pure host-side helpers in `pyghidra_lib`
-(`_analysis_budget` + `_slow_analyzer` + `_FAST_PROFILE_BYTES`), driven in-process by `_analyze`
-instead of the old Jython preScript / `-analysisTimeoutPerFile` args. The end-to-end behavior is
-validated against a real monolith separately. The module is stdlib-only at import (Ghidra is lazy)."""
+"""Ghidra's analysis of a 100 MB+ monolith is bounded by a fast profile that disables the passes
+proven pathological on a huge binary (Call-Fixup Installer's O(n^2) AddressSet, the per-processor
+Constant Reference Analyzer, the decompile-every-function passes) while KEEPING the call-graph/
+reference analyzers. Since the PyGhidra re-platform these are pure host-side helpers in `pyghidra_lib`
+(`_slow_analyzer` + `_FAST_PROFILE_BYTES`), applied in-process by `_analyze` before AutoAnalysisManager
+runs. The analysis otherwise runs to completion — `re_analyze` runs it detached with a generous budget
+(the Jython `-analysisTimeoutPerFile` graceful-partial-save is not replicated: cancelling analysis
+mid-pass corrupts the DB transaction, and the fast profile + detached budget bound the monolith case).
+The end-to-end behavior is validated against a real monolith separately; the module is stdlib-only at
+import (Ghidra is lazy)."""
 
 from __future__ import annotations
 
 from hexgraph.sandbox.probes import pyghidra_lib as L
-
-
-def test_analysis_budget_sits_just_under_the_host_budget(monkeypatch):
-    monkeypatch.setenv("HEXGRAPH_PROBE_TIMEOUT_S", "1000")        # large: budget = 1000 - overhead
-    assert L._analysis_budget() == 1000 - L._SAVE_OVERHEAD_S
-
-
-def test_small_nontrivial_budget_still_gets_a_graceful_stop(monkeypatch):
-    # A lowered resources.sandbox.timeout (e.g. 200s) must NOT silently drop the graceful save:
-    # the budget floors at ~half the wall-clock (here 100s) rather than vanishing.
-    monkeypatch.setenv("HEXGRAPH_PROBE_TIMEOUT_S", "200")
-    assert L._analysis_budget() == 100
-
-
-def test_no_analysis_budget_when_absent_or_bad(monkeypatch):
-    monkeypatch.delenv("HEXGRAPH_PROBE_TIMEOUT_S", raising=False)
-    assert L._analysis_budget() is None                          # no budget advertised -> let it run
-    monkeypatch.setenv("HEXGRAPH_PROBE_TIMEOUT_S", "90")         # < 120 -> too small to split usefully
-    assert L._analysis_budget() is None
-    monkeypatch.setenv("HEXGRAPH_PROBE_TIMEOUT_S", "not-a-number")
-    assert L._analysis_budget() is None
 
 
 def test_fast_profile_threshold_default_is_100mib():
