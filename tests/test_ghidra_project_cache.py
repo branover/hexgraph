@@ -170,11 +170,11 @@ def test_cmd_prune_ghidra_cache_is_explicit_only(hg_home):
     _make_project(root, "new__v", 2 * mb, mtime=2000)  # 4 MiB total
 
     # No flag → report only; delete NOTHING.
-    assert _cmd_prune(argparse.Namespace(project=pid, ghidra_cache_mb=None)) == 0
+    assert _cmd_prune(argparse.Namespace(project=pid, ghidra_cache_mb=None, r2_cache_mb=None)) == 0
     assert (root / "old__v").exists() and (root / "new__v").exists()
 
     # Explicit --ghidra-cache-mb 2 → evict the oldest to get under 2 MiB.
-    assert _cmd_prune(argparse.Namespace(project=pid, ghidra_cache_mb=2)) == 0
+    assert _cmd_prune(argparse.Namespace(project=pid, ghidra_cache_mb=2, r2_cache_mb=None)) == 0
     assert not (root / "old__v").exists()   # oldest evicted, only because asked
     assert (root / "new__v").exists()       # newest kept
 

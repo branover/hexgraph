@@ -175,7 +175,10 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
   of the same target attaches to the running one, never a duplicate) and idempotent: re-call it to poll
   (`state` walks `none → running → analyzed`), and once `analyzed` every gated verb is instant. `re_disassemble`
   (targeted) and `re_search_decompiled` (reads the store) need no whole-program analysis and are never gated.
-  Headless Ghidra only for now — the radare2 backend isn't gated yet.
+  The radare2 backend now **persists its analysis the same way** — the first whole-binary decompile builds a
+  warm r2 project (a named project under `dir.projects`) and later decompiles of other functions reuse it with
+  no re-`aaa`, reclaimable only via `hexgraph prune --r2-cache-mb`. It isn't *gated* yet, though, so on a cache
+  miss it still analyzes on demand rather than erroring; the explicit-`re_analyze` gate is headless-Ghidra-only for now.
 - **Enrichment of existing objects is automatic and free.** When a call recovers something unambiguous
   about an object that is *already* a node, a function's recovered prototype and address, the `is_sink`
   tag on a dangerous import, the call sites on an existing `calls` edge, HexGraph attaches it in place

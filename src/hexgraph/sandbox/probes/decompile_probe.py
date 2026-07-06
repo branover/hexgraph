@@ -25,8 +25,121 @@ r2ghidra plugin required. No network; the target is analyzed, never executed.
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
 import sys
+import time
+
+# Persistent radare2 project (analyze-once / reuse). When a writable slot is bind-mounted at
+# PROJECT_MOUNT (engine.re.r2_project → runner.CONTAINER_PROJECT_DIR), the whole-binary decompile
+# path saves the analyzed program as a NAMED project under `dir.projects` and reloads it with NO
+# `aaa` on later calls, exactly like the Ghidra probe. Absent the mount, it runs the old throwaway
+# `aaa`-per-call path. (The mount point name is Ghidra-flavored; it's just a generic writable dir.)
+PROJECT_MOUNT = "/ghidra-project"
+# radare2's `dir.projects` points here (under the mount); the named project lands at <this>/hexgraph.
+PROJECT_SUBDIR = "project"
+# The bare project NAME saved with `Ps` / reloaded with `-p`. MUST be a name, never a path — an
+# absolute-path project (`Ps /abs`) SEGFAULTS r2 on reload (verified across r2 versions).
+PROJECT_NAME = "hexgraph"
+# The COMMITTED warm marker (engine.re.r2_project.META_NAME) under PROJECT_MOUNT, written as the
+# LAST step of a successful cold save — its presence (NOT raw dir non-emptiness) is the
+# authoritative "valid warm project" signal, so a crashed/timed-out cold save re-analyzes cold.
+META_NAME = "meta.json"
+
+
+def _valid_marker(path: str) -> bool:
+    """True iff `path` is a committed, parseable warm marker. Anything else (absent, empty,
+    truncated/corrupt JSON from a crash) ⇒ treat the slot as cold. Mirrors ghidra_probe."""
+    try:
+        with open(path) as fh:
+            json.load(fh)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _clear_partial(proj_dir: str, marker: str) -> None:
+    """Wipe a partially-written slot before a cold re-analysis: drop the stale marker and the
+    incomplete project dir, then recreate an empty project dir. Best-effort."""
+    try:
+        os.remove(marker)
+    except OSError:
+        pass
+    try:
+        if os.path.isdir(proj_dir):
+            shutil.rmtree(proj_dir)
+    except OSError:
+        pass
+    os.makedirs(proj_dir, exist_ok=True)
+
+
+def _commit_marker(marker: str) -> None:
+    """COMMIT the warm marker — the LAST step of a successful cold save, written atomically
+    (tmp + os.replace) so a crash never leaves a half-written marker that reads as warm. Mirrors
+    engine.re.r2_project.R2Project.write_meta; its presence makes the slot warm next call."""
+    payload = json.dumps({"program_name": PROJECT_NAME, "created_at": time.time()})
+    tmp = marker + ".tmp"
+    try:
+        with open(tmp, "w") as fh:
+            fh.write(payload)
+        os.replace(tmp, marker)
+    except OSError:
+        pass  # best-effort; without a marker the next call simply re-analyzes cold (correct)
+
+
+def _project_flags() -> tuple[bool, str, str, list[str]]:
+    """Decide the persistent-project state for a whole-binary decompile. Returns
+    (use_project, proj_dir, marker, extra_open_flags): `use_project` is True only when the writable
+    mount is present; `extra_open_flags` sets `dir.projects` (always) plus `-p <name>` when a valid
+    warm project exists, so the r2 open reloads the analysis instead of re-running `aaa`. On a cold
+    or half-written slot it wipes any partial state so the save starts clean."""
+    if not os.path.isdir(PROJECT_MOUNT):
+        return False, "", "", []
+    proj_dir = os.path.join(PROJECT_MOUNT, PROJECT_SUBDIR)
+    marker = os.path.join(PROJECT_MOUNT, META_NAME)
+    named = os.path.join(proj_dir, PROJECT_NAME)
+    warm = bool(_valid_marker(marker) and os.path.isdir(named) and os.listdir(named))
+    if not warm:
+        _clear_partial(proj_dir, marker)  # fresh OR half-written → start the cold save clean
+    os.makedirs(proj_dir, exist_ok=True)
+    flags = ["-e", f"dir.projects={proj_dir}"]
+    if warm:
+        flags += ["-p", PROJECT_NAME]
+    return True, proj_dir, marker, flags
+
+
+def _set_git_env() -> None:
+    """Set a deterministic git identity BEFORE r2 opens/saves a project (r2 spawns any git child
+    with the env it was launched with). r2 6.1.4 projects are plain dirs (no git), so this is
+    normally an unused no-op — but a version whose projects are git-backed would otherwise stall on
+    a missing identity. `setdefault` never clobbers a real identity."""
+    for k, v in (("GIT_AUTHOR_NAME", "hexgraph"), ("GIT_AUTHOR_EMAIL", "hexgraph@localhost"),
+                 ("GIT_COMMITTER_NAME", "hexgraph"), ("GIT_COMMITTER_EMAIL", "hexgraph@localhost")):
+        os.environ.setdefault(k, v)
+
+
+def _emit_r2_version() -> int:
+    """Print `{r2_version}` — the toolchain half of the project cache key (engine.re.r2_project.
+    r2_version_for_image runs this with NO target). Reads `radare2 -v`'s first line
+    ('radare2 6.1.4 …' → '6.1.4'); r2_version stays null if radare2 can't be run."""
+    import subprocess
+
+    ver = None
+    for exe in ("radare2", "r2"):
+        try:
+            out = subprocess.run([exe, "-v"], capture_output=True, text=True, timeout=20)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        lines = (out.stdout or "").strip().splitlines()
+        if lines:
+            parts = lines[0].split()
+            if len(parts) >= 2:
+                ver = parts[1]
+        break
+    print(json.dumps({"tool": "decompile_probe", "r2_version": ver}))
+    return 0
+
 
 # `call <target>` in r2 disassembly. Capture the callee symbol/function name,
 # skipping register-indirect calls (call rax / call qword [..]).
@@ -251,6 +364,8 @@ def _targeted_disasm(r2, seek: str, is_addr: bool) -> dict | None:
 
 
 def main() -> int:
+    if "--r2-version" in sys.argv:
+        return _emit_r2_version()  # no-target run: report the toolchain version for the cache key
     if len(sys.argv) < 2:
         print(json.dumps({"error": "usage: decompile_probe.py <artifact> [function|0xADDR] "
                                    "[--reanalyze] | --range <0xADDR> [--length N | --count N]"}))
@@ -287,8 +402,23 @@ def main() -> int:
         print(json.dumps({"error": f"radare2/r2pipe not available in the sandbox image: {exc}"}))
         return 3
 
+    # Persistent project (analyze-once) applies to the WHOLE-BINARY decompile path only — the
+    # targeted disasm/range modes are already cheap (`af`/`pD`) and open plain. When the writable
+    # slot is mounted, `_project_flags` reloads a warm project via `-p` (skipping `aaa`) or wipes
+    # any partial state for a clean cold save.
+    use_project = disasm_subject is None and range_addr is None
+    proj_dir = marker = ""
+    open_flags = ["-2"]  # -2 silences stderr
+    warm = False
+    if use_project:
+        use_project, proj_dir, marker, pflags = _project_flags()
+        if use_project:
+            warm = "-p" in pflags
+            open_flags += pflags
+            _set_git_env()  # before open: r2 spawns any git child with the inherited env
+
     try:
-        r2 = r2pipe.open(path, flags=["-2"])  # -2 silences stderr
+        r2 = r2pipe.open(path, flags=open_flags)
     except Exception as exc:  # noqa: BLE001 — surface a structured reason, not a bare traceback
         print(json.dumps({"error": f"radare2 failed to open the target: {exc}"}))
         return 4
@@ -321,9 +451,21 @@ def main() -> int:
             rng = _disassemble_range(r2, range_addr, length=length, count=count)
             print(json.dumps({"tool": "decompile_probe", "range": rng}))
             return 0
-        # --reanalyze raises the analysis depth (aaaa: the deeper, more aggressive pass)
-        # so a missed function/edge gets a second chance; the default aaa is the fast path.
-        r2.cmd("aaaa" if reanalyze else "aaa")
+        # Whole-binary analysis. A WARM persistent project already carries it (reloaded at open via
+        # `-p`), so skip `aaa` entirely — the whole point of the cache. Otherwise analyze (`aaaa` =
+        # the deeper --reanalyze pass; `aaa` the fast default) and, when persisting, SAVE the
+        # analyzed program as a named project + commit the warm marker LAST so the next call reloads.
+        if not warm:
+            r2.cmd("aaaa" if reanalyze else "aaa")
+            if use_project:
+                r2.cmd(f"Ps {PROJECT_NAME}")  # save by NAME under dir.projects (never a path)
+                # Commit the warm marker ONLY if `Ps` actually wrote the named project — a failed
+                # save (disk/permission) leaves nothing, so committing would falsely mark the slot
+                # warm. (It self-heals next call via the same named-dir check, but this avoids the
+                # wasted cold redo and keeps the marker honest.)
+                named = os.path.join(proj_dir, PROJECT_NAME)
+                if os.path.isdir(named) and os.listdir(named):
+                    _commit_marker(marker)
         records = []
         offsets = {}
         try:
@@ -383,7 +525,10 @@ def main() -> int:
                 **(_function_facts(r2, seek) if seek else {}),
             }
 
-        print(json.dumps({"tool": "decompile_probe", "functions": functions[:200], "focus": focus}))
+        # `cached` mirrors ghidra_probe: True ⇒ served from a WARM persistent project (no `aaa`
+        # this call), False ⇒ a cold analysis (or the uncached throwaway path).
+        print(json.dumps({"tool": "decompile_probe", "functions": functions[:200],
+                          "focus": focus, "cached": warm}))
         return 0
     finally:
         r2.quit()
