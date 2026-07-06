@@ -658,7 +658,10 @@ def emulate_core(program, flat, monitor, focus) -> dict:
     if not reached_ret and steps >= MAX_STEPS:
         emu_out["error"] = "step budget exhausted before return (%d)" % MAX_STEPS
     if reached_ret and ret_reg is not None:
-        raw = int(emu.readRegister(ret_reg)) & 0xFFFFFFFFFFFFFFFF
+        # readRegister() returns a java.math.BigInteger, which jpype does NOT auto-coerce to a
+        # Python int (unlike a primitive long/int) — int(BigInteger) raises TypeError. Go via
+        # .toString() so any 64-bit magnitude (incl. values >= 2**63) round-trips correctly.
+        raw = int(emu.readRegister(ret_reg).toString()) & 0xFFFFFFFFFFFFFFFF
         emu_out["value_hex"] = "0x%x" % raw
         if ret_size and ret_size < 8:
             mask = (1 << (ret_size * 8)) - 1
