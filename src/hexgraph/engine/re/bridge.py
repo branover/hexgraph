@@ -246,20 +246,6 @@ def bridge_status(session, project, target, *, runner=None) -> dict:
     return _finalize(session, project, target, container_name(ctx[2]), runner=ex)
 
 
-def blocking_message(target, op: str = "this operation") -> str | None:
-    """When a live bridge holds the target's project, a headless Ghidra op on the SAME slot would
-    conflict on Ghidra's project lock. Until the bridge serves that op (the PR2 refactor), the
-    op's call site calls this and, on a non-None result, returns it instead of running headless.
-    None when no bridge is live (proceed headless as before). re_decompile_* IS served by the
-    bridge, so it routes there instead of being blocked."""
-    if bridge_endpoint(target) is None:
-        return None
-    return (f"A resident Ghidra bridge holds this target's project, so {op} can't run headless "
-            "right now without conflicting on Ghidra's project lock. Run re_bridge_stop(target) to "
-            "use the headless path (decompile is served BY the bridge). Bridge coverage for this op "
-            "is coming in a follow-up.")
-
-
 def bridge_endpoint(target) -> tuple[str, int] | None:
     """For decompiler routing: `(ip, port)` when the target has a LIVE bridge, else None. The common
     no-bridge case (no metadata entry) does NO docker call and returns immediately. When an entry

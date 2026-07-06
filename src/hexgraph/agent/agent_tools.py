@@ -1167,18 +1167,14 @@ def _ghidra_xrefs(ctx: ToolContext, mode: str, subject: str | None) -> dict | No
 
     if not docker_available():
         return None
-    # A live per-target bridge holds the Ghidra project; a headless warm-xref pass would conflict on
-    # the project lock. Skip it and let the caller DEGRADE to the radare2 xref path (its own
-    # analysis, no conflict). Bridge-served xrefs come with the PR2 refactor.
-    from hexgraph.engine.re.bridge import bridge_endpoint
-
-    if bridge_endpoint(ctx.target) is not None:
-        return None
-    from hexgraph.sandbox.decompiler import GhidraDecompiler
+    # A live per-target bridge OWNS the Ghidra project, so route the xref query to it — the resident
+    # reference index answers with no per-call open and no project-lock conflict; else the headless
+    # warm path. Either way a probe fault / top-level error returns None so the caller degrades to r2.
+    from hexgraph.sandbox.decompiler import ghidra_op_backend
 
     try:
-        out = GhidraDecompiler().xrefs(ctx.target.path, mode=mode, subject=subject or None,
-                                       project=ctx.project)
+        out = ghidra_op_backend(ctx.target).xrefs(
+            ctx.target.path, mode=mode, subject=subject or None, project=ctx.project)
     except Exception:  # noqa: BLE001 — a warm-path failure DEGRADES to r2, never aborts the tool
         return None
     if not isinstance(out, dict) or out.get("error"):

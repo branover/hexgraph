@@ -168,11 +168,19 @@ def test_get_decompiler_routes_to_live_bridge(env, monkeypatch):
     assert not isinstance(get_decompiler(), GhidraBridgeDecompiler)
 
 
-def test_blocking_message_only_when_live(env):
+def test_ghidra_op_backend_routes_to_live_bridge(env, monkeypatch):
+    """The non-decompile Ghidra ops (xrefs/taint/emulate/rename) route to the live managed bridge via
+    ghidra_op_backend — no headless op conflicts on the slot the bridge owns; else headless."""
     s, p, t = env
-    assert B.blocking_message(t, "xrefs") is None          # no bridge yet
-    B.start_bridge(s, p, t, runner=_FakeExec())
-    assert "re_bridge_stop" in B.blocking_message(t, "rename")  # live -> guard message
+    monkeypatch.setattr("hexgraph.engine.re.ghidra_bridge.connect_managed",
+                        lambda host, port: types.SimpleNamespace(host=host, port=port))
+    from hexgraph.sandbox.decompiler import GhidraDecompiler, ghidra_op_backend
+    from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler
+
+    assert isinstance(ghidra_op_backend(t), GhidraDecompiler)   # no bridge yet -> headless
+    B.start_bridge(s, p, t, runner=_FakeExec())                 # records the endpoint
+    assert isinstance(ghidra_op_backend(t), GhidraBridgeDecompiler)  # live bridge -> bridge ops
+    assert isinstance(ghidra_op_backend(), GhidraDecompiler)    # no target -> headless
 
 
 def test_endpoint_none_when_bridge_dead(env, monkeypatch):

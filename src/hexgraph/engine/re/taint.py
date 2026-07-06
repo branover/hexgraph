@@ -97,6 +97,19 @@ def get_taint_analyzer() -> TaintAnalyzer:
     return NullTaintAnalyzer()
 
 
+def _target_taint_analyzer(target: Any) -> TaintAnalyzer:
+    """The taint analyzer for a SPECIFIC target: the Ghidra analyzer bound to the target's op backend
+    — the live managed bridge if one is up (reuse the resident project; a headless taint pass would
+    otherwise conflict on the project lock the bridge holds) else headless — or the Null analyzer when
+    Ghidra isn't active. This is what routes taint to the bridge like the other Ghidra ops."""
+    base = get_taint_analyzer()
+    if isinstance(base, GhidraTaintAnalyzer):
+        from hexgraph.sandbox.decompiler import ghidra_op_backend
+
+        return GhidraTaintAnalyzer(decompiler=ghidra_op_backend(target))
+    return base
+
+
 def _source_label(source: dict) -> str:
     """A short human label for a flow's source (`param host`, `call_return getenv`, …)."""
     kind = (source or {}).get("kind") or "unknown"
@@ -117,7 +130,7 @@ def analyze_taint(session: Session, project: Any, target: Any, *,
     from hexgraph.engine.graph.edges import add_edge
     from hexgraph.engine.graph.nodes import get_or_create_node
 
-    analyzer = analyzer or get_taint_analyzer()
+    analyzer = analyzer or _target_taint_analyzer(target)
     path = getattr(target, "path", None)
     promoted = {"functions": 0, "sinks": 0, "edges": 0}
     if not analyzer.available or not path:

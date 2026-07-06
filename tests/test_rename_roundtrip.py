@@ -147,19 +147,21 @@ def test_rename_still_applies_when_ghidra_write_errors(hg_home, monkeypatch):
         assert node.name == "renamed_anyway"  # graph rename succeeded despite the Ghidra boom
 
 
-def test_decompile_core_applies_the_rename(hg_home):
-    """The rename round-trip lives in pyghidra_lib.decompile_core: it applies the analyst's rename
-    to the function CONTAINING the address (SourceType.USER_DEFINED) then focuses on it, so the warm
-    re-open + save persists the new name for every future decompile. Guards the logic offline (no
-    Ghidra) — a broken rename prelude would otherwise only surface inside a container."""
+def test_apply_rename_writes_and_persists(hg_home):
+    """The rename round-trip lives in pyghidra_lib._apply_rename: it renames the function CONTAINING
+    the address (SourceType.USER_DEFINED, in a transaction) then SAVES the program, so the new name
+    persists for every future decompile — over the headless path AND the resident bridge (a warm
+    program has no lingering analysis txn, so the mid-life save commits). Guards the logic offline
+    (no Ghidra) — a broken rename would otherwise only surface inside a container."""
     import inspect
 
     from hexgraph.sandbox.probes import pyghidra_lib as L
 
-    src = inspect.getsource(L.decompile_core)
+    src = inspect.getsource(L._apply_rename)
     assert "SourceType.USER_DEFINED" in src
     assert "setName" in src
     assert "getFunctionContaining" in src
+    assert "program.save" in src  # the mid-life save that persists the rename
 
 
 def test_rename_error_result_does_not_record(hg_home, monkeypatch):
