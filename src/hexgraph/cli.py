@@ -239,6 +239,29 @@ def _cmd_prune(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_ghidra_bridge(args: argparse.Namespace) -> int:
+    """Manage a target's persistent Ghidra bridge (a resident analysis for fast repeated
+    decompiles). start/stop/status a bridge by target id."""
+    from hexgraph.engine.re import bridge as B
+
+    init_db()
+    with session_scope() as s:
+        t = s.get(Target, args.target)
+        if t is None:
+            print(f"error: target {args.target} not found", file=sys.stderr)
+            return 1
+        p = s.get(Project, t.project_id)
+        if args._gbcmd == "start":
+            res = B.start_bridge(s, p, t)
+        elif args._gbcmd == "stop":
+            res = B.stop_bridge(s, p, t)
+        else:
+            res = B.bridge_status(s, p, t)
+    where = f"  [{res.get('ip')}:{res.get('port')}]" if res.get("ip") else ""
+    print(f"{res.get('state')}: {res.get('detail')}{where}")
+    return 0 if res.get("state") in ("running", "starting", "stopped", "none") else 1
+
+
 def _cmd_doctor(args: argparse.Namespace) -> int:
     """Reconcile on-disk project dirs against the DB. Read-only report by default; `--clean`
     deletes orphan dirs (dirs with no matching DB project). Never deletes a DB project."""
@@ -468,6 +491,16 @@ def build_parser() -> argparse.ArgumentParser:
     pd.add_argument("--clean", action="store_true",
                     help="delete orphan project dirs (those with no matching DB project)")
     pd.set_defaults(func=_cmd_doctor)
+
+    pgb = sub.add_parser("ghidra-bridge", help="manage a target's persistent Ghidra bridge "
+                                               "(resident analysis for fast repeated decompiles)")
+    gbsub = pgb.add_subparsers(dest="_gbcmd", required=True)
+    for _verb, _help in (("start", "start (or attach to) a bridge for a target"),
+                         ("stop", "stop a target's bridge"),
+                         ("status", "show a target's bridge state")):
+        _gp = gbsub.add_parser(_verb, help=_help)
+        _gp.add_argument("target", help="target_id")
+        _gp.set_defaults(func=_cmd_ghidra_bridge)
 
     pc = sub.add_parser("config", help="read/write managed settings (optional features, prefs)")
     csub = pc.add_subparsers(dest="_cfgcmd", required=True)

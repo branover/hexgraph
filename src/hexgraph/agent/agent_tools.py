@@ -476,7 +476,7 @@ def _decomp(ctx: ToolContext, function: str | None, *,
         ctx.cache[key] = {"error": "decompilation unavailable (Docker/sandbox not running)"}
         return ctx.cache[key]
     try:
-        out = get_decompiler().decompile(ctx.target.path, function, address=address,
+        out = get_decompiler(target=ctx.target).decompile(ctx.target.path, function, address=address,
                                          reanalyze=reanalyze, project=ctx.project)
     except Exception as exc:  # noqa: BLE001
         out = {"error": f"decompiler failed: {exc}"}
@@ -1166,6 +1166,13 @@ def _ghidra_xrefs(ctx: ToolContext, mode: str, subject: str | None) -> dict | No
     from hexgraph.sandbox.runner import docker_available
 
     if not docker_available():
+        return None
+    # A live per-target bridge holds the Ghidra project; a headless warm-xref pass would conflict on
+    # the project lock. Skip it and let the caller DEGRADE to the radare2 xref path (its own
+    # analysis, no conflict). Bridge-served xrefs come with the PR2 refactor.
+    from hexgraph.engine.re.bridge import bridge_endpoint
+
+    if bridge_endpoint(ctx.target) is not None:
         return None
     from hexgraph.sandbox.decompiler import GhidraDecompiler
 

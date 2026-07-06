@@ -106,8 +106,12 @@ def emulate_constant(session: Session, project: Any, target: Any, *, function: s
 
     from hexgraph.engine import observations as obs
     from hexgraph.engine.graph.nodes import get_or_create_node
+    from hexgraph.engine.re.bridge import blocking_message
     from hexgraph.sandbox.decompiler import GhidraDecompiler
 
+    _msg = blocking_message(target, "constant recovery (P-Code emulation)")
+    if _msg:  # a live bridge holds the project; emulation has no radare2 fallback
+        return {"skipped": "bridge_active", "error": _msg}
     out = GhidraDecompiler().run_emulate(getattr(target, "path", None), function, project=project) or {}
     emu = out.get("emulation") or {}
     value = emu.get("value")

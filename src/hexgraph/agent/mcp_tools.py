@@ -833,6 +833,44 @@ def analyze(target_id: str) -> dict:
         return start_analysis(s.get(Project, t.project_id), t)
 
 
+def bridge_start(target_id: str) -> dict:
+    """START (or attach to) a persistent Ghidra bridge for a target: a long-lived container that
+    keeps the target's warm Ghidra project RESIDENT, so re_decompile_* reuse it instead of
+    re-opening it per call. Requires a saved Ghidra analysis (re_analyze first) + features.network.
+    Returns {state, detail, container?, ip?, port?}; blocks briefly while the project opens (poll
+    with re_bridge_status if it returns 'starting')."""
+    from hexgraph.engine.re.bridge import start_bridge
+
+    with session_scope() as s:
+        t = s.get(Target, target_id)
+        if t is None:
+            return {"error": "target not found"}
+        return start_bridge(s, s.get(Project, t.project_id), t)
+
+
+def bridge_stop(target_id: str) -> dict:
+    """STOP a target's persistent Ghidra bridge and revert its decompiles to the headless path."""
+    from hexgraph.engine.re.bridge import stop_bridge
+
+    with session_scope() as s:
+        t = s.get(Target, target_id)
+        if t is None:
+            return {"error": "target not found"}
+        return stop_bridge(s, s.get(Project, t.project_id), t)
+
+
+def bridge_status(target_id: str) -> dict:
+    """The persistent-bridge state for a target (running | starting | failed | none | ...). Starts
+    nothing; records the endpoint when it transitions to running."""
+    from hexgraph.engine.re.bridge import bridge_status as _bridge_status
+
+    with session_scope() as s:
+        t = s.get(Target, target_id)
+        if t is None:
+            return {"error": "target not found"}
+        return _bridge_status(s, s.get(Project, t.project_id), t)
+
+
 def list_functions(target_id: str) -> str:
     return _tool(target_id, "list_functions", {})
 

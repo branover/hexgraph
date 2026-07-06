@@ -397,7 +397,22 @@ def _resolve_name(explicit: str | None) -> str:
     return "radare2"
 
 
-def get_decompiler(name: str | None = None) -> Decompiler:
+def get_decompiler(name: str | None = None, *, target=None) -> Decompiler:
+    """Pick the decompiler. When `target` has a LIVE persistent Ghidra bridge (started via
+    re_bridge_start) and no explicit `name` override is given, route to it: decompiles reuse the
+    resident project instead of re-opening it per call. Best-effort — a dead/unreachable bridge
+    falls through to the normal seam (headless), so routing never breaks decompilation."""
+    if name is None and target is not None:
+        try:
+            from hexgraph.engine.re.bridge import bridge_endpoint
+
+            ep = bridge_endpoint(target)
+            if ep:
+                from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler, connect_ops
+
+                return GhidraBridgeDecompiler(ops=connect_ops(host=ep[0], port=ep[1]))
+        except Exception:  # noqa: BLE001 — routing is an optimization, never load-bearing
+            pass
     resolved = _resolve_name(name)
     if resolved in ("radare2", "r2"):
         return R2Decompiler()

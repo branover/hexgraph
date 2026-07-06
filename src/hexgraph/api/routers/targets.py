@@ -199,7 +199,7 @@ def api_decompile(target_id: str, body: dict):
             from hexgraph.sandbox.decompiler import get_decompiler
 
             project = s.get(Project, t.project_id)
-            decompiler = get_decompiler()
+            decompiler = get_decompiler(target=t)
             function, address = body.get("function"), body.get("address")
             out = decompiler.decompile(t.path, function, address=address, project=project)
             # Address-focus is preferred (resolves a stripped/renamed function), but it can miss

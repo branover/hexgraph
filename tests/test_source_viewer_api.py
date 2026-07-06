@@ -112,7 +112,7 @@ def test_disassemble_falls_back_from_address_to_name(hg_home, monkeypatch):
 def test_decompile_falls_back_from_address_to_name(hg_home, monkeypatch):
     tid = _seed_target()
     monkeypatch.setattr(runner, "docker_available", lambda: True)
-    monkeypatch.setattr(dc, "get_decompiler", lambda: _FakeR2AddrMiss())
+    monkeypatch.setattr(dc, "get_decompiler", lambda *a, **k: _FakeR2AddrMiss())
     c = TestClient(create_app())
     r = c.post(f"/api/targets/{tid}/decompile", json={"function": "check_password", "address": "0xBAD"})
     assert r.status_code == 200
@@ -132,7 +132,7 @@ def test_decompile_reports_backend(hg_home, monkeypatch):
             return {"functions": ["main"], "focus": {"name": subj, "address": address,
                                                      "pseudocode": "int main(){}"}}
 
-    monkeypatch.setattr(dc, "get_decompiler", lambda: _FakeDecompiler())
+    monkeypatch.setattr(dc, "get_decompiler", lambda *a, **k: _FakeDecompiler())
     c = TestClient(create_app())
     r = c.post(f"/api/targets/{tid}/decompile", json={"function": "main"})
     assert r.status_code == 200
