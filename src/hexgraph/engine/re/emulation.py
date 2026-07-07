@@ -92,17 +92,31 @@ def emulate_constant(session: Session, project: Any, target: Any, *, function: s
                 "reached_ret": False, "steps": None, "observation_id": None,
                 "error": "emulation requires the Ghidra headless decompiler (features.ghidra)"}
 
-    # PRE-CHECK: skip the doomed run for an argument-dependent routine. If a prior decompile
-    # recorded the recovered signature on the function node and it takes arguments, emulating
-    # it over uninitialized inputs won't reach a clean ret — return an informative result
-    # instead of burning a sandbox emulation. (No recorded signature ⇒ fall through and let
-    # the emulation's own in-probe arg guard decide; we never fabricate.)
+    # PRE-CHECK (first — a pure graph read, triggers NO analysis): skip the doomed run for an
+    # argument-dependent routine. If a prior decompile recorded the recovered signature on the
+    # function node and it takes arguments, emulating it over uninitialized inputs won't reach a clean
+    # ret — return an informative result (pointing at the solver) instead of burning a sandbox
+    # emulation. This is the MORE actionable answer than "needs_analysis" (re_analyze won't make an
+    # arg-dependent routine emulable), AND a recorded signature implies analysis already ran. (No
+    # recorded signature ⇒ fall through to the analysis gate; we never fabricate.)
     arg_count = _recovered_arg_count(session, project, target, function)
     if arg_count and arg_count > 0:
         return {"available": True, "function": function, "value": None, "value_hex": None,
                 "reached_ret": False, "steps": 0, "observation_id": None,
                 "skipped": "arg_dependent", "param_count": arg_count,
                 "error": _ARG_DEPENDENT_HINT}
+
+    # ANALYSIS GATE: recover_constant is invoked directly (it bypasses run_tool's gate), so gate it
+    # HERE — on a cold target with no warm project it must point at re_analyze, NEVER cold-analyze
+    # (the invariant: only re_analyze runs a full analysis). A live bridge / warm slot reads as
+    # 'analyzed'|'unavailable' → proceeds and serves it warm.
+    from hexgraph.engine.re.analysis import analysis_lead
+
+    _lead = analysis_lead(project, target)
+    if _lead:
+        return {"available": True, "function": function, "value": None, "value_hex": None,
+                "reached_ret": False, "steps": None, "observation_id": None,
+                "skipped": "needs_analysis", "error": _lead}
 
     from hexgraph.engine import observations as obs
     from hexgraph.engine.graph.nodes import get_or_create_node

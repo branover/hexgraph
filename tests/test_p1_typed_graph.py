@@ -1,6 +1,6 @@
 """P1: typed graph — node materialization, polymorphic edges, findings-as-about."""
 
-from hexgraph.db.models import Edge, EdgeType, Node, NodeType
+from hexgraph.db.models import Edge, EdgeType, Node, NodeType, Target
 from hexgraph.db.session import session_scope
 from hexgraph.engine.graph.edges import add_edge, delete_node_cascade
 from hexgraph.engine.targets.ingest import create_project, ingest_file
@@ -8,7 +8,7 @@ from hexgraph.engine.graph.nodes import materialize_function, materialize_symbol
 from hexgraph.engine.tasks import create_task
 from hexgraph.engine.worker import run_task_sync
 
-from conftest import fixture_path
+from conftest import fixture_path, warm_r2_slot
 
 
 def test_node_content_hash_dedups(hg_home):
@@ -85,6 +85,10 @@ def test_decompile_promotes_focus_under_curation_contract(hg_home, sandbox, monk
         p = create_project(s, name="d")
         summary = ingest_and_analyze(s, p, fixture_path("vuln_httpd"), runner=sandbox)
         tid_target = summary["root_target_id"]
+        # The task's focus decompile is warm-only now (the analysis invariant) — run the re_analyze
+        # step first (build the warm r2 project) so it decompiles cgi_handler warm and can recover its
+        # callees to self-wire the `calls` edge, instead of returning the re_analyze lead.
+        warm_r2_slot(s.get(Target, tid_target).path, p.data_dir)
         # Pre-curate ONE callee so the both-endpoints-exist rule has an endpoint to wire to.
         materialize_function(s, project_id=p.id, target_id=tid_target, name="strcpy")
         funcs_before = s.query(Node).filter(Node.node_type == NodeType.function.value).count()

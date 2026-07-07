@@ -264,3 +264,33 @@ def test_byte_scan_finds_a_known_opcode_end_to_end(hg_home):
         out = run_tool(ctx, "search_code", {"bytes_pattern": "55"})
         assert "hit(s)" in out
         assert "0x" in out            # at least one concrete address (the prologue byte is common)
+
+
+# --- xrefs_probe warm-reload flags: reload a committed project, refuse a cold miss (offline) ---
+
+def test_warm_r2_flags_cold_vs_warm(tmp_path):
+    """`_warm_r2_flags` is the WARM-ONLY heart of the xrefs probe: it returns the r2 reload flags
+    (`dir.projects` + `-p`) ONLY for a committed project (marker + a non-empty named dir), and None
+    for a cold/half-written slot (so the probe returns the re_analyze lead instead of running `aaa`).
+    Pure filesystem logic — no r2, no Docker."""
+    import json as _json
+
+    from hexgraph.sandbox.probes import xrefs_probe as X
+
+    mount = tmp_path / "gp"
+    orig = X._PROJECT_MOUNT
+    try:
+        X._PROJECT_MOUNT = str(mount)
+        assert X._warm_r2_flags() is None                     # mount absent
+        mount.mkdir()
+        assert X._warm_r2_flags() is None                     # no marker, no project
+        (mount / X._META_NAME).write_text(_json.dumps({"content_hash": "x"}))
+        assert X._warm_r2_flags() is None                     # marker but named dir missing/empty
+        named = mount / X._PROJECT_SUBDIR / X._PROJECT_NAME
+        named.mkdir(parents=True)
+        (named / "hexgraph.d").write_text("state")            # non-empty named project
+        flags = X._warm_r2_flags()
+        assert flags and "-p" in flags and X._PROJECT_NAME in flags
+        assert any("dir.projects=" in f for f in flags)
+    finally:
+        X._PROJECT_MOUNT = orig

@@ -19,7 +19,7 @@ from hexgraph.engine.re import taint as T
 from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph import settings as st
 
-from conftest import SANDBOX_READY, fixture_path
+from conftest import SANDBOX_READY, fixture_path, warm_ghidra_slot
 
 
 # ── offline: the taint core recognizes the sinks + sources it grounds flows on ─────────
@@ -159,6 +159,7 @@ def test_ghidra_taint_finds_command_injection_on_netcfgd(hg_home):
     with session_scope() as s:
         p = create_project(s, name="nc")
         t = ingest_file(s, p, binpath, name="netcfgd")
+        warm_ghidra_slot(p, t)  # re_analyze first — taint is warm-only (the analysis invariant)
         out = T.analyze_taint(s, p, t, analyzer=T.GhidraTaintAnalyzer())
 
         assert out["available"] is True, out
@@ -197,6 +198,7 @@ def test_ghidra_taint_finds_libc_input_command_injection(hg_home):
     with session_scope() as s:
         p = create_project(s, name="pd")
         t = ingest_file(s, p, binpath, name="pingd")
+        warm_ghidra_slot(p, t)  # re_analyze first — taint is warm-only (the analysis invariant)
         out = T.analyze_taint(s, p, t, analyzer=T.GhidraTaintAnalyzer())
 
         assert out["available"] is True, out

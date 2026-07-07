@@ -2056,12 +2056,35 @@ def _xrefs(ctx: ToolContext, symbol: str | None) -> str:
     return ctx.cache[key]
 
 
+def _r2_project_mount(ctx: ToolContext) -> str | None:
+    """The WARM r2-project slot root for this target, bind-mounted into xrefs_probe so it RELOADS the
+    analysis instead of re-running `aaa` (the invariant: only re_analyze analyzes). None when there's
+    no data dir / slot (xrefs_probe then returns the re_analyze lead for the index modes). Best-effort;
+    mirrors R2Decompiler._resolve_slot. Read-only reload → no slot lock needed (never saves)."""
+    project = getattr(ctx, "project", None)
+    if project is None or not getattr(project, "data_dir", None):
+        return None
+    try:
+        from hexgraph.engine.re import r2_project as rp
+        from hexgraph.sandbox.executor import get_executor
+        from hexgraph.sandbox.runner import sandbox_image
+
+        sha = rp.content_hash(ctx.target.path)
+        version = rp.r2_version_for_image(sandbox_image(), runner=get_executor())
+        slot = rp.resolve(project.data_dir, sha, version)
+        slot.prepare()
+        return str(slot.root)
+    except Exception:  # noqa: BLE001 — best-effort; a resolve failure reads as "no warm slot"
+        return None
+
+
 def _run_xrefs_probe(ctx: ToolContext, subject: str | None, mode: str):
     """Run a breadth xrefs query in `mode`, returning (out, error_text). Prefers the warm persistent
     Ghidra project's reference index when headless Ghidra is active (analyze-once, fast on a large
     target where the cold r2 sweep times out); falls back to the r2 xrefs_probe (`--mode
-    function|data|callgraph`) only when Ghidra can't run. `mode="callers"` passes no --mode flag on
-    the r2 path (legacy compat)."""
+    function|data|callgraph`) only when Ghidra can't run. The r2 probe is WARM-ONLY too — it RELOADS
+    the persistent r2 project (bind-mounted) and NEVER runs `aaa`; a cold slot returns the re_analyze
+    lead. `mode="callers"` passes no --mode flag on the r2 path (legacy compat)."""
     if _ghidra_xrefs_active():
         out = _ghidra_xrefs(ctx, mode, subject)
         if out is not None:
@@ -2074,7 +2097,8 @@ def _run_xrefs_probe(ctx: ToolContext, subject: str | None, mode: str):
     extra = ([subject] if subject else []) + (["--mode", mode] if mode != "callers" else [])
     try:
         return get_executor().run_json_probe("xrefs_probe.py", ctx.target.path,
-                                             extra_args=extra or None), None
+                                             extra_args=extra or None,
+                                             project_mount=_r2_project_mount(ctx)), None
     except Exception as exc:  # noqa: BLE001
         return None, f"{mode} xrefs failed: {exc}"
 
@@ -2406,14 +2430,16 @@ def _ghidra_search(ctx: ToolContext, *, bytes_pat, immediate) -> dict | None:
 
 def _r2_search(ctx: ToolContext, *, bytes_pat, immediate):
     """The radare2 raw-scan fallback (`xrefs_probe --mode search`, `/xj`//`/vj`) for when Ghidra
-    can't answer. The probe no longer runs a whole-binary `aaa` for a search, so it's fast (function
-    mapping best-effort from the symbol table). Returns the probe dict, or a string error message."""
+    can't answer. The probe never runs a whole-binary `aaa` for a search, so it's fast; passing the
+    warm r2 project (when one exists) lets it map hits to the containing function. Returns the probe
+    dict, or a string error message."""
     from hexgraph.sandbox.executor import get_executor
 
     extra = ["--mode", "search"] + (["--bytes", str(bytes_pat)] if bytes_pat
                                     else ["--imm", str(immediate)])
     try:
-        return get_executor().run_json_probe("xrefs_probe.py", ctx.target.path, extra_args=extra)
+        return get_executor().run_json_probe("xrefs_probe.py", ctx.target.path, extra_args=extra,
+                                             project_mount=_r2_project_mount(ctx))
     except Exception as exc:  # noqa: BLE001
         return f"search_code scan failed: {exc}"
 

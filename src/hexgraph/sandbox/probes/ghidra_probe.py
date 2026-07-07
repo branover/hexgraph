@@ -93,9 +93,20 @@ def _load_user_script():
     return body, None
 
 
-def _script_warm() -> bool:
+# The single re_analyze lead every warm-only mode returns on a cold miss (rc=5). One source of
+# truth so the message stays consistent across decompile / xrefs / taint / emulate / rename / search
+# / script — the only place a full analysis is built is re_analyze.
+_RE_ANALYZE_LEAD = (
+    "No warm Ghidra analysis for this target yet. Run re_analyze(target) FIRST — it builds the warm "
+    "project ONCE with a generous budget (detached; re-call re_analyze to poll until state='analyzed'), "
+    "then re-run this tool and it'll be instant. This tool is warm-only and never runs a cold analysis "
+    "itself — re_analyze is the only place a full analysis pass happens.")
+
+
+def _warm_slot_present() -> bool:
     """A committed warm slot at PROJECT_MOUNT (the same signal pyghidra_lib._is_warm reads), keyed
-    off THIS module's PROJECT_MOUNT so tests can redirect it. re_script refuses when this is False."""
+    off THIS module's PROJECT_MOUNT so tests can redirect it. Every WARM-ONLY mode (i.e. everything
+    but `analyze`) refuses when this is False."""
     if not os.path.isdir(PROJECT_MOUNT):
         return False
     marker = os.path.join(PROJECT_MOUNT, META_NAME)
@@ -192,11 +203,13 @@ def _run(m) -> dict:
     from ghidra.util.task import ConsoleTaskMonitor
 
     mode = m["mode"]
-    # script + search are READ-ONLY, WARM-ONLY queries: they open the warm program immutable and
-    # never trigger a cold analysis (a byte scan that cold-analyzes a large target IS the timeout
-    # bug; the host falls back to the r2 raw scan on a warm miss instead).
+    # THE analysis chokepoint: ONLY the `analyze` mode (re_analyze) may build a cold analysis. Every
+    # other mode is WARM-ONLY — main() already refused a cold miss with the re_analyze lead, so on the
+    # warm path open_target never analyzes. script + search additionally open the program READ-ONLY
+    # (immutable) so a query can't mutate the project.
+    cold_analyze = mode == "analyze"
     read_only = mode in ("script", "search")
-    with L.open_target(m["artifact"], cold_analyze=not read_only,
+    with L.open_target(m["artifact"], cold_analyze=cold_analyze,
                        read_only=read_only) as (program, flat, cached):
         monitor = ConsoleTaskMonitor()
         if mode == "script":
@@ -226,8 +239,8 @@ def main() -> int:
                                    "--xrefs mode [subj]|--rename addr name|--analyze|--script|--check]"}))
         return 2
     m = _parse(sys.argv)
-    script_mode = m["mode"] == "script"
-    if script_mode:
+    mode = m["mode"]
+    if mode == "script":
         # Decode + validate the agent script up front so a bad/oversized/missing body fails FAST —
         # before any Ghidra work (matches the Jython --script pre-flight). rc=2 on a bad script.
         body, err = _load_user_script()
@@ -235,28 +248,31 @@ def main() -> int:
             print(json.dumps({"error": err, "tool": "ghidra_script"}))
             return 2
         m["user_script"] = body
-        # re_script is WARM-ONLY: without a committed warm project there is nothing to query, so
-        # refuse BEFORE launching the JVM / touching Ghidra and point at re_analyze (which builds
-        # the warm project once, detached). rc=5 — the host maps this to the re_analyze lead.
-        if not _script_warm():
-            print(json.dumps({
-                "error": "re_script needs a WARM Ghidra project for this target, but none is built "
-                         "(cold). Run re_analyze(target) first to build it ONCE (detached; poll "
-                         "until state='analyzed'), then re-run re_script — it is warm-only and "
-                         "never runs a cold analysis.",
-                "tool": "ghidra_script"}))
-            return 5
     if not os.path.isdir(os.path.join(GHIDRA_DIR, "Ghidra")) or not _pyghidra_installed():
+        # No Ghidra at all — the actionable lead is "rebuild with WITH_GHIDRA=1", NOT re_analyze
+        # (re_analyze needs Ghidra too). Checked FIRST so a missing toolchain reads as such.
         print(json.dumps({"error": "Ghidra/PyGhidra not installed in this sandbox image — rebuild "
                                    "it with WITH_GHIDRA=1 (just sandbox-build with_ghidra=1), or "
                                    "switch the decompiler back to radare2"}))
         return 3
+    # WARM-ONLY enforcement (THE analysis invariant): only `analyze` (re_analyze) builds a cold
+    # analysis. Every OTHER mode needs a committed warm project; on a cold miss, refuse BEFORE any
+    # Ghidra work (a cheap filesystem check — no JVM) and point at re_analyze. Return a STRUCTURED
+    # payload with rc=0 (not a non-zero exit that run_probe would raise on) so the host surfaces the
+    # lead gracefully — no per-call tool ever triggers a full analysis; re_analyze is the single
+    # chokepoint. (Install-check first, so a missing toolchain still reads as "rebuild", not
+    # "re_analyze".)
+    if mode != "analyze" and not _warm_slot_present():
+        print(json.dumps({"error": _RE_ANALYZE_LEAD, "needs_analysis": True, "focus": None,
+                          "functions": [],
+                          "tool": "ghidra_script" if mode == "script" else "ghidra_probe"}))
+        return 0
     try:
         L.start()
         print(json.dumps(_run(m)))
         return 0
     except Exception as exc:  # noqa: BLE001 — always emit a structured payload, never nothing
-        tool = "ghidra_script" if script_mode else "ghidra_probe"
+        tool = "ghidra_script" if mode == "script" else "ghidra_probe"
         print(json.dumps({"error": f"ghidra probe failed: {exc}", "tb": traceback.format_exc(),
                           "functions": [], "focus": None, "calls": [], "structs": [],
                           "tool": tool}))

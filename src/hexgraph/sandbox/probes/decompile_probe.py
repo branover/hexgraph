@@ -47,6 +47,18 @@ PROJECT_NAME = "hexgraph"
 # authoritative "valid warm project" signal, so a crashed/timed-out cold save re-analyzes cold.
 META_NAME = "meta.json"
 
+# Returned when a plain focus/list decompile hits a COLD slot: the whole-binary decompile path is
+# warm-only (THE analysis invariant) — it must NEVER run a cold `aaa` itself (that per-call cold sweep
+# on a large target is the ~2547s timeout). Only the two EXPLICIT analysis entry points cold-analyze:
+# `--analyze` (re_analyze, detached, generous budget) and `--reanalyze` (re_reanalyze, the deliberate
+# deeper re-analysis). Everything else points here on a cold miss. (Targeted --disasm/--range need no
+# analysis and are unaffected.)
+_RE_ANALYZE_LEAD = (
+    "No warm radare2 analysis for this target yet. Run re_analyze(target) FIRST — it builds the warm "
+    "project ONCE with a generous budget (detached; poll until state='analyzed'), then re-run this — "
+    "it's warm-only and never runs a cold analysis itself (re_analyze is the only place a full "
+    "analysis pass happens).")
+
 
 def _valid_marker(path: str) -> bool:
     """True iff `path` is a committed, parseable warm marker. Anything else (absent, empty,
@@ -454,6 +466,18 @@ def main() -> int:
             count = _parse_int(_flag_value(rest, "--count"))
             rng = _disassemble_range(r2, range_addr, length=length, count=count)
             print(json.dumps({"tool": "decompile_probe", "range": rng}))
+            return 0
+        # WARM-ONLY enforcement (THE analysis invariant): the whole-binary decompile/list path must
+        # NEVER run a cold `aaa` off its own bat — only the two EXPLICIT analysis entry points do:
+        # `--analyze` (re_analyze) and `--reanalyze` (re_reanalyze). A plain focus/list decompile on a
+        # COLD slot returns the re_analyze lead instead of analyzing, so no per-call tool (nor the LLM
+        # decompile task / enrich) ever triggers a full analysis. (Targeted --disasm/--range returned
+        # above; they need no analysis.)
+        # rc=0 with a STRUCTURED payload (not a non-zero exit run_probe would raise on) so the host
+        # surfaces the lead gracefully — same convention as ghidra_probe / xrefs_probe warm-misses.
+        if not warm and not (analyze_mode or reanalyze):
+            print(json.dumps({"tool": "decompile_probe", "focus": None, "functions": [],
+                              "needs_analysis": True, "error": _RE_ANALYZE_LEAD}))
             return 0
         # Whole-binary analysis. A WARM persistent project already carries it (reloaded at open via
         # `-p`), so skip `aaa` entirely — the whole point of the cache. Otherwise analyze (`aaaa` =

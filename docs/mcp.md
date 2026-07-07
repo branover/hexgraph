@@ -165,8 +165,10 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
   reference index, the same analyze-once project the decompile verbs build, instead of re-analyzing the
   whole binary on every call. On a large target that is the difference between an instant answer and a query
   that never finishes, and an unknown symbol comes back as "not found" right away rather than after a long
-  wait. With the radare2 backend, or before a first analysis has warmed the project, the verbs fall back to
-  a fresh cross-reference pass.
+  wait. The radare2 backend works the same way: the verbs reload the warm r2 project's own index rather than
+  re-running a whole-binary pass. Either way, until a first analysis has warmed the project they point you at
+  `re_analyze` instead of quietly analyzing (see the next point) — no per-call verb ever launches a cold pass
+  of its own.
 - **Analysis is explicit — `re_analyze` first, then the per-call verbs.** The whole-program tools
   (`re_decompile_function`/`re_decompile_at`, `re_list_functions`, and the xref family
   `re_xrefs`/`re_function_xrefs`/`re_data_xrefs`/`re_call_graph`) **require a saved analysis**: on a warm
@@ -176,8 +178,10 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
   generous, size-scaled budget, so it finishes and commits the warm project. It's **single-flight** (a second
   `re_analyze` of the same target attaches to the running one, never a duplicate) and idempotent: re-call it to
   poll (`state` walks `none → running → analyzed`), and once `analyzed` every gated verb is instant.
-  `re_disassemble` (targeted) and `re_search_decompiled` (reads the store) need no whole-program analysis and
-  are never gated. This is **backend-aware**: it covers both headless Ghidra (a warm Ghidra project) and
+  `re_recover_constant` (P-Code emulation) and the `static_analysis` taint pass gate the same way — they run
+  the deeper analysis over the warm project, so on a cold target they return the `re_analyze` lead rather than
+  analyzing themselves. `re_disassemble` (targeted) and `re_search_decompiled` (reads the store) need no
+  whole-program analysis and are never gated. This is **backend-aware**: it covers both headless Ghidra (a warm Ghidra project) and
   radare2 (a warm r2 project, reclaimable via `hexgraph prune --r2-cache-mb`), each with its own persistent
   slot. Only the Ghidra *bridge* backend — which attaches to a Ghidra you already have open — has nothing to
   build here, so it reports `unavailable` and isn't gated.

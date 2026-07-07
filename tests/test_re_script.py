@@ -334,6 +334,12 @@ def test_probe_script_mode_cold_refuses_without_warm(tmp_path, monkeypatch, caps
     art.write_bytes(b"\x7fELF fake bytes")
     body = "result = {'ok': 1}"
     monkeypatch.setenv(G.USER_SCRIPT_ENV, base64.b64encode(body.encode()).decode())
+    # Make Ghidra "look installed" so the install-check passes and the ONLY reason to refuse is the
+    # missing warm slot — isolating the warm-check (rc=5), not the toolchain-missing rc=3.
+    ghidra_dir = tmp_path / "ghidra"
+    (ghidra_dir / "Ghidra").mkdir(parents=True)
+    monkeypatch.setattr(G, "GHIDRA_DIR", str(ghidra_dir))
+    monkeypatch.setattr(G, "_pyghidra_installed", lambda: True)
     # No PROJECT_MOUNT dir ⇒ non-persistent ⇒ warm=False ⇒ script-mode must refuse.
     monkeypatch.setattr(G, "PROJECT_MOUNT", str(tmp_path / "nope"))
 
@@ -345,8 +351,11 @@ def test_probe_script_mode_cold_refuses_without_warm(tmp_path, monkeypatch, caps
     monkeypatch.setattr(G.subprocess, "run", _no_ghidra)  # nor shell out (the native path never does)
     monkeypatch.setattr(G.sys, "argv", ["ghidra_probe.py", str(art), "--script"])
     rc = G.main()
-    assert rc == 5
+    # rc=0 with a STRUCTURED needs_analysis payload (not a non-zero exit run_probe would raise on) —
+    # the host surfaces the lead gracefully. The refusal is in the payload, not the exit code.
+    assert rc == 0
     out = json.loads(capsys.readouterr().out)
+    assert out.get("needs_analysis") is True
     assert "error" in out and "re_analyze" in out["error"] and "warm-only" in out["error"]
 
 
