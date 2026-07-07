@@ -101,15 +101,20 @@ def _read_only_program(project, prog_name):
     domain object). Used by the re_script path so an AGENT-SUPPLIED script can query the warm
     project but NEVER mutate/corrupt it (the equivalent of the Jython path's analyzeHeadless
     `-readOnly`). The consumer is released on exit; the project is closed by the caller."""
+    from java.lang import Object as _JavaObject
     from ghidra.framework.model import DomainFile
     from ghidra.program.model.listing import Program
     from ghidra.util.task import ConsoleTaskMonitor
 
-    consumer = object()
+    # The consumer is a reference token for get/release; it must bind to `java.lang.Object`, which a
+    # plain Python object() can't (jpype rejects the overload) — use an actual Java Object.
+    consumer = _JavaObject()
     df = project.getProjectData().getFile("/" + prog_name)
     if df is None:
         raise FileNotFoundError(f"program /{prog_name} not found in the warm project")
-    dobj = df.getReadOnlyDomainObject(consumer, DomainFile.DEFAULT_VERSION, ConsoleTaskMonitor())
+    # int(...) coerces DEFAULT_VERSION to a primitive: jpype hands the JInt static field back as a
+    # boxed value and can't match the getReadOnlyDomainObject(Object, int, TaskMonitor) overload.
+    dobj = df.getReadOnlyDomainObject(consumer, int(DomainFile.DEFAULT_VERSION), ConsoleTaskMonitor())
     if not Program.class_.isAssignableFrom(dobj.getClass()):
         with contextlib.suppress(Exception):
             dobj.release(consumer)
@@ -1003,6 +1008,88 @@ def script_core(program, flat, monitor, user_script, *, out_path=None) -> dict:
     return out
 
 
+# --- Byte/immediate search over the warm program's loaded memory -----------------------------
+
+_MAX_SEARCH_HITS = 200  # bound a scan so a common pattern can't flood (mirrors xrefs_probe)
+
+
+def _search_patterns(program, bytes_pattern, immediate):
+    """The byte pattern(s) to scan for, as Python `bytes`. A hex `bytes_pattern` -> one pattern; an
+    `immediate` -> the value encoded at the program's endianness in 4- AND 8-byte widths (so a
+    constant stored as int32 OR int64 both match). Returns None when neither is given / invalid."""
+    if bytes_pattern:
+        try:
+            return [bytes.fromhex(str(bytes_pattern).replace(" ", ""))]
+        except ValueError:
+            return None
+    if immediate is not None:
+        try:
+            val = int(str(immediate), 0)  # 0x.. or decimal
+        except (TypeError, ValueError):
+            return None
+        if val < 0:
+            # Reject negatives to match the r2 fallback's _IMM (which has no leading `-`), so the same
+            # `immediate` resolves identically on either backend. Search a two's-complement value via
+            # bytes_pattern instead (e.g. `ffffffff` for -1).
+            return None
+        big = False
+        with contextlib.suppress(Exception):
+            big = program.getLanguage().isBigEndian()
+        order = "big" if big else "little"
+        pats = []
+        for width in (4, 8):
+            try:
+                pats.append(val.to_bytes(width, order))
+            except OverflowError:
+                pass  # value doesn't fit this width
+        return pats or None
+    return None
+
+
+def search_bytes_core(program, flat, monitor, *, bytes_pattern=None, immediate=None,
+                      max_hits=_MAX_SEARCH_HITS) -> dict:
+    """Scan the WARM program's already-loaded memory image for a BYTE pattern (hex) or an IMMEDIATE
+    value, returning hits `[{addr, in_function}]` each mapped to its containing function (None for a
+    data hit). This is the byte-scan analog of re_xrefs consulting the warm reference index: it
+    reuses the resident/warm program — NO analysis — so it's a fast `Memory.findBytes` scan, NOT the
+    whole-binary r2 `aaa` sweep that times out on a large target. Output mirrors the r2 xrefs_probe
+    `search` contract so the host formats either backend identically. Exactly one of the inputs."""
+    patterns = _search_patterns(program, bytes_pattern, immediate)
+    term = ({"kind": "bytes", "pattern": bytes_pattern} if bytes_pattern
+            else {"kind": "immediate", "value": immediate})
+    if patterns is None:
+        return {"tool": "ghidra_search", "mode": "search", **term,
+                "error": "search needs a bytes_pattern (hex pairs) or an immediate value"}
+
+    mem = program.getMemory()
+    hits, seen = [], set()
+    for pat in patterns:  # an immediate scans multiple widths
+        addr = program.getMinAddress()
+        while addr is not None and len(hits) < max_hits:
+            found = None
+            with contextlib.suppress(Exception):
+                found = mem.findBytes(addr, pat, None, True, monitor)  # bytes -> byte[] via jpype
+            if found is None:
+                break
+            off = found.getOffset()
+            if off not in seen:
+                seen.add(off)
+                fn = flat.getFunctionContaining(found)
+                hits.append({"addr": "0x" + found.toString(),
+                             "in_function": fn.getName() if fn is not None else None})
+            # add(1) throws AddressOverflowException at the very top of the space — stop cleanly
+            # there rather than raise out of the core (which would drop the hits already found).
+            try:
+                addr = found.add(1)
+            except Exception:  # noqa: BLE001
+                break
+        if len(hits) >= max_hits:
+            break
+    hits.sort(key=lambda h: int(h["addr"], 16))
+    return {"tool": "ghidra_search", "mode": "search", **term,
+            "hits": hits[:max_hits], "total": len(hits)}
+
+
 def ghidra_version() -> str | None:
     """The GHIDRA application version (e.g. '12.1') from application.properties — the SAME token
     the Jython probe reported, so the persistent-project cache key (`<sha>__<version>`) is stable
@@ -1035,6 +1122,7 @@ def bridge_dispatch(program, flat, monitor, req) -> dict:
       `xrefs`    mode (callers|function|data|callgraph|sinks) + optional subject
       `taint`    grounded source->sink flows
       `emulate`  focus = a parameterless routine (constant recovery)
+      `search`   bytes_pattern (hex) or immediate — a memory scan of the resident image
       `rename`   address + new_name — the one WRITE, persisted into the resident project via
                  `_apply_rename`'s mid-life save (so it sticks for future reads over the bridge)."""
     import traceback
@@ -1056,6 +1144,10 @@ def bridge_dispatch(program, flat, monitor, req) -> dict:
             return taint_core(program, flat, monitor)
         if op == "emulate":
             return emulate_core(program, flat, monitor, req.get("focus"))
+        if op == "search":
+            return search_bytes_core(program, flat, monitor,
+                                     bytes_pattern=req.get("bytes_pattern"),
+                                     immediate=req.get("immediate"))
         if op == "rename":
             address, new_name = req.get("address"), req.get("new_name")
             if not address or not new_name:

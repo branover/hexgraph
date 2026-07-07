@@ -254,3 +254,65 @@ def test_managed_ops_unreachable_raises_bridge_unavailable():
     # Port 1 is not listening -> connect refused -> a clean BridgeUnavailable (routing falls back).
     with pytest.raises(BridgeUnavailable):
         _ManagedOps("127.0.0.1", 1, timeout=1.0).decompile(None, "x")
+
+
+# ── search: pattern encoding + dispatch + client ────────────────────────────────────────
+
+class _FakeLang:
+    def __init__(self, big):
+        self._big = big
+
+    def isBigEndian(self):
+        return self._big
+
+
+class _EndianProgram:
+    def __init__(self, big=False):
+        self._lang = _FakeLang(big)
+
+    def getLanguage(self):
+        return self._lang
+
+
+def test_search_patterns_bytes_hex():
+    resp = L._search_patterns(_EndianProgram(), "de ad be ef", None)  # whitespace tolerated
+    assert resp == [bytes.fromhex("deadbeef")]
+
+
+def test_search_patterns_immediate_both_widths_and_endianness():
+    little = L._search_patterns(_EndianProgram(big=False), None, "0x41")
+    assert little == [(0x41).to_bytes(4, "little"), (0x41).to_bytes(8, "little")]
+    big = L._search_patterns(_EndianProgram(big=True), None, "255")
+    assert big == [(255).to_bytes(4, "big"), (255).to_bytes(8, "big")]
+
+
+def test_search_patterns_invalid_inputs():
+    assert L._search_patterns(_EndianProgram(), "zz", None) is None       # bad hex
+    assert L._search_patterns(_EndianProgram(), None, "notanum") is None  # bad immediate
+    assert L._search_patterns(_EndianProgram(), None, "-1") is None       # negative: matches r2 _IMM
+    assert L._search_patterns(_EndianProgram(), None, None) is None       # neither given
+
+
+def test_dispatch_search_delegates_to_the_core(monkeypatch):
+    seen = {}
+
+    def _fake(program, flat, monitor, *, bytes_pattern=None, immediate=None):
+        seen.update(bytes_pattern=bytes_pattern, immediate=immediate)
+        return {"mode": "search", "hits": [], "total": 0}
+
+    monkeypatch.setattr(L, "search_bytes_core", _fake)
+    resp = L.bridge_dispatch(_FakeProgram([]), object(), object(),
+                             {"op": "search", "bytes_pattern": "deadbeef", "immediate": None})
+    assert seen == {"bytes_pattern": "deadbeef", "immediate": None}
+    assert resp["mode"] == "search"
+
+
+def test_managed_ops_search_round_trip():
+    from hexgraph.engine.re.ghidra_bridge import _ManagedOps
+
+    port, captured, t = _one_shot_server({"mode": "search", "kind": "bytes", "total": 1,
+                                          "hits": [{"addr": "0x1000", "in_function": "main"}]})
+    out = _ManagedOps("127.0.0.1", port).search_bytes("deadbeef", None)
+    t.join(timeout=5)
+    assert captured["req"] == {"op": "search", "bytes_pattern": "deadbeef", "immediate": None}
+    assert out["total"] == 1 and out["hits"][0]["in_function"] == "main"

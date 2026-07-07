@@ -132,14 +132,29 @@ def _check() -> int:
     return 0
 
 
+def _flag_value(argv, flag):
+    """The value immediately following `flag` in argv, or None (for `--sbytes <hex>` / `--simm <v>`)."""
+    if flag in argv:
+        i = argv.index(flag)
+        if i + 1 < len(argv):
+            return argv[i + 1]
+    return None
+
+
 def _parse(argv):
     """Parse the probe argv into a mode dict. Mirrors the Jython arg grammar exactly."""
     artifact = argv[1]
     rest = argv[2:]
     m = {"artifact": artifact, "mode": "decompile", "focus": None,
-         "rename": None, "xrefs_mode": "sinks", "xrefs_subject": "", "user_script": None}
+         "rename": None, "xrefs_mode": "sinks", "xrefs_subject": "", "user_script": None,
+         "search_bytes": None, "search_imm": None}
     if "--script" in rest:
         m["mode"] = "script"  # run the agent-supplied script over the WARM program, read-only
+        return m
+    if "--search" in rest:
+        m["mode"] = "search"  # byte/immediate memory scan over the WARM program, read-only
+        m["search_bytes"] = _flag_value(rest, "--sbytes")
+        m["search_imm"] = _flag_value(rest, "--simm")
         return m
     if "--analyze" in rest:
         m["mode"] = "analyze"  # cold whole-binary analysis, no focus
@@ -177,12 +192,19 @@ def _run(m) -> dict:
     from ghidra.util.task import ConsoleTaskMonitor
 
     mode = m["mode"]
-    read_only = mode == "script"
+    # script + search are READ-ONLY, WARM-ONLY queries: they open the warm program immutable and
+    # never trigger a cold analysis (a byte scan that cold-analyzes a large target IS the timeout
+    # bug; the host falls back to the r2 raw scan on a warm miss instead).
+    read_only = mode in ("script", "search")
     with L.open_target(m["artifact"], cold_analyze=not read_only,
                        read_only=read_only) as (program, flat, cached):
         monitor = ConsoleTaskMonitor()
         if mode == "script":
             result = L.script_core(program, flat, monitor, m["user_script"])
+        elif mode == "search":
+            result = L.search_bytes_core(program, flat, monitor,
+                                         bytes_pattern=m.get("search_bytes"),
+                                         immediate=m.get("search_imm"))
         elif mode == "taint":
             result = L.taint_core(program, flat, monitor)
         elif mode == "emulate":

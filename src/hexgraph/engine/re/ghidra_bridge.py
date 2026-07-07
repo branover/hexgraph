@@ -206,6 +206,9 @@ class _ManagedOps:
     def rename_function(self, address: str, new_name: str) -> dict:
         return self._rpc({"op": "rename", "address": address, "new_name": new_name})
 
+    def search_bytes(self, bytes_pattern, immediate) -> dict:
+        return self._rpc({"op": "search", "bytes_pattern": bytes_pattern, "immediate": immediate})
+
 
 def connect_managed(host: str, port: int) -> BridgeOps:
     """Ops for HexGraph's managed resident bridge (custom JSON RPC). Unlike `connect_ops`, needs NO
@@ -264,6 +267,10 @@ class GhidraBridgeDecompiler(Decompiler):
 
     def rename_function(self, artifact: str, *, address: str, new_name: str, project=None) -> dict:
         return self._managed().rename_function(address, new_name)
+
+    def search_bytes(self, artifact: str, *, bytes_pattern: str | None = None,
+                     immediate: str | None = None, project=None) -> dict:
+        return self._managed().search_bytes(bytes_pattern, immediate)
 
 
 def list_open_programs(ops: BridgeOps | None = None) -> list[dict]:
