@@ -1027,6 +1027,11 @@ def _search_patterns(program, bytes_pattern, immediate):
             val = int(str(immediate), 0)  # 0x.. or decimal
         except (TypeError, ValueError):
             return None
+        if val < 0:
+            # Reject negatives to match the r2 fallback's _IMM (which has no leading `-`), so the same
+            # `immediate` resolves identically on either backend. Search a two's-complement value via
+            # bytes_pattern instead (e.g. `ffffffff` for -1).
+            return None
         big = False
         with contextlib.suppress(Exception):
             big = program.getLanguage().isBigEndian()
@@ -1034,7 +1039,7 @@ def _search_patterns(program, bytes_pattern, immediate):
         pats = []
         for width in (4, 8):
             try:
-                pats.append(val.to_bytes(width, order, signed=val < 0))
+                pats.append(val.to_bytes(width, order))
             except OverflowError:
                 pass  # value doesn't fit this width
         return pats or None
@@ -1072,7 +1077,12 @@ def search_bytes_core(program, flat, monitor, *, bytes_pattern=None, immediate=N
                 fn = flat.getFunctionContaining(found)
                 hits.append({"addr": "0x" + found.toString(),
                              "in_function": fn.getName() if fn is not None else None})
-            addr = found.add(1)
+            # add(1) throws AddressOverflowException at the very top of the space — stop cleanly
+            # there rather than raise out of the core (which would drop the hits already found).
+            try:
+                addr = found.add(1)
+            except Exception:  # noqa: BLE001
+                break
         if len(hits) >= max_hits:
             break
     hits.sort(key=lambda h: int(h["addr"], 16))

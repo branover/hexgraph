@@ -289,6 +289,7 @@ def test_search_patterns_immediate_both_widths_and_endianness():
 def test_search_patterns_invalid_inputs():
     assert L._search_patterns(_EndianProgram(), "zz", None) is None       # bad hex
     assert L._search_patterns(_EndianProgram(), None, "notanum") is None  # bad immediate
+    assert L._search_patterns(_EndianProgram(), None, "-1") is None       # negative: matches r2 _IMM
     assert L._search_patterns(_EndianProgram(), None, None) is None       # neither given
 
 
