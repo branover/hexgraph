@@ -150,7 +150,7 @@ def test_analysis_gate_precedes_work_on_ghidra_miss(hg_home, monkeypatch):
     """list_functions is analysis-gated: on a Ghidra-active warm MISS the re_analyze lead is
     returned BEFORE any decompiler work (the decompiler is never reached — it explodes if called)."""
     monkeypatch.setattr("hexgraph.engine.re.analysis.analysis_state",
-                        lambda project, target: {"state": "none", "detail": "(none)"})
+                        lambda project, target, **kw: {"state": "none", "detail": "(none)"})
 
     def _explode(ctx, function, **kw):
         raise AssertionError("must not decompile when gated")
