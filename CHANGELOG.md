@@ -5,6 +5,31 @@ All notable changes to HexGraph are recorded here. The format loosely follows
 [semantic versioning](https://semver.org/) properly once it reaches 1.0. Until then,
 expect breaking changes between minor versions.
 
+## [0.9.0](https://github.com/branover/hexgraph/compare/hexgraph-v0.8.0...hexgraph-v0.9.0) (2026-07-07)
+
+
+### Features
+
+* gate the whole-program tools on a saved analysis (error -&gt; re_analyze) ([#261](https://github.com/branover/hexgraph/issues/261)) ([a84ea48](https://github.com/branover/hexgraph/commit/a84ea48fd6c3985acaf20b4a82a57e39fbf9fd4d))
+* make re_analyze + the analysis gate backend-aware (radare2, not just Ghidra) ([#263](https://github.com/branover/hexgraph/issues/263)) ([9229979](https://github.com/branover/hexgraph/commit/92299798d799c5d752e74acf0d4d20564453a92a))
+* **mcp:** re_* query tools + gated re_script escape-hatch ([#267](https://github.com/branover/hexgraph/issues/267)) ([fa6fa3e](https://github.com/branover/hexgraph/commit/fa6fa3e616f612f9ceeff8c608f15ba7c00fff16))
+* persist radare2 analysis as a reusable project (analyze-once for the r2 backend) ([#262](https://github.com/branover/hexgraph/issues/262)) ([aabb016](https://github.com/branover/hexgraph/commit/aabb0165bfb8c14c654241b307d5474fcaf87673))
+* persistent per-target Ghidra bridge — resident project, fast repeated decompiles (PR1) ([#264](https://github.com/branover/hexgraph/issues/264)) ([0968acb](https://github.com/branover/hexgraph/commit/0968acbf9d1f344f431c95c1c9f42818020f9800))
+* re_analyze — explicit detached whole-binary analysis with single-flight ([#260](https://github.com/branover/hexgraph/issues/260)) ([50fcd67](https://github.com/branover/hexgraph/commit/50fcd67aefded5fb0ea4a07dcbcd32248a316ca2))
+* serve all Ghidra ops (xrefs/taint/emulate/rename) over the resident bridge ([#268](https://github.com/branover/hexgraph/issues/268)) ([818fb50](https://github.com/branover/hexgraph/commit/818fb503372a73400c7734f24a70a3a48bb58321))
+
+
+### Bug Fixes
+
+* enforce the analysis invariant — only re_analyze runs a full analysis ([#270](https://github.com/branover/hexgraph/issues/270)) ([ee2d641](https://github.com/branover/hexgraph/commit/ee2d6411eba99cb5dec19ea536a47cc0b9e965db))
+* give sandbox probes a container-side self-timeout (orphan-proof the budget) ([#257](https://github.com/branover/hexgraph/issues/257)) ([fd44a9b](https://github.com/branover/hexgraph/commit/fd44a9b79894e36db9048d6ba2702caf785ce986))
+* never auto-delete Ghidra analysis; eviction is explicit-only ([#259](https://github.com/branover/hexgraph/issues/259)) ([faeee73](https://github.com/branover/hexgraph/commit/faeee73cef28cb363e67f9ad6340ab2bc60e4dff))
+* re_disassemble uses a targeted r2 path, not the whole-binary decompiler ([#258](https://github.com/branover/hexgraph/issues/258)) ([5bf5a26](https://github.com/branover/hexgraph/commit/5bf5a26fd7cd15d1354f0046014c8bd130613a38))
+* re_search_code byte/immediate scan no longer runs a whole-binary analysis (2547s timeout) ([#269](https://github.com/branover/hexgraph/issues/269)) ([1645b3b](https://github.com/branover/hexgraph/commit/1645b3b71b42aa182bea09e4dc2ecb1935b1703d))
+* serve xrefs from the warm Ghidra project, not a cold per-call r2 sweep ([#256](https://github.com/branover/hexgraph/issues/256)) ([abaaaab](https://github.com/branover/hexgraph/commit/abaaaabb255598269d383939193ffb5a76a16284))
+* tolerate non-array agent-authored evidence in the finding inspector (no white-screen) ([#253](https://github.com/branover/hexgraph/issues/253)) ([2406445](https://github.com/branover/hexgraph/commit/24064454a090121f0cd86bd34e44c24085576fd7))
+* validate src_build phases instead of crashing or faking success ([#255](https://github.com/branover/hexgraph/issues/255)) ([6ddfb70](https://github.com/branover/hexgraph/commit/6ddfb7096731eac82d0e09295f4933d036c8b04c))
+
 ## [0.8.0](https://github.com/branover/hexgraph/compare/hexgraph-v0.7.0...hexgraph-v0.8.0) (2026-06-15)
 
 
