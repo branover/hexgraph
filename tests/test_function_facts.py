@@ -163,8 +163,15 @@ def test_ghidra_focus_facts_are_decompiler_refined_not_listing_db(hg_home, tmp_p
         pytest.skip("could not compile authcheck")
 
     from hexgraph.sandbox.decompiler import GhidraDecompiler
+    from conftest import warm_ghidra_slot
 
-    out = GhidraDecompiler().decompile(binpath, function="check_password")
+    # Decompile is warm-only now (the analysis invariant), so analyze the target ONCE first (the
+    # re_analyze step) and decompile against that warm project.
+    with session_scope() as s:
+        p = create_project(s, name="ff")
+        t = ingest_file(s, p, binpath, name="authcheck")
+        warm_ghidra_slot(p, t)
+        out = GhidraDecompiler().decompile(t.path, function="check_password", project=p)
     focus = out.get("focus") or {}
     assert focus.get("name") == "check_password", out
     proto = focus.get("prototype") or ""

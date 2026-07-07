@@ -193,6 +193,28 @@ def analysis_state(project, target, *, runner=None) -> dict:
                                        "build it", "container": name}
 
 
+def analysis_lead(project, target, *, runner=None) -> str | None:
+    """A re_analyze lead when `target` has NO saved analysis for the active backend, else None
+    (proceed). `analyzed` → None; `unavailable` (Ghidra-bridge / Docker down / no byte artifact) →
+    None too, since those paths serve warm anyway or can't be gated. This is the single host-side
+    gate for the analysis-needing tools/tasks that DON'T go through agent_tools.run_tool's gate
+    (recover_constant, the taint task) — so, like every per-call tool, they point at re_analyze on a
+    cold target instead of triggering a full analysis themselves. Best-effort: any error ⇒ None."""
+    try:
+        st = analysis_state(project, target, runner=runner)
+    except Exception:  # noqa: BLE001 — a gate hiccup must never block a tool that could run
+        return None
+    state = st.get("state")
+    if state in ("analyzed", "unavailable"):
+        return None
+    lead = {"none": "No saved analysis for this target yet.",
+            "running": "A whole-binary analysis is already in progress.",
+            "failed": "The last analysis did not finish."}.get(state, "No saved analysis.")
+    return (f"{lead} Run re_analyze(target) first — it builds the warm analysis ONCE with a generous "
+            "budget (detached; re-call re_analyze to poll until state='analyzed'), then retry this — "
+            f"it's warm-only and never runs a cold analysis itself. [{st.get('detail', '')}]")
+
+
 def start_analysis(project, target, *, runner=None) -> dict:
     """Start OR attach to a detached whole-binary analysis for the ACTIVE backend. Idempotent and
     single-flight: already-warm ⇒ no-op ``analyzed``; already-running ⇒ ``running`` (attach);

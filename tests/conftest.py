@@ -213,6 +213,49 @@ def fixture_path(name: str) -> str:
     return os.path.join(os.path.dirname(__file__), "fixtures", name)
 
 
+def warm_ghidra_slot(project, target):
+    """Synchronously build + COMMIT the warm Ghidra project for `target` — the re_analyze step, run
+    inline. Since the analysis invariant (only re_analyze runs a full analysis), every warm-only
+    Ghidra op (decompile / taint / emulate / xrefs / search) needs an already-analyzed slot; the
+    real-Ghidra tests call this right after ingest to stand in for a prior `re_analyze`. Mirrors
+    engine.re.analysis: resolve the slot, run `ghidra_probe --analyze` with the slot bind-mounted
+    (the container runs --user 1000:1000, so the project is written as the uid a later -process open
+    expects). Returns the probe payload; asserts the slot committed. Requires a real WITH_GHIDRA
+    image (callers are GHIDRA_READY-gated)."""
+    from hexgraph.engine.re import ghidra_project as gp
+    from hexgraph.sandbox.runner import SandboxRunner, sandbox_image
+
+    runner = SandboxRunner()
+    sha = gp.content_hash(target.path)
+    version = gp.ghidra_version_for_image(sandbox_image(), runner=runner)
+    slot = gp.resolve(project.data_dir, sha, version)
+    slot.prepare()
+    out = runner.run_json_probe(
+        "ghidra_probe.py", target.path, extra_args=["--analyze"], project_mount=str(slot.root))
+    assert slot.exists(), f"warm --analyze did not commit the slot: {out}"
+    return out
+
+
+def warm_r2_slot(artifact_path, data_dir) -> str:
+    """Synchronously build + COMMIT the warm radare2 project for `artifact_path` under `data_dir` —
+    the re_analyze step for the radare2 backend, run inline. Returns the slot root to pass as
+    `project_mount` so a subsequent WARM-ONLY xrefs_probe call (which no longer runs a cold `aaa`
+    itself — the analysis invariant) reloads the analyzed project. Mirrors engine.re.analysis's r2
+    path (`decompile_probe --analyze`). Requires the sandbox image (radare2)."""
+    from hexgraph.engine.re import r2_project as rp
+    from hexgraph.sandbox.runner import SandboxRunner, sandbox_image
+
+    runner = SandboxRunner()
+    sha = rp.content_hash(artifact_path)
+    version = rp.r2_version_for_image(sandbox_image(), runner=runner)
+    slot = rp.resolve(str(data_dir), sha, version)
+    slot.prepare()
+    out = runner.run_json_probe(
+        "decompile_probe.py", artifact_path, extra_args=["--analyze"], project_mount=str(slot.root))
+    assert slot.exists(), f"warm r2 --analyze did not commit the slot: {out}"
+    return str(slot.root)
+
+
 def container_ip(name: str) -> str:
     """The single network IP of a running container. The naive
     `{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}` template silently CONCATENATES

@@ -137,6 +137,17 @@ def analyze_taint(session: Session, project: Any, target: Any, *,
         return {"available": False, "flows": [], "analyzed": 0,
                 "promoted": promoted, "observation_id": None, "cached": False, "error": None}
 
+    # ANALYSIS GATE (the invariant): the Ghidra taint pass needs the warm project — on a cold target
+    # point at re_analyze instead of cold-analyzing (the static_analysis task reaches here outside
+    # run_tool's gate). A live bridge / warm slot reads as analyzed → proceeds.
+    if isinstance(analyzer, GhidraTaintAnalyzer):
+        from hexgraph.engine.re.analysis import analysis_lead
+
+        _lead = analysis_lead(project, target)
+        if _lead:
+            return {"available": False, "flows": [], "analyzed": 0, "promoted": promoted,
+                    "observation_id": None, "cached": False, "error": _lead}
+
     result = analyzer.analyze(path, project=project)
     flows = result.get("flows") or []
     status = "error" if result.get("error") else "ok"

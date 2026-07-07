@@ -23,9 +23,10 @@ def _ctx(s):
 
 
 def _fake_state(monkeypatch, state):
-    """Force analysis_state (the gate's sole input) to a fixed lifecycle state."""
+    """Force analysis_state (the gate's sole input) to a fixed lifecycle state. Accepts **kw so it
+    works for BOTH callers — _analysis_gate (project, target) and analysis_lead (…, runner=…)."""
     monkeypatch.setattr("hexgraph.engine.re.analysis.analysis_state",
-                        lambda project, target: {"state": state, "detail": f"({state})"})
+                        lambda project, target, **kw: {"state": state, "detail": f"({state})"})
 
 
 # --- the gate helper ----------------------------------------------------------
@@ -106,6 +107,107 @@ def test_gated_set_is_exactly_the_whole_program_tools():
         assert t in g
     for t in ("disassemble", "disassemble_range", "search_decompiled", "reanalyze"):
         assert t not in g  # targeted/raw/store-reading/explicit — not gated
+
+
+# --- analysis_lead: the host gate for tools that BYPASS run_tool (recover_constant, taint task) ---
+
+def test_analysis_lead_points_at_re_analyze_on_cold_states(hg_home, monkeypatch):
+    """analysis_lead is the single host-side gate for the analysis-needing paths that DON'T go
+    through run_tool's gate (recover_constant, the static_analysis taint task). On a cold/unfinished
+    slot it returns a re_analyze lead; those callers surface it instead of cold-analyzing."""
+    from hexgraph.engine.re import analysis as A
+
+    with session_scope() as s:
+        p = create_project(s, name="lead")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        for state in ("none", "running", "failed"):
+            _fake_state(monkeypatch, state)
+            lead = A.analysis_lead(p, t)
+            assert lead and "re_analyze" in lead and "warm-only" in lead
+
+
+@pytest.mark.parametrize("state", ["analyzed", "unavailable"])
+def test_analysis_lead_is_none_when_analyzed_or_unavailable(hg_home, monkeypatch, state):
+    """analyzed ⇒ proceed warm; unavailable (Ghidra-bridge / Docker down / no artifact) ⇒ those
+    paths serve warm anyway or can't be gated ⇒ no lead (never blocks a runnable tool)."""
+    from hexgraph.engine.re import analysis as A
+
+    _fake_state(monkeypatch, state)
+    with session_scope() as s:
+        p = create_project(s, name="lead2")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        assert A.analysis_lead(p, t) is None
+
+
+def test_analysis_lead_is_best_effort_on_error(hg_home, monkeypatch):
+    """A gate hiccup returns None (never blocks a tool that could run) — mirrors _analysis_gate."""
+    from hexgraph.engine.re import analysis as A
+
+    def _boom(project, target, **kw):
+        raise RuntimeError("state check failed")
+
+    monkeypatch.setattr("hexgraph.engine.re.analysis.analysis_state", _boom)
+    with session_scope() as s:
+        p = create_project(s, name="lead3")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        assert A.analysis_lead(p, t) is None
+
+
+def test_recover_constant_gates_on_cold_analysis(hg_home, monkeypatch):
+    """recover_constant (emulate) bypasses run_tool's gate, so it gates on analysis_lead directly:
+    a cold target returns skipped=needs_analysis + a re_analyze lead and NEVER emulates."""
+    from hexgraph.engine.re.emulation import emulate_constant
+    from hexgraph.sandbox.decompiler import GhidraDecompiler
+    from hexgraph import settings as st
+
+    st.update_settings({"features.emulation.enabled": True,
+                        "features.ghidra.enabled": True, "features.ghidra.mode": "headless"})
+    _fake_state(monkeypatch, "none")
+
+    def _explode(self, *a, **k):
+        raise AssertionError("must not emulate when the analysis gate is cold")
+
+    monkeypatch.setattr(GhidraDecompiler, "run_emulate", _explode)
+    with session_scope() as s:
+        p = create_project(s, name="rc-gate")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        out = emulate_constant(s, p, t, function="derive_key")
+        assert out.get("skipped") == "needs_analysis"
+        assert "re_analyze" in (out.get("error") or "")
+
+
+def test_taint_task_gates_on_cold_analysis(hg_home, monkeypatch):
+    """analyze_taint (the static_analysis task path) also bypasses run_tool's gate — a cold target
+    returns availability False with a re_analyze lead and NEVER runs the Ghidra taint pass."""
+    from hexgraph.engine.re import taint as T
+    from hexgraph import settings as st
+
+    st.update_settings({"features.ghidra.enabled": True, "features.ghidra.mode": "headless"})
+    _fake_state(monkeypatch, "none")
+
+    class _ExplodingTaint(T.GhidraTaintAnalyzer):
+        def analyze(self, artifact, *, project=None):
+            raise AssertionError("must not run taint when the analysis gate is cold")
+
+    with session_scope() as s:
+        p = create_project(s, name="taint-gate")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        out = T.analyze_taint(s, p, t, analyzer=_ExplodingTaint())
+        assert out["available"] is False
+        assert "re_analyze" in (out.get("error") or "")
+
+
+def test_r2_project_mount_degrades_on_remote_executor(hg_home, monkeypatch):
+    """_r2_project_mount returns None when the active executor can't bind-mount the persistent slot
+    (the remote executor — run_probe there REFUSES a project_mount). Without this the r2 xref/search
+    calls would pass a mount and hard-error on remote; degrading to None lets them fall back (index
+    modes → re_analyze lead; search → raw scan) exactly as on a cold local slot."""
+    class _Remoteish:
+        supports_project_mount = False
+
+    monkeypatch.setattr("hexgraph.sandbox.executor.get_executor", lambda *a, **k: _Remoteish())
+    with session_scope() as s:
+        assert AT._r2_project_mount(_ctx(s)) is None
 
 
 # --- content_hash memoization (perf enabler for the gate) ---------------------

@@ -24,8 +24,39 @@ No network; the target is analyzed, never executed.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
+
+# Persistent r2 project (analyze-once). The host bind-mounts a WARM r2 slot here; xrefs is a per-call
+# QUERY, so it NEVER runs `aaa` — it RELOADS the warm project (dir.projects + -p), or returns the
+# re_analyze lead on a cold miss. (A raw byte SEARCH needs no analysis and scans the loaded image
+# either way.) Mirrors the warm half of decompile_probe._project_flags. Generic writable dir name.
+_PROJECT_MOUNT = "/ghidra-project"
+_PROJECT_SUBDIR = "project"
+_PROJECT_NAME = "hexgraph"
+_META_NAME = "meta.json"
+_RE_ANALYZE_LEAD = (
+    "No warm radare2 analysis for this target yet. Run re_analyze(target) FIRST — it builds the warm "
+    "project ONCE (detached; poll until state='analyzed'), then re-run this — it's warm-only and never "
+    "runs a cold analysis itself (re_analyze is the only place a full analysis pass happens).")
+
+
+def _warm_r2_flags():
+    """The r2 open-flags to RELOAD a committed warm r2 project (dir.projects + -p), or None when none
+    is mounted/committed. Never analyzes — the warm project already carries `aaa`."""
+    if not os.path.isdir(_PROJECT_MOUNT):
+        return None
+    proj_dir = os.path.join(_PROJECT_MOUNT, _PROJECT_SUBDIR)
+    named = os.path.join(proj_dir, _PROJECT_NAME)
+    try:
+        with open(os.path.join(_PROJECT_MOUNT, _META_NAME)) as fh:
+            json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not (os.path.isdir(named) and os.listdir(named)):
+        return None
+    return ["-e", f"dir.projects={proj_dir}", "-p", _PROJECT_NAME]
 
 # A subject given as a hex address (data xrefs / an address subject). Validated
 # strictly so it can never inject a command when interpolated into an r2 seek.
@@ -269,19 +300,23 @@ def main() -> int:
 
     import r2pipe
 
-    r2 = r2pipe.open(path, flags=["-2"])
+    # WARM-ONLY (the invariant): xrefs NEVER runs a full `aaa` (that whole-binary analysis on a large
+    # target is the ~2547s timeout). Non-search modes need the warm reference index — reload the warm
+    # r2 project, or return the re_analyze lead on a cold miss. A raw byte/immediate SEARCH needs no
+    # analysis, so it proceeds either way (hits map to a containing function only when a warm project
+    # is loaded — the WARM Ghidra search_bytes path is the precise mapper; this is the fast fallback).
+    warm_flags = _warm_r2_flags()
+    warm = warm_flags is not None
+    if not warm and mode != "search":
+        print(json.dumps({"tool": "xrefs_probe", "mode": mode,
+                          "error": _RE_ANALYZE_LEAD, "needs_analysis": True}))
+        return 0
+    r2 = r2pipe.open(path, flags=["-2"] + (warm_flags or []))
     try:
-        # A byte/immediate SEARCH is a raw memory scan — it does NOT need whole-binary analysis, and
-        # running `aaa` on a large target is exactly the ~2547s timeout re_search_code hit. So skip
-        # both `aaa` and the flag-set build for `--mode search` (the search + `_fn_at` work off the
-        # loaded image / symbols alone; a hit then carries a containing-function name only where a
-        # symbol already covers it — the WARM Ghidra search_bytes path gives precise mapping, this
-        # fast fallback trades some mapping for not hanging). Every OTHER mode still needs `aaa`.
+        # The flag set (sym.imp.X vs sym.X) comes from the LOADED warm project — NO `aaa`.
+        # (`fj` is the JSON flag list; `flsj`/`fsj` list flag *spaces*, not flags.)
         flagset: set[str] = set()
         if mode != "search":
-            r2.cmd("aaa")
-            # The set of flag names r2 knows, so we can resolve sym.imp.X vs sym.X
-            # (`fj` is the JSON flag list; `flsj`/`fsj` list flag *spaces*, not flags).
             try:
                 for f in json.loads(r2.cmd("fj") or "[]"):
                     if f.get("name"):

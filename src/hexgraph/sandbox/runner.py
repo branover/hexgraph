@@ -306,6 +306,12 @@ def _assert_network_gate(network_gate: str) -> None:
 
 
 class SandboxRunner:
+    # Whether this executor can bind-mount the persistent analysis slot (project_mount) — the local
+    # docker executor can (the slot lives on the local data dir); the remote executor overrides this
+    # to False (run_probe there refuses a project_mount). Callers that resolve a warm slot for a
+    # per-call reload consult this so they degrade (skip the mount) instead of erroring on remote.
+    supports_project_mount = True
+
     def __init__(self, image: str | None = None, timeout: int = DEFAULT_TIMEOUT) -> None:
         self.image = image or sandbox_image()
         self.timeout = timeout

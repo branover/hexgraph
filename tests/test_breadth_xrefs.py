@@ -385,9 +385,13 @@ def test_data_xrefs_resolves_named_symbol_end_to_end(hg_home, tmp_path):
         pytest.skip("could not compile keytab")
 
     from hexgraph.sandbox.executor import get_executor
+    from conftest import warm_r2_slot
 
+    # xrefs_probe is warm-only now (the analysis invariant) — analyze once (the re_analyze step) and
+    # pass the warm r2 project so the data-xref query reloads it instead of running a cold `aaa`.
+    mount = warm_r2_slot(binpath, tmp_path / "r2home")
     out = get_executor().run_json_probe(
-        "xrefs_probe.py", binpath, extra_args=["KEY_ENC", "--mode", "data"])
+        "xrefs_probe.py", binpath, extra_args=["KEY_ENC", "--mode", "data"], project_mount=mount)
     refs = out.get("data_refs") or []
     assert refs, out  # resolved BY NAME and found at least one reference
     # The reference lives in verify() (which does memcmp(in, KEY_ENC, ...)).

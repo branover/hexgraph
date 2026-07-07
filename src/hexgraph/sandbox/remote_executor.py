@@ -79,6 +79,11 @@ class RemoteDockerExecutor(SandboxRunner):
     on the instance, passed to the docker subprocess via the env, and NEVER logged (the
     error paths below scrub it)."""
 
+    # The persistent analysis slot lives on the LOCAL data dir — a cross-host writable mount isn't
+    # wired for the staged-volume remote path, so run_probe refuses a project_mount here. Callers
+    # consult this to skip the warm-slot mount (degrading to the re_analyze lead) instead of erroring.
+    supports_project_mount = False
+
     def __init__(self, docker_host: str, *, image: str | None = None,
                  timeout: int = DEFAULT_TIMEOUT, tls_env: dict | None = None) -> None:
         super().__init__(image=image, timeout=timeout)

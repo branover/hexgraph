@@ -21,7 +21,7 @@ from hexgraph.engine.targets.ingest import create_project, ingest_file
 from hexgraph import settings as st
 from hexgraph.policy import PolicyViolation, assert_allows_emulation
 
-from conftest import SANDBOX_READY, fixture_path
+from conftest import SANDBOX_READY, fixture_path, warm_ghidra_slot
 
 
 # ── offline: the opt-in gate ──────────────────────────────────────────────────────────
@@ -92,6 +92,10 @@ def test_emulate_constant_no_signature_falls_through(hg_home, monkeypatch):
 
     monkeypatch.setattr(GhidraDecompiler, "run_emulate",
                         lambda self, *a, **k: {"emulation": {"reached_ret": False, "value": None}})
+    # Bypass the analysis gate (it would otherwise return needs_analysis on a Docker host before the
+    # stub) — this is a pure host-logic test that the arg pre-check FALLS THROUGH into the emulation
+    # path; the gate itself is covered in the re_analyze / warm-only tests.
+    monkeypatch.setattr("hexgraph.engine.re.analysis.analysis_lead", lambda *a, **k: None)
     st.update_settings({"features.emulation.enabled": True,
                         "features.ghidra.enabled": True, "features.ghidra.mode": "headless"})
     with session_scope() as s:
@@ -180,6 +184,7 @@ def test_emulate_recovers_derived_constant_on_keyderive(hg_home):
     with session_scope() as s:
         p = create_project(s, name="kd")
         t = ingest_file(s, p, binpath, name="keyderive")
+        warm_ghidra_slot(p, t)  # re_analyze first — emulate is warm-only (the analysis invariant)
         out = emulate_constant(s, p, t, function="derive_unlock_code")
 
         assert out["available"] is True and out["reached_ret"] is True, out
