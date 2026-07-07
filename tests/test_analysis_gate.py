@@ -197,6 +197,19 @@ def test_taint_task_gates_on_cold_analysis(hg_home, monkeypatch):
         assert "re_analyze" in (out.get("error") or "")
 
 
+def test_r2_project_mount_degrades_on_remote_executor(hg_home, monkeypatch):
+    """_r2_project_mount returns None when the active executor can't bind-mount the persistent slot
+    (the remote executor — run_probe there REFUSES a project_mount). Without this the r2 xref/search
+    calls would pass a mount and hard-error on remote; degrading to None lets them fall back (index
+    modes → re_analyze lead; search → raw scan) exactly as on a cold local slot."""
+    class _Remoteish:
+        supports_project_mount = False
+
+    monkeypatch.setattr("hexgraph.sandbox.executor.get_executor", lambda *a, **k: _Remoteish())
+    with session_scope() as s:
+        assert AT._r2_project_mount(_ctx(s)) is None
+
+
 # --- content_hash memoization (perf enabler for the gate) ---------------------
 
 def test_content_hash_is_memoized_and_invalidates(tmp_path):

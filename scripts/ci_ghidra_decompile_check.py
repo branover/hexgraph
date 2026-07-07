@@ -31,6 +31,7 @@ decompilation is broken.
 from __future__ import annotations
 
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -65,13 +66,30 @@ def main() -> int:
         _fail(f"could not import hexgraph (install the package in this job): {exc}")
 
     runner = SandboxRunner(image=image)
+
+    # Analysis is WARM-ONLY now (the invariant: only re_analyze runs a full analysis). Build the warm
+    # Ghidra project ONCE via `--analyze` into a bind-mounted slot, then drive decompile + xrefs
+    # against THAT warm project — exactly the production shape (re_analyze → warm per-call verbs). A
+    # per-run temp slot; CI is ephemeral, so no cleanup needed. This ALSO exercises the `--analyze`
+    # detached-analysis path end to end under production hardening.
+    proj = tempfile.mkdtemp(prefix="ci-ghidra-slot-")
+    try:
+        warm = runner.run_json_probe("ghidra_probe.py", str(fixture),
+                                     extra_args=["--analyze"], project_mount=proj)
+    except SandboxError as exc:
+        _fail(f"ghidra --analyze (warm-project build) failed under production hardening: {exc}")
+    if isinstance(warm, dict) and warm.get("error"):
+        _fail(f"ghidra --analyze reported an error: {warm['error']}")
+
     try:
         # run_json_probe == run_probe + json.loads of stdout, the same call GhidraDecompiler
         # makes. On a non-zero probe exit it raises SandboxError; ghidra_probe.py emits its
         # diagnostic (the analyzeHeadless log tail) on STDOUT as {"error": ...}, so surface
         # that too — the previous standalone gate printed only the empty stderr, hiding the
-        # cause (the launcher's "Failed to create directory" under --read-only).
-        result = runner.run_json_probe("ghidra_probe.py", str(fixture), extra_args=[FOCUS])
+        # cause (the launcher's "Failed to create directory" under --read-only). WARM decompile
+        # against the project built above (project_mount=proj) — a cold decompile now refuses.
+        result = runner.run_json_probe("ghidra_probe.py", str(fixture),
+                                       extra_args=[FOCUS], project_mount=proj)
     except SandboxError as exc:
         # SandboxRunner raises on a non-zero probe exit and the SandboxError message carries
         # the probe's STDERR tail (runner._run: proc.stderr.strip()[:500]); it does NOT carry
@@ -115,11 +133,12 @@ def main() -> int:
     # REAL Ghidra: this is the reference-index query the re_xrefs / re_function_xrefs / re_call_graph
     # verbs serve from the warm project, and the offline tier has no Ghidra to run it. cgi_handler
     # does `strcpy(buf, token)`, so "who calls strcpy" (ReferenceManager.getReferencesTo, filtered
-    # to the containing function) MUST include cgi_handler. Drives the SAME production run_probe path
-    # (a cold throwaway project here, which still imports+analyzes then runs XREFS_SCRIPT).
+    # to the containing function) MUST include cgi_handler. Drives the SAME production run_probe path,
+    # served WARM from the project built above (project_mount=proj) — the reference index the re_xrefs
+    # family reuses, never a per-call re-analysis.
     try:
         xr = runner.run_json_probe("ghidra_probe.py", str(fixture),
-                                   extra_args=["--xrefs", "callers", "strcpy"])
+                                   extra_args=["--xrefs", "callers", "strcpy"], project_mount=proj)
     except SandboxError as exc:
         _fail(f"ghidra xrefs probe failed under production hardening: {exc}")
     if "error" in xr:
