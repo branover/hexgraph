@@ -317,6 +317,30 @@ class GhidraDecompiler(Decompiler):
                 return self.runner.run_json_probe("ghidra_probe.py", artifact, extra_args=args)
             return self._run_locked(slot, artifact, args)
 
+    def search_bytes(self, artifact: str, *, bytes_pattern: str | None = None,
+                     immediate: str | None = None, project=None) -> dict:
+        """Scan the warm project's LOADED MEMORY for a BYTE pattern / IMMEDIATE value (`--search`),
+        each hit mapped to its containing function. WARM-ONLY on purpose: a byte scan must NEVER
+        trigger a cold whole-binary analysis — that cold import/`aaa` IS the 2547s timeout the r2
+        xrefs_probe hits. Without a committed warm slot this returns an `error` so the caller degrades
+        to the r2 raw-scan path (fast, no analysis) instead of cold-importing here. Held under the
+        slot lock (read-only open, so the warm project is never mutated); emits the same JSON shape as
+        the r2 xrefs_probe `search` mode."""
+        slot = self._resolve_slot(artifact, project)
+        if slot is None or not slot.exists():
+            return {"tool": "ghidra_search", "mode": "search",
+                    "error": "no warm Ghidra analysis for this target (search is warm-only)"}
+        args = ["--search"]
+        if bytes_pattern:
+            args += ["--sbytes", str(bytes_pattern)]
+        elif immediate is not None:
+            args += ["--simm", str(immediate)]
+        with slot.lock() as locked:
+            if not locked:
+                return {"tool": "ghidra_search", "mode": "search",
+                        "error": "ghidra project busy (locked); try again"}
+            return self._run_locked(slot, artifact, args)
+
     def _run_locked(self, slot, artifact: str, args, *, force_cold: bool = False):
         """Run the probe with the slot held exclusively. Decides cold vs warm on the AUTHORITATIVE
         committed marker (`slot.exists()`); cleans a partially-written slot before a cold run; and

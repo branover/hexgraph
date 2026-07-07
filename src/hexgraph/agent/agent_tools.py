@@ -2385,26 +2385,58 @@ def _search_code_grep(ctx: ToolContext, args: dict, *, query: str, functions) ->
     return _clip("\n".join(lines))
 
 
-def _search_code_scan(ctx: ToolContext, args: dict, *, bytes_pat, immediate) -> str:
-    """The byte/immediate scan: run the r2 `--mode search` probe (`/xj`//`/vj`) over the mapped
-    image and map each hit to its containing function, PAGINATED (total + next offset reported,
-    the no-silent-caps discipline). QUERY: records an Observation; adds no graph nodes."""
+def _ghidra_search(ctx: ToolContext, *, bytes_pat, immediate) -> dict | None:
+    """The WARM Ghidra memory scan (`GhidraDecompiler`/bridge `search_bytes`): `Memory.findBytes`
+    over the resident/warm image, each hit mapped to its containing function — a fast scan that
+    reuses the warm analysis, NOT the r2 whole-binary `aaa` sweep. Returns the probe dict on a
+    COMPLETED run, or None when Ghidra couldn't answer (not the active backend / no warm project /
+    a probe fault) so the caller falls back to r2. Best-effort: never raises into the caller."""
+    from hexgraph.sandbox.decompiler import ghidra_op_backend
+
+    try:
+        out = ghidra_op_backend(ctx.target).search_bytes(
+            ctx.target.path, bytes_pattern=bytes_pat,
+            immediate=(str(immediate) if immediate is not None else None), project=ctx.project)
+    except Exception:  # noqa: BLE001 — a warm-path failure DEGRADES to r2, never aborts the tool
+        return None
+    if not isinstance(out, dict) or out.get("error"):
+        return None
+    return out
+
+
+def _r2_search(ctx: ToolContext, *, bytes_pat, immediate):
+    """The radare2 raw-scan fallback (`xrefs_probe --mode search`, `/xj`//`/vj`) for when Ghidra
+    can't answer. The probe no longer runs a whole-binary `aaa` for a search, so it's fast (function
+    mapping best-effort from the symbol table). Returns the probe dict, or a string error message."""
     from hexgraph.sandbox.executor import get_executor
+
+    extra = ["--mode", "search"] + (["--bytes", str(bytes_pat)] if bytes_pat
+                                    else ["--imm", str(immediate)])
+    try:
+        return get_executor().run_json_probe("xrefs_probe.py", ctx.target.path, extra_args=extra)
+    except Exception as exc:  # noqa: BLE001
+        return f"search_code scan failed: {exc}"
+
+
+def _search_code_scan(ctx: ToolContext, args: dict, *, bytes_pat, immediate) -> str:
+    """The byte/immediate scan, PAGINATED (total + next offset reported, the no-silent-caps
+    discipline). Prefers the WARM Ghidra loaded-memory scan (the byte-scan analog of re_xrefs
+    consulting the warm reference index — a fast memory scan over the resident image, NOT the r2
+    whole-binary `aaa` sweep that times out on a large target); falls back to the r2 raw scan (also
+    fast now — no `aaa` for a search) when Ghidra can't answer. QUERY: records an Observation."""
     from hexgraph.sandbox.runner import docker_available
 
     if not docker_available():
         return "search_code byte/immediate scan unavailable (Docker/sandbox not running)"
-    extra = ["--mode", "search"]
-    if bytes_pat:
-        extra += ["--bytes", str(bytes_pat)]
-        subj = f"bytes {bytes_pat!r}"
-    else:
-        extra += ["--imm", str(immediate)]
-        subj = f"immediate {immediate!r}"
-    try:
-        out = get_executor().run_json_probe("xrefs_probe.py", ctx.target.path, extra_args=extra)
-    except Exception as exc:  # noqa: BLE001
-        return f"search_code scan failed: {exc}"
+    subj = f"bytes {bytes_pat!r}" if bytes_pat else f"immediate {immediate!r}"
+
+    # Warm Ghidra first (reuses the warm project / a live bridge); r2 raw scan otherwise.
+    out = _ghidra_search(ctx, bytes_pat=bytes_pat, immediate=immediate) \
+        if _ghidra_xrefs_active() else None
+    if out is None:
+        out = _r2_search(ctx, bytes_pat=bytes_pat, immediate=immediate)
+    if isinstance(out, str):  # a string error from the r2 fallback
+        return out
     if isinstance(out, dict) and out.get("error"):
         return f"search_code: {out['error']}"
 

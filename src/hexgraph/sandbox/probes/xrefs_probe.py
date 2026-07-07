@@ -271,16 +271,23 @@ def main() -> int:
 
     r2 = r2pipe.open(path, flags=["-2"])
     try:
-        r2.cmd("aaa")
-        # The set of flag names r2 knows, so we can resolve sym.imp.X vs sym.X
-        # (`fj` is the JSON flag list; `flsj`/`fsj` list flag *spaces*, not flags).
+        # A byte/immediate SEARCH is a raw memory scan — it does NOT need whole-binary analysis, and
+        # running `aaa` on a large target is exactly the ~2547s timeout re_search_code hit. So skip
+        # both `aaa` and the flag-set build for `--mode search` (the search + `_fn_at` work off the
+        # loaded image / symbols alone; a hit then carries a containing-function name only where a
+        # symbol already covers it — the WARM Ghidra search_bytes path gives precise mapping, this
+        # fast fallback trades some mapping for not hanging). Every OTHER mode still needs `aaa`.
         flagset: set[str] = set()
-        try:
-            for f in json.loads(r2.cmd("fj") or "[]"):
-                if f.get("name"):
-                    flagset.add(f["name"])
-        except json.JSONDecodeError:
-            pass
+        if mode != "search":
+            r2.cmd("aaa")
+            # The set of flag names r2 knows, so we can resolve sym.imp.X vs sym.X
+            # (`fj` is the JSON flag list; `flsj`/`fsj` list flag *spaces*, not flags).
+            try:
+                for f in json.loads(r2.cmd("fj") or "[]"):
+                    if f.get("name"):
+                        flagset.add(f["name"])
+            except json.JSONDecodeError:
+                pass
 
         if mode == "search":
             # Validate the pattern/value STRICTLY before it reaches the r2 command (injection
