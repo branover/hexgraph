@@ -96,6 +96,7 @@ def test_remote_decompile_one_inlines_name_and_passes_no_kwarg():
     assert '"check_password"' in expr         # the validated name is inlined as a string literal
     assert "==fn]" not in expr                # not the old free-variable-in-lambda form
     assert "lambda di, fn:" in expr           # the function is a bound lambda parameter
+    assert "di.dispose()" in expr             # the DecompInterface is disposed, not leaked per call
 
 
 def test_remote_decompile_one_address_resolves_containing_function():
@@ -111,6 +112,65 @@ def test_remote_decompile_one_address_resolves_containing_function():
     assert "getFunctionContaining" in expr and '"0x40132c"' in expr
     assert "getFunctions(True)" not in expr   # the name-match path is NOT used for an address
     assert name == "cmd_exec"
+
+
+def test_remote_decompile_one_disposes_interface_on_every_path():
+    """Regression: the eval must DISPOSE the DecompInterface (a native decompiler subprocess +
+    threads in the researcher's long-lived Ghidra) on every normal return, else it leaks one per
+    call. The fake bridge never runs the expr, so here we EVALUATE the real string against fakes to
+    prove the dispose is REACHABLE — on a successful decompile and on the fn-is-None not-found path —
+    not merely present in the string."""
+    from hexgraph.engine.re.ghidra_bridge import _RemoteOps
+
+    disposed = {"n": 0}
+
+    class _Deci:
+        def openProgram(self, p): pass
+        def decompileFunction(self, fn, secs, mon):
+            return type("Res", (), {"decompileCompleted": lambda self: True,
+                                    "getDecompiledFunction": lambda self: type(
+                                        "DF", (), {"getC": lambda self: "PSEUDO"})()})()
+        def dispose(self): disposed["n"] += 1
+
+    class _Fn:
+        def __init__(self, n): self._n = n
+        def getName(self): return self._n
+
+    class _FM:
+        def __init__(self, fns): self._fns = fns
+        def getFunctions(self, _ordered): return list(self._fns)
+
+    class _Prog:
+        def __init__(self, fns): self._fm = _FM(fns)
+        def getFunctionManager(self): return self._fm
+
+    def _import(name, *a, **k):
+        import types
+        m = types.SimpleNamespace()
+        if name == "ghidra.app.decompiler":
+            m.DecompInterface = _Deci
+        elif name == "ghidra.util.task":
+            m.ConsoleTaskMonitor = object
+        return m
+
+    captured = {}
+
+    class _Cap:
+        def remote_eval(self, expr, **kw):
+            captured["expr"] = expr
+            return ("x", "y")
+
+    _RemoteOps(_Cap())._decompile_one("secret_fn")
+    expr = captured["expr"]
+
+    def _run(prog):
+        disposed["n"] = 0
+        return eval(expr, {"__builtins__": {"__import__": _import}, "currentProgram": prog})
+
+    assert _run(_Prog([_Fn("secret_fn")])) == ("secret_fn", "PSEUDO")  # found -> (name, body)
+    assert disposed["n"] == 1                                          # …and disposed, not leaked
+    assert _run(_Prog([])) == ("", "")                                 # not found -> ('', '') sentinel
+    assert disposed["n"] == 1                                          # …the created interface is STILL disposed
 
 
 def test_remote_decompile_focus_none_when_not_found():
