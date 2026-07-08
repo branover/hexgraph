@@ -116,13 +116,24 @@ class _RemoteOps:
         # remote exception: fn is None -> ('', ''); a function that doesn't decompile ->
         # (name, ''); otherwise (name, C). The resolved function rides in as a bound lambda PARAM.
         return self.b.remote_eval(
-            "(lambda di, fn: ('', '') if fn is None else "
+            # `di` (a DecompInterface) also rides as a bound lambda PARAMETER, and the body is
+            # wrapped in `(lambda result: (di.dispose(), result)[1])(...)` so the interface — a
+            # native `decompile` subprocess + I/O threads — is DISPOSED once the (name, pseudocode)
+            # tuple is materialized. getC()/getName() are already-copied strings, safe to read
+            # post-dispose; the dispose-lambda closes over `di` exactly as the worker closes over
+            # `fn`. Without this a long-lived researcher Ghidra leaks one interface per call — the
+            # same class of leak fixed for the managed resident bridge (pyghidra_lib). (Only the
+            # normal-return paths dispose, matching the pre-existing behavior on a raised remote
+            # decompile; every non-exception outcome here returns a sentinel, so all of those free it.)
+            "(lambda di, fn: "
+            "(lambda result: (di.dispose(), result)[1])("
+            "('', '') if fn is None else "
             "(lambda res: (fn.getName(), res.getDecompiledFunction().getC()) "
             "if (res is not None and res.decompileCompleted() "
             "and res.getDecompiledFunction() is not None) else (fn.getName(), ''))"
             "((di.openProgram(currentProgram), di.decompileFunction(fn, 60, "
             "__import__('ghidra.util.task', fromlist=['ConsoleTaskMonitor']).ConsoleTaskMonitor()))[1])"
-            ")("
+            "))("
             "__import__('ghidra.app.decompiler', fromlist=['DecompInterface']).DecompInterface(), "
             + target_expr + ")"
         )
