@@ -491,175 +491,175 @@ def taint_core(program, flat, monitor) -> dict:
 
     candidates = [f for f in funcs if not f.isExternal() and calls_a_sink(f)][:200]
     deci = DecompInterface()
-    deci.openProgram(program)
-
-    flows = []
-    for f in candidates:
-        res = None
-        with contextlib.suppress(Exception):
-            res = deci.decompileFunction(f, 60, monitor)
-        if res is None or not res.decompileCompleted():
-            continue
-        hf = res.getHighFunction()
-        if hf is None:
-            continue
-
-        tainted = set()        # identity hashes of value-tainted varnodes
-        src_of = {}            # identity hash -> source descriptor
-        tainted_slot = {}      # stack-slot key -> source descriptor
-
-        def vmark(vn, desc):
-            if vn is None:
-                return False
-            h = System.identityHashCode(vn)
-            if h in tainted:
-                return False
-            tainted.add(h)
-            src_of[h] = desc
-            return True
-
-        def slot_key(vn, depth=0):
-            if vn is None or depth > 6:
-                return None
-            d = vn.getDef()
-            if d is None:
-                sp = None
-                with contextlib.suppress(Exception):
-                    sp = vn.getAddress().getAddressSpace().getName()
-                return ("stk", sp, vn.getOffset()) if sp == "stack" else None
-            mn = d.getMnemonic()
-            if mn == "PTRSUB" and d.getNumInputs() == 2 and d.getInput(1).isConstant():
-                b = d.getInput(0)
-                bs = "?"
-                with contextlib.suppress(Exception):
-                    bs = b.getAddress().getAddressSpace().getName()
-                return ("stk", bs, b.getOffset(), d.getInput(1).getOffset())
-            if mn in ("COPY", "CAST"):
-                return slot_key(d.getInput(0), depth + 1)
-            if mn == "INT_ADD" and d.getNumInputs() == 2 and d.getInput(1).isConstant():
-                return slot_key(d.getInput(0), depth + 1)
-            return None
-
-        def arg_taint(vn):
-            if vn is None:
-                return None
-            h = System.identityHashCode(vn)
-            if h in tainted:
-                return src_of[h]
-            k = slot_key(vn)
-            if k is not None and k in tainted_slot:
-                return tainted_slot[k]
-            return None
-
-        # Sources A: function parameters.
-        with contextlib.suppress(Exception):
-            it = hf.getLocalSymbolMap().getSymbols()
-            while it.hasNext():
-                sym = it.next()
-                if sym.isParameter():
-                    hv = sym.getHighVariable()
-                    if hv is not None:
-                        for inst in hv.getInstances():
-                            vmark(inst, {"kind": "param", "detail": sym.getName()})
-
-        ops = list(hf.getPcodeOps())
-        # Sources B/C: library-call sources in one pass over the CALL ops.
-        for op in ops:
-            if op.getOpcode() != PcodeOp.CALL:
+    try:
+        deci.openProgram(program)
+        flows = []
+        for f in candidates:
+            res = None
+            with contextlib.suppress(Exception):
+                res = deci.decompileFunction(f, 60, monitor)
+            if res is None or not res.decompileCompleted():
                 continue
-            cn = callee_name(op)
-            if cn in _SOURCE_RET and op.getOutput() is not None:
-                vmark(op.getOutput(), {"kind": "call_return", "detail": cn})
-            elif cn in _SOURCE_BUF:
-                di = _SOURCE_BUF[cn] + 1
-                if op.getNumInputs() > di:
-                    k = slot_key(op.getInput(di))
-                    if k is not None and k not in tainted_slot:
-                        tainted_slot[k] = {"kind": "libc_input", "detail": cn}
+            hf = res.getHighFunction()
+            if hf is None:
+                continue
 
-        # Forward propagation to a fixpoint over BOTH domains.
-        changed, guard = True, 0
-        while changed and guard < 4096:
-            changed, guard = False, guard + 1
+            tainted = set()        # identity hashes of value-tainted varnodes
+            src_of = {}            # identity hash -> source descriptor
+            tainted_slot = {}      # stack-slot key -> source descriptor
+
+            def vmark(vn, desc):
+                if vn is None:
+                    return False
+                h = System.identityHashCode(vn)
+                if h in tainted:
+                    return False
+                tainted.add(h)
+                src_of[h] = desc
+                return True
+
+            def slot_key(vn, depth=0):
+                if vn is None or depth > 6:
+                    return None
+                d = vn.getDef()
+                if d is None:
+                    sp = None
+                    with contextlib.suppress(Exception):
+                        sp = vn.getAddress().getAddressSpace().getName()
+                    return ("stk", sp, vn.getOffset()) if sp == "stack" else None
+                mn = d.getMnemonic()
+                if mn == "PTRSUB" and d.getNumInputs() == 2 and d.getInput(1).isConstant():
+                    b = d.getInput(0)
+                    bs = "?"
+                    with contextlib.suppress(Exception):
+                        bs = b.getAddress().getAddressSpace().getName()
+                    return ("stk", bs, b.getOffset(), d.getInput(1).getOffset())
+                if mn in ("COPY", "CAST"):
+                    return slot_key(d.getInput(0), depth + 1)
+                if mn == "INT_ADD" and d.getNumInputs() == 2 and d.getInput(1).isConstant():
+                    return slot_key(d.getInput(0), depth + 1)
+                return None
+
+            def arg_taint(vn):
+                if vn is None:
+                    return None
+                h = System.identityHashCode(vn)
+                if h in tainted:
+                    return src_of[h]
+                k = slot_key(vn)
+                if k is not None and k in tainted_slot:
+                    return tainted_slot[k]
+                return None
+
+            # Sources A: function parameters.
+            with contextlib.suppress(Exception):
+                it = hf.getLocalSymbolMap().getSymbols()
+                while it.hasNext():
+                    sym = it.next()
+                    if sym.isParameter():
+                        hv = sym.getHighVariable()
+                        if hv is not None:
+                            for inst in hv.getInstances():
+                                vmark(inst, {"kind": "param", "detail": sym.getName()})
+
+            ops = list(hf.getPcodeOps())
+            # Sources B/C: library-call sources in one pass over the CALL ops.
             for op in ops:
-                oc = op.getOpcode()
-                out = op.getOutput()
-                n = op.getNumInputs()
-                ins = [op.getInput(i) for i in range(n)]
-                if oc in prop_ops:
-                    d = None
-                    for v in ins:
-                        d = arg_taint(v)
-                        if d is not None:
-                            break
-                    if d is not None and out is not None and vmark(out, d):
-                        changed = True
-                elif oc == PcodeOp.CALL:
-                    cn = callee_name(op)
-                    if cn in _COPY_TO_DEST and n > 2:
+                if op.getOpcode() != PcodeOp.CALL:
+                    continue
+                cn = callee_name(op)
+                if cn in _SOURCE_RET and op.getOutput() is not None:
+                    vmark(op.getOutput(), {"kind": "call_return", "detail": cn})
+                elif cn in _SOURCE_BUF:
+                    di = _SOURCE_BUF[cn] + 1
+                    if op.getNumInputs() > di:
+                        k = slot_key(op.getInput(di))
+                        if k is not None and k not in tainted_slot:
+                            tainted_slot[k] = {"kind": "libc_input", "detail": cn}
+
+            # Forward propagation to a fixpoint over BOTH domains.
+            changed, guard = True, 0
+            while changed and guard < 4096:
+                changed, guard = False, guard + 1
+                for op in ops:
+                    oc = op.getOpcode()
+                    out = op.getOutput()
+                    n = op.getNumInputs()
+                    ins = [op.getInput(i) for i in range(n)]
+                    if oc in prop_ops:
                         d = None
-                        for i in range(2, n):
-                            d = arg_taint(ins[i])
+                        for v in ins:
+                            d = arg_taint(v)
                             if d is not None:
                                 break
-                        if d is not None:
-                            k = slot_key(ins[1])
-                            if k is not None and k not in tainted_slot:
-                                tainted_slot[k] = d
-                                changed = True
-                    if cn in _COPY_TO_RET and out is not None:
-                        d = None
-                        for i in range(1, n):
-                            d = arg_taint(ins[i])
-                            if d is not None:
-                                break
-                        if d is not None and vmark(out, d):
+                        if d is not None and out is not None and vmark(out, d):
                             changed = True
+                    elif oc == PcodeOp.CALL:
+                        cn = callee_name(op)
+                        if cn in _COPY_TO_DEST and n > 2:
+                            d = None
+                            for i in range(2, n):
+                                d = arg_taint(ins[i])
+                                if d is not None:
+                                    break
+                            if d is not None:
+                                k = slot_key(ins[1])
+                                if k is not None and k not in tainted_slot:
+                                    tainted_slot[k] = d
+                                    changed = True
+                        if cn in _COPY_TO_RET and out is not None:
+                            d = None
+                            for i in range(1, n):
+                                d = arg_taint(ins[i])
+                                if d is not None:
+                                    break
+                            if d is not None and vmark(out, d):
+                                changed = True
 
-        sanitizer_hits = set()
-        for op in ops:
-            if op.getOpcode() == PcodeOp.CALL and callee_name(op) in _SANITIZERS:
-                sanitizer_hits.add(callee_name(op))
+            sanitizer_hits = set()
+            for op in ops:
+                if op.getOpcode() == PcodeOp.CALL and callee_name(op) in _SANITIZERS:
+                    sanitizer_hits.add(callee_name(op))
 
-        for op in ops:
-            if op.getOpcode() != PcodeOp.CALL:
-                continue
-            cn = callee_name(op)
-            cat, lo = None, 1
-            if cn in _SINK_EXEC:
-                cat = "command_exec"
-            elif cn in _SINK_OVERFLOW:
-                cat, lo = "buffer_overflow", 2
-            if cat is None:
-                continue
-            n = op.getNumInputs()
-            hit_idx, src = None, None
-            for i in range(lo, n):
-                d = arg_taint(op.getInput(i))
-                if d is not None:
-                    hit_idx, src = i, d
+            for op in ops:
+                if op.getOpcode() != PcodeOp.CALL:
+                    continue
+                cn = callee_name(op)
+                cat, lo = None, 1
+                if cn in _SINK_EXEC:
+                    cat = "command_exec"
+                elif cn in _SINK_OVERFLOW:
+                    cat, lo = "buffer_overflow", 2
+                if cat is None:
+                    continue
+                n = op.getNumInputs()
+                hit_idx, src = None, None
+                for i in range(lo, n):
+                    d = arg_taint(op.getInput(i))
+                    if d is not None:
+                        hit_idx, src = i, d
+                        break
+                if hit_idx is None:
+                    continue
+                flows.append({
+                    "function": f.getName(),
+                    "function_addr": "0x" + f.getEntryPoint().toString(),
+                    "source": src or {"kind": "unknown"},
+                    "sink": {"func": cn, "category": cat,
+                             "call_addr": addr_of(op), "arg_index": hit_idx},
+                    "sanitized": sorted(sanitizer_hits),
+                })
+                if len(flows) >= 200:
                     break
-            if hit_idx is None:
-                continue
-            flows.append({
-                "function": f.getName(),
-                "function_addr": "0x" + f.getEntryPoint().toString(),
-                "source": src or {"kind": "unknown"},
-                "sink": {"func": cn, "category": cat,
-                         "call_addr": addr_of(op), "arg_index": hit_idx},
-                "sanitized": sorted(sanitizer_hits),
-            })
             if len(flows) >= 200:
                 break
-        if len(flows) >= 200:
-            break
-
-    # Dispose the decompiler subprocess (ONE interface, reused across every candidate here) before
-    # returning — the same native-process/thread leak that empties the resident bridge's decompiles
-    # if it accumulates, just one-per-taint-op rather than per-request. See _focus_facts.
-    with contextlib.suppress(Exception):
-        deci.dispose()
-    return {"taint": {"flows": flows, "analyzed": len(candidates)}}
+        return {"taint": {"flows": flows, "analyzed": len(candidates)}}
+    finally:
+        # A DecompInterface spawns a native `decompile` subprocess + I/O threads; the resident
+        # bridge reuses ONE across this whole taint op, so dispose it in a finally (like
+        # _focus_facts — the candidate loop calls raw Java that can raise) to free it on every path.
+        with contextlib.suppress(Exception):
+            deci.dispose()
 
 
 # --- Emulation: constant recovery via Ghidra's P-Code emulator (ported from EMU_SCRIPT) ------

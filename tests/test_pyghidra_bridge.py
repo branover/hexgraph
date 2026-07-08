@@ -212,12 +212,15 @@ class _FakeRes:
 
 
 class _FakeDeci:
-    def __init__(self, on_decompile=None):
+    def __init__(self, on_decompile=None, on_open=None):
         self.opened = self.disposed = 0
         self._on_decompile = on_decompile
+        self._on_open = on_open
 
     def openProgram(self, program):
         self.opened += 1
+        if self._on_open is not None:
+            self._on_open()
 
     def decompileFunction(self, target, secs, monitor):
         return self._on_decompile() if self._on_decompile is not None else _FakeRes()
@@ -293,6 +296,62 @@ def test_focus_facts_disposes_even_when_decompile_raises(monkeypatch):
     with pytest.raises(RuntimeError):
         L._focus_facts(object(), _FakeTarget("f"), None)
     assert deci.disposed == 1  # freed via finally even when decompilation raised
+
+
+_PCODE_OPS = (
+    "COPY CAST INT_ADD INT_SUB INT_AND INT_OR INT_XOR INT_MULT INT_ZEXT INT_SEXT INT_2COMP "
+    "INT_NEGATE INT_LEFT INT_RIGHT INT_SRIGHT INT_DIV INT_REM SUBPIECE PIECE PTRADD PTRSUB "
+    "MULTIEQUAL INDIRECT LOAD"
+).split()
+
+
+class _FakeEmptyFM:
+    def getFunctions(self, _ordered):
+        return []
+
+
+class _FakeTaintProgram:
+    def getFunctionManager(self):
+        return _FakeEmptyFM()
+
+
+def _install_fake_ghidra_taint(monkeypatch, deci):
+    """Fake the java/ghidra modules taint_core imports (DecompInterface, PcodeOp opcodes, System) so
+    the Ghidra-only taint core runs offline with no candidates."""
+    import sys
+    import types
+
+    for name in ("ghidra", "ghidra.app", "ghidra.app.decompiler", "ghidra.program",
+                 "ghidra.program.model", "ghidra.program.model.pcode", "java", "java.lang"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    sys.modules["ghidra.app.decompiler"].DecompInterface = lambda: deci
+    pcode = type("PcodeOp", (), {op: i + 1 for i, op in enumerate(_PCODE_OPS)})
+    sys.modules["ghidra.program.model.pcode"].PcodeOp = pcode
+    sys.modules["java.lang"].System = type("System", (), {"identityHashCode": staticmethod(id)})
+
+
+def test_taint_core_disposes_the_decompiler(monkeypatch):
+    """taint_core reuses ONE DecompInterface across its whole run; it must dispose it (here with no
+    candidates, so the interface is opened then freed)."""
+    deci = _FakeDeci()
+    _install_fake_ghidra_taint(monkeypatch, deci)
+    out = L.taint_core(_FakeTaintProgram(), object(), None)
+    assert out["taint"]["analyzed"] == 0
+    assert deci.disposed == 1
+
+
+def test_taint_core_disposes_even_when_it_raises(monkeypatch):
+    """Regression for the finding: the taint dispose must be in a finally, so a failure inside the
+    try (raw Java in the candidate loop can raise) still frees the interface. Pre-fix the dispose was
+    a bare pre-return statement, skipped on the error path."""
+    def _boom():
+        raise RuntimeError("openProgram failed")
+
+    deci = _FakeDeci(on_open=_boom)
+    _install_fake_ghidra_taint(monkeypatch, deci)
+    with pytest.raises(RuntimeError):
+        L.taint_core(_FakeTaintProgram(), object(), None)
+    assert deci.disposed == 1  # freed via finally even though the try raised
 
 
 # ── client: _ManagedOps speaks the same protocol ───────────────────────────────────────
