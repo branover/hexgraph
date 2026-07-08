@@ -352,70 +352,81 @@ def _focus_facts(program, target, monitor) -> dict:
     from ghidra.app.decompiler import DecompInterface
 
     deci = DecompInterface()
-    deci.openProgram(program)
-    res = deci.decompileFunction(target, 60, monitor)
-    pseudo, hf, df = "", None, None
-    if res is not None and res.decompileCompleted():
-        df = res.getDecompiledFunction()
-        if df is not None:
-            pseudo = df.getC()
-        hf = res.getHighFunction()
+    try:
+        deci.openProgram(program)
+        res = deci.decompileFunction(target, 60, monitor)
+        pseudo, hf, df = "", None, None
+        if res is not None and res.decompileCompleted():
+            df = res.getDecompiledFunction()
+            if df is not None:
+                pseudo = df.getC()
+            hf = res.getHighFunction()
 
-    callees = []
-    with contextlib.suppress(Exception):
-        callees = [c.getName() for c in target.getCalledFunctions(monitor)]
-    addr = None
-    with contextlib.suppress(Exception):
-        addr = "0x" + target.getEntryPoint().toString()
-
-    prototype = None
-    with contextlib.suppress(Exception):
-        if df is not None:
-            prototype = df.getSignature()
-    if not prototype:
+        callees = []
         with contextlib.suppress(Exception):
-            prototype = target.getSignature().getPrototypeString()
-    calling_convention = None
-    with contextlib.suppress(Exception):
-        calling_convention = target.getCallingConventionName()
-
-    params, local_vars, from_hf = [], [], False
-    if hf is not None:
-        try:
-            proto = hf.getFunctionPrototype()
-            if proto is not None:
-                for i in range(proto.getNumParams()):
-                    ps = proto.getParam(i)
-                    params.append({"name": ps.getName(), "type": str(ps.getDataType())})
-            pnames = {p["name"] for p in params}
-            it = hf.getLocalSymbolMap().getSymbols()
-            while it.hasNext():
-                sym = it.next()
-                if not sym.isParameter() and sym.getName() not in pnames:
-                    local_vars.append({"name": sym.getName(), "type": str(sym.getDataType())})
-            from_hf = True
-        except Exception:
-            params, local_vars, from_hf = [], [], False
-    if not from_hf:
+            callees = [c.getName() for c in target.getCalledFunctions(monitor)]
+        addr = None
         with contextlib.suppress(Exception):
-            params = [{"name": p.getName(), "type": str(p.getDataType())}
-                      for p in target.getParameters()]
-        with contextlib.suppress(Exception):
-            pnames = {p["name"] for p in params}
-            local_vars = [{"name": v.getName(), "type": str(v.getDataType())}
-                          for v in target.getLocalVariables() if v.getName() not in pnames]
+            addr = "0x" + target.getEntryPoint().toString()
 
-    focus = {"name": target.getName(), "resolved": target.getName(), "address": addr,
-             "pseudocode": pseudo, "disasm": "", "callees": callees}
-    if prototype:
-        focus["prototype"] = prototype
-    if calling_convention:
-        focus["calling_convention"] = calling_convention
-    if params:
-        focus["params"], focus["param_count"] = params, len(params)
-    if local_vars:
-        focus["locals"], focus["local_count"] = local_vars, len(local_vars)
-    return focus
+        prototype = None
+        with contextlib.suppress(Exception):
+            if df is not None:
+                prototype = df.getSignature()
+        if not prototype:
+            with contextlib.suppress(Exception):
+                prototype = target.getSignature().getPrototypeString()
+        calling_convention = None
+        with contextlib.suppress(Exception):
+            calling_convention = target.getCallingConventionName()
+
+        params, local_vars, from_hf = [], [], False
+        if hf is not None:
+            try:
+                proto = hf.getFunctionPrototype()
+                if proto is not None:
+                    for i in range(proto.getNumParams()):
+                        ps = proto.getParam(i)
+                        params.append({"name": ps.getName(), "type": str(ps.getDataType())})
+                pnames = {p["name"] for p in params}
+                it = hf.getLocalSymbolMap().getSymbols()
+                while it.hasNext():
+                    sym = it.next()
+                    if not sym.isParameter() and sym.getName() not in pnames:
+                        local_vars.append({"name": sym.getName(), "type": str(sym.getDataType())})
+                from_hf = True
+            except Exception:
+                params, local_vars, from_hf = [], [], False
+        if not from_hf:
+            with contextlib.suppress(Exception):
+                params = [{"name": p.getName(), "type": str(p.getDataType())}
+                          for p in target.getParameters()]
+            with contextlib.suppress(Exception):
+                pnames = {p["name"] for p in params}
+                local_vars = [{"name": v.getName(), "type": str(v.getDataType())}
+                              for v in target.getLocalVariables() if v.getName() not in pnames]
+
+        focus = {"name": target.getName(), "resolved": target.getName(), "address": addr,
+                 "pseudocode": pseudo, "disasm": "", "callees": callees}
+        if prototype:
+            focus["prototype"] = prototype
+        if calling_convention:
+            focus["calling_convention"] = calling_convention
+        if params:
+            focus["params"], focus["param_count"] = params, len(params)
+        if local_vars:
+            focus["locals"], focus["local_count"] = local_vars, len(local_vars)
+        return focus
+    finally:
+        # A DecompInterface spawns a native `decompile` subprocess + its I/O threads. The RESIDENT
+        # bridge serves thousands of decompiles off ONE long-lived process, so leaking an interface
+        # per request exhausts threads (`pthread_create failed (EAGAIN)`) until every later decompile
+        # fails to start its subprocess and returns an EMPTY body (signature + callees, no pseudo-C).
+        # dispose() tears the subprocess down. (Headless never leaked — one process per call, so
+        # process exit reclaimed it; only the resident bridge accumulates.) The focus dict above is
+        # built entirely from extracted primitives, so disposing before the return is safe.
+        with contextlib.suppress(Exception):
+            deci.dispose()
 
 
 # --- Taint: grounded P-Code source->sink data-flow (ported from TAINT_SCRIPT) --------------
@@ -643,6 +654,11 @@ def taint_core(program, flat, monitor) -> dict:
         if len(flows) >= 200:
             break
 
+    # Dispose the decompiler subprocess (ONE interface, reused across every candidate here) before
+    # returning — the same native-process/thread leak that empties the resident bridge's decompiles
+    # if it accumulates, just one-per-taint-op rather than per-request. See _focus_facts.
+    with contextlib.suppress(Exception):
+        deci.dispose()
     return {"taint": {"flows": flows, "analyzed": len(candidates)}}
 
 
@@ -1160,8 +1176,16 @@ def bridge_dispatch(program, flat, monitor, req) -> dict:
         return {"error": f"bridge op {op} failed: {exc}", "tb": traceback.format_exc()}
 
 
-def _serve_one(conn, program, flat, monitor) -> None:
-    """Handle one connection: read one JSON request line, dispatch, write one JSON response line."""
+def _serve_one(conn, program, flat, make_monitor) -> None:
+    """Handle one connection: read one JSON request line, dispatch, write one JSON response line.
+
+    Mints a FRESH TaskMonitor for THIS request via `make_monitor()`. A resident bridge serves many
+    requests off ONE long-lived program, so the monitor must NEVER be shared across them: Ghidra's
+    `DecompInterface.decompileFunction(f, timeout, monitor)` CANCELS the monitor it is handed when
+    the per-function timeout elapses, and a `ConsoleTaskMonitor` stays cancelled once cancelled — so
+    a single slow function would poison EVERY later decompile into `decompileCompleted()==false`,
+    i.e. an empty body (signature + callees, no pseudo-C). A per-request monitor can't leak that
+    cancelled state between requests. (Headless never hit this — one process, one monitor, per call.)"""
     conn.settimeout(600)
     fh = conn.makefile("rwb")
     line = fh.readline()
@@ -1172,16 +1196,19 @@ def _serve_one(conn, program, flat, monitor) -> None:
     except (ValueError, UnicodeDecodeError):
         resp = {"error": "bad request json"}
     else:
-        resp = bridge_dispatch(program, flat, monitor, req)
+        resp = bridge_dispatch(program, flat, make_monitor(), req)
     fh.write((json.dumps(resp) + "\n").encode("utf-8"))
     fh.flush()
 
 
-def serve_bridge(host, port, program, flat, monitor) -> None:
+def serve_bridge(host, port, program, flat, make_monitor) -> None:
     """Block forever serving line-delimited JSON bridge requests over TCP against the RESIDENT
-    (program, flat, monitor). Single-threaded — Ghidra program access is NOT concurrency-safe, so
-    one connection + one request at a time (two host processes serialize). The caller binds AFTER
-    the project is open, so a host TCP-liveness probe only succeeds once the project can serve."""
+    (program, flat). Single-threaded — Ghidra program access is NOT concurrency-safe, so one
+    connection + one request at a time (two host processes serialize). The caller binds AFTER the
+    project is open, so a host TCP-liveness probe only succeeds once the project can serve.
+
+    `make_monitor` is a 0-arg factory (e.g. the `ConsoleTaskMonitor` class) invoked ONCE PER REQUEST
+    so no request can inherit a prior one's cancelled monitor — see `_serve_one` for why that matters."""
     import socket
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -1194,7 +1221,7 @@ def serve_bridge(host, port, program, flat, monitor) -> None:
         except OSError:
             continue
         try:
-            _serve_one(conn, program, flat, monitor)
+            _serve_one(conn, program, flat, make_monitor)
         except Exception:  # noqa: BLE001 — never let one connection kill the resident loop
             pass
         finally:

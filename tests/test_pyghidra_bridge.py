@@ -134,7 +134,7 @@ def test_serve_one_round_trips_over_a_socket():
     client, server = socket.socketpair()
     try:
         client.sendall(json.dumps({"op": "ping"}).encode() + b"\n")
-        L._serve_one(server, _FakeProgram(["a", "b"]), None, None)
+        L._serve_one(server, _FakeProgram(["a", "b"]), None, lambda: None)
         resp = json.loads(client.makefile("rb").readline())
         assert resp["functions_total"] == 2
     finally:
@@ -146,12 +146,153 @@ def test_serve_one_bad_json_is_a_structured_error():
     client, server = socket.socketpair()
     try:
         client.sendall(b"not json\n")
-        L._serve_one(server, _FakeProgram([]), None, None)
+        L._serve_one(server, _FakeProgram([]), None, lambda: None)
         resp = json.loads(client.makefile("rb").readline())
         assert resp["error"] == "bad request json"
     finally:
         client.close()
         server.close()
+
+
+def test_serve_one_mints_a_fresh_monitor_per_request(monkeypatch):
+    """Regression: the resident bridge must hand each request its OWN TaskMonitor.
+
+    Ghidra's DecompInterface.decompileFunction(f, timeout, monitor) cancels the monitor it's given
+    on a per-function timeout, and a ConsoleTaskMonitor stays cancelled — so one slow function under
+    a SHARED monitor poisoned every later decompile into an empty body. _serve_one must call the
+    make_monitor factory once per request and dispatch with that fresh instance, never a reused one."""
+    captured = []
+    monkeypatch.setattr(
+        L, "bridge_dispatch",
+        lambda program, flat, monitor, req: (captured.append(monitor) or {"ok": True}))
+    minted = []
+
+    def make_monitor():
+        m = object()
+        minted.append(m)
+        return m
+
+    for _ in range(3):
+        client, server = socket.socketpair()
+        try:
+            client.sendall(b'{"op": "ping"}\n')
+            L._serve_one(server, _FakeProgram([]), None, make_monitor)
+        finally:
+            client.close()
+            server.close()
+
+    assert len(minted) == 3               # a fresh monitor was minted for every request
+    assert captured == minted             # each request dispatched with its own freshly-minted monitor
+    assert len({id(m) for m in captured}) == 3  # …and never the same instance twice (no cross-request leak)
+
+
+# ── decompiler lifecycle: the resident bridge must DISPOSE each DecompInterface ─────────────
+# A DecompInterface spawns a native `decompile` subprocess + I/O threads; leaking one per request
+# on the long-lived bridge exhausts threads (pthread_create EAGAIN) until decompiles return empty
+# bodies. _focus_facts imports DecompInterface locally, so a fake ghidra module makes the
+# otherwise Ghidra-only path exercisable offline.
+
+class _FakeDf:
+    def getC(self):
+        return "int f(void) { return 0; }"
+
+    def getSignature(self):
+        return "int f(void)"
+
+
+class _FakeRes:
+    def decompileCompleted(self):
+        return True
+
+    def getDecompiledFunction(self):
+        return _FakeDf()
+
+    def getHighFunction(self):
+        return None
+
+
+class _FakeDeci:
+    def __init__(self, on_decompile=None):
+        self.opened = self.disposed = 0
+        self._on_decompile = on_decompile
+
+    def openProgram(self, program):
+        self.opened += 1
+
+    def decompileFunction(self, target, secs, monitor):
+        return self._on_decompile() if self._on_decompile is not None else _FakeRes()
+
+    def dispose(self):
+        self.disposed += 1
+
+
+class _FakeAddr:
+    def toString(self):
+        return "100000"
+
+
+class _FakeSig:
+    def getPrototypeString(self):
+        return "int f(void)"
+
+
+class _FakeTarget:
+    def __init__(self, name="f"):
+        self._name = name
+
+    def getName(self):
+        return self._name
+
+    def getCalledFunctions(self, monitor):
+        return []
+
+    def getEntryPoint(self):
+        return _FakeAddr()
+
+    def getSignature(self):
+        return _FakeSig()
+
+    def getCallingConventionName(self):
+        return "default"
+
+    def getParameters(self):
+        return []
+
+    def getLocalVariables(self):
+        return []
+
+
+def _install_fake_ghidra_decompiler(monkeypatch, deci):
+    """Route _focus_facts's local `from ghidra.app.decompiler import DecompInterface` to a fake
+    yielding `deci`, so the Ghidra-only decompile path runs offline."""
+    import sys
+    import types
+
+    for name in ("ghidra", "ghidra.app", "ghidra.app.decompiler"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    sys.modules["ghidra.app.decompiler"].DecompInterface = lambda: deci
+
+
+def test_focus_facts_disposes_the_decompiler(monkeypatch):
+    """Regression: every decompile must tear down its native decompiler subprocess, not leak it."""
+    deci = _FakeDeci()
+    _install_fake_ghidra_decompiler(monkeypatch, deci)
+    focus = L._focus_facts(object(), _FakeTarget("f"), None)
+    assert focus["pseudocode"] == "int f(void) { return 0; }"  # the body still comes back…
+    assert deci.disposed == 1                                   # …and the interface is disposed, not leaked
+
+
+def test_focus_facts_disposes_even_when_decompile_raises(monkeypatch):
+    """The dispose is in a finally, so a failing decompile (e.g. the subprocess can't start under
+    thread exhaustion) still frees the interface instead of leaking on the error path."""
+    def _boom():
+        raise RuntimeError("decompiler process could not start")
+
+    deci = _FakeDeci(on_decompile=_boom)
+    _install_fake_ghidra_decompiler(monkeypatch, deci)
+    with pytest.raises(RuntimeError):
+        L._focus_facts(object(), _FakeTarget("f"), None)
+    assert deci.disposed == 1  # freed via finally even when decompilation raised
 
 
 # ── client: _ManagedOps speaks the same protocol ───────────────────────────────────────
