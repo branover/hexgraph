@@ -40,7 +40,11 @@ def main() -> int:
             sys.stderr.write(f"ghidra_bridge_probe: project resident (cached={cached}); "
                              f"serving JSON RPC on 0.0.0.0:{PORT}\n")
             sys.stderr.flush()
-            L.serve_bridge("0.0.0.0", PORT, program, flat, ConsoleTaskMonitor())  # blocks forever
+            # Pass the CLASS (a per-request monitor factory), not an instance: serve_bridge mints a
+            # fresh ConsoleTaskMonitor per request so a decompile timeout — which cancels the monitor
+            # it's handed, permanently for a ConsoleTaskMonitor — can't poison later decompiles into
+            # empty bodies. See pyghidra_lib._serve_one.
+            L.serve_bridge("0.0.0.0", PORT, program, flat, ConsoleTaskMonitor)  # blocks forever
     except Exception as exc:  # noqa: BLE001
         sys.stderr.write(f"ghidra_bridge_probe: {exc}\n")
         return 4
