@@ -19,10 +19,11 @@ from hexgraph.engine.targets.ingest import create_project, ingest_file
 ELF = b"\x7fELF\x01\x01\x01" + b"a binary" + b"\x00" * 8
 
 
-def test_busy_timeout_is_generous():
+def test_busy_timeout_is_generous(hg_home):
     """The busy_timeout must comfortably exceed a normal slow-but-legitimate write hold
     (a Docker recon, a file copy) so a concurrent writer WAITS rather than crashing. 5s was
-    too short; regression-guard the generous value on an actual connection."""
+    too short; regression-guard the generous value on an actual connection. `hg_home` keeps
+    this hermetic — it reads the PRAGMA off the tmp-home engine, never the real ~/.hexgraph."""
     assert BUSY_TIMEOUT_MS >= 30_000
     with get_engine().connect() as conn:
         got = conn.exec_driver_sql("PRAGMA busy_timeout").scalar()

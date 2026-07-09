@@ -1,6 +1,6 @@
 """Write-path resilience under multi-agent fan-out.
 
-WAL + busy_timeout=5000 already live in db/session.py (they make a writer *wait*
+WAL + a busy_timeout already live in db/session.py (they make a writer *wait*
 for the lock). These tests cover the gaps this change closes:
 
   1. A bounded retry-with-backoff at the WRITE-UNIT boundary (`with_write_retry` /
