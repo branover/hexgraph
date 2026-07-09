@@ -171,7 +171,10 @@ class Target(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     project_id: Mapped[str] = mapped_column(ForeignKey("project.id"))
-    parent_id: Mapped[str | None] = mapped_column(ForeignKey("target.id"), nullable=True)
+    # Indexed: the primary "children of X" lookup (target-children pagination for the
+    # Targets sidebar tree, subtree BFS, dedup) filters on this — a real firmware can have
+    # 8000+ target rows, and this dimension is far more selective than project_id alone.
+    parent_id: Mapped[str | None] = mapped_column(ForeignKey("target.id"), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(300))
     path: Mapped[str] = mapped_column(Text)
     kind: Mapped[TargetKind] = mapped_column(Enum(TargetKind), default=TargetKind.unknown)
@@ -184,8 +187,11 @@ class Target(Base):
     archived: Mapped[bool] = mapped_column(default=False, index=True)
     # Curated-graph visibility: a hidden target is still recorded + searchable + addressable
     # (unpack registers every firmware ELF), but contributes NOTHING to the curated graph —
-    # the graph/Targets list/MCP target_list filter to visible=True by default, and recon on a
-    # hidden target ENRICHES it (metadata + an Observation) without materializing nodes or
+    # the GRAPH (build_graph) and MCP target_list filter to visible=True by default. The web
+    # UI's Targets SIDEBAR is deliberately NOT filtered by this — it shows everything actually
+    # extracted (lazily, via target-children pagination) so the graph can stay uncluttered
+    # without hiding what exists; the graph remains the one thing that's discriminating. Recon
+    # on a hidden target ENRICHES it (metadata + an Observation) without materializing nodes or
     # minting a finding. Revealing it (`set_visible`/`reveal_dir`) flips this True and
     # materializes its recon nodes from the already-stored facts. Default True so a lone
     # ingest, a promoted file, and every pre-existing target stay visible; only

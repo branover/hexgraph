@@ -48,6 +48,11 @@ export default function Workspace() {
   const [caps, setCaps] = useState<{ target?: Record<string, string[]>; node?: Record<string, string[]>; edge?: Record<string, string[]>; features?: { build?: boolean; build_fetch?: boolean; source_edit?: boolean; fuzzing?: boolean; poc?: boolean } }>({});
   const [selFinding, setSelFinding] = useState<Finding | null>(null);
   const [selNode, setSelNode] = useState<GraphNode | null>(null);
+  // The FULL TargetNode for a selected HIDDEN target (never in `detail.targets`, which is
+  // visible-only) — renderDetail() needs more than selNode's minimal GraphNode shape
+  // (arch/format/metadata/visible) to populate the inspector. Cleared on any non-hinted
+  // selection so a stale hint never leaks onto an unrelated node.
+  const [selTargetHint, setSelTargetHint] = useState<TargetNode | undefined>(undefined);
   const [selEdge, setSelEdge] = useState<any | null>(null);
   const [selGraphId, setSelGraphId] = useState<string>();
   // Legend isolate-by-type: a hovered chip previews (transient), a clicked chip pins.
@@ -139,9 +144,13 @@ export default function Workspace() {
   // that's discriminating). `expandedTargets` (which target rows are open) is separate from
   // `expandedDirs` (the synthetic FS-folder grouping above, which operates on already-fetched
   // children). `childrenCache[id]` is undefined until fetched, `[]` once fetched-but-empty.
+  // `childrenError` is a DISTINCT signal from "confirmed empty" — a fetch failure (network
+  // blip, transient DB lock) must render a retry affordance, not silently look like a target
+  // with zero children (which `child_count` might disagree with).
   const [expandedTargets, setExpandedTargets] = useState<Set<string>>(new Set());
   const [childrenCache, setChildrenCache] = useState<Record<string, TargetNode[]>>({});
   const [childrenLoading, setChildrenLoading] = useState<Set<string>>(new Set());
+  const [childrenError, setChildrenError] = useState<Set<string>>(new Set());
   // Apply a deep-linked ?lens=<name> exactly once on first load (the live applyLens is
   // defined below, so route through a ref the settings-load effect can call).
   const lensApplied = useRef(false);
@@ -205,6 +214,7 @@ export default function Workspace() {
     setExpandedTargets(new Set());
     setChildrenCache({});
     setChildrenLoading(new Set());
+    setChildrenError(new Set());
     setDetail(d); setTasks(tk);
     // Refresh the open detail with the reloaded data so triage (Accept/Dismiss,
     // status pills, annotations) re-renders instead of showing a stale finding —
@@ -255,10 +265,15 @@ export default function Workspace() {
     setExpandedTargets((prev) => new Set(prev).add(targetId));
     setChildrenCache((prev) => {
       if (prev[targetId] !== undefined) return prev;   // already fetched — nothing to do
+      setChildrenError((e) => (e.has(targetId) ? new Set([...e].filter((x) => x !== targetId)) : e));
       setChildrenLoading((l) => new Set(l).add(targetId));
       api.targetChildren(projectId, targetId, { includeHidden: true, limit: CHILDREN_PAGE_SIZE })
         .then((page) => setChildrenCache((c) => ({ ...c, [targetId]: page.items })))
-        .catch(() => setChildrenCache((c) => ({ ...c, [targetId]: [] })))
+        // Leave the cache entry unset (not `[]`) on failure — that stays a DISTINCT state
+        // from "confirmed zero children" and lets a retry (re-expanding this row) fetch
+        // again, instead of a network blip / transient DB lock permanently looking like a
+        // target with zero children (which `child_count` might disagree with anyway).
+        .catch(() => setChildrenError((e) => new Set(e).add(targetId)))
         .finally(() => setChildrenLoading((l) => { const x = new Set(l); x.delete(targetId); return x; }));
       return prev;
     });
@@ -571,6 +586,10 @@ export default function Workspace() {
   // would otherwise silently fail (id set, inspector left showing the stale prior selection).
   const onGraphSelect = async (id: string, type: string, targetHint?: TargetNode) => {
     setSelGraphId(id); setSelTask(undefined);
+    // Every branch below either sets a fresh hint (the `target` branch) or must clear a
+    // stale one from a PRIOR hidden-target selection — otherwise renderDetail's fallback
+    // would attach the wrong target's arch/format/metadata to this new selection.
+    setSelTargetHint(undefined);
     if (type === "finding") {
       const f = detail!.findings.find((x) => x.id === id);
       if (f) { setSelNode(null); setSelFinding(f); }
@@ -579,10 +598,16 @@ export default function Workspace() {
     const n = graph?.nodes.find((x) => x.id === id);
     if (n) { setSelFinding(null); setSelNode(n); return; }
     // A `target` ref not in the loaded graph: build a GraphNode from the loaded targets (or
-    // the caller-supplied hint for a target the graph/`detail.targets` doesn't carry at all).
+    // the caller-supplied hint for a target the graph/`detail.targets` doesn't carry at all —
+    // a HIDDEN target, by design never in either). Stash the full TargetNode too: renderDetail
+    // needs more than a GraphNode's minimal shape (arch/format/metadata/visible) to populate
+    // the inspector, and `detail.targets.find` there would miss the same way this one would.
     if (type === "target") {
       const t = targetHint || detail?.targets.find((x) => x.id === id);
-      if (t) { setSelFinding(null); setSelNode({ id: t.id, type: "target", label: t.name, kind: t.kind, parent_id: t.parent_id }); }
+      if (t) {
+        setSelFinding(null); setSelNode({ id: t.id, type: "target", label: t.name, kind: t.kind, parent_id: t.parent_id });
+        setSelTargetHint(t);
+      }
       return;
     }
     // A node (or hypothesis, which is a node_type='hypothesis' node) not in the loaded
@@ -844,11 +869,26 @@ export default function Workspace() {
     const expanded = expandedTargets.has(t.id);
     const kids = childrenCache[t.id];
     const loading = childrenLoading.has(t.id);
+    const failed = childrenError.has(t.id);
     const toggle = (e: React.MouseEvent) => {
       e.stopPropagation();
       if (expanded) collapseTarget(t.id); else expandTarget(t.id);
     };
     const row = TargetRow(t, depth, displayName, { expanded, loading, onToggle: toggle });
+    // A failed fetch is NOT "zero children" — show a retry row instead of silently
+    // collapsing to empty (a fetch error would otherwise look identical to a target that
+    // genuinely has none, even though child_count may say otherwise).
+    if (expanded && failed) {
+      return (
+        <div key={t.id}>
+          {row}
+          <div className="tree-row dir" style={{ marginLeft: (depth + 1) * 16, color: "var(--muted)" }}
+               onClick={(e) => { e.stopPropagation(); expandTarget(t.id); }}>
+            <div className="nm"><Icon name="refresh" size={13} /> failed to load — retry</div>
+          </div>
+        </div>
+      );
+    }
     if (!expanded || !kids || kids.length === 0) {
       return <div key={t.id}>{row}</div>;
     }
@@ -972,7 +1012,13 @@ export default function Workspace() {
     }
     if (selTask) return <TaskDetail taskId={selTask} onViewFinding={viewFinding} onRerun={pollThenReload} />;
     if (selNode) {
-      const tgt = selNode.type === "target" ? detail.targets.find((t) => t.id === selNode.id) : undefined;
+      // `detail.targets` is visible-only — a HIDDEN target selected from the lazy tree
+      // (or a search hit; search doesn't filter by visible either) misses here and falls
+      // back to the hint onGraphSelect stashed, so the inspector still populates instead of
+      // rendering near-empty (NodeInspector gates its whole target-info block on `tgt`).
+      const tgt = selNode.type === "target"
+        ? (detail.targets.find((t) => t.id === selNode.id) ?? (selTargetHint?.id === selNode.id ? selTargetHint : undefined))
+        : undefined;
       const owner = selNode.type === "node" ? detail.targets.find((t) => t.id === selNode.target_id) : undefined;
       const allowed = tgt
         ? targetCaps(tgt.kind)
