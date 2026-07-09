@@ -132,6 +132,16 @@ export default function Workspace() {
   // `dirDefaultsApplied`.
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
   const dirDefaultsApplied = useRef<Set<string>>(new Set());
+  // ── Targets tree: lazy per-target children (independent of the graph's own visible-only
+  // filtering — a firmware can unpack into thousands of HIDDEN children, so the tree fetches
+  // one target's direct children only when its row is expanded, via GET .../target-children
+  // (include_hidden=true — everything extracted is browsable here; the GRAPH stays the thing
+  // that's discriminating). `expandedTargets` (which target rows are open) is separate from
+  // `expandedDirs` (the synthetic FS-folder grouping above, which operates on already-fetched
+  // children). `childrenCache[id]` is undefined until fetched, `[]` once fetched-but-empty.
+  const [expandedTargets, setExpandedTargets] = useState<Set<string>>(new Set());
+  const [childrenCache, setChildrenCache] = useState<Record<string, TargetNode[]>>({});
+  const [childrenLoading, setChildrenLoading] = useState<Set<string>>(new Set());
   // Apply a deep-linked ?lens=<name> exactly once on first load (the live applyLens is
   // defined below, so route through a ref the settings-load effect can call).
   const lensApplied = useRef(false);
@@ -189,6 +199,12 @@ export default function Workspace() {
       setLoadedRooms(new Set());
       setGraph(g);
     }
+    // Same "refresh starts over" convention as loadedRooms above: a reload discards any
+    // fetched target-children pages rather than trying to reconcile them (a reveal/promote/
+    // archive elsewhere in the tree may have changed counts we'd otherwise show stale).
+    setExpandedTargets(new Set());
+    setChildrenCache({});
+    setChildrenLoading(new Set());
     setDetail(d); setTasks(tk);
     // Refresh the open detail with the reloaded data so triage (Accept/Dismiss,
     // status pills, annotations) re-renders instead of showing a stale finding —
@@ -227,6 +243,38 @@ export default function Workspace() {
       return new Set(prev).add(targetId);
     });
   }, [projectId]);
+
+  // ── Targets tree: fetch ONE target's direct children on demand (mirrors expandRoom's
+  // idempotent-via-checking-inside-the-setter idiom). include_hidden=true always — the tree's
+  // whole point is showing everything extracted, not just what's already in the graph.
+  // Only fetches the first page (500 children) today; a directory bigger than that shows a
+  // "N more" affordance rather than silently truncating (see FolderRow/TreeRow below).
+  const CHILDREN_PAGE_SIZE = 500;
+  const expandTarget = useCallback((targetId: string) => {
+    if (!projectId) return;
+    setExpandedTargets((prev) => new Set(prev).add(targetId));
+    setChildrenCache((prev) => {
+      if (prev[targetId] !== undefined) return prev;   // already fetched — nothing to do
+      setChildrenLoading((l) => new Set(l).add(targetId));
+      api.targetChildren(projectId, targetId, { includeHidden: true, limit: CHILDREN_PAGE_SIZE })
+        .then((page) => setChildrenCache((c) => ({ ...c, [targetId]: page.items })))
+        .catch(() => setChildrenCache((c) => ({ ...c, [targetId]: [] })))
+        .finally(() => setChildrenLoading((l) => { const x = new Set(l); x.delete(targetId); return x; }));
+      return prev;
+    });
+  }, [projectId]);
+  const collapseTarget = (targetId: string) => setExpandedTargets((prev) => {
+    const next = new Set(prev); next.delete(targetId); return next;
+  });
+  // Reveal a hidden target directly from the tree row (no need to open the inspector's
+  // separate Filesystem browser first) — same onChanged={load} full-refresh convention
+  // NodeInspector's own reveal path already uses (load() resets the tree's expand/cache
+  // state too, same as loadedRooms above; consistent, if not the most surgical UX).
+  const revealFromTree = async (t: TargetNode) => {
+    if (!projectId) return;
+    await api.setTargetVisible(projectId, t.id, true);
+    await load();
+  };
 
   // SURFACE target kinds (web_app/service/remote) have NO byte artifact, so byte 'recon'
   // is wrong for them — the server now advertises a surface-appropriate set (web_app →
@@ -517,7 +565,11 @@ export default function Workspace() {
   // isn't loaded, fall back to fetching it by id (api.getNode) so the inspector still
   // opens regardless of graph LOD. Async, but every caller is fire-and-forget setState,
   // so none relies on it resolving synchronously.
-  const onGraphSelect = async (id: string, type: string) => {
+  // `targetHint` lets a caller that already has the TargetNode in hand (the lazy Targets
+  // tree, whose HIDDEN rows are never in `detail.targets`/`graph.nodes` — a hidden target
+  // contributes nothing to the graph by design) select it without needing a lookup that
+  // would otherwise silently fail (id set, inspector left showing the stale prior selection).
+  const onGraphSelect = async (id: string, type: string, targetHint?: TargetNode) => {
     setSelGraphId(id); setSelTask(undefined);
     if (type === "finding") {
       const f = detail!.findings.find((x) => x.id === id);
@@ -526,9 +578,10 @@ export default function Workspace() {
     }
     const n = graph?.nodes.find((x) => x.id === id);
     if (n) { setSelFinding(null); setSelNode(n); return; }
-    // A `target` ref not in the loaded graph: build a GraphNode from the loaded targets.
+    // A `target` ref not in the loaded graph: build a GraphNode from the loaded targets (or
+    // the caller-supplied hint for a target the graph/`detail.targets` doesn't carry at all).
     if (type === "target") {
-      const t = detail?.targets.find((x) => x.id === id);
+      const t = targetHint || detail?.targets.find((x) => x.id === id);
       if (t) { setSelFinding(null); setSelNode({ id: t.id, type: "target", label: t.name, kind: t.kind, parent_id: t.parent_id }); }
       return;
     }
@@ -602,7 +655,6 @@ export default function Workspace() {
 
   const isMock = detail.project.backend === "mock";
   const roots = detail.targets.filter((t) => !t.parent_id);
-  const childrenOf = (id: string) => detail.targets.filter((t) => t.parent_id === id);
   // Only FILESYSTEM byte targets carry a meaningful rootfs path in their name. A dynamic
   // SURFACE child (web_app/service/remote) may have a slash in its label by coincidence
   // (e.g. "upnpd control (tcp/5000)") — never fold those into folders.
@@ -669,29 +721,70 @@ export default function Workspace() {
     const next = new Set(prev); next.has(key) ? next.delete(key) : next.add(key); return next;
   });
 
+  // Whether a target row should offer an expand chevron. Non-root targets came from the
+  // lazy target-children fetch (`t.child_count` is exact); ROOTS come from `detail.targets`
+  // (the eager project payload), which doesn't carry child_count — show the chevron
+  // optimistically for those and let expanding reveal the truth (an empty expand just shows
+  // nothing further, same as a folder with 0 matches).
+  const targetHasChildren = (t: TargetNode) => t.child_count === undefined || t.child_count > 0;
+
   // The bare leaf-target row (everything below the name). `displayName` is the FS leaf
   // ("telnetd") when grouped under a folder; `title` keeps the full path on hover. `depth`
   // sets indentation in units of the existing 16px `child` step, so a binary three folders
-  // deep still aligns with its folder. All existing per-target behavior is preserved.
-  const TargetRow = (t: TargetNode, depth: number, displayName?: string) => {
+  // deep still aligns with its folder. `expandCtl` wires the row's OWN expand chevron (a
+  // target's children are lazy-fetched now — see TreeRow); undefined for a folder-grouped
+  // FS leaf (those are already inside an expanded parent, and are ELF files, not containers).
+  const TargetRow = (t: TargetNode, depth: number, displayName?: string,
+                      expandCtl?: { expanded: boolean; loading: boolean; onToggle: (e: React.MouseEvent) => void }) => {
     const allowed = targetCaps(t.kind);
     const fc = findingCounts[t.id];
+    const hidden = t.visible === false;
     return (
-      <div className={"tree-row" + (depth > 0 ? " child" : "") + (selGraphId === t.id ? " sel" : "") + (scope === t.id ? " scoped" : "")}
+      <div className={"tree-row" + (depth > 0 ? " child" : "") + (selGraphId === t.id ? " sel" : "")
+                      + (scope === t.id ? " scoped" : "") + (hidden ? " hidden-target" : "")}
            style={depth > 1 ? { marginLeft: depth * 16 } : undefined}
-           title={displayName && displayName !== t.name ? t.name : undefined}
-           onClick={() => { onGraphSelect(t.id, "target"); if (view !== "source" && view !== "matrix") scopeToTarget(t.id); }}>
+           title={[displayName && displayName !== t.name ? t.name : null,
+                  hidden ? "extracted but not revealed into the curated graph" : null]
+                  .filter(Boolean).join(" — ") || undefined}
+           onClick={() => {
+             onGraphSelect(t.id, "target", t);
+             // A hidden target has no graph presence yet — nothing to scope the graph to.
+             if (!hidden && view !== "source" && view !== "matrix") scopeToTarget(t.id);
+           }}>
         <div className="nm">
+          {expandCtl && targetHasChildren(t) && (
+            <span className="dir-chev" style={{ transform: expandCtl.expanded ? "none" : "rotate(-90deg)", display: "inline-flex" }}
+                  onClick={expandCtl.onToggle}>
+              <Icon name="chevron" size={13} />
+            </span>
+          )}
           <Icon name={NODE_ICON[t.kind] || "binary"} size={15} /> {displayName || t.name}
           {fc && <span className={"tbadge" + (fc.hot ? " hot" : "")} style={{ marginLeft: "auto" }}>{fc.n}</span>}
         </div>
-        <div className="mt">{t.kind}{t.arch ? " · " + t.arch : ""}</div>
+        {/* "hidden" lives on the .mt subline (own row, small font) rather than inline next to
+            the name — at deep tree indentation a long name + a badge both competing for
+            space in the .nm flex row collided with the absolutely-positioned row-actions
+            that appear on hover. Dimmed opacity (.hidden-target) is the primary signal;
+            this + the row's title tooltip are the explicit ones. */}
+        <div className="mt">
+          {t.kind}{t.arch ? " · " + t.arch : ""}{hidden ? " · hidden" : ""}{expandCtl?.loading ? " · loading…" : ""}
+        </div>
         {/* Action cluster: Run (+ its in-menu Fuzz row) and Remove, in one aligned top-right
             row. The standalone fuzz button was removed — it duplicated the Launcher menu's
-            "Fuzz campaign…" row and the two absolutely-positioned controls collided (issue 7). */}
+            "Fuzz campaign…" row and the two absolutely-positioned controls collided (issue 7).
+            A HIDDEN target gets a Reveal action instead of Run (nothing to run/fuzz until
+            it's in the graph) — the sidebar's own path to "make this visible", not just the
+            inspector's separate Filesystem browser. */}
         <div className="row-actions" onClick={(e) => e.stopPropagation()}>
-          <Launcher allowed={allowed} onChoose={(type) => setLaunchFor({ target: t, type })}
-                    onFuzz={caps.features?.fuzzing && t.kind !== "firmware_image" ? () => setFuzzFor(t) : undefined} />
+          {hidden ? (
+            <button className="btn sm icon ghost" title="Reveal into the curated graph"
+                    onClick={() => revealFromTree(t)}>
+              <Icon name="eye" size={12} />
+            </button>
+          ) : (
+            <Launcher allowed={allowed} onChoose={(type) => setLaunchFor({ target: t, type })}
+                      onFuzz={caps.features?.fuzzing && t.kind !== "firmware_image" ? () => setFuzzFor(t) : undefined} />
+          )}
           <button className="btn sm icon ghost trash" title="Remove target (hides its nodes/findings)"
                   onClick={(e) => { e.stopPropagation(); removeTarget(t); }}>
             <Icon name="x" size={12} />
@@ -727,33 +820,54 @@ export default function Workspace() {
         {open && (
           <>
             {subdirs.map((s) => FolderRow(s, depth + 1, keyPrefix))}
-            {files.map((f) => TargetRow(f, depth + 1, leafName(f)))}
+            {/* A folder-grouped FS leaf can ITSELF be a container with its own children
+                (e.g. a nested .pkg promoted from inside this directory) — route through
+                TreeRow, not TargetRow directly, so it gets the same lazy expand chevron. */}
+            {files.map((f) => TreeRow(f, depth + 1, leafName(f)))}
           </>
         )}
       </div>
     );
   };
 
-  // A target row + its children. Firmware children with path-style names group into folders;
-  // everything else renders flat exactly as before.
-  const TreeRow = (t: TargetNode, depth: number): React.ReactNode => {
-    const kids = childrenOf(t.id);
-    const grouped = kids.length > 0 && hasDirNames(kids);
+  // A target row + its LAZILY-FETCHED children (fetched only once this row is expanded —
+  // see expandTarget). Firmware children with path-style names group into folders once
+  // fetched; everything else renders flat. `displayName` threads the FS-leaf label through
+  // when this target is itself a grouped folder leaf (called from FolderRow above).
+  //
+  // Trade-off, deliberate: nothing auto-expands, not even a small project's few targets —
+  // a real firmware can have thousands of (mostly hidden) direct children, and there's no
+  // cheap way to tell "few" from "thousands" before fetching. One extra click for the common
+  // small case buys never flooding the tree for the case that actually broke (a promoted
+  // container with 4000+ children rendered as 4000+ DOM rows).
+  const TreeRow = (t: TargetNode, depth: number, displayName?: string): React.ReactNode => {
+    const expanded = expandedTargets.has(t.id);
+    const kids = childrenCache[t.id];
+    const loading = childrenLoading.has(t.id);
+    const toggle = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (expanded) collapseTarget(t.id); else expandTarget(t.id);
+    };
+    const row = TargetRow(t, depth, displayName, { expanded, loading, onToggle: toggle });
+    if (!expanded || !kids || kids.length === 0) {
+      return <div key={t.id}>{row}</div>;
+    }
+    const grouped = hasDirNames(kids);
     if (grouped) {
       const tree = buildDirTree(kids);
       const subdirs = [...tree.subdirs].sort((a, b) => a.name.localeCompare(b.name));
       const files = [...tree.files].sort((a, b) => leafName(a).localeCompare(leafName(b)));
       return (
         <div key={t.id}>
-          {TargetRow(t, depth)}
+          {row}
           {subdirs.map((s) => FolderRow(s, depth + 1, t.id))}
-          {files.map((f) => TargetRow(f, depth + 1, leafName(f)))}
+          {files.map((f) => TreeRow(f, depth + 1, leafName(f)))}
         </div>
       );
     }
     return (
       <div key={t.id}>
-        {TargetRow(t, depth)}
+        {row}
         {kids.map((c) => TreeRow(c, depth + 1))}
       </div>
     );

@@ -176,6 +176,15 @@ code { font-family: var(--mono); }
 .tree-row .row-actions .run { opacity: .9; }
 .tree-row .trash { color: var(--muted); transition: color .12s; }
 .tree-row .trash:hover { color: #ff6b6b; }
+/* A target row's own expand chevron (unknown/nonzero child count — lazy target-children
+   fetch on click), reusing the folder chevron's look. */
+.tree-row .nm > .dir-chev { color: var(--muted); transition: transform .12s; margin-right: 1px; }
+/* Extracted but not revealed into the curated graph (target.visible=false) — dimmed, with
+   a "hidden" pill and a Reveal action in place of the usual Run menu. The GRAPH stays the
+   thing that's discriminating; this sidebar shows everything that actually exists. */
+.tree-row.hidden-target { opacity: .6; }
+.tree-row.hidden-target:hover, .tree-row.hidden-target.sel { opacity: .85; }
+.tbadge.muted { background: var(--surface-3); color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
 
 /* Phase 1: filesystem directory folders (pure-UI grouping of a firmware's path-named
    children). A folder is a single-line row — tighter than a target row, no .mt subline. */
