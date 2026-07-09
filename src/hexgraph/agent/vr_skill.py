@@ -87,6 +87,10 @@ skip ahead. If you were handed a PATH (e.g. "find vulns in the firmware at /path
   runs DETACHED in the background instead of blocking this call (`recon_status` in the
   response: "done" or "queued" — the child targets exist either way, their recon facts just
   land later for a large firmware; `target_facts` on one to check, or just come back to it).
+  If you were handed a DIRECTORY instead (an already-extracted/mounted filesystem — no packed
+  blob to unpack), use `target_ingest_dir(path, project_id=<id>)` instead: same idea, but it
+  walks the tree directly and eagerly registers every ELF as a hidden child, with the same
+  detach-above-threshold/`recon_status` behavior.
   `target_list(project_id)` shows the firmware
   plus the **revealed** children; `target_list(project_id, include_hidden=true)` (or `fs_list`,
   whose entries carry `added`/`revealed`) shows the full set. Pick the binaries worth analyzing

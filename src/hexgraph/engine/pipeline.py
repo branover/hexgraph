@@ -112,6 +112,27 @@ def _ensure_children_recon_detached(session: Session, project: Project, target: 
     return "queued"
 
 
+def recon_children(session: Session, project: Project, anchor: Target, children: list[Target],
+                    runner: Executor) -> str:
+    """Recon `children` — inline sequentially if there are few, ONE detached batch task
+    (see `_ensure_children_recon_detached`) if there are more than
+    `CHILD_RECON_DETACH_THRESHOLD`. Progress/detach state is recorded against `anchor`
+    (the firmware/directory root the children belong to). Shared by `analyze_target`'s
+    firmware-unpack path and `ingest_directory_and_analyze`'s directory-import path — both
+    eagerly register the same kind of child (a hidden ELF target) and need the same
+    "don't block on thousands of sequential sandbox runs" handling.
+
+    Returns "done", "queued", or "failed" (the detach itself couldn't start)."""
+    total = len(children)
+    if total > CHILD_RECON_DETACH_THRESHOLD:
+        return _ensure_children_recon_detached(session, project, anchor, children)
+    for i, child in enumerate(children, start=1):
+        _record_progress(session, anchor, "recon_children", done=i - 1, total=total)
+        child_facts = run_recon(session, project, child, runner)
+        _maybe_enrich_ghidra(session, project, child, child_facts)
+    return "done"
+
+
 def analyze_target(
     session: Session,
     project: Project,
@@ -125,10 +146,10 @@ def analyze_target(
     (F05). The signal is advisory — a poller watches `metadata_json["ingest_progress"]`.
 
     Above `CHILD_RECON_DETACH_THRESHOLD` children, per-child recon runs DETACHED (see
-    `_ensure_children_recon_detached`) instead of inline. `summary["recon_status"]` is
-    "done" (small — recon already ran, exactly like before), "queued" (large — child TARGET
-    ROWS exist and are already in `summary["children"]`, but their recon facts land later —
-    poll via `target_facts`/re-ingesting), or "failed" (the detach itself couldn't start)."""
+    `recon_children`) instead of inline. `summary["recon_status"]` is "done" (small —
+    recon already ran, exactly like before), "queued" (large — child TARGET ROWS exist
+    and are already in `summary["children"]`, but their recon facts land later — poll via
+    `target_facts`/re-ingesting), or "failed" (the detach itself couldn't start)."""
     _record_progress(session, target, "recon")
     facts = run_recon(session, project, target, runner)
     summary = {"target_id": target.id, "name": target.name, "children": [], "recon_status": "done"}
@@ -149,18 +170,11 @@ def analyze_target(
         # Materialize the child list first so we can report "recon i/N children" with a known N.
         children = list(unpack_firmware(session, project, target, runner))
         total = len(children)
-        if total > CHILD_RECON_DETACH_THRESHOLD:
-            summary["children"] = [{"target_id": c.id, "name": c.name} for c in children]
-            summary["recon_status"] = _ensure_children_recon_detached(session, project, target, children)
-        else:
-            for i, child in enumerate(children, start=1):
-                _record_progress(session, target, "recon_children", done=i - 1, total=total)
-                # Children are registered HIDDEN by unpack_firmware: recon ENRICHES each
-                # (metadata + a recon Observation) but materializes no graph nodes — a
-                # hidden child contributes nothing to the graph until revealed.
-                child_facts = run_recon(session, project, child, runner)
-                _maybe_enrich_ghidra(session, project, child, child_facts)
-                summary["children"].append({"target_id": child.id, "name": child.name})
+        summary["children"] = [{"target_id": c.id, "name": c.name} for c in children]
+        # Children are registered HIDDEN by unpack_firmware: recon ENRICHES each (metadata +
+        # a recon Observation) but materializes no graph nodes — a hidden child contributes
+        # nothing to the graph until revealed.
+        summary["recon_status"] = recon_children(session, project, target, children, runner)
         # F07: flag packed containers the unpack left in the tree (a large vendor firmware image leaves
         # the real web UI/SSH/SNMP runtime in nested .pkg/squashfs that aren't auto-recursed).
         # Without this, "N children unpacked" reads as "fully unpacked" and a researcher hunts the
@@ -215,4 +229,37 @@ def ingest_and_analyze(
     links = build_links_against(session, project)
     summary["links_against_edges"] = links
     summary["root_target_id"] = root.id
+    return summary
+
+
+def ingest_directory_and_analyze(
+    session: Session,
+    project: Project,
+    src_dir: str | Path,
+    *,
+    name: str | None = None,
+    runner: Executor | None = None,
+) -> dict:
+    """The directory-import counterpart to `ingest_and_analyze`: no packed blob to recon
+    at the root (`ingest_directory` walks + copies the tree directly, eagerly registering
+    ELF children), so this skips straight to reconning those children — same
+    threshold/detach handling as a large firmware's unpacked children (`recon_children`).
+    Returns the SAME summary shape as `ingest_and_analyze` (target_id/name/children/
+    children_count/recon_status/root_target_id/links_against_edges), so every existing
+    consumer (CLI/MCP/API) handles either with no branching of its own."""
+    from hexgraph.engine.targets.dirimport import ingest_directory
+
+    runner = runner or get_executor()
+    root, children = ingest_directory(session, project, src_dir, name=name)
+    summary = {
+        "target_id": root.id, "name": root.name, "format": "directory",
+        "children": [{"target_id": c.id, "name": c.name} for c in children],
+    }
+    summary["recon_status"] = recon_children(session, project, root, children, runner)
+    summary["children_count"] = len(summary["children"])
+    links = build_links_against(session, project)
+    summary["links_against_edges"] = links
+    summary["root_target_id"] = root.id
+    final_stage = "recon_children_queued" if summary["recon_status"] == "queued" else "done"
+    _record_progress(session, root, final_stage, children=summary["children_count"])
     return summary

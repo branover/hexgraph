@@ -38,11 +38,14 @@ def _cmd_db_upgrade(args: argparse.Namespace) -> int:
 
 
 def _cmd_ingest(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
     from hexgraph.engine.targets.ingest import create_project
-    from hexgraph.engine.pipeline import ingest_and_analyze
+    from hexgraph.engine.pipeline import ingest_and_analyze, ingest_directory_and_analyze
     from hexgraph.sandbox.runner import SandboxRunner, docker_available
 
     init_db()
+    is_dir = Path(args.path).expanduser().is_dir()
     if not args.no_recon and not docker_available():
         print(
             "error: Docker is required for the recon sandbox. Start Docker, or pass "
@@ -60,12 +63,20 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
         else:
             project = create_project(
                 session,
-                name=args.name or args.path.split("/")[-1],
+                name=args.name or args.path.rstrip("/").split("/")[-1],
                 llm_backend=args.backend,
             )
         project_id = project.id
 
         if args.no_recon:
+            if is_dir:
+                from hexgraph.engine.targets.dirimport import ingest_directory
+
+                target, children = ingest_directory(session, project, args.path, name=args.name)
+                print(f"project {project_id}")
+                print(f"target  {target.id}  {target.name}  "
+                      f"({len(children)} child target(s) registered, recon skipped)")
+                return 0
             from hexgraph.engine.targets.ingest import ingest_file
 
             target = ingest_file(session, project, args.path, name=args.name)
@@ -73,9 +84,14 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
             print(f"target  {target.id}  {target.name}  (recon skipped)")
             return 0
 
-        summary = ingest_and_analyze(
-            session, project, args.path, name=args.name, runner=SandboxRunner()
-        )
+        if is_dir:
+            summary = ingest_directory_and_analyze(
+                session, project, args.path, name=args.name, runner=SandboxRunner()
+            )
+        else:
+            summary = ingest_and_analyze(
+                session, project, args.path, name=args.name, runner=SandboxRunner()
+            )
         print(f"project {project_id}")
         print(f"target  {summary['root_target_id']}  {summary['name']}")
         for child in summary["children"]:
@@ -456,8 +472,10 @@ def build_parser() -> argparse.ArgumentParser:
     pup.add_argument("--no-backup", action="store_true", help="skip the pre-upgrade backup")
     pup.set_defaults(func=_cmd_db_upgrade)
 
-    pi = sub.add_parser("ingest", help="ingest a binary/firmware as a target")
-    pi.add_argument("path")
+    pi = sub.add_parser("ingest", help="ingest a binary/firmware, or a directory of an "
+                                        "already-extracted/mounted filesystem, as a target")
+    pi.add_argument("path", help="a binary/firmware file, or a directory (an already-"
+                                  "extracted/mounted filesystem tree)")
     pi.add_argument("--name")
     pi.add_argument("--project", help="add to an existing project instead of creating one")
     pi.add_argument("--backend", default="mock", choices=["mock", "anthropic", "claude_code"])
