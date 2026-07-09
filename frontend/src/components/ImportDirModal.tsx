@@ -51,9 +51,10 @@ export default function ImportDirModal({ projectId, onClose, onDone }: {
           <label>name (optional)</label>
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="defaults from the path" />
         </div>
-        <label className="switch" style={{ fontSize: 12, display: "flex", gap: 8, alignItems: "center", marginTop: 4 }}>
+        <label className="switch" style={{ gap: 8, alignItems: "center", marginTop: 4 }}>
           <input type="checkbox" checked={recon} onChange={(e) => setRecon(e.target.checked)} />
-          <span>Recon each ELF found (needs Docker) — off registers the tree without analysis</span>
+          <span>Run recon on each ELF binary found (needs Docker). Leave this off to register
+            the files only, without recon.</span>
         </label>
         <div className="foot">
           <button className="btn ghost" onClick={onClose}>Cancel</button>
