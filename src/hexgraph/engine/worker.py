@@ -70,6 +70,21 @@ def _dispatch(session: Session, project: Project, target: Target, task: Task) ->
         analyze_target(session, project, target, get_executor())
         build_links_against(session, project)
         return
+    if task.type == "ghidra_enrich":
+        from hexgraph.engine.re.ghidra import enrich_target
+
+        result = enrich_target(session, project, target)
+        if result.get("ok"):
+            # Mark done so _ensure_ghidra_enrichment (engine.targets.reveal) doesn't
+            # re-queue this target; a soft failure (ok=False, no exception) leaves it
+            # unmarked so a later reveal call retries instead of silently giving up.
+            meta = dict(target.metadata_json or {})
+            meta["ghidra_enriched"] = True
+            target.metadata_json = meta
+            from sqlalchemy.orm.attributes import flag_modified
+
+            flag_modified(target, "metadata_json")
+        return
     if task.type in LLM_TASK_TYPES:
         execute_llm_task(session, project, target, task)
         return

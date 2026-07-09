@@ -74,6 +74,12 @@ export default function FilesystemBrowser({ projectId, targetId, onChanged }: {
     try {
       const r = await api.revealDir(projectId, targetId, prefix);
       if (r.revealed === 0) alert("No hidden binaries to reveal under " + (prefix || "/"));
+      // Ghidra enrichment per binary (if enabled) runs in the background — a directory with
+      // many binaries would otherwise block this call for a long time (each is a cold headless
+      // Ghidra pass). The binaries are already revealed/searchable; enrichment just deepens them.
+      else if (r.enrichment_queued > 0)
+        alert(`Revealed ${r.revealed} binaries. Ghidra enrichment for ${r.enrichment_queued} of `
+          + `them is running in the background and may take a while.`);
       await load(); onChanged?.();
     } catch (e: any) { alert(String(e.message || e)); }
     finally { setBusy(""); }

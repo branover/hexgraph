@@ -294,9 +294,11 @@ export const api = {
   promoteFile: (pid: string, fwId: string, rel: string) => postJSON<any>(`/api/projects/${pid}/targets/${fwId}/promote-file`, { rel }),
   // Reveal/re-hide a target in the curated graph. Firmware ELF children are hidden by default
   // (unpack registers them all); revealing materializes the target's recon nodes from stored facts.
-  setTargetVisible: (pid: string, tid: string, visible: boolean) => postJSON<{ target_id: string; name: string; visible: boolean; materialized: boolean }>(`/api/projects/${pid}/targets/${tid}/visible`, { visible }),
+  setTargetVisible: (pid: string, tid: string, visible: boolean) => postJSON<{ target_id: string; name: string; visible: boolean; materialized: boolean; enrichment_queued: boolean }>(`/api/projects/${pid}/targets/${tid}/visible`, { visible }),
   // Bulk-reveal every hidden firmware child whose rootfs path is under `prefix` (e.g. "usr/sbin").
-  revealDir: (pid: string, fwId: string, prefix: string) => postJSON<{ firmware_target_id: string; prefix: string; revealed: number; target_ids: string[] }>(`/api/projects/${pid}/targets/${fwId}/reveal-dir`, { prefix }),
+  // `enrichment_queued` = how many revealed targets got a background Ghidra enrichment task
+  // (revealing/materializing itself is synchronous and fast; enrichment is not).
+  revealDir: (pid: string, fwId: string, prefix: string) => postJSON<{ firmware_target_id: string; prefix: string; revealed: number; target_ids: string[]; enrichment_queued: number }>(`/api/projects/${pid}/targets/${fwId}/reveal-dir`, { prefix }),
   // Target-level follow-up suggestions from enriched recon metadata (e.g. risky-sink → static-analyze).
   targetSuggestions: (tid: string) => getJSON<any[]>(`/api/targets/${tid}/suggestions`),
   // Source trees (Phase 1 — read-only IDE browse)

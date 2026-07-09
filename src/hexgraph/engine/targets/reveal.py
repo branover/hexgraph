@@ -45,47 +45,95 @@ def _recon_facts(session: Session, project: Project, target: Target) -> dict:
     return target.metadata_json or {}
 
 
-def _materialize_on_reveal(session: Session, project: Project, target: Target) -> None:
+def _materialize_on_reveal(session: Session, project: Project, target: Target) -> bool:
     """Bring a just-revealed target's enrichment into the curated graph: its recon
-    symbol/string nodes (from stored facts) plus the optional Ghidra enrichment that
-    was deferred while it was hidden. Idempotent (materialize_* dedups)."""
+    symbol/string nodes (from stored facts — fast, synchronous) plus the optional Ghidra
+    enrichment that was deferred while it was hidden — kicked off DETACHED (see
+    `_ensure_ghidra_enrichment`), not run inline. A cold headless Ghidra full-analysis can
+    take many minutes per binary; `reveal_dir` can reveal a dozen+ targets in one call, and
+    running that many sequentially inline turned a single MCP call into a multi-hour block —
+    the same class of bug `promote_file` had (see engine.targets.filesystem._ensure_analysis).
+    Idempotent (materialize_* dedups). Returns True if Ghidra enrichment was (newly) queued."""
     from hexgraph.engine.re.recon import materialize_recon_nodes
 
     facts = _recon_facts(session, project, target)
     materialize_recon_nodes(session, project.id, target, facts)
-    # Mirror analyze_target's optional Ghidra enrich pass (skipped while hidden).
+    if facts.get("kind") not in ("executable", "shared_library"):
+        return False
     try:
-        from hexgraph.engine.re.ghidra import enrich_enabled, enrich_target
-
-        if enrich_enabled() and (facts.get("kind") in ("executable", "shared_library")):
-            enrich_target(session, project, target)
+        return _ensure_ghidra_enrichment(session, project, target)
     except Exception:  # noqa: BLE001 — enrichment is an optional bonus pass
-        pass
+        return False
+
+
+def _ensure_ghidra_enrichment(session: Session, project: Project, target: Target) -> bool:
+    """Kick off `target`'s optional Ghidra enrichment (`engine.re.ghidra.enrich_target`) in a
+    DETACHED background OS process if it isn't already done or in flight — same pattern as
+    `engine.targets.filesystem._ensure_analysis`. Safe to call repeatedly: no-ops once
+    enriched (marked by the `ghidra_enrich` task on success) or while a `ghidra_enrich` Task
+    for this target is still queued/running, and self-heals a task that died before finishing
+    instead of leaving the target silently unenriched forever. Returns True if a task was
+    (newly) queued."""
+    from hexgraph.engine.re.ghidra import enrich_enabled
+
+    if not enrich_enabled():
+        return False
+    if (target.metadata_json or {}).get("ghidra_enriched"):
+        return False
+    from hexgraph.db.models import Task, TaskStatus
+
+    already_running = (
+        session.query(Task)
+        .filter(Task.target_id == target.id, Task.type == "ghidra_enrich",
+                Task.status.in_((TaskStatus.queued, TaskStatus.running)))
+        .first()
+    )
+    if already_running is not None:
+        return False
+
+    from hexgraph.engine.tasks import create_task
+    from hexgraph.engine.worker import spawn_detached_task
+    from sqlalchemy.orm.attributes import flag_modified
+
+    task = create_task(session, project=project, target_id=target.id, type="ghidra_enrich")
+    meta = dict(target.metadata_json or {})
+    meta["ghidra_enrich_task_id"] = task.id
+    target.metadata_json = meta
+    flag_modified(target, "metadata_json")
+    session.commit()
+    spawn_detached_task(task.id)
+    return True
 
 
 def set_visible(session: Session, project_id: str, target_id: str, visible: bool) -> dict:
     """Reveal (visible=True) or re-hide (visible=False) one target. Revealing
-    materializes its recon nodes from the already-stored facts (no re-run). Returns
-    {target_id, visible, materialized} (materialized = nodes were (re)materialized)."""
+    materializes its recon nodes from the already-stored facts (no re-run); optional Ghidra
+    enrichment runs detached (see `_materialize_on_reveal`). Returns {target_id, visible,
+    materialized} (materialized = nodes were (re)materialized)."""
     t = session.get(Target, target_id)
     if t is None or t.project_id != project_id:
         raise ValueError("target not found in project")
     was_visible = t.visible
     t.visible = visible
     materialized = False
+    enrichment_queued = False
     if visible and not was_visible:
         project = session.get(Project, project_id)
-        _materialize_on_reveal(session, project, t)
+        enrichment_queued = _materialize_on_reveal(session, project, t)
         materialized = True
     session.flush()
-    return {"target_id": t.id, "name": t.name, "visible": t.visible, "materialized": materialized}
+    return {"target_id": t.id, "name": t.name, "visible": t.visible, "materialized": materialized,
+            "enrichment_queued": enrichment_queued}
 
 
 def reveal_dir(session: Session, project_id: str, firmware_target_id: str, prefix: str) -> dict:
     """Reveal every HIDDEN child of a firmware whose rootfs-relative name (path) is
     under `prefix` (a directory prefix like "usr/sbin" or "/usr/sbin"). Materializes
-    each revealed child's recon nodes. Returns {firmware_target_id, prefix, revealed,
-    target_ids}. Already-visible children are left untouched."""
+    each revealed child's recon nodes (fast); optional Ghidra enrichment for each runs
+    DETACHED in the background rather than blocking this call — see `_materialize_on_reveal`.
+    Returns {firmware_target_id, prefix, revealed, target_ids, enrichment_queued}
+    (enrichment_queued = how many revealed targets got a background Ghidra enrichment task).
+    Already-visible children are left untouched."""
     fw = session.get(Target, firmware_target_id)
     if fw is None or fw.project_id != project_id:
         raise ValueError("firmware target not found in project")
@@ -115,12 +163,14 @@ def reveal_dir(session: Session, project_id: str, firmware_target_id: str, prefi
         .all()
     )
     revealed_ids: list[str] = []
+    enrichment_queued = 0
     for c in children:
         if c.visible:
             continue
         if c.id in ids_under_prefix or _under(c.name):   # any manifest path under prefix, or its own name
             c.visible = True
-            _materialize_on_reveal(session, project, c)
+            if _materialize_on_reveal(session, project, c):
+                enrichment_queued += 1
             revealed_ids.append(c.id)
     session.flush()
     return {
@@ -128,4 +178,5 @@ def reveal_dir(session: Session, project_id: str, firmware_target_id: str, prefi
         "prefix": prefix,
         "revealed": len(revealed_ids),
         "target_ids": revealed_ids,
+        "enrichment_queued": enrichment_queued,
     }
