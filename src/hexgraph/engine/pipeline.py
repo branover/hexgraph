@@ -53,8 +53,9 @@ def _record_progress(session: Session, target: Target, stage: str, **extra) -> N
 def _maybe_enrich_ghidra(session: Session, project: Project, target: Target, facts: dict) -> None:
     """Optionally fold Ghidra's function/call-graph/struct inventory into the graph
     (Settings → features.ghidra.enrich_recon). Best-effort: never breaks recon.
-    Skipped for HIDDEN targets — a hidden target adds nothing to the curated graph
-    until revealed (reveal runs this enrichment then)."""
+    Skipped for HIDDEN targets — a hidden target adds nothing to the curated graph until
+    revealed, and revealing no longer auto-enriches either (engine.targets.reveal requires
+    an explicit per-call `enrich=True`, not just the global setting)."""
     if not target.visible:
         return
     if facts.get("kind") not in _ENRICHABLE_KINDS:
