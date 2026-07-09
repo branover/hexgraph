@@ -286,7 +286,13 @@ def api_target_file(target_id: str, rel: str):
 
 @router.post("/api/projects/{project_id}/targets/{target_id}/promote-file")
 def api_promote_file(project_id: str, target_id: str, body: dict):
-    """Add a file from a firmware's unpacked filesystem as a child target."""
+    """Add a file from a firmware's unpacked filesystem as a child target. Returns as soon as
+    the child exists — analysis (recon; unpack + recon of every nested file for a container)
+    runs detached, so `analysis_status` reports queued/running/succeeded/failed rather than
+    the UI seeing what looks like an instant no-op on a large, deeply-nested package. Re-POST
+    the same body to poll."""
+    from hexgraph.db.models import Task
+
     with session_scope() as s:
         project = s.get(Project, project_id)
         fw = s.get(Target, target_id)
@@ -296,4 +302,9 @@ def api_promote_file(project_id: str, target_id: str, body: dict):
             child = promote_file(s, project, fw, body.get("rel", ""))
         except FilesystemError as exc:
             raise HTTPException(400, str(exc))
-        return {"target_id": child.id, "name": child.name, "kind": child.kind.value}
+        result = {"target_id": child.id, "name": child.name, "kind": child.kind.value}
+        task_id = (child.metadata_json or {}).get("analyze_task_id")
+        task = s.get(Task, task_id) if task_id else None
+        if task is not None:
+            result["analysis_status"] = task.status.value
+        return result

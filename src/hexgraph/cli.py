@@ -162,6 +162,18 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0 if status in ("succeeded", "needs_triage") else 1
 
 
+def _cmd_internal_run_task(args: argparse.Namespace) -> int:
+    """Hidden. Run one already-created Task to completion in THIS process, then exit — the
+    detached-execution primitive (`engine.worker.spawn_detached_task`) shells out to this so a
+    caller like `promote_file` can kick off minutes-to-hours of sandbox work without blocking
+    its own request. Not meant to be invoked directly by a human."""
+    from hexgraph.engine.worker import run_task_sync
+
+    init_db()
+    status = run_task_sync(args.task_id)
+    return 0 if status in ("succeeded", "needs_triage") else 1
+
+
 def _cmd_findings(args: argparse.Namespace) -> int:
     init_db()
     with session_scope() as session:
@@ -512,6 +524,10 @@ def build_parser() -> argparse.ArgumentParser:
     cs.add_argument("path")
     cs.add_argument("value")
     cs.set_defaults(func=_cmd_config)
+
+    pirt = sub.add_parser("internal-run-task", help=argparse.SUPPRESS)
+    pirt.add_argument("task_id")
+    pirt.set_defaults(func=_cmd_internal_run_task)
 
     ps = sub.add_parser("serve", help="start the loopback-only API/UI")
     ps.add_argument("--host", default=None)

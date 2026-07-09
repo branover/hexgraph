@@ -91,6 +91,107 @@ def test_promote_file(hg_home, monkeypatch):
         assert again.id == child.id
 
 
+def test_promote_file_detaches_analysis(hg_home, monkeypatch):
+    """A promote_file call that would trigger analysis returns fast with a queued Task
+    instead of blocking — and calling it again while that task is in flight must NOT spawn
+    a second one or redo the ingest. Real incident: two overlapping calls on the same rel,
+    minutes apart, each ran a full ~4000-child duplicate unpack because the old code only
+    marked the manifest idempotent AFTER the (very long) analysis finished."""
+    monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
+    spawned = []
+    monkeypatch.setattr("hexgraph.engine.worker.spawn_detached_task",
+                        lambda task_id: spawned.append(task_id) or 12345)
+    with session_scope() as s:
+        p, fw = _firmware_with_fs(s)
+        child = promote_file(s, p, fw, "usr/sbin/httpd")
+        assert len(spawned) == 1
+        task_id = child.metadata_json["analyze_task_id"]
+        assert task_id == spawned[0]
+
+        from hexgraph.db.models import Task, TaskStatus
+        task = s.get(Task, task_id)
+        assert task.type == "target_analyze" and task.status == TaskStatus.queued
+        assert task.target_id == child.id
+
+        # A second call (racing caller, or a naive retry after an impatient timeout) while
+        # analysis is still queued must return the SAME child and NOT spawn a second task.
+        again = promote_file(s, p, fw, "usr/sbin/httpd")
+        assert again.id == child.id
+        assert len(spawned) == 1
+
+
+def test_promote_file_self_heals_lost_task(hg_home, monkeypatch):
+    """If the process died (or the task otherwise ended) before analysis ever reached 'done',
+    calling promote_file again must notice and kick off a fresh analysis rather than silently
+    leaving the child permanently marked promoted-but-unanalyzed."""
+    monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
+    spawned = []
+    monkeypatch.setattr("hexgraph.engine.worker.spawn_detached_task",
+                        lambda task_id: spawned.append(task_id) or 1)
+    with session_scope() as s:
+        p, fw = _firmware_with_fs(s)
+        child = promote_file(s, p, fw, "usr/sbin/httpd")
+        assert len(spawned) == 1
+
+        from hexgraph.db.models import Task, TaskStatus
+        task = s.get(Task, spawned[0])
+        task.status = TaskStatus.failed
+        s.commit()
+
+        again = promote_file(s, p, fw, "usr/sbin/httpd")
+        assert again.id == child.id
+        assert len(spawned) == 2  # self-healed: a fresh analysis was kicked off
+
+
+def test_api_promote_file_reports_detached_analysis_status(hg_home, monkeypatch):
+    """The REST endpoint behind FilesystemBrowser.tsx must ALSO report analysis_status —
+    without it, promoting a large container looked like an instant no-op in the UI with no
+    indication analysis was still running in the background."""
+    from fastapi.testclient import TestClient
+    from hexgraph.api.app import create_app
+
+    monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
+    spawned = []
+    monkeypatch.setattr("hexgraph.engine.worker.spawn_detached_task",
+                        lambda task_id: spawned.append(task_id) or 1)
+    with session_scope() as s:
+        p, fw = _firmware_with_fs(s)
+        pid, fwid = p.id, fw.id
+
+    client = TestClient(create_app())
+    r = client.post(f"/api/projects/{pid}/targets/{fwid}/promote-file", json={"rel": "usr/sbin/httpd"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["analysis_status"] == "queued"
+    assert len(spawned) == 1
+
+
+def test_target_analyze_task_dispatches_to_analyze_target(hg_home, monkeypatch):
+    """The `target_analyze` task type — what promote_file's detached spawn runs via
+    `internal-run-task` — must route to analyze_target + build_links_against; this task
+    type exists only to run that pipeline off the request path."""
+    calls = []
+    monkeypatch.setattr(
+        "hexgraph.engine.pipeline.analyze_target",
+        lambda session, project, target, runner: calls.append(("analyze", target.id)) or {"children": []},
+    )
+    monkeypatch.setattr(
+        "hexgraph.engine.targets.unpack.build_links_against",
+        lambda session, project: calls.append(("links", project.id)),
+    )
+    from hexgraph.engine.tasks import create_task
+    from hexgraph.engine.worker import run_task_sync
+
+    with session_scope() as s:
+        p, fw = _firmware_with_fs(s)
+        task = create_task(s, project=p, target_id=fw.id, type="target_analyze")
+        task_id, pid, fwid = task.id, p.id, fw.id
+
+    status = run_task_sync(task_id)
+    assert status == "succeeded"
+    assert calls == [("analyze", fwid), ("links", pid)]
+
+
 def test_list_filesystem_marks_hidden_child_unrevealed(hg_home):
     """An unpack-registered HIDDEN child reads as added but NOT revealed, so the UI
     can offer a 'Reveal' affordance instead of just 'added'."""

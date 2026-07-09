@@ -422,7 +422,11 @@ where the secrets are before you decompile a thing.
   `target_set_visible`/`target_reveal_dir` for the ELF children that already exist hidden, and
   `target_promote_file` for anything not already a target. Either way it's the bridge from "I see
   an interesting file in the rootfs" to analyzing it — and a natural seam for handing that child
-  to a parallel sub-agent.
+  to a parallel sub-agent. It returns as soon as the child exists, NOT once analysis finishes —
+  promoting a large, deeply-nested container (a signed vendor `.pkg`) can be thousands of
+  sequential sandbox runs, minutes to hours. Don't re-call it in a tight loop expecting instant
+  completion; call it again with the same args occasionally to check `analysis_status`, and do
+  other work (a different target, reading already-unpacked files) while it runs.
 
 ## The firmware network map
 Model network/IPC endpoints as **socket nodes** (`graph_create_socket(kind, port|name)`) and

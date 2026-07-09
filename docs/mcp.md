@@ -79,7 +79,11 @@ agent's context small:
   its own target), `task_run`, `finding_verify_poc`, `fuzz_verify_artifact`,
   `fuzz_start`/`fuzz_resume`, `src_build`, and more. `target_ingest` returns a bounded summary
   (the child count plus a preview of the first ~20 children, since firmware can unpack into
-  hundreds); call `target_list(project_id)` for the full target tree.
+  hundreds); call `target_list(project_id)` for the full target tree. `target_promote_file`
+  returns as soon as the child target exists — analysis runs detached, since promoting a large,
+  deeply-nested container can mean thousands of sequential sandbox runs; call it again with the
+  same arguments to poll `analysis_status` (queued/running/succeeded/failed) rather than assuming
+  a quick return means nothing is happening.
 
 **Firmware children are hidden by default.** A real firmware unpacks into hundreds of ELFs, so
 unpack registers each as a child target but keeps it **hidden** — it's recorded, searchable, and
