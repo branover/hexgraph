@@ -73,14 +73,26 @@ def db_url() -> str:
     return f"sqlite:///{_resolve_db_path()}"
 
 
+BUSY_TIMEOUT_MS = 30_000  # how long a writer waits for the lock before "database is locked"
+
+
 def _apply_sqlite_pragmas(dbapi_conn, _record) -> None:
     """WAL + a busy timeout so the web app and a coding agent's MCP server (separate
     processes) can read/write the same SQLite file concurrently without
     'database is locked'. WAL allows many readers alongside one writer; the busy
-    timeout makes a writer wait briefly instead of failing immediately."""
+    timeout makes a writer wait instead of failing immediately.
+
+    The timeout is deliberately generous (30s, was 5s): a HexGraph writer can legitimately
+    hold the single SQLite write lock for many seconds — a recon/analysis task runs a Docker
+    sandbox, a directory/firmware ingest copies files — so a concurrent writer (the web app
+    while a CLI ingest runs, two ingests, a detached recon task) must be willing to WAIT out
+    a slow-but-normal holder rather than crash at 5s. The real fix for long holds is to not
+    hold the lock across the slow work at all (recon commits its task row before the Docker
+    probe; ingest commits before recon) — this bigger ceiling is the safety net for whatever
+    hold still slips through, so a brief overlap waits instead of failing."""
     cur = dbapi_conn.cursor()
     cur.execute("PRAGMA journal_mode=WAL")
-    cur.execute("PRAGMA busy_timeout=5000")
+    cur.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
     cur.execute("PRAGMA synchronous=NORMAL")
     # NB: foreign_keys is intentionally left OFF — edges/annotations reference
     # entities polymorphically by string id (not FKs), and merge/cascade logic
@@ -95,7 +107,7 @@ def get_engine() -> Engine:
         path.parent.mkdir(parents=True, exist_ok=True)
         _engine = create_engine(
             f"sqlite:///{path}", future=True,
-            connect_args={"check_same_thread": False, "timeout": 5},
+            connect_args={"check_same_thread": False, "timeout": BUSY_TIMEOUT_MS / 1000},
         )
         event.listen(_engine, "connect", _apply_sqlite_pragmas)
         _Session = sessionmaker(bind=_engine, future=True, expire_on_commit=False)

@@ -153,5 +153,10 @@ def ingest_directory(
         children.append(child)
 
     record_manifest(target, method="directory_import", root_rel="", files=files)
-    session.flush()
+    # COMMIT the registered tree (root + children + manifest) before returning to the caller's
+    # recon phase. Like the pre-walk commit above, this bounds how long this ingest holds the
+    # single SQLite write lock: without it the whole registration transaction stays open into
+    # recon_children, so a concurrent writer (the web app, another ingest) waits on this ingest
+    # for the entire recon run. Committing here releases the lock the moment registration is done.
+    session.commit()
     return target, children

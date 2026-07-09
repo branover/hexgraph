@@ -105,8 +105,8 @@ def record_observation(
     enrichment (both are derived from the real bytes and stand on their own) — so a later
     failure can no longer wipe them. The checkpoint is a plain `session.commit()` (see
     `_checkpoint` for why it is deliberately NOT wrapped in the commit-level write-retry);
-    `busy_timeout` (5s) is the transient-lock resilience that IS safe here — it makes the
-    commit's flush WAIT for the lock rather than fail immediately.
+    `busy_timeout` (db.session pragmas) is the transient-lock resilience that IS safe here —
+    it makes the commit's flush WAIT for the lock rather than fail immediately.
 
     Why commit the CALLER's session rather than a separate one: SQLite is single-writer.
     The task session holds the write lock continuously once it has flushed any pending
@@ -188,7 +188,7 @@ def _checkpoint(session: Session) -> None:
     Observation while reporting success (the same reason `session_scope` documents that a
     commit lock can't be retried in place — the unit must be rebuilt from scratch, which a
     bare re-commit can't do). The transient-lock resilience that IS safe lives one layer
-    down: `busy_timeout` (5s, db.session pragmas) makes the commit's flush WAIT for the
+    down: `busy_timeout` (db.session pragmas) makes the commit's flush WAIT for the
     lock rather than fail immediately, which absorbs ordinary cross-process contention (a
     web-app task vs an MCP server). If the timeout still elapses the lock error propagates
     and the task fails as it would today — but every Observation an EARLIER checkpoint
