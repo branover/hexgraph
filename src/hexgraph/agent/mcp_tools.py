@@ -1548,8 +1548,10 @@ def set_visible(project_id: str, target_id: str, visible: bool = True) -> dict:
     Firmware ELF children are HIDDEN by default (unpack registers each so it's searchable
     and addressable, but a 765-ELF firmware would otherwise flood the graph/Targets pane);
     recon already enriched them. Revealing materializes the target's recon nodes from the
-    already-stored facts (no re-run) so it joins the graph. Returns
-    {target_id, name, visible, materialized}."""
+    already-stored facts (no re-run) so it joins the graph immediately; optional Ghidra
+    enrichment (if enabled) runs DETACHED in the background — `enrichment_queued` says
+    whether a task was kicked off (a cold headless Ghidra pass can take minutes; this call
+    does not wait for it). Returns {target_id, name, visible, materialized, enrichment_queued}."""
     from hexgraph.engine.targets.reveal import set_visible as _set
 
     with session_scope() as s:
@@ -1566,8 +1568,13 @@ def reveal_dir(project_id: str, target_id: str, prefix: str = "") -> dict:
     (e.g. prefix='usr/sbin' reveals all ELFs in /usr/sbin) — the bulk counterpart to
     target_set_visible for bringing a whole directory of binaries into the curated graph
     at once. An empty prefix reveals ALL hidden children. Materializes each revealed
-    child's recon nodes from stored facts (no re-run). `target_id` is the firmware.
-    Returns {firmware_target_id, prefix, revealed, target_ids}."""
+    child's recon nodes from stored facts (no re-run) — fast, even for a directory with many
+    binaries. Optional Ghidra enrichment per binary (if enabled) runs DETACHED in the
+    background rather than blocking this call (a cold headless Ghidra pass on a dozen+
+    binaries sequentially can take hours; this call returns as soon as they're revealed).
+    `target_id` is the firmware. Returns {firmware_target_id, prefix, revealed, target_ids,
+    enrichment_queued} (enrichment_queued = how many revealed targets got a background
+    enrichment task)."""
     # NB: the catalog advertises this arg as `target_id` (the firmware), and the MCP
     # server dispatches by KEYWORD (`fn(**arguments)`), so this param name MUST match
     # the catalog schema — otherwise every MCP call raises TypeError.

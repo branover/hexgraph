@@ -417,6 +417,10 @@ where the secrets are before you decompile a thing.
   `fs_list` entry that's `added` but not `revealed` already IS a target — reveal it (recon
   already enriched it; reveal materializes its nodes, no re-run) rather than re-promoting.
   Reveal the binaries worth analyzing, then decompile / `task_run` / fuzz them like any other.
+  If Ghidra enrichment is enabled, it runs DETACHED per revealed binary (`enrichment_queued`
+  in the response) — a directory can have a dozen-plus binaries, each a cold headless Ghidra
+  pass; don't expect it done by the time this call returns, and don't loop calling
+  `target_reveal_dir` back-to-back on overlapping prefixes waiting for it to "finish".
 - **target_promote_file(target_id, path)** — promote a NON-ELF file or one unpack didn't register
   (a CGI script, a helper) into its OWN child target (created visible), then analyze it. Use
   `target_set_visible`/`target_reveal_dir` for the ELF children that already exist hidden, and

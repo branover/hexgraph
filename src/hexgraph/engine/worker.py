@@ -70,6 +70,49 @@ def _dispatch(session: Session, project: Project, target: Target, task: Task) ->
         analyze_target(session, project, target, get_executor())
         build_links_against(session, project)
         return
+    if task.type == "ghidra_enrich":
+        from hexgraph.engine.re.ghidra import enrich_target
+
+        result = enrich_target(session, project, target)
+        if result.get("ok"):
+            # Mark done so _ensure_ghidra_enrichment (engine.targets.reveal) doesn't
+            # re-queue this target; a soft failure (ok=False, no exception) leaves it
+            # unmarked so a later reveal call retries instead of silently giving up.
+            meta = dict(target.metadata_json or {})
+            meta["ghidra_enriched"] = True
+            target.metadata_json = meta
+            from sqlalchemy.orm.attributes import flag_modified
+
+            flag_modified(target, "metadata_json")
+        return
+    if task.type == "ghidra_enrich_batch":
+        # reveal_dir's bulk path (engine.targets.reveal._ensure_batch_ghidra_enrichment):
+        # ONE detached process enriches MANY targets SEQUENTIALLY, not one process per
+        # target — a directory can have a dozen+ binaries, and a dozen+ CONCURRENT cold
+        # headless Ghidra containers would contend hard for host resources. `target` here is
+        # the anchor (the firmware passed to reveal_dir), not any one of the actual targets
+        # being enriched — those travel in params_json.
+        from hexgraph.engine.re.ghidra import enrich_target
+        from sqlalchemy.orm.attributes import flag_modified
+
+        for tid in (task.params_json or {}).get("target_ids", []):
+            tgt = session.get(Target, tid)
+            if tgt is None:
+                continue
+            try:
+                result = enrich_target(session, project, tgt)
+            except Exception:  # noqa: BLE001 — one bad target must not abort the rest
+                continue
+            if result.get("ok"):
+                meta = dict(tgt.metadata_json or {})
+                meta["ghidra_enriched"] = True
+                tgt.metadata_json = meta
+                flag_modified(tgt, "metadata_json")
+            # Checkpoint per-target: a killed/crashed batch (this can run for a long
+            # time — a dozen+ sequential cold Ghidra analyses) keeps whatever it already
+            # finished rather than losing all progress on the final commit.
+            session.commit()
+        return
     if task.type in LLM_TASK_TYPES:
         execute_llm_task(session, project, target, task)
         return
