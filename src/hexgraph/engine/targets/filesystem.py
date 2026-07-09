@@ -225,14 +225,18 @@ def _ensure_analysis(session: Session, project: Project, child: Target, runner=N
     if already_running is not None:
         return
 
+    # Commit the Task + the manifest's analyze_task_id marker BEFORE spawning — same ordering
+    # principle as _mark_promoted: once the detached process starts, it opens its OWN session
+    # and commits its own progress against `child.metadata_json`. Spawning first (with the
+    # marker write still pending here) risked this call's later commit clobbering progress the
+    # detached process had already written in that window.
     task = create_task(session, project=project, target_id=child.id, type="target_analyze")
-    session.commit()
-    spawn_detached_task(task.id)
     meta = dict(child.metadata_json or {})
     meta["analyze_task_id"] = task.id
     child.metadata_json = meta
     flag_modified(child, "metadata_json")
     session.commit()
+    spawn_detached_task(task.id)
 
 
 def promote_file(session: Session, project: Project, firmware: Target, rel: str, runner=None):

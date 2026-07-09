@@ -143,6 +143,29 @@ def test_promote_file_self_heals_lost_task(hg_home, monkeypatch):
         assert len(spawned) == 2  # self-healed: a fresh analysis was kicked off
 
 
+def test_api_promote_file_reports_detached_analysis_status(hg_home, monkeypatch):
+    """The REST endpoint behind FilesystemBrowser.tsx must ALSO report analysis_status —
+    without it, promoting a large container looked like an instant no-op in the UI with no
+    indication analysis was still running in the background."""
+    from fastapi.testclient import TestClient
+    from hexgraph.api.app import create_app
+
+    monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
+    spawned = []
+    monkeypatch.setattr("hexgraph.engine.worker.spawn_detached_task",
+                        lambda task_id: spawned.append(task_id) or 1)
+    with session_scope() as s:
+        p, fw = _firmware_with_fs(s)
+        pid, fwid = p.id, fw.id
+
+    client = TestClient(create_app())
+    r = client.post(f"/api/projects/{pid}/targets/{fwid}/promote-file", json={"rel": "usr/sbin/httpd"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["analysis_status"] == "queued"
+    assert len(spawned) == 1
+
+
 def test_target_analyze_task_dispatches_to_analyze_target(hg_home, monkeypatch):
     """The `target_analyze` task type — what promote_file's detached spawn runs via
     `internal-run-task` — must route to analyze_target + build_links_against; this task

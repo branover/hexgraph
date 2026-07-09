@@ -44,7 +44,17 @@ export default function FilesystemBrowser({ projectId, targetId, onChanged }: {
 
   const add = async (rel: string) => {
     setBusy(rel);
-    try { await api.promoteFile(projectId, targetId, rel); await load(); onChanged?.(); }
+    try {
+      const r = await api.promoteFile(projectId, targetId, rel);
+      // A container (.pkg/squashfs/cpio) analyzes in the background — thousands of nested
+      // files can take minutes to hours. Don't let a fast, empty-looking return read as a
+      // no-op; re-adding the same file later polls the same status.
+      if (r?.analysis_status === "queued" || r?.analysis_status === "running") {
+        alert("Analysis is running in the background (unpacking + reconning nested files can "
+          + "take a while for a large firmware package). Re-add this file later to check progress.");
+      }
+      await load(); onChanged?.();
+    }
     catch (e: any) { alert(String(e.message || e)); }
     finally { setBusy(""); }
   };
