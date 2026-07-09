@@ -162,9 +162,11 @@ def test_set_visible_detaches_ghidra_enrichment(hg_home, monkeypatch):
         assert len(spawned) == 1
 
 
-def test_reveal_dir_detaches_ghidra_enrichment_per_child(hg_home, monkeypatch):
-    """Multiple binaries revealed in one call must each get their OWN detached enrichment
-    task, and the call itself must return without waiting for any of them."""
+def test_reveal_dir_batches_ghidra_enrichment_into_one_task(hg_home, monkeypatch):
+    """Multiple binaries revealed in one call must NOT each get their own detached process —
+    a directory can have a dozen+ binaries, and that many CONCURRENT cold headless Ghidra
+    containers would contend hard for host resources. One `ghidra_enrich_batch` task covers
+    the whole batch; the call itself returns without waiting for any of it."""
     monkeypatch.setattr("hexgraph.engine.re.ghidra.enrich_enabled", lambda: True)
     spawned = []
     monkeypatch.setattr("hexgraph.engine.worker.spawn_detached_task",
@@ -176,13 +178,19 @@ def test_reveal_dir_detaches_ghidra_enrichment_per_child(hg_home, monkeypatch):
         a = _executable_child(s, p, name="usr/sbin/httpd", parent=fw)
         b = _executable_child(s, p, name="usr/sbin/telnetd", parent=fw)
         s.flush()
-        pid, fwid = p.id, fw.id
+        pid, fwid, aid, bid = p.id, fw.id, a.id, b.id
 
     with session_scope() as s:
         out = reveal_dir(s, pid, fwid, "usr/sbin")
         assert out["revealed"] == 2
         assert out["enrichment_queued"] == 2
-        assert len(spawned) == 2
+        assert len(spawned) == 1   # ONE batch task, not one per binary
+
+        from hexgraph.db.models import Task, TaskStatus
+        task = s.get(Task, spawned[0])
+        assert task.type == "ghidra_enrich_batch" and task.status == TaskStatus.queued
+        assert task.target_id == fwid
+        assert set(task.params_json["target_ids"]) == {aid, bid}
 
 
 def test_ghidra_enrichment_self_heals_after_lost_task(hg_home, monkeypatch):
@@ -236,6 +244,67 @@ def test_ghidra_enrich_task_dispatches_to_enrich_target(hg_home, monkeypatch):
     assert calls == [cid]
     with session_scope() as s:
         assert s.get(Target, cid).metadata_json.get("ghidra_enriched") is True
+
+
+def test_ghidra_enrich_batch_task_processes_all_targets_sequentially(hg_home, monkeypatch):
+    """The `ghidra_enrich_batch` task type — what reveal_dir's detached spawn runs — must
+    enrich every target in params_json.target_ids, marking each enriched independently, and
+    a failure on ONE target must not abort the rest of the batch."""
+    calls = []
+
+    def _fake_enrich(session, project, target):
+        calls.append(target.id)
+        if target.name == "bad":
+            raise RuntimeError("boom")
+        return {"ok": True, "recorded": True, "functions": 0, "calls": 0, "structs": 0}
+
+    monkeypatch.setattr("hexgraph.engine.re.ghidra.enrich_target", _fake_enrich)
+    from hexgraph.engine.tasks import create_task
+    from hexgraph.engine.worker import run_task_sync
+
+    with session_scope() as s:
+        p = create_project(s, name="dispatch-enrich-batch")
+        fw = ingest_file(s, p, fixture_path("synthetic_fw.bin"), name="fw")
+        fw.kind = TargetKind.firmware_image
+        a = _executable_child(s, p, name="usr/sbin/httpd", parent=fw, visible=True)
+        bad = ingest_file(s, p, fixture_path("vuln_httpd"), name="bad", parent=fw, visible=True)
+        c = _executable_child(s, p, name="usr/sbin/telnetd", parent=fw, visible=True)
+        s.flush()
+        task = create_task(s, project=p, target_id=fw.id, type="ghidra_enrich_batch",
+                           params={"target_ids": [a.id, bad.id, c.id]})
+        task_id, aid, badid, cid = task.id, a.id, bad.id, c.id
+
+    status = run_task_sync(task_id)
+    assert status == "succeeded"           # one bad target doesn't fail the whole batch
+    assert calls == [aid, badid, cid]      # processed in order, including past the failure
+    with session_scope() as s:
+        assert s.get(Target, aid).metadata_json.get("ghidra_enriched") is True
+        assert s.get(Target, badid).metadata_json.get("ghidra_enriched") is not True
+        assert s.get(Target, cid).metadata_json.get("ghidra_enriched") is True
+
+
+def test_ghidra_enrichment_marks_failed_task_on_spawn_error(hg_home, monkeypatch):
+    """If spawn_detached_task itself raises (e.g. fork/exec resource exhaustion), the Task
+    must end up terminal (failed), not stuck 'queued' forever — a permanently-queued task
+    would wrongly block every future reveal from ever retrying (the already_running check)."""
+    monkeypatch.setattr("hexgraph.engine.re.ghidra.enrich_enabled", lambda: True)
+
+    def _boom(task_id):
+        raise OSError("Resource temporarily unavailable")
+
+    monkeypatch.setattr("hexgraph.engine.worker.spawn_detached_task", _boom)
+    with session_scope() as s:
+        p = create_project(s, name="spawn-fails")
+        child = _executable_child(s, p)
+        cid, pid = child.id, p.id
+
+    with session_scope() as s:
+        out = set_visible(s, pid, cid, True)
+        assert out["enrichment_queued"] is False   # spawn failed — nothing actually queued
+
+        from hexgraph.db.models import Task, TaskStatus
+        task_id = s.get(Target, cid).metadata_json["ghidra_enrich_task_id"]
+        assert s.get(Task, task_id).status == TaskStatus.failed  # terminal, not stuck queued
 
 
 def test_set_visible_can_rehide(hg_home):
