@@ -63,6 +63,13 @@ def _dispatch(session: Session, project: Project, target: Target, task: Task) ->
 
         run_web_discover(session, project, target, task)
         return
+    if task.type == "target_analyze":
+        from hexgraph.engine.pipeline import analyze_target
+        from hexgraph.engine.targets.unpack import build_links_against
+
+        analyze_target(session, project, target, get_executor())
+        build_links_against(session, project)
+        return
     if task.type in LLM_TASK_TYPES:
         execute_llm_task(session, project, target, task)
         return
@@ -209,3 +216,30 @@ def get_worker() -> TaskWorker:
     if _worker is None:
         _worker = TaskWorker()
     return _worker
+
+
+def spawn_detached_task(task_id: str) -> int:
+    """Run `task_id` to completion in an INDEPENDENT OS process, decoupled from the caller's
+    own lifetime.
+
+    Some callers (e.g. `promote_file`) need to kick off work that can legitimately take minutes
+    to hours (thousands of sequential sandbox runs for a deeply-nested firmware package) without
+    blocking their own request/response cycle. Enqueueing onto `TaskWorker` isn't enough on its
+    own: that worker's event loop lives in the `hexgraph serve` process, which may not even be
+    running when the caller is an MCP tool invocation (`hexgraph mcp` is a separate, standalone
+    process — see CLAUDE.md's worktree/MCP notes). A background THREAD in the calling process
+    would have the same problem one level down: if that process exits (a client disconnect, a
+    crash, a restart), the thread dies with it and the work is lost mid-flight — exactly the
+    failure mode that produced a real incident (a promote_file call whose analysis silently died
+    partway through, leaving the manifest permanently marked "promoted" but never analyzed).
+    A detached OS process survives all of that; `run_task_sync` re-opens its own DB session and
+    the `task` row is the durable, pollable record of progress either way."""
+    import subprocess
+    import sys
+
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "hexgraph.cli", "internal-run-task", task_id],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return proc.pid

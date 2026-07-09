@@ -119,16 +119,23 @@ def promote_file(target_id: str, path: str) -> dict:
     target so you can analyze it directly (decompile/list_functions/run_task/fuzz) — the
     bridge from browsing the rootfs to analyzing a binary in it. `path` is relative to the
     extracted root (see list_filesystem; an entry's `is_elf` flags a binary worth promoting,
-    `added` means it's already a target). Real bytes → runs recon in the sandbox when Docker
-    is up. Idempotent per path (returns the existing child if already promoted). Use it when
-    list_filesystem surfaces an interesting binary (a CGI, a service daemon, a helper) that
-    unpack didn't already register.
+    `added` means it's already a target). Idempotent per path (returns the existing child if
+    already promoted). Use it when list_filesystem surfaces an interesting binary (a CGI, a
+    service daemon, a helper) that unpack didn't already register.
 
-    Promoting a CONTAINER (a .pkg/squashfs/cpio) extracts it and registers its inner binaries as
-    HIDDEN child targets — the result then carries `registered_children` + a note (hidden by
-    default; target_list(include_hidden=true) to see them, target_set_visible to analyze one) and
-    `packed_containers` for any still-nested containers to go deeper into.
-    Returns {id, name, kind, parent_id, arch, registered_children?, packed_containers?, note?}."""
+    Real bytes → analysis (recon; for a CONTAINER — .pkg/squashfs/cpio — unpack + recon of every
+    nested file) runs in the sandbox DETACHED when Docker is up: this call returns as soon as the
+    child target exists (seconds), NOT once analysis finishes — a large, deeply-nested firmware
+    package can be thousands of sequential per-file sandbox runs, legitimately minutes to hours.
+    `analysis_status` reports queued/running/succeeded/failed; while queued/running, inner
+    binaries are still being registered as HIDDEN child targets as they're found. Call
+    promote_file AGAIN with the same target_id/path to poll — it returns the same child and
+    current status without re-running analysis. Once succeeded, the result carries
+    `registered_children` (target_list(include_hidden=true) to see them, target_set_visible to
+    analyze one) and `packed_containers` for any still-nested containers to go deeper into.
+    Returns {id, name, kind, parent_id, arch, analysis_status?, registered_children?,
+    packed_containers?, note?}."""
+    from hexgraph.db.models import Task
     from hexgraph.engine.targets.filesystem import FilesystemError, promote_file as _add
 
     with session_scope() as s:
@@ -141,6 +148,23 @@ def promote_file(target_id: str, path: str) -> dict:
             return {"error": str(exc)}
         result = {"id": child.id, "name": child.name, "kind": child.kind.value,
                   "parent_id": target_id, "arch": (child.metadata_json or {}).get("arch")}
+
+        task_id = (child.metadata_json or {}).get("analyze_task_id")
+        task = s.get(Task, task_id) if task_id else None
+        if task is not None:
+            result["analysis_status"] = task.status.value
+            if task.status.value in ("queued", "running"):
+                result["note"] = ("analysis is running in the background (unpack + recon of "
+                    "every nested file, one sandbox run at a time — can take a while for a "
+                    "large, deeply nested firmware package). Call target_promote_file again "
+                    "with the same target_id/path to check progress.")
+                return result
+            if task.status.value == "failed":
+                result["note"] = "background analysis failed; the child target exists but is unanalyzed."
+                return result
+            # succeeded (or no task was needed, e.g. Docker unavailable) — fall through and
+            # report whatever the analysis materialized.
+
         # F09: a container-promote registers inner ELFs HIDDEN, so target_list (without
         # include_hidden) shows 0 and the promote looks like a no-op. Report what it registered.
         inner = s.query(Target).filter(Target.parent_id == child.id).all()

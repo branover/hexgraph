@@ -172,16 +172,82 @@ def read_file(project: Project, firmware: Target, rel: str, *, max_bytes: int = 
             "content": raw.hex(), "truncated": truncated}
 
 
-def promote_file(session: Session, project: Project, firmware: Target, rel: str, runner=None):
-    """Ingest a file from the firmware's unpacked tree as a child target (real
-    bytes → recon if Docker is up). Idempotent per `rel` (returns the existing
-    child if already added)."""
-    from hexgraph.engine.graph.edges import add_edge
-    from hexgraph.engine.targets.ingest import ingest_file
-    from hexgraph.engine.pipeline import analyze_target
-    from hexgraph.engine.targets.unpack import build_links_against
+def _mark_promoted(session: Session, firmware: Target, rel: str, child_id: str) -> None:
+    """Mark the manifest entry as added (+ COMMIT) so promote_file is idempotent per `rel` —
+    across sessions AND across an in-flight analysis, not just within one call. This must run
+    BEFORE the (potentially very long) analysis kicks off: an incident showed two overlapping
+    promote_file calls on the same rel, minutes apart, both reading `child_target_id` as unset
+    and each running a full independent unpack — two ~4000-child duplicate subtrees for one
+    file. Rebuild with fresh dicts + flag_modified: a shallow copy that mutates the shared
+    nested entries leaves the JSON column unchanged-by-identity, so it never persists."""
+    from sqlalchemy.orm.attributes import flag_modified
+
+    meta = dict(firmware.metadata_json or {})
+    fsmeta = dict(meta.get("filesystem") or {})
+    fsmeta["files"] = [
+        {**f, "child_target_id": child_id} if f.get("rel") == rel else f
+        for f in fsmeta.get("files", [])
+    ]
+    meta["filesystem"] = fsmeta
+    firmware.metadata_json = meta
+    flag_modified(firmware, "metadata_json")
+    session.commit()
+
+
+def _ensure_analysis(session: Session, project: Project, child: Target, runner=None) -> None:
+    """Kick off `child`'s analysis (recon; unpack + recon of every nested file if it's itself a
+    container) in a DETACHED background OS process if it isn't already done or in flight.
+
+    Analysis is NOT run inline: for a large, deeply-nested firmware package that's thousands of
+    sequential per-child sandbox runs — legitimately many minutes to hours (see `promote_file`).
+    Safe to call repeatedly (on every promote_file call for an already-promoted rel, including
+    the first one): no-ops if `ingest_progress` already reached "done", or if a `target_analyze`
+    Task for this child is still queued/running — so it also SELF-HEALS a process that died
+    between `_mark_promoted`'s commit and the Task being created below, which would otherwise
+    leave a child permanently marked promoted but never analyzed."""
+    from hexgraph.engine.tasks import create_task
+    from hexgraph.engine.worker import spawn_detached_task
     from hexgraph.sandbox.executor import get_executor
     from hexgraph.sandbox.runner import docker_available
+    from hexgraph.db.models import Task, TaskStatus
+    from sqlalchemy.orm.attributes import flag_modified
+
+    if not (runner or (get_executor() if docker_available() else None)):
+        return
+    if ((child.metadata_json or {}).get("ingest_progress") or {}).get("stage") == "done":
+        return
+    already_running = (
+        session.query(Task)
+        .filter(Task.target_id == child.id, Task.type == "target_analyze",
+                Task.status.in_((TaskStatus.queued, TaskStatus.running)))
+        .first()
+    )
+    if already_running is not None:
+        return
+
+    task = create_task(session, project=project, target_id=child.id, type="target_analyze")
+    session.commit()
+    spawn_detached_task(task.id)
+    meta = dict(child.metadata_json or {})
+    meta["analyze_task_id"] = task.id
+    child.metadata_json = meta
+    flag_modified(child, "metadata_json")
+    session.commit()
+
+
+def promote_file(session: Session, project: Project, firmware: Target, rel: str, runner=None):
+    """Ingest a file from the firmware's unpacked tree as a child target (real bytes → recon
+    if Docker is up). Idempotent per `rel` (returns the existing child if already promoted, OR
+    still mid-analysis — see below).
+
+    `promote_file` itself returns as soon as the child target + `contains` edge exist (seconds);
+    analysis runs detached in the background (see `_ensure_analysis`), tracked by a
+    `target_analyze` Task. Callers poll by calling `promote_file` again on the same
+    `(firmware, rel)`: it returns the SAME child immediately (via the manifest's
+    `child_target_id`, set right away — see `_mark_promoted`) and, if analysis hasn't started
+    or died mid-way, (re)ensures it's running rather than silently doing nothing."""
+    from hexgraph.engine.graph.edges import add_edge
+    from hexgraph.engine.targets.ingest import ingest_file
 
     fs = (firmware.metadata_json or {}).get("filesystem")
     if not fs:
@@ -192,6 +258,7 @@ def promote_file(session: Session, project: Project, firmware: Target, rel: str,
     if entry.get("child_target_id"):
         existing = session.get(Target, entry["child_target_id"])
         if existing is not None:
+            _ensure_analysis(session, project, existing, runner)
             return existing
 
     host_path = _host_root(project, firmware) / rel
@@ -202,23 +269,6 @@ def promote_file(session: Session, project: Project, firmware: Target, rel: str,
     add_edge(session, project_id=project.id, src=("target", firmware.id), dst=("target", child.id),
              type=EdgeType.contains, origin="human", confidence=1.0,
              created_by_tool="promote-file", attrs={"path": rel})
-    if (runner or (get_executor() if docker_available() else None)):
-        analyze_target(session, project, child, runner or get_executor())
-        build_links_against(session, project)
-
-    # Mark the manifest entry as added so the UI shows it AND promote-file is idempotent
-    # across sessions (an agent's repeat call must return this child, not make a dupe).
-    # Rebuild with fresh dicts + flag_modified: a shallow copy that mutates the shared
-    # nested entries leaves the JSON column unchanged-by-identity, so it never persists.
-    from sqlalchemy.orm.attributes import flag_modified
-
-    meta = dict(firmware.metadata_json or {})
-    fsmeta = dict(meta.get("filesystem") or {})
-    fsmeta["files"] = [
-        {**f, "child_target_id": child.id} if f.get("rel") == rel else f
-        for f in fsmeta.get("files", [])
-    ]
-    meta["filesystem"] = fsmeta
-    firmware.metadata_json = meta
-    flag_modified(firmware, "metadata_json")
+    _mark_promoted(session, firmware, rel, child.id)
+    _ensure_analysis(session, project, child, runner)
     return child

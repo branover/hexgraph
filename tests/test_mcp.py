@@ -902,6 +902,30 @@ def test_promote_file_tool(hg_home, monkeypatch):
     assert mcp_tools.promote_file("nope", "x").get("error") == "target not found"
 
 
+def test_promote_file_tool_reports_detached_analysis_status(hg_home, monkeypatch):
+    """When Docker is up, promote_file must return fast with analysis_status='queued' — not
+    block for the (potentially very long) analysis — and re-calling it while still queued must
+    report the same status without spawning duplicate work."""
+    from test_filesystem import _firmware_with_fs
+
+    monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
+    spawned = []
+    monkeypatch.setattr("hexgraph.engine.worker.spawn_detached_task",
+                        lambda task_id: spawned.append(task_id) or 1)
+    with session_scope() as s:
+        p, fw = _firmware_with_fs(s)
+        fwid = fw.id
+
+    out = mcp_tools.promote_file(fwid, "usr/sbin/httpd")
+    assert out.get("id") and out["analysis_status"] == "queued"
+    assert "background" in out["note"]
+    assert len(spawned) == 1
+
+    again = mcp_tools.promote_file(fwid, "usr/sbin/httpd")
+    assert again["id"] == out["id"] and again["analysis_status"] == "queued"
+    assert len(spawned) == 1  # polling must not re-spawn analysis
+
+
 def test_resume_fuzz_campaign_guards(hg_home):
     """The wrapper must surface the engine's guards as `{"error": ...}` strings, never raise:
     a still-running campaign can't resume, and an unknown id is reported plainly."""
