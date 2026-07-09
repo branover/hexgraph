@@ -21,6 +21,7 @@ import { AddNodeModal, AddEdgeModal } from "../components/Author";
 import ReportModal from "../components/ReportModal";
 import RunCompareModal from "../components/RunCompareModal";
 import GhidraImportModal from "../components/GhidraImportModal";
+import ImportDirModal from "../components/ImportDirModal";
 import SourceBrowser from "../components/SourceBrowser";
 import FunctionSourceViewer from "../components/FunctionSourceViewer";
 import { CampaignsPanel } from "../components/CampaignsPanel";
@@ -75,7 +76,7 @@ export default function Workspace() {
   const [fuzzFor, setFuzzFor] = useState<TargetNode | null>(null);
   const [q, setQ] = useState("");
   const [results, setResults] = useState<any | null>(null);
-  const [modal, setModal] = useState<"node" | "edge" | "report" | "compare" | "ghidra" | "egress" | null>(null);
+  const [modal, setModal] = useState<"node" | "edge" | "report" | "compare" | "ghidra" | "egress" | "dir" | null>(null);
   const [edgePrefill, setEdgePrefill] = useState<{ src: string; dst: string } | null>(null);
   const [ghidraBridge, setGhidraBridge] = useState(false);
   const [fuzzingEnabled, setFuzzingEnabled] = useState(false);
@@ -1063,6 +1064,9 @@ export default function Workspace() {
             <Icon name="chip" size={14} /><span className="ttl">Targets</span>
             <span className="grow" />
             <button className="btn sm" onClick={() => fileRef.current?.click()}><Icon name="plus" size={12} /> Add</button>
+            <button className="btn sm" title="Import an already-extracted/mounted filesystem directory" onClick={() => setModal("dir")}>
+              <Icon name="folder" size={12} /> Import dir
+            </button>
             {ghidraBridge && (
               <button className="btn sm" title="Import a program open in Ghidra" onClick={() => setModal("ghidra")}>
                 <Icon name="bulb" size={12} /> Ghidra
@@ -1371,6 +1375,7 @@ export default function Workspace() {
       {modal === "egress" && <EgressPanel projectId={projectId!} onClose={() => setModal(null)} />}
       {modal === "compare" && <RunCompareModal targets={detail.targets} onClose={() => setModal(null)} />}
       {modal === "ghidra" && <GhidraImportModal projectId={projectId!} onClose={() => setModal(null)} onDone={load} />}
+      {modal === "dir" && <ImportDirModal projectId={projectId!} onClose={() => setModal(null)} onDone={load} />}
       {launchFor && (
         <LaunchModal target={launchFor.target} taskType={launchFor.type} isMock={isMock}
                      initialObjective={launchFor.objective} initialParams={launchFor.params}

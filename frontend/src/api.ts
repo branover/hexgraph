@@ -415,6 +415,12 @@ export const api = {
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `${r.status}`);
     return r.json();
   },
+  // Import an already-extracted/mounted filesystem DIRECTORY as a target — a host path,
+  // not a file upload (a browser can't practically upload an entire mounted tree; the
+  // server is loopback-only and already has the same host filesystem access the CLI/MCP
+  // tools do). `path` must be readable from wherever `hexgraph serve` is running.
+  addTargetDir: (pid: string, path: string, name?: string, recon = true) =>
+    postJSON<any>(`/api/projects/${pid}/targets/dir`, { path, name, recon }),
 };
 
 export const SEV_ORDER = ["critical", "high", "medium", "low", "info"];
