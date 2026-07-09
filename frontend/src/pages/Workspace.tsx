@@ -21,6 +21,7 @@ import { AddNodeModal, AddEdgeModal } from "../components/Author";
 import ReportModal from "../components/ReportModal";
 import RunCompareModal from "../components/RunCompareModal";
 import GhidraImportModal from "../components/GhidraImportModal";
+import ImportDirModal from "../components/ImportDirModal";
 import SourceBrowser from "../components/SourceBrowser";
 import FunctionSourceViewer from "../components/FunctionSourceViewer";
 import { CampaignsPanel } from "../components/CampaignsPanel";
@@ -75,7 +76,7 @@ export default function Workspace() {
   const [fuzzFor, setFuzzFor] = useState<TargetNode | null>(null);
   const [q, setQ] = useState("");
   const [results, setResults] = useState<any | null>(null);
-  const [modal, setModal] = useState<"node" | "edge" | "report" | "compare" | "ghidra" | "egress" | null>(null);
+  const [modal, setModal] = useState<"node" | "edge" | "report" | "compare" | "ghidra" | "egress" | "dir" | null>(null);
   const [edgePrefill, setEdgePrefill] = useState<{ src: string; dst: string } | null>(null);
   const [ghidraBridge, setGhidraBridge] = useState(false);
   const [fuzzingEnabled, setFuzzingEnabled] = useState(false);
@@ -1062,12 +1063,19 @@ export default function Workspace() {
           <div className="pane-h">
             <Icon name="chip" size={14} /><span className="ttl">Targets</span>
             <span className="grow" />
-            <button className="btn sm" onClick={() => fileRef.current?.click()}><Icon name="plus" size={12} /> Add</button>
-            {ghidraBridge && (
-              <button className="btn sm" title="Import a program open in Ghidra" onClick={() => setModal("ghidra")}>
-                <Icon name="bulb" size={12} /> Ghidra
+            {/* Wraps before pushing the pinned collapse control off a narrow pane — same
+                treatment as .rp-tabs on the right-pane header (theme.css). */}
+            <div className="pane-actions">
+              <button className="btn sm" onClick={() => fileRef.current?.click()}><Icon name="plus" size={12} /> Add</button>
+              <button className="btn sm" title="Import an already-extracted/mounted filesystem directory" onClick={() => setModal("dir")}>
+                <Icon name="folder" size={12} /> Import dir
               </button>
-            )}
+              {ghidraBridge && (
+                <button className="btn sm" title="Import a program open in Ghidra" onClick={() => setModal("ghidra")}>
+                  <Icon name="bulb" size={12} /> Ghidra
+                </button>
+              )}
+            </div>
             <button className="btn sm icon ghost pane-collapse" title="Collapse Targets panel" onClick={toggleLeft}>
               <span style={{ transform: "rotate(90deg)", display: "inline-flex" }}><Icon name="chevron" size={13} /></span>
             </button>
@@ -1371,6 +1379,7 @@ export default function Workspace() {
       {modal === "egress" && <EgressPanel projectId={projectId!} onClose={() => setModal(null)} />}
       {modal === "compare" && <RunCompareModal targets={detail.targets} onClose={() => setModal(null)} />}
       {modal === "ghidra" && <GhidraImportModal projectId={projectId!} onClose={() => setModal(null)} onDone={load} />}
+      {modal === "dir" && <ImportDirModal projectId={projectId!} onClose={() => setModal(null)} onDone={load} />}
       {launchFor && (
         <LaunchModal target={launchFor.target} taskType={launchFor.type} isMock={isMock}
                      initialObjective={launchFor.objective} initialParams={launchFor.params}
