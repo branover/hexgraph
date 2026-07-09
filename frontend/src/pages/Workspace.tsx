@@ -1063,15 +1063,19 @@ export default function Workspace() {
           <div className="pane-h">
             <Icon name="chip" size={14} /><span className="ttl">Targets</span>
             <span className="grow" />
-            <button className="btn sm" onClick={() => fileRef.current?.click()}><Icon name="plus" size={12} /> Add</button>
-            <button className="btn sm" title="Import an already-extracted/mounted filesystem directory" onClick={() => setModal("dir")}>
-              <Icon name="folder" size={12} /> Import dir
-            </button>
-            {ghidraBridge && (
-              <button className="btn sm" title="Import a program open in Ghidra" onClick={() => setModal("ghidra")}>
-                <Icon name="bulb" size={12} /> Ghidra
+            {/* Wraps before pushing the pinned collapse control off a narrow pane — same
+                treatment as .rp-tabs on the right-pane header (theme.css). */}
+            <div className="pane-actions">
+              <button className="btn sm" onClick={() => fileRef.current?.click()}><Icon name="plus" size={12} /> Add</button>
+              <button className="btn sm" title="Import an already-extracted/mounted filesystem directory" onClick={() => setModal("dir")}>
+                <Icon name="folder" size={12} /> Import dir
               </button>
-            )}
+              {ghidraBridge && (
+                <button className="btn sm" title="Import a program open in Ghidra" onClick={() => setModal("ghidra")}>
+                  <Icon name="bulb" size={12} /> Ghidra
+                </button>
+              )}
+            </div>
             <button className="btn sm icon ghost pane-collapse" title="Collapse Targets panel" onClick={toggleLeft}>
               <span style={{ transform: "rotate(90deg)", display: "inline-flex" }}><Icon name="chevron" size={13} /></span>
             </button>

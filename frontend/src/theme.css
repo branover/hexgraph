@@ -158,6 +158,10 @@ code { font-family: var(--mono); }
 /* the right-pane primary tab bar wraps before pushing the expand/collapse controls
    off a narrow pane (min width 280px) — they are primary nav, never hidden behind a scroll. */
 .rp-tabs { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex: 1 1 auto; min-width: 0; }
+/* Same treatment for a left-pane header's action-button cluster (e.g. Targets: Add /
+   Import dir / Ghidra) — wraps to a second line before the pane's `overflow: hidden`
+   clips a pinned control (the collapse chevron) off-screen entirely. */
+.pane-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: flex-end; min-width: 0; }
 .scroll { overflow: auto; padding: 10px; flex: 1; }
 
 /* tree */
