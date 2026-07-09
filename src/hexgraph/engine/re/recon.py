@@ -92,6 +92,16 @@ def execute_recon(
     Hidden targets enrich but add nothing to the graph until revealed. Returns the
     raw facts."""
     runner = runner or get_executor()
+    # Release the single SQLite write lock BEFORE the (seconds-to-minutes) Docker sandbox run.
+    # create_task/mark_running already flushed the task row, so this session is holding the
+    # write lock; running the probe with it held starves every other writer (the web app, a
+    # second ingest, another recon task) for the whole sandbox duration — the direct cause of
+    # a concurrent writer's "database is locked". Committing the caller's session here is the
+    # same release-the-lock-across-slow-work checkpoint the Observation store already relies on
+    # (engine.observations.record_observation documents why, under single-writer SQLite, the
+    # caller's own commit is the only thing that actually frees the lock). Recon facts are
+    # persisted and checkpointed again after the probe, so nothing is lost.
+    session.commit()
     facts = runner.run_json_probe("recon_probe.py", target.path)
     write_trace(task, "recon_facts.json", facts)
 
