@@ -80,10 +80,18 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
         print(f"target  {summary['root_target_id']}  {summary['name']}")
         for child in summary["children"]:
             print(f"  child {child['target_id']}  {child['name']}")
-        print(
-            f"recon complete: {1 + len(summary['children'])} target(s), "
-            f"{summary['links_against_edges']} links_against edge(s)"
-        )
+        if summary.get("recon_status") == "queued":
+            print(f"{1 + len(summary['children'])} target(s) registered; recon for "
+                  f"{len(summary['children'])} child(ren) is running in the background "
+                  f"(large firmware) — check `hexgraph targets {project_id}` later.")
+        elif summary.get("recon_status") == "failed":
+            print(f"{1 + len(summary['children'])} target(s) registered, but background recon "
+                  f"could not be started for the children — re-ingest to retry.", file=sys.stderr)
+        else:
+            print(
+                f"recon complete: {1 + len(summary['children'])} target(s), "
+                f"{summary['links_against_edges']} links_against edge(s)"
+            )
     return 0
 
 

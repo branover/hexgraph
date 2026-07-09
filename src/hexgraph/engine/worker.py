@@ -70,6 +70,31 @@ def _dispatch(session: Session, project: Project, target: Target, task: Task) ->
         analyze_target(session, project, target, get_executor())
         build_links_against(session, project)
         return
+    if task.type == "recon_children_batch":
+        # analyze_target's large-firmware path (engine.pipeline.CHILD_RECON_DETACH_THRESHOLD):
+        # ONE detached process recons every child SEQUENTIALLY — same "one process for the
+        # whole batch, not one per item" reasoning as ghidra_enrich_batch below. `target`
+        # here is the PARENT (firmware) being analyzed, not any one of the actual children —
+        # those travel in params_json.
+        from hexgraph.engine.pipeline import _maybe_enrich_ghidra, _record_progress
+        from hexgraph.engine.re.recon import run_recon
+
+        child_ids = (task.params_json or {}).get("target_ids", [])
+        total = len(child_ids)
+        for i, cid in enumerate(child_ids, start=1):
+            # _record_progress commits — this doubles as the per-child checkpoint, same as
+            # the inline (small-firmware) loop already relied on.
+            _record_progress(session, target, "recon_children", done=i - 1, total=total)
+            child = session.get(Target, cid)
+            if child is None:
+                continue
+            try:
+                child_facts = run_recon(session, project, child, get_executor())
+                _maybe_enrich_ghidra(session, project, child, child_facts)
+            except Exception:  # noqa: BLE001 — one bad child must not abort the rest
+                pass
+        _record_progress(session, target, "done", children=total)
+        return
     if task.type == "ghidra_enrich":
         from hexgraph.engine.re.ghidra import enrich_target
 

@@ -2464,7 +2464,13 @@ def ingest(path: str, name: str | None = None, project_id: str | None = None) ->
     """Ingest a binary/firmware from a local path as a target (firmware unpacks into
     children), running recon in the sandbox. Creates a project if none is given. Returns a
     bounded summary (children_count + a preview of the first ~20 children); call
-    target_list(project_id) for the full set."""
+    target_list(project_id) for the full set.
+
+    For a large firmware (more than a couple dozen unpacked children), per-child recon runs
+    DETACHED in the background instead of blocking this call — `recon_status` is "done"
+    (small — recon already ran) or "queued" (large — the child target rows already exist and
+    are in `children`/`children_count`, but their recon facts land later; poll via
+    `target_facts` on a child, or just re-list with target_list once you expect it's done)."""
     import os
 
     from hexgraph.engine.targets.ingest import create_project, ingest_file
@@ -2490,9 +2496,12 @@ def ingest(path: str, name: str | None = None, project_id: str | None = None) ->
             "root_target_id": summary["root_target_id"],
             "children_count": summary.get("children_count", len(children)),
             "children": children[:_INGEST_CHILD_PREVIEW],
+            "recon_status": summary.get("recon_status", "done"),
         }
         if summary.get("format"):
             result["format"] = summary["format"]
+        if summary.get("recon_status") == "failed":
+            result["warning"] = "background recon could not be started for this firmware's children"
         # G01: a large blob whose container format the unpacker didn't recognize, and the carve
         # attempt extracted nothing — surface it LOUDLY (a top-level warning + the magic bytes) so
         # the operator isn't left with a silent 0-child result and no idea why.
@@ -2509,7 +2518,12 @@ def ingest(path: str, name: str | None = None, project_id: str | None = None) ->
                 "(squashfs/cpio/.pkg) are still in the tree and were NOT recursed — the deeper "
                 "service surface (e.g. the service runtime: web UI/SSH/SNMP) may be inside. "
                 "target_promote_file one to extract + register its inner binaries.")
-        if len(children) > _INGEST_CHILD_PREVIEW:
+        if summary.get("recon_status") == "queued":
+            result["note"] = (f"{len(children)} children found; recon is running in the "
+                              f"background (large firmware — sequential per-child sandbox "
+                              f"analysis can take a while). Check target_facts on a child, "
+                              f"or re-list later, to see recon facts land.")
+        elif len(children) > _INGEST_CHILD_PREVIEW:
             result["note"] = (f"{len(children)} children unpacked; showing the first "
                               f"{_INGEST_CHILD_PREVIEW}. Use target_list(project_id) for the "
                               f"full set.")

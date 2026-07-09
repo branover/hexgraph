@@ -26,6 +26,18 @@ log = logging.getLogger(__name__)
 _FIRMWARE_FORMATS = {"squashfs", "cpio", "disk_image"}
 _ENRICHABLE_KINDS = {"executable", "shared_library"}
 
+# How many unpacked children to recon INLINE before switching to a detached background task
+# instead. Existing test fixtures unpack into single digits (unaffected); a real large
+# firmware can unpack into thousands — reconning each is its own sandboxed container
+# spin-up, so a small firmware still analyzes fully synchronously (unchanged behavior, exact
+# same summary shape as before) while a large one returns fast with the child TARGET ROWS
+# already created (unpack_firmware's own registration is a cheap host-side copy+hash, not
+# the bottleneck — see _ensure_children_recon_detached) and a task id to poll instead of
+# blocking the ingest call for what can be hours. Same bug class already fixed tonight for
+# promote_file/reveal_dir, just at the INITIAL-ingest call site (`ingest_and_analyze` /
+# `hexgraph ingest` / `target_ingest` never routed through the detached-task system at all).
+CHILD_RECON_DETACH_THRESHOLD = 25
+
 
 def _record_progress(session: Session, target: Target, stage: str, **extra) -> None:
     """Emit a coarse ingest-progress signal so the multi-minute unpack+recon isn't a silent
@@ -69,6 +81,37 @@ def _maybe_enrich_ghidra(session: Session, project: Project, target: Target, fac
         pass
 
 
+def _ensure_children_recon_detached(session: Session, project: Project, target: Target,
+                                    children: list[Target]) -> str:
+    """Kick off recon for `children` as ONE detached process working through them
+    SEQUENTIALLY — same "one process for the whole batch, not one per item" reasoning as
+    `engine.targets.reveal._ensure_batch_ghidra_enrichment` (a directory/firmware can have
+    thousands of children; spawning one INDEPENDENT process per child would launch that many
+    CONCURRENT sandbox containers and contend hard for host resources). The Task is anchored
+    on `target` (the firmware/parent being analyzed); child ids travel in `params_json`.
+    Returns "queued", or "failed" if the spawn itself raised (the Task ends up marked
+    failed rather than stuck queued forever — see engine.targets.reveal for the same
+    self-heal reasoning)."""
+    from hexgraph.engine.tasks import create_task, mark_failed
+    from hexgraph.engine.worker import spawn_detached_task
+
+    task = create_task(session, project=project, target_id=target.id, type="recon_children_batch",
+                       params={"target_ids": [c.id for c in children]})
+    session.commit()
+    try:
+        spawn_detached_task(task.id)
+    except Exception:  # noqa: BLE001 — never let a spawn failure break the ingest call
+        mark_failed(task, "failed to spawn detached recon-children process")
+        session.commit()
+        return "failed"
+    meta = dict(target.metadata_json or {})
+    meta["recon_children_task_id"] = task.id
+    target.metadata_json = meta
+    flag_modified(target, "metadata_json")
+    session.commit()
+    return "queued"
+
+
 def analyze_target(
     session: Session,
     project: Project,
@@ -79,10 +122,16 @@ def analyze_target(
 
     Emits coarse per-stage progress on the root target's metadata (recon → unpacking →
     recon i/N children → done) so the multi-minute firmware path isn't a silent black box
-    (F05). The signal is advisory — a poller watches `metadata_json["ingest_progress"]`."""
+    (F05). The signal is advisory — a poller watches `metadata_json["ingest_progress"]`.
+
+    Above `CHILD_RECON_DETACH_THRESHOLD` children, per-child recon runs DETACHED (see
+    `_ensure_children_recon_detached`) instead of inline. `summary["recon_status"]` is
+    "done" (small — recon already ran, exactly like before), "queued" (large — child TARGET
+    ROWS exist and are already in `summary["children"]`, but their recon facts land later —
+    poll via `target_facts`/re-ingesting), or "failed" (the detach itself couldn't start)."""
     _record_progress(session, target, "recon")
     facts = run_recon(session, project, target, runner)
-    summary = {"target_id": target.id, "name": target.name, "children": []}
+    summary = {"target_id": target.id, "name": target.name, "children": [], "recon_status": "done"}
 
     # G01: a recognized firmware format OR a large blob whose format we couldn't recognize —
     # in the latter case ATTEMPT a binwalk carve anyway (it often recognizes vendor wrappers our
@@ -100,14 +149,18 @@ def analyze_target(
         # Materialize the child list first so we can report "recon i/N children" with a known N.
         children = list(unpack_firmware(session, project, target, runner))
         total = len(children)
-        for i, child in enumerate(children, start=1):
-            _record_progress(session, target, "recon_children", done=i - 1, total=total)
-            # Children are registered HIDDEN by unpack_firmware: recon ENRICHES each
-            # (metadata + a recon Observation) but materializes no graph nodes — a
-            # hidden child contributes nothing to the graph until revealed.
-            child_facts = run_recon(session, project, child, runner)
-            _maybe_enrich_ghidra(session, project, child, child_facts)
-            summary["children"].append({"target_id": child.id, "name": child.name})
+        if total > CHILD_RECON_DETACH_THRESHOLD:
+            summary["children"] = [{"target_id": c.id, "name": c.name} for c in children]
+            summary["recon_status"] = _ensure_children_recon_detached(session, project, target, children)
+        else:
+            for i, child in enumerate(children, start=1):
+                _record_progress(session, target, "recon_children", done=i - 1, total=total)
+                # Children are registered HIDDEN by unpack_firmware: recon ENRICHES each
+                # (metadata + a recon Observation) but materializes no graph nodes — a
+                # hidden child contributes nothing to the graph until revealed.
+                child_facts = run_recon(session, project, child, runner)
+                _maybe_enrich_ghidra(session, project, child, child_facts)
+                summary["children"].append({"target_id": child.id, "name": child.name})
         # F07: flag packed containers the unpack left in the tree (a large vendor firmware image leaves
         # the real web UI/SSH/SNMP runtime in nested .pkg/squashfs that aren't auto-recursed).
         # Without this, "N children unpacked" reads as "fully unpacked" and a researcher hunts the
@@ -143,7 +196,8 @@ def analyze_target(
     else:
         _maybe_enrich_ghidra(session, project, target, facts)
     summary["children_count"] = len(summary["children"])
-    _record_progress(session, target, "done", children=summary["children_count"])
+    final_stage = "recon_children_queued" if summary["recon_status"] == "queued" else "done"
+    _record_progress(session, target, final_stage, children=summary["children_count"])
     return summary
 
 

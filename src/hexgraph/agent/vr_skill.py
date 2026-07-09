@@ -83,7 +83,11 @@ skip ahead. If you were handed a PATH (e.g. "find vulns in the firmware at /path
   **Firmware unpacks into child targets**: the extracted binaries become their own targets and
   the rootfs becomes browsable. Those children are registered **hidden** (a firmware unpacks
   into hundreds of ELFs; a visible child each would bury the graph), but each is still
-  recon-enriched, searchable, and addressable. `target_list(project_id)` shows the firmware
+  recon-enriched, searchable, and addressable. Above a couple dozen children, per-child recon
+  runs DETACHED in the background instead of blocking this call (`recon_status` in the
+  response: "done" or "queued" — the child targets exist either way, their recon facts just
+  land later for a large firmware; `target_facts` on one to check, or just come back to it).
+  `target_list(project_id)` shows the firmware
   plus the **revealed** children; `target_list(project_id, include_hidden=true)` (or `fs_list`,
   whose entries carry `added`/`revealed`) shows the full set. Pick the binaries worth analyzing
   (httpd, cgi-bin handlers, daemons, the libraries they link) and **reveal** them —
