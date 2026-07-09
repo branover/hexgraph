@@ -233,13 +233,22 @@ def spawn_detached_task(task_id: str) -> int:
     failure mode that produced a real incident (a promote_file call whose analysis silently died
     partway through, leaving the manifest permanently marked "promoted" but never analyzed).
     A detached OS process survives all of that; `run_task_sync` re-opens its own DB session and
-    the `task` row is the durable, pollable record of progress either way."""
+    the `task` row is the durable, pollable record of progress either way.
+
+    `start_new_session=True` only detaches the SESSION/process group — it does NOT reparent the
+    child to init, so the OS still tracks it as a child of THIS process for wait()/reaping
+    purposes. Without an explicit wait, a finished child sits as a zombie until this process
+    (`hexgraph serve` / `hexgraph mcp`, both long-lived) itself exits — over an engagement that
+    promotes many files, that accumulates one zombie per detached analysis. A daemon thread
+    blocked on `proc.wait()` reaps it the moment it exits, without making the caller block."""
     import subprocess
     import sys
+    import threading
 
     proc = subprocess.Popen(
         [sys.executable, "-m", "hexgraph.cli", "internal-run-task", task_id],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
+    threading.Thread(target=proc.wait, daemon=True).start()
     return proc.pid
