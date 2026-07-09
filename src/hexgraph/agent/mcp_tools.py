@@ -2546,7 +2546,12 @@ def ingest_dir(path: str, name: str | None = None, project_id: str | None = None
     background instead of blocking this call — `recon_status` is "done" (small — recon
     already ran) or "queued" (large — the child target rows already exist and are in
     `children`/`children_count`, but their recon facts land later; poll via target_facts
-    on a child, or just re-list with target_list once you expect it's done)."""
+    on a child, or just re-list with target_list once you expect it's done).
+
+    A path the walk couldn't read (permission denied — common on a real extracted rootfs,
+    which keeps its original device-side ownership) is skipped, not fatal — `skipped_paths_count`/
+    `skipped_paths_sample` in the result flag this so a lower-than-expected child count doesn't
+    silently read as "that's the whole tree"."""
     import os
 
     from hexgraph.engine.targets.ingest import create_project
@@ -2564,9 +2569,17 @@ def ingest_dir(path: str, name: str | None = None, project_id: str | None = None
             project = create_project(s, name=(name or os.path.basename(path.rstrip("/"))))
         if not docker_available():
             t, children = ingest_directory(s, project, path, name=name)
-            return {"project_id": project.id, "root_target_id": t.id,
-                    "children_count": len(children), "recon": False,
-                    "note": "Docker not running — registered without recon"}
+            result = {"project_id": project.id, "root_target_id": t.id,
+                      "children_count": len(children), "recon": False,
+                      "note": "Docker not running — registered without recon"}
+            meta = t.metadata_json or {}
+            if meta.get("skipped_paths_count"):
+                result["skipped_paths_count"] = meta["skipped_paths_count"]
+                result["skipped_paths_sample"] = meta.get("skipped_paths_sample", [])
+                result["warning"] = (f"{meta['skipped_paths_count']} path(s) under the source "
+                                     f"tree could not be read and were skipped (permission "
+                                     f"denied?) — the child count above may be incomplete.")
+            return result
         summary = ingest_directory_and_analyze(s, project, path, name=name, runner=get_executor())
         children = summary.get("children", [])
         result = {
@@ -2576,6 +2589,12 @@ def ingest_dir(path: str, name: str | None = None, project_id: str | None = None
             "children": children[:_INGEST_CHILD_PREVIEW],
             "recon_status": summary.get("recon_status", "done"),
         }
+        if summary.get("skipped_paths_count"):
+            result["skipped_paths_count"] = summary["skipped_paths_count"]
+            result["skipped_paths_sample"] = summary.get("skipped_paths_sample", [])
+            result["warning"] = (f"{summary['skipped_paths_count']} path(s) under the source "
+                                 f"tree could not be read and were skipped (permission "
+                                 f"denied?) — the child count above may be incomplete.")
         if summary.get("recon_status") == "failed":
             result["warning"] = "background recon could not be started for this tree's children"
         if summary.get("recon_status") == "queued":

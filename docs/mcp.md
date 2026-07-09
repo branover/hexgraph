@@ -96,6 +96,9 @@ agent's context small:
   to parse, just a tree to copy), copies it into the project, and eagerly registers every ELF as a
   hidden child target exactly like firmware unpack does — so `fs_list`/`fs_read_file`/
   `target_promote_file`/`target_set_visible`/`target_reveal_dir` all work on the result unchanged.
+  A path the walk can't read (permission denied — common on a real extracted rootfs, which keeps
+  its original device-side ownership) is skipped rather than fatal; `skipped_paths_count` in the
+  result flags when the child count may be incomplete because of it.
 
 **Firmware children are hidden by default.** A real firmware unpacks into hundreds of ELFs, so
 unpack registers each as a child target but keeps it **hidden** — it's recorded, searchable, and
