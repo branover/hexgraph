@@ -144,7 +144,7 @@ def test_set_visible_detaches_ghidra_enrichment(hg_home, monkeypatch):
         cid, pid = child.id, p.id
 
     with session_scope() as s:
-        out = set_visible(s, pid, cid, True)
+        out = set_visible(s, pid, cid, True, enrich=True)
         assert out["visible"] is True and out["materialized"] is True
         assert out["enrichment_queued"] is True
         assert len(spawned) == 1
@@ -157,9 +157,30 @@ def test_set_visible_detaches_ghidra_enrichment(hg_home, monkeypatch):
         assert task.type == "ghidra_enrich" and task.status == TaskStatus.queued
 
         # A second call while enrichment is queued/running must not re-spawn.
-        again = set_visible(s, pid, cid, True)
+        again = set_visible(s, pid, cid, True, enrich=True)
         assert again["enrichment_queued"] is False
         assert len(spawned) == 1
+
+
+def test_set_visible_does_not_enrich_by_default(hg_home, monkeypatch):
+    """Real incident: revealing auto-enriched every executable, even though the operator
+    never asked for it — a directory of a dozen+ binaries silently queued a dozen+ background
+    Ghidra jobs. Even with the feature globally enabled, a plain reveal (no enrich=True) must
+    NOT queue anything."""
+    monkeypatch.setattr("hexgraph.engine.re.ghidra.enrich_enabled", lambda: True)
+    spawned = []
+    monkeypatch.setattr("hexgraph.engine.worker.spawn_detached_task",
+                        lambda task_id: spawned.append(task_id) or 1)
+    with session_scope() as s:
+        p = create_project(s, name="reveal-no-enrich")
+        child = _executable_child(s, p)
+        cid, pid = child.id, p.id
+
+    with session_scope() as s:
+        out = set_visible(s, pid, cid, True)
+        assert out["visible"] is True and out["materialized"] is True
+        assert out["enrichment_queued"] is False
+        assert len(spawned) == 0
 
 
 def test_reveal_dir_batches_ghidra_enrichment_into_one_task(hg_home, monkeypatch):
@@ -181,7 +202,7 @@ def test_reveal_dir_batches_ghidra_enrichment_into_one_task(hg_home, monkeypatch
         pid, fwid, aid, bid = p.id, fw.id, a.id, b.id
 
     with session_scope() as s:
-        out = reveal_dir(s, pid, fwid, "usr/sbin")
+        out = reveal_dir(s, pid, fwid, "usr/sbin", enrich=True)
         assert out["revealed"] == 2
         assert out["enrichment_queued"] == 2
         assert len(spawned) == 1   # ONE batch task, not one per binary
@@ -191,6 +212,30 @@ def test_reveal_dir_batches_ghidra_enrichment_into_one_task(hg_home, monkeypatch
         assert task.type == "ghidra_enrich_batch" and task.status == TaskStatus.queued
         assert task.target_id == fwid
         assert set(task.params_json["target_ids"]) == {aid, bid}
+
+
+def test_reveal_dir_does_not_enrich_by_default(hg_home, monkeypatch):
+    """The exact real incident, reproduced and asserted against: revealing a directory of
+    binaries must NOT auto-queue Ghidra enrichment for any of them, even with the feature
+    globally enabled, unless the caller explicitly passes enrich=True."""
+    monkeypatch.setattr("hexgraph.engine.re.ghidra.enrich_enabled", lambda: True)
+    spawned = []
+    monkeypatch.setattr("hexgraph.engine.worker.spawn_detached_task",
+                        lambda task_id: spawned.append(task_id) or 1)
+    with session_scope() as s:
+        p = create_project(s, name="reveal-dir-no-enrich")
+        fw = ingest_file(s, p, fixture_path("synthetic_fw.bin"), name="fw")
+        fw.kind = TargetKind.firmware_image
+        _executable_child(s, p, name="usr/sbin/httpd", parent=fw)
+        _executable_child(s, p, name="usr/sbin/telnetd", parent=fw)
+        s.flush()
+        pid, fwid = p.id, fw.id
+
+    with session_scope() as s:
+        out = reveal_dir(s, pid, fwid, "usr/sbin")
+        assert out["revealed"] == 2
+        assert out["enrichment_queued"] == 0
+        assert len(spawned) == 0
 
 
 def test_ghidra_enrichment_self_heals_after_lost_task(hg_home, monkeypatch):
@@ -206,7 +251,7 @@ def test_ghidra_enrichment_self_heals_after_lost_task(hg_home, monkeypatch):
         cid, pid = child.id, p.id
 
     with session_scope() as s:
-        set_visible(s, pid, cid, True)
+        set_visible(s, pid, cid, True, enrich=True)
         assert len(spawned) == 1
         from hexgraph.db.models import Task, TaskStatus
         task = s.get(Task, spawned[0])
@@ -215,7 +260,7 @@ def test_ghidra_enrichment_self_heals_after_lost_task(hg_home, monkeypatch):
 
         # Re-hide then re-reveal (the natural way an operator/agent would retry).
         set_visible(s, pid, cid, False)
-        again = set_visible(s, pid, cid, True)
+        again = set_visible(s, pid, cid, True, enrich=True)
         assert again["enrichment_queued"] is True
         assert len(spawned) == 2
 
@@ -299,7 +344,7 @@ def test_ghidra_enrichment_marks_failed_task_on_spawn_error(hg_home, monkeypatch
         cid, pid = child.id, p.id
 
     with session_scope() as s:
-        out = set_visible(s, pid, cid, True)
+        out = set_visible(s, pid, cid, True, enrich=True)
         assert out["enrichment_queued"] is False   # spawn failed — nothing actually queued
 
         from hexgraph.db.models import Task, TaskStatus

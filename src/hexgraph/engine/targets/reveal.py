@@ -66,15 +66,22 @@ def _needs_ghidra_enrichment(target: Target) -> bool:
     return enrich_enabled() and not (target.metadata_json or {}).get("ghidra_enriched")
 
 
-def _materialize_on_reveal(session: Session, project: Project, target: Target) -> bool:
+def _materialize_on_reveal(session: Session, project: Project, target: Target, *, enrich: bool = False) -> bool:
     """Bring a just-revealed target's enrichment into the curated graph: recon nodes (fast,
-    synchronous) plus optional Ghidra enrichment, kicked off DETACHED (see
-    `_ensure_ghidra_enrichment`) rather than run inline — a cold headless Ghidra full-analysis
-    can take many minutes. Used by `set_visible` (ONE target — see `reveal_dir` for the bulk
-    path, which batches enrichment instead of spawning one detached process per target).
+    synchronous) — plus, only when the CALLER explicitly opts in via `enrich=True`, optional
+    Ghidra enrichment kicked off DETACHED (see `_ensure_ghidra_enrichment`). Revealing does
+    NOT auto-enrich by default: visibility and "run a potentially long-running Ghidra
+    analysis" are separate decisions — even detached, silently queuing enrichment for
+    everything you reveal is surprising (a directory of a dozen+ binaries would each queue a
+    background job you didn't explicitly ask for — this is what actually paged the operator:
+    revealing an Erlang erts/bin directory queued a dozen+ analyses with no way to opt out).
+    `enrich=True` is an ADDITIONAL per-call gate on top of `features.ghidra.enrich_recon`
+    (see `_needs_ghidra_enrichment`), not a replacement for it — both must hold.
+    Used by `set_visible` (ONE target — see `reveal_dir` for the bulk path, which batches
+    enrichment instead of spawning one detached process per target).
     Idempotent (materialize_* dedups). Returns True if Ghidra enrichment was (newly) queued."""
     facts = _materialize_recon_only(session, project, target)
-    if facts.get("kind") not in ("executable", "shared_library"):
+    if not enrich or facts.get("kind") not in ("executable", "shared_library"):
         return False
     try:
         return _ensure_ghidra_enrichment(session, project, target) if _needs_ghidra_enrichment(target) else False
@@ -154,11 +161,14 @@ def _ensure_batch_ghidra_enrichment(session: Session, project: Project, firmware
     return len(target_ids)
 
 
-def set_visible(session: Session, project_id: str, target_id: str, visible: bool) -> dict:
+def set_visible(session: Session, project_id: str, target_id: str, visible: bool, *,
+                enrich: bool = False) -> dict:
     """Reveal (visible=True) or re-hide (visible=False) one target. Revealing
-    materializes its recon nodes from the already-stored facts (no re-run); optional Ghidra
-    enrichment runs detached (see `_materialize_on_reveal`). Returns {target_id, visible,
-    materialized} (materialized = nodes were (re)materialized)."""
+    materializes its recon nodes from the already-stored facts (no re-run). Optional Ghidra
+    enrichment does NOT run automatically — pass `enrich=True` to also queue it, detached
+    (see `_materialize_on_reveal`). Returns {target_id, visible, materialized,
+    enrichment_queued} (materialized = nodes were (re)materialized; enrichment_queued is
+    always False when enrich=False)."""
     t = session.get(Target, target_id)
     if t is None or t.project_id != project_id:
         raise ValueError("target not found in project")
@@ -168,24 +178,26 @@ def set_visible(session: Session, project_id: str, target_id: str, visible: bool
     enrichment_queued = False
     if visible and not was_visible:
         project = session.get(Project, project_id)
-        enrichment_queued = _materialize_on_reveal(session, project, t)
+        enrichment_queued = _materialize_on_reveal(session, project, t, enrich=enrich)
         materialized = True
     session.flush()
     return {"target_id": t.id, "name": t.name, "visible": t.visible, "materialized": materialized,
             "enrichment_queued": enrichment_queued}
 
 
-def reveal_dir(session: Session, project_id: str, firmware_target_id: str, prefix: str) -> dict:
+def reveal_dir(session: Session, project_id: str, firmware_target_id: str, prefix: str, *,
+               enrich: bool = False) -> dict:
     """Reveal every HIDDEN child of a firmware whose rootfs-relative name (path) is
     under `prefix` (a directory prefix like "usr/sbin" or "/usr/sbin"). Materializes
-    each revealed child's recon nodes (fast); optional Ghidra enrichment for the whole batch
-    runs as ONE detached background process working through them sequentially — not one
-    process per target (see `_ensure_batch_ghidra_enrichment`: a directory can have a dozen+
-    binaries, and spawning that many CONCURRENT cold headless Ghidra containers would
-    contend hard for host resources, unlike a single target's `set_visible`).
+    each revealed child's recon nodes (fast). Optional Ghidra enrichment does NOT run
+    automatically — pass `enrich=True` to also queue it for the whole batch, as ONE detached
+    background process working through them sequentially, not one process per target (see
+    `_ensure_batch_ghidra_enrichment`: a directory can have a dozen+ binaries, and spawning
+    that many CONCURRENT cold headless Ghidra containers would contend hard for host
+    resources, unlike a single target's `set_visible`).
     Returns {firmware_target_id, prefix, revealed, target_ids, enrichment_queued}
-    (enrichment_queued = how many revealed targets got queued into that background batch).
-    Already-visible children are left untouched."""
+    (enrichment_queued = how many revealed targets got queued into that background batch;
+    always 0 when enrich=False). Already-visible children are left untouched."""
     fw = session.get(Target, firmware_target_id)
     if fw is None or fw.project_id != project_id:
         raise ValueError("firmware target not found in project")
@@ -222,7 +234,7 @@ def reveal_dir(session: Session, project_id: str, firmware_target_id: str, prefi
         if c.id in ids_under_prefix or _under(c.name):   # any manifest path under prefix, or its own name
             c.visible = True
             facts = _materialize_recon_only(session, project, c)
-            if facts.get("kind") in ("executable", "shared_library") and _needs_ghidra_enrichment(c):
+            if enrich and facts.get("kind") in ("executable", "shared_library") and _needs_ghidra_enrichment(c):
                 to_enrich.append(c.id)
             revealed_ids.append(c.id)
     session.flush()

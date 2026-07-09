@@ -1543,38 +1543,43 @@ def restore_target(project_id: str, target_id: str) -> dict:
             return {"error": str(exc)}
 
 
-def set_visible(project_id: str, target_id: str, visible: bool = True) -> dict:
+def set_visible(project_id: str, target_id: str, visible: bool = True, enrich: bool = False) -> dict:
     """REVEAL (visible=true) or re-HIDE (visible=false) one target in the curated graph.
     Firmware ELF children are HIDDEN by default (unpack registers each so it's searchable
     and addressable, but a 765-ELF firmware would otherwise flood the graph/Targets pane);
     recon already enriched them. Revealing materializes the target's recon nodes from the
-    already-stored facts (no re-run) so it joins the graph immediately; optional Ghidra
-    enrichment (if enabled) runs DETACHED in the background — `enrichment_queued` says
-    whether a task was kicked off (a cold headless Ghidra pass can take minutes; this call
-    does not wait for it). Returns {target_id, name, visible, materialized, enrichment_queued}."""
+    already-stored facts (no re-run) so it joins the graph immediately. Ghidra enrichment does
+    NOT happen automatically — pass `enrich=true` to also queue it, DETACHED in the background
+    (a cold headless Ghidra pass can take minutes; still requires features.ghidra.enrich_recon
+    to be on, `enrich=true` is an additional opt-in per call, not a replacement for it).
+    `enrichment_queued` says whether a task was actually kicked off. Returns {target_id, name,
+    visible, materialized, enrichment_queued}."""
     from hexgraph.engine.targets.reveal import set_visible as _set
 
     with session_scope() as s:
         if s.get(Project, project_id) is None:
             return {"error": "project not found"}
         try:
-            return _set(s, project_id, target_id, visible)
+            return _set(s, project_id, target_id, visible, enrich=enrich)
         except ValueError as exc:
             return {"error": str(exc)}
 
 
-def reveal_dir(project_id: str, target_id: str, prefix: str = "") -> dict:
+def reveal_dir(project_id: str, target_id: str, prefix: str = "", enrich: bool = False) -> dict:
     """REVEAL every HIDDEN child of a firmware whose rootfs path is under `prefix`
     (e.g. prefix='usr/sbin' reveals all ELFs in /usr/sbin) — the bulk counterpart to
     target_set_visible for bringing a whole directory of binaries into the curated graph
     at once. An empty prefix reveals ALL hidden children. Materializes each revealed
     child's recon nodes from stored facts (no re-run) — fast, even for a directory with many
-    binaries. Optional Ghidra enrichment per binary (if enabled) runs DETACHED in the
-    background rather than blocking this call (a cold headless Ghidra pass on a dozen+
-    binaries sequentially can take hours; this call returns as soon as they're revealed).
+    binaries. Ghidra enrichment does NOT happen automatically — pass `enrich=true` to also
+    queue it for the whole batch as ONE detached background process working through them
+    sequentially (a cold headless Ghidra pass on a dozen+ binaries can take hours; still
+    requires features.ghidra.enrich_recon to be on). Don't pass enrich=true reflexively —
+    it's meant for when you deliberately want deep analysis on everything in that directory,
+    not as the default way to browse a firmware's contents.
     `target_id` is the firmware. Returns {firmware_target_id, prefix, revealed, target_ids,
-    enrichment_queued} (enrichment_queued = how many revealed targets got a background
-    enrichment task)."""
+    enrichment_queued} (enrichment_queued = how many revealed targets got queued into that
+    background batch; always 0 when enrich=false)."""
     # NB: the catalog advertises this arg as `target_id` (the firmware), and the MCP
     # server dispatches by KEYWORD (`fn(**arguments)`), so this param name MUST match
     # the catalog schema — otherwise every MCP call raises TypeError.
@@ -1584,7 +1589,7 @@ def reveal_dir(project_id: str, target_id: str, prefix: str = "") -> dict:
         if s.get(Project, project_id) is None:
             return {"error": "project not found"}
         try:
-            return _reveal(s, project_id, target_id, prefix)
+            return _reveal(s, project_id, target_id, prefix, enrich=enrich)
         except ValueError as exc:
             return {"error": str(exc)}
 
