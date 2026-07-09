@@ -75,18 +75,27 @@ agent's context small:
   instead, call `finding_update(status='dismissed')`. It also holds the visibility verbs
   `target_set_visible` (reveal or re-hide one target) and `target_reveal_dir` (reveal every
   hidden firmware child under a rootfs directory prefix) — see the hidden-children note below.
-- **run** covers `target_ingest`, `target_promote_file` (promote a file from an unpacked firmware into
-  its own target), `task_run`, `finding_verify_poc`, `fuzz_verify_artifact`,
-  `fuzz_start`/`fuzz_resume`, `src_build`, and more. `target_ingest` returns a bounded summary
-  (the child count plus a preview of the first ~20 children, since firmware can unpack into
-  hundreds); call `target_list(project_id)` for the full target tree. Above a couple dozen
-  unpacked children, per-child recon runs detached in the background instead of blocking the
-  call — `recon_status` in the response is "done" or "queued" (children exist, their recon
-  facts land later; `target_facts` on one to check). `target_promote_file`
+- **run** covers `target_ingest`, `target_ingest_dir` (import an already-extracted/mounted
+  filesystem directory — no packed blob to unpack), `target_promote_file` (promote a file from
+  an unpacked firmware into its own target), `task_run`, `finding_verify_poc`, `fuzz_verify_artifact`,
+  `fuzz_start`/`fuzz_resume`, `src_build`, and more. `target_ingest`/`target_ingest_dir` return a
+  bounded summary (the child count plus a preview of the first ~20 children, since firmware/a
+  large tree can unpack into hundreds); call `target_list(project_id)` for the full target tree.
+  Above a couple dozen unpacked/discovered children, per-child recon runs detached in the
+  background instead of blocking the call — `recon_status` in the response is "done" or "queued"
+  (children exist, their recon facts land later; `target_facts` on one to check). `target_promote_file`
   returns as soon as the child target exists — analysis runs detached, since promoting a large,
   deeply-nested container can mean thousands of sequential sandbox runs; call it again with the
   same arguments to poll `analysis_status` (queued/running/succeeded/failed) rather than assuming
   a quick return means nothing is happening.
+
+  `target_ingest_dir` is the alternative to `target_ingest` for when there's no packed firmware
+  image to unpack — the operator already has a rootfs on disk (self-extracted, mounted, or a live
+  device's exported filesystem). It walks the directory on the host (not sandboxed — the same
+  trust level `target_ingest` already extends to a host path; there's no untrusted container format
+  to parse, just a tree to copy), copies it into the project, and eagerly registers every ELF as a
+  hidden child target exactly like firmware unpack does — so `fs_list`/`fs_read_file`/
+  `target_promote_file`/`target_set_visible`/`target_reveal_dir` all work on the result unchanged.
 
 **Firmware children are hidden by default.** A real firmware unpacks into hundreds of ELFs, so
 unpack registers each as a child target but keeps it **hidden** — it's recorded, searchable, and

@@ -194,6 +194,8 @@ Run `.venv/bin/hexgraph <command>` (or just `hexgraph` with the venv active):
 
 ```text
 hexgraph ingest <path> [--name N] [--project ID] [--no-recon] [--backend B]
+                              # <path> is a binary/firmware file, or a directory of an
+                              # already-extracted/mounted filesystem (auto-detected)
 hexgraph targets <project>
 hexgraph run <target> --type T [--objective TEXT] [--function F] [--backend B] [--mock-scenario S]
 hexgraph rehost <target> [--brand HINT]      # boot firmware under emulation (needs features.rehost)

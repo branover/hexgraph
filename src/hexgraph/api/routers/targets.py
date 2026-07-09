@@ -80,6 +80,43 @@ def api_add_target(
         os.unlink(tmp)
 
 
+class DirIngest(BaseModel):
+    path: str
+    name: str | None = None
+    recon: bool = True
+
+
+@router.post("/api/projects/{project_id}/targets/dir")
+def api_add_target_dir(project_id: str, body: DirIngest):
+    """Import an already-extracted/mounted filesystem DIRECTORY as a target — the
+    alternative to the file-upload endpoint above for when there's no packed blob to
+    unpack, just a rootfs already on the SERVER's disk. A JSON body path, not an upload:
+    the server is loopback-only/self-hosted and already has the same host filesystem
+    access the CLI/MCP tools do (`hexgraph ingest <path>` / `target_ingest`) — a browser
+    can't practically upload an entire mounted tree, so this trusts a path the same way."""
+    if not os.path.isdir(body.path):
+        raise HTTPException(400, f"not a directory: {body.path!r}")
+    from hexgraph.engine.targets.dirimport import ingest_directory
+    from hexgraph.engine.pipeline import ingest_directory_and_analyze
+
+    with session_scope() as s:
+        project = s.get(Project, project_id)
+        if project is None:
+            raise HTTPException(404, "project not found")
+        if body.recon and not runner.docker_available():
+            raise HTTPException(400, "Docker is required to analyze a target. Start Docker, "
+                                     "or import with recon=false to register bytes only.")
+        if not body.recon:
+            target, children = ingest_directory(s, project, body.path, name=body.name)
+            return {"target_id": target.id, "name": target.name, "recon": False,
+                    "children": [{"target_id": c.id, "name": c.name} for c in children]}
+        summary = ingest_directory_and_analyze(s, project, body.path, name=body.name,
+                                               runner=executor.get_executor())
+        return {"target_id": summary["root_target_id"], "name": summary["name"], "recon": True,
+                "children": summary.get("children", []),
+                "recon_status": summary.get("recon_status", "done")}
+
+
 @router.get("/api/projects/{project_id}/target-children")
 def api_target_children(project_id: str, parent_id: str | None = None, offset: int = 0,
                         limit: int = 200, include_hidden: bool = False):

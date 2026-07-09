@@ -2532,6 +2532,66 @@ def ingest(path: str, name: str | None = None, project_id: str | None = None) ->
         return result
 
 
+def ingest_dir(path: str, name: str | None = None, project_id: str | None = None) -> dict:
+    """Ingest an already-extracted/mounted FILESYSTEM DIRECTORY as a target — the
+    alternative to target_ingest for when there's no packed firmware blob to unpack (the
+    operator already has a rootfs on disk: self-extracted, mounted, or a live device's
+    exported filesystem). The tree is copied in and every ELF is eagerly registered as a
+    HIDDEN child target (byte-identical ELFs dedup to one target), same as firmware unpack.
+    Creates a project if none is given. Returns the SAME bounded summary shape as
+    target_ingest (children_count + a preview of the first ~20 children, recon_status);
+    call target_list(project_id) for the full set.
+
+    For a large tree (more than a couple dozen ELFs), per-child recon runs DETACHED in the
+    background instead of blocking this call — `recon_status` is "done" (small — recon
+    already ran) or "queued" (large — the child target rows already exist and are in
+    `children`/`children_count`, but their recon facts land later; poll via target_facts
+    on a child, or just re-list with target_list once you expect it's done)."""
+    import os
+
+    from hexgraph.engine.targets.ingest import create_project
+    from hexgraph.engine.targets.dirimport import ingest_directory
+    from hexgraph.engine.pipeline import ingest_directory_and_analyze
+    from hexgraph.sandbox.executor import get_executor
+    from hexgraph.sandbox.runner import docker_available
+
+    if not os.path.isdir(path):
+        return {"error": f"directory not found: {path!r} (resolved from the MCP server's "
+                          f"working directory {os.getcwd()!r}). Pass an ABSOLUTE path."}
+    with session_scope() as s:
+        project = s.get(Project, project_id) if project_id else None
+        if project is None:
+            project = create_project(s, name=(name or os.path.basename(path.rstrip("/"))))
+        if not docker_available():
+            t, children = ingest_directory(s, project, path, name=name)
+            return {"project_id": project.id, "root_target_id": t.id,
+                    "children_count": len(children), "recon": False,
+                    "note": "Docker not running — registered without recon"}
+        summary = ingest_directory_and_analyze(s, project, path, name=name, runner=get_executor())
+        children = summary.get("children", [])
+        result = {
+            "project_id": project.id,
+            "root_target_id": summary["root_target_id"],
+            "children_count": summary.get("children_count", len(children)),
+            "children": children[:_INGEST_CHILD_PREVIEW],
+            "recon_status": summary.get("recon_status", "done"),
+        }
+        if summary.get("recon_status") == "failed":
+            result["warning"] = "background recon could not be started for this tree's children"
+        if summary.get("recon_status") == "queued":
+            result["note"] = (f"{len(children)} children found; recon is running in the "
+                              f"background (large tree — sequential per-child sandbox "
+                              f"analysis can take a while). Check target_facts on a child, "
+                              f"or re-list later, to see recon facts land.")
+        elif len(children) > _INGEST_CHILD_PREVIEW:
+            result["note"] = (f"{len(children)} children found; showing the first "
+                              f"{_INGEST_CHILD_PREVIEW}. Use target_list(project_id) for the "
+                              f"full set.")
+        else:
+            result["note"] = "Use target_list(project_id) for the full target tree."
+        return result
+
+
 def register_web_surface(project_id: str, base_url: str, name: str | None = None,
                      endpoints: list | None = None) -> dict:
     """Register a WEB attack surface (a `web_app` target reached via an HTTP Channel —
