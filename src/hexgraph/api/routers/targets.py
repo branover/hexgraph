@@ -9,6 +9,8 @@ import tempfile
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
+from sqlalchemy import func
+
 from hexgraph.db.models import Project, Target
 from hexgraph.db.session import session_scope
 from hexgraph.engine.targets.filesystem import (
@@ -24,6 +26,8 @@ from hexgraph.engine.targets.unpack import build_links_against
 # Import the modules (not the names) so tests can monkeypatch runner.docker_available /
 # executor.get_executor and have HTTP routes pick up the patched callable.
 from hexgraph.sandbox import executor, runner
+
+from ._shared import target_dict
 
 router = APIRouter()
 
@@ -70,6 +74,48 @@ def api_add_target(
             return result
     finally:
         os.unlink(tmp)
+
+
+@router.get("/api/projects/{project_id}/target-children")
+def api_target_children(project_id: str, parent_id: str | None = None, offset: int = 0,
+                        limit: int = 200, include_hidden: bool = False):
+    """Direct children of `parent_id` (root-level targets — parent_id IS NULL — when
+    `parent_id` is omitted), paginated. Lets the Targets sidebar tree lazy-load one directory
+    level at a time instead of fetching a project's entire target set — a real firmware can
+    unpack into 5000+ targets, and GET /api/projects/{id} returns them all in one response.
+
+    Visibility here is INDEPENDENT of the curated graph's: `include_hidden=true` lists every
+    extracted child regardless of whether it's been revealed into the graph — the sidebar's
+    job is to make everything that was actually extracted findable, while the graph (which
+    already filters to visible=True with no override — see build_graph) stays the thing that
+    avoids flooding. Pass `include_hidden=true` to see everything; default matches
+    GET /api/projects/{id}'s (visible only) for callers that don't care about hidden children.
+
+    Returns {items: [...target fields + child_count], total, offset, next_offset, has_more}
+    (child_count = how many children each item itself has, for the tree's expand affordance —
+    also independent of include_hidden, i.e. counts ALL of that item's children)."""
+    offset = max(0, offset)
+    limit = max(1, min(limit, 2000))
+    with session_scope() as s:
+        if s.get(Project, project_id) is None:
+            raise HTTPException(404, "project not found")
+        q = s.query(Target).filter(Target.project_id == project_id, Target.archived.is_(False))
+        q = q.filter(Target.parent_id == parent_id) if parent_id else q.filter(Target.parent_id.is_(None))
+        if not include_hidden:
+            q = q.filter(Target.visible.is_(True))
+        total = q.count()
+        rows = q.order_by(Target.name).offset(offset).limit(limit).all()
+        ids = [t.id for t in rows]
+        counts = dict(
+            s.query(Target.parent_id, func.count(Target.id))
+            .filter(Target.parent_id.in_(ids), Target.archived.is_(False))
+            .group_by(Target.parent_id)
+            .all()
+        ) if ids else {}
+        items = [{**target_dict(t), "child_count": counts.get(t.id, 0)} for t in rows]
+        next_offset = offset + len(rows) if offset + len(rows) < total else None
+        return {"items": items, "total": total, "offset": offset,
+                "next_offset": next_offset, "has_more": next_offset is not None}
 
 
 class SocketCreate(BaseModel):

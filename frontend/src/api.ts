@@ -1,7 +1,7 @@
 // Typed client for the HexGraph JSON API (the SPA's only backend contract).
 
 export interface Project { id: string; name: string; backend: string; created_at: string; }
-export interface TargetNode { id: string; name: string; kind: string; format?: string; arch?: string; parent_id?: string | null; metadata?: any; }
+export interface TargetNode { id: string; name: string; kind: string; format?: string; arch?: string; parent_id?: string | null; metadata?: any; visible?: boolean; child_count?: number; }
 export interface Finding {
   id: string; target_id: string; task_id: string; status: string;
   title: string; severity: string; confidence: string; category: string;
@@ -212,6 +212,19 @@ async function delJSON<T>(url: string): Promise<T> {
 export const api = {
   projects: () => getJSON<Project[]>("/api/projects"),
   project: (id: string) => getJSON<ProjectDetail>(`/api/projects/${id}`),
+  // Paginated direct children of `parentId` (root-level targets when omitted) — lets the
+  // Targets tree lazy-load one directory level at a time instead of the whole project's
+  // target set. includeHidden=true (the tree's default) surfaces extracted-but-unrevealed
+  // children too; the graph's own visible-only filtering is untouched by this.
+  targetChildren: (pid: string, parentId?: string, opts: { includeHidden?: boolean; offset?: number; limit?: number } = {}) => {
+    const qs = new URLSearchParams();
+    if (parentId) qs.set("parent_id", parentId);
+    if (opts.includeHidden) qs.set("include_hidden", "true");
+    if (opts.offset) qs.set("offset", String(opts.offset));
+    if (opts.limit) qs.set("limit", String(opts.limit));
+    return getJSON<{ items: TargetNode[]; total: number; offset: number; next_offset: number | null; has_more: boolean }>(
+      `/api/projects/${pid}/target-children${qs.toString() ? "?" + qs.toString() : ""}`);
+  },
   graph: (id: string) => getJSON<Graph>(`/graph/${id}`),
   graphSize: (id: string) => getJSON<GraphSize>(`/graph/${id}/size`),
   graphSkeleton: (id: string) => getJSON<Skeleton>(`/graph/${id}/skeleton`),
