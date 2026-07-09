@@ -76,6 +76,12 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
                 print(f"project {project_id}")
                 print(f"target  {target.id}  {target.name}  "
                       f"({len(children)} child target(s) registered, recon skipped)")
+                meta = target.metadata_json or {}
+                if meta.get("skipped_paths_count"):
+                    print(f"warning: {meta['skipped_paths_count']} path(s) could not be read "
+                          f"and were skipped (permission denied?), e.g.:", file=sys.stderr)
+                    for p in meta.get("skipped_paths_sample", [])[:5]:
+                        print(f"  {p}", file=sys.stderr)
                 return 0
             from hexgraph.engine.targets.ingest import ingest_file
 
@@ -96,6 +102,11 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
         print(f"target  {summary['root_target_id']}  {summary['name']}")
         for child in summary["children"]:
             print(f"  child {child['target_id']}  {child['name']}")
+        if summary.get("skipped_paths_count"):
+            print(f"warning: {summary['skipped_paths_count']} path(s) could not be read and "
+                  f"were skipped (permission denied?), e.g.:", file=sys.stderr)
+            for p in summary.get("skipped_paths_sample", [])[:5]:
+                print(f"  {p}", file=sys.stderr)
         if summary.get("recon_status") == "queued":
             print(f"{1 + len(summary['children'])} target(s) registered; recon for "
                   f"{len(summary['children'])} child(ren) is running in the background "

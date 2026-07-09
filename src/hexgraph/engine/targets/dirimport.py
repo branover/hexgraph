@@ -25,14 +25,26 @@ from hexgraph.engine.targets.ingest import ingest_file
 from hexgraph.engine.targets.targets import file_sha256
 
 
-def _walk_and_copy(src: Path, dst: Path) -> list[dict]:
+def _walk_and_copy(src: Path, dst: Path) -> tuple[list[dict], list[str]]:
     """Copy every regular file under `src` into `dst`, building a manifest entry per
     file. Skips symlinks and any non-regular entry (device/socket/FIFO nodes a real
     rootfs mount can contain) — `Path.is_file()` already resolves to False for those;
     `is_symlink()` additionally excludes a symlink to a regular file, which `is_file()`
-    alone would follow and admit. Mirrors `unpack_probe.py`'s `_walk_files` guard."""
+    alone would follow and admit. Mirrors `unpack_probe.py`'s `_walk_files` guard.
+
+    Returns (files, skipped): `skipped` collects paths the walk couldn't read (a
+    directory `os.walk` couldn't list, or a file that raised on stat/open/copy — most
+    commonly a permission error on a real extracted rootfs, where files keep their
+    original device-side ownership). `os.walk`'s default `onerror=None` swallows a
+    directory-listing failure entirely — without an explicit handler, a whole unreadable
+    subtree goes silently missing from the manifest with no signal at all."""
     files: list[dict] = []
-    for dirpath, _dirnames, filenames in os.walk(src, followlinks=False):
+    skipped: list[str] = []
+
+    def _on_walk_error(exc: OSError) -> None:
+        skipped.append(getattr(exc, "filename", None) or str(exc))
+
+    for dirpath, _dirnames, filenames in os.walk(src, onerror=_on_walk_error, followlinks=False):
         rel_dir = Path(dirpath).relative_to(src)
         for fname in filenames:
             abspath = Path(dirpath) / fname
@@ -43,6 +55,7 @@ def _walk_and_copy(src: Path, dst: Path) -> list[dict]:
                 with open(abspath, "rb") as fh:
                     head = fh.read(4)
             except OSError:
+                skipped.append(str(abspath))
                 continue
             rel = (rel_dir / fname).as_posix() if str(rel_dir) != "." else fname
             dst_path = dst / rel
@@ -50,9 +63,10 @@ def _walk_and_copy(src: Path, dst: Path) -> list[dict]:
             try:
                 shutil.copy2(abspath, dst_path)
             except OSError:
+                skipped.append(str(abspath))
                 continue
             files.append({"rel": rel, "size": size, "is_elf": head == b"\x7fELF"})
-    return files
+    return files, skipped
 
 
 def ingest_directory(
@@ -91,11 +105,27 @@ def ingest_directory(
     )
     session.add(target)
     session.flush()  # assign id
+    # COMMIT before the (possibly very slow — a real rootfs partition can run to gigabytes
+    # across thousands of files) host-side walk+copy below. Every other slow phase in the
+    # ingest pipeline is preceded by a commit checkpoint (pipeline._record_progress, called
+    # right before unpack_firmware's sandboxed extraction and before each child's recon) —
+    # this was the one place that skipped it, so the write transaction opened by the flush
+    # above stayed held for the ENTIRE copy, and any concurrent writer (another ingest, the
+    # web UI, an agent's MCP session) hit "database is locked" once busy_timeout expired.
+    session.commit()
 
     base = persistent_base(project, target.id)
     base.mkdir(parents=True, exist_ok=True)
-    files = _walk_and_copy(src, base)
-    target.metadata_json = {"original_path": str(src)}
+    files, skipped = _walk_and_copy(src, base)
+    meta = {"original_path": str(src)}
+    if skipped:
+        # Surfaced rather than silently dropped — most commonly a permission error on a real
+        # extracted rootfs, where files keep their original device-side ownership. A whole
+        # unreadable subtree going missing from the manifest with no signal is worse than an
+        # incomplete-but-honest one.
+        meta["skipped_paths_count"] = len(skipped)
+        meta["skipped_paths_sample"] = skipped[:20]
+    target.metadata_json = meta
 
     # F08: register each unique-bytes ELF once; every later byte-identical path points
     # at the same target instead of cloning a row/edge — same reasoning as unpack_firmware.

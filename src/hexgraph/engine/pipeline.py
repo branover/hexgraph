@@ -255,6 +255,13 @@ def ingest_directory_and_analyze(
         "target_id": root.id, "name": root.name, "format": "directory",
         "children": [{"target_id": c.id, "name": c.name} for c in children],
     }
+    # Some paths under the source tree couldn't be read (most commonly a permission error on
+    # a real extracted rootfs, which keeps its original device-side ownership) — surface this
+    # rather than let a lower-than-expected child count read as "that's the whole tree".
+    root_meta = root.metadata_json or {}
+    if root_meta.get("skipped_paths_count"):
+        summary["skipped_paths_count"] = root_meta["skipped_paths_count"]
+        summary["skipped_paths_sample"] = root_meta.get("skipped_paths_sample", [])
     summary["recon_status"] = recon_children(session, project, root, children, runner)
     summary["children_count"] = len(summary["children"])
     links = build_links_against(session, project)

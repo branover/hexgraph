@@ -108,13 +108,22 @@ def api_add_target_dir(project_id: str, body: DirIngest):
                                      "or import with recon=false to register bytes only.")
         if not body.recon:
             target, children = ingest_directory(s, project, body.path, name=body.name)
-            return {"target_id": target.id, "name": target.name, "recon": False,
-                    "children": [{"target_id": c.id, "name": c.name} for c in children]}
+            result = {"target_id": target.id, "name": target.name, "recon": False,
+                      "children": [{"target_id": c.id, "name": c.name} for c in children]}
+            meta = target.metadata_json or {}
+            if meta.get("skipped_paths_count"):
+                result["skipped_paths_count"] = meta["skipped_paths_count"]
+                result["skipped_paths_sample"] = meta.get("skipped_paths_sample", [])
+            return result
         summary = ingest_directory_and_analyze(s, project, body.path, name=body.name,
                                                runner=executor.get_executor())
-        return {"target_id": summary["root_target_id"], "name": summary["name"], "recon": True,
-                "children": summary.get("children", []),
-                "recon_status": summary.get("recon_status", "done")}
+        result = {"target_id": summary["root_target_id"], "name": summary["name"], "recon": True,
+                  "children": summary.get("children", []),
+                  "recon_status": summary.get("recon_status", "done")}
+        if summary.get("skipped_paths_count"):
+            result["skipped_paths_count"] = summary["skipped_paths_count"]
+            result["skipped_paths_sample"] = summary.get("skipped_paths_sample", [])
+        return result
 
 
 @router.get("/api/projects/{project_id}/target-children")

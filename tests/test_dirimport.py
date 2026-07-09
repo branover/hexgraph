@@ -8,9 +8,12 @@ instance of the synchronous-per-item-loop bug), and the CLI/MCP/API consumer wir
 
 import os
 
+import pytest
+
 from hexgraph.db.models import Target, Task, TaskStatus
 from hexgraph.db.session import session_scope
 from hexgraph.engine import pipeline
+from hexgraph.engine.targets import dirimport
 from hexgraph.engine.targets.dirimport import ingest_directory
 from hexgraph.engine.targets.ingest import create_project
 
@@ -114,6 +117,66 @@ def test_not_a_directory_raises(hg_home, tmp_path):
             pass
 
 
+def test_ingest_directory_commits_root_before_slow_walk(hg_home, tmp_path, monkeypatch):
+    """Regression: a real user hit 'sqlite3.OperationalError: database is locked' ingesting
+    a large automotive firmware partition. Root cause: ingest_directory flushed the root
+    Target row, then ran the (potentially very slow — real partitions run to gigabytes
+    across thousands of files) host-side _walk_and_copy WITHOUT committing first, holding
+    a SQLite write lock for the entire copy — any concurrent writer collided. This spies on
+    _walk_and_copy to confirm the root row is already COMMITTED (visible to a fresh,
+    independent session) by the time the slow walk starts."""
+    captured = {}
+
+    def _spy_walk_and_copy(src, dst):
+        with session_scope() as s2:
+            row = s2.query(Target).filter(Target.project_id == captured["project_id"],
+                                          Target.parent_id.is_(None)).first()
+            captured["visible_before_walk"] = row is not None
+        return [], []
+
+    monkeypatch.setattr(dirimport, "_walk_and_copy", _spy_walk_and_copy)
+
+    src = tmp_path / "rootfs"
+    src.mkdir()
+    with session_scope() as s:
+        p = create_project(s, name="lock-regression")
+        captured["project_id"] = p.id
+        ingest_directory(s, p, src, name="rootfs")
+
+    assert captured["visible_before_walk"] is True
+
+
+def test_walk_skips_unreadable_directory_and_reports_it(hg_home, tmp_path):
+    """A real user reported only 1 ELF found across a large partition tree — a plausible
+    cause is a permission-denied subdirectory (a real extracted rootfs keeps its original
+    device-side ownership) that os.walk's default onerror=None silently skips, with NO
+    signal that anything was missed. The walk must surface what it couldn't read instead
+    of letting an incomplete manifest look like a complete one."""
+    if os.getuid() == 0:
+        pytest.skip("running as root — permission bits don't restrict root")
+
+    src = tmp_path / "rootfs"
+    src.mkdir()
+    (src / "readable").mkdir()
+    (src / "readable" / "file.txt").write_bytes(b"ok")
+    locked = src / "locked"
+    locked.mkdir()
+    (locked / "hidden.txt").write_bytes(b"nope")
+    os.chmod(locked, 0o000)
+    try:
+        with session_scope() as s:
+            p = create_project(s, name="dirimport-skip")
+            target, children = ingest_directory(s, p, src, name="rootfs")
+            meta = target.metadata_json
+            assert meta.get("skipped_paths_count", 0) >= 1
+            assert any("locked" in sp for sp in meta.get("skipped_paths_sample", []))
+            fs_files = {f["rel"]: f for f in meta["filesystem"]["files"]}
+            assert "readable/file.txt" in fs_files
+            assert not any(rel.startswith("locked") for rel in fs_files)
+    finally:
+        os.chmod(locked, 0o755)
+
+
 def _rootfs_with_n_elfs(tmp_path, n):
     src = tmp_path / "rootfs"
     src.mkdir()
@@ -161,6 +224,28 @@ def test_ingest_directory_and_analyze_detaches_large_tree(hg_home, tmp_path, mon
         assert task.type == "recon_children_batch" and task.status == TaskStatus.queued
         assert task.target_id == summary["root_target_id"]
         assert len(task.params_json["target_ids"]) == n
+
+
+def test_ingest_directory_and_analyze_surfaces_skipped_paths(hg_home, tmp_path, monkeypatch):
+    if os.getuid() == 0:
+        pytest.skip("running as root — permission bits don't restrict root")
+    monkeypatch.setattr(pipeline, "run_recon", _fake_facts)
+
+    src = tmp_path / "rootfs"
+    src.mkdir()
+    (src / "bin0").write_bytes(ELF_A)
+    locked = src / "locked"
+    locked.mkdir()
+    (locked / "f").write_bytes(b"x")
+    os.chmod(locked, 0o000)
+    try:
+        with session_scope() as s:
+            p = create_project(s, name="dirimport-skip-summary")
+            summary = pipeline.ingest_directory_and_analyze(s, p, src, name="rootfs", runner=None)
+            assert summary.get("skipped_paths_count", 0) >= 1
+            assert summary.get("skipped_paths_sample")
+    finally:
+        os.chmod(locked, 0o755)
 
 
 def test_cli_ingest_routes_directory_to_dir_import(hg_home, tmp_path, capsys):
