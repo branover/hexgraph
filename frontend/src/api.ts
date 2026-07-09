@@ -306,12 +306,15 @@ export const api = {
   filesystem: (tid: string) => getJSON<{ unpacked: boolean; method?: string; files: FsEntry[] }>(`/api/targets/${tid}/filesystem`),
   promoteFile: (pid: string, fwId: string, rel: string) => postJSON<any>(`/api/projects/${pid}/targets/${fwId}/promote-file`, { rel }),
   // Reveal/re-hide a target in the curated graph. Firmware ELF children are hidden by default
-  // (unpack registers them all); revealing materializes the target's recon nodes from stored facts.
-  setTargetVisible: (pid: string, tid: string, visible: boolean) => postJSON<{ target_id: string; name: string; visible: boolean; materialized: boolean; enrichment_queued: boolean }>(`/api/projects/${pid}/targets/${tid}/visible`, { visible }),
+  // (unpack registers them all); revealing materializes the target's recon nodes from stored
+  // facts. Ghidra enrichment does NOT run automatically — pass enrich:true to also queue it,
+  // detached (default false: revealing to browse shouldn't silently kick off analysis jobs).
+  setTargetVisible: (pid: string, tid: string, visible: boolean, enrich = false) => postJSON<{ target_id: string; name: string; visible: boolean; materialized: boolean; enrichment_queued: boolean }>(`/api/projects/${pid}/targets/${tid}/visible`, { visible, enrich }),
   // Bulk-reveal every hidden firmware child whose rootfs path is under `prefix` (e.g. "usr/sbin").
-  // `enrichment_queued` = how many revealed targets got a background Ghidra enrichment task
-  // (revealing/materializing itself is synchronous and fast; enrichment is not).
-  revealDir: (pid: string, fwId: string, prefix: string) => postJSON<{ firmware_target_id: string; prefix: string; revealed: number; target_ids: string[]; enrichment_queued: number }>(`/api/projects/${pid}/targets/${fwId}/reveal-dir`, { prefix }),
+  // `enrichment_queued` = how many revealed targets got queued into ONE background batch
+  // Ghidra-enrichment task (revealing/materializing itself is always synchronous and fast;
+  // enrichment only happens at all when enrich:true is passed — default false).
+  revealDir: (pid: string, fwId: string, prefix: string, enrich = false) => postJSON<{ firmware_target_id: string; prefix: string; revealed: number; target_ids: string[]; enrichment_queued: number }>(`/api/projects/${pid}/targets/${fwId}/reveal-dir`, { prefix, enrich }),
   // Target-level follow-up suggestions from enriched recon metadata (e.g. risky-sink → static-analyze).
   targetSuggestions: (tid: string) => getJSON<any[]>(`/api/targets/${tid}/suggestions`),
   // Source trees (Phase 1 — read-only IDE browse)

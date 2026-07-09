@@ -68,18 +68,16 @@ export default function FilesystemBrowser({ projectId, targetId, onChanged }: {
     finally { setBusy(""); }
   };
 
-  // Reveal every hidden child under a directory prefix in one call.
+  // Reveal every hidden child under a directory prefix in one call. Ghidra enrichment is
+  // NOT requested here (api.revealDir's enrich param defaults to false) — reveal is a fast,
+  // predictable visibility toggle; deliberately opting a whole directory into a dozen-plus
+  // background Ghidra analyses is a bigger decision than "let me see what's in here",
+  // and doing it implicitly on every reveal is what caused a real 2+ hour incident.
   const revealDir = async (prefix: string) => {
     setBusy("dir:" + prefix);
     try {
       const r = await api.revealDir(projectId, targetId, prefix);
       if (r.revealed === 0) alert("No hidden binaries to reveal under " + (prefix || "/"));
-      // Ghidra enrichment per binary (if enabled) runs in the background — a directory with
-      // many binaries would otherwise block this call for a long time (each is a cold headless
-      // Ghidra pass). The binaries are already revealed/searchable; enrichment just deepens them.
-      else if (r.enrichment_queued > 0)
-        alert(`Revealed ${r.revealed} binaries. Ghidra enrichment for ${r.enrichment_queued} of `
-          + `them is running in the background and may take a while.`);
       await load(); onChanged?.();
     } catch (e: any) { alert(String(e.message || e)); }
     finally { setBusy(""); }

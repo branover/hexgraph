@@ -177,6 +177,11 @@ def api_remove_target(project_id: str, target_id: str):
 
 class VisibleUpdate(BaseModel):
     visible: bool = True
+    # Off by default: revealing a target and running a (detached, but still real) Ghidra
+    # analysis on it are separate decisions — see engine.targets.reveal for why auto-enrich
+    # on reveal was a real incident (an operator paged 2+ hours revealing a directory whose
+    # dozen-plus binaries each silently queued a background analysis).
+    enrich: bool = False
 
 
 @router.post("/api/projects/{project_id}/targets/{target_id}/visible")
@@ -184,34 +189,37 @@ def api_set_target_visible(project_id: str, target_id: str, body: VisibleUpdate)
     """Reveal (visible=true) or re-hide (visible=false) one target. Firmware children
     are HIDDEN by default (unpack registers them so they're searchable/addressable, but
     they add nothing to the curated graph); revealing materializes the target's recon
-    nodes from the already-stored facts (no re-run)."""
+    nodes from the already-stored facts (no re-run). Ghidra enrichment does not run
+    automatically — pass enrich=true to also queue it, detached."""
     from hexgraph.engine.targets.reveal import set_visible
 
     with session_scope() as s:
         if s.get(Project, project_id) is None:
             raise HTTPException(404, "project not found")
         try:
-            return set_visible(s, project_id, target_id, body.visible)
+            return set_visible(s, project_id, target_id, body.visible, enrich=body.enrich)
         except ValueError as exc:
             raise HTTPException(404, str(exc))
 
 
 class RevealDir(BaseModel):
     prefix: str = ""
+    enrich: bool = False
 
 
 @router.post("/api/projects/{project_id}/targets/{target_id}/reveal-dir")
 def api_reveal_dir(project_id: str, target_id: str, body: RevealDir):
     """Reveal every HIDDEN child of a firmware whose rootfs path is under `prefix`
     (e.g. "usr/sbin" reveals all ELFs under that directory). Materializes each revealed
-    child's recon nodes. `target_id` is the firmware target."""
+    child's recon nodes. `target_id` is the firmware target. Ghidra enrichment does not run
+    automatically — pass enrich=true to also queue it for the whole batch, detached."""
     from hexgraph.engine.targets.reveal import reveal_dir
 
     with session_scope() as s:
         if s.get(Project, project_id) is None:
             raise HTTPException(404, "project not found")
         try:
-            return reveal_dir(s, project_id, target_id, body.prefix)
+            return reveal_dir(s, project_id, target_id, body.prefix, enrich=body.enrich)
         except ValueError as exc:
             raise HTTPException(404, str(exc))
 
