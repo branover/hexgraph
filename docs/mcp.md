@@ -79,7 +79,10 @@ agent's context small:
   its own target), `task_run`, `finding_verify_poc`, `fuzz_verify_artifact`,
   `fuzz_start`/`fuzz_resume`, `src_build`, and more. `target_ingest` returns a bounded summary
   (the child count plus a preview of the first ~20 children, since firmware can unpack into
-  hundreds); call `target_list(project_id)` for the full target tree. `target_promote_file`
+  hundreds); call `target_list(project_id)` for the full target tree. Above a couple dozen
+  unpacked children, per-child recon runs detached in the background instead of blocking the
+  call — `recon_status` in the response is "done" or "queued" (children exist, their recon
+  facts land later; `target_facts` on one to check). `target_promote_file`
   returns as soon as the child target exists — analysis runs detached, since promoting a large,
   deeply-nested container can mean thousands of sequential sandbox runs; call it again with the
   same arguments to poll `analysis_status` (queued/running/succeeded/failed) rather than assuming

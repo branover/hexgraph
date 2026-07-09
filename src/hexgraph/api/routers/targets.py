@@ -71,6 +71,10 @@ def api_add_target(
                 summary = analyze_target(s, project, target, executor.get_executor())
                 build_links_against(s, project)
                 result["children"] = summary.get("children", [])
+                # A large firmware's per-child recon runs detached (engine.pipeline.
+                # CHILD_RECON_DETACH_THRESHOLD) — "queued" means the children above are
+                # registered but their recon facts land later, not that this call failed.
+                result["recon_status"] = summary.get("recon_status", "done")
             return result
     finally:
         os.unlink(tmp)
