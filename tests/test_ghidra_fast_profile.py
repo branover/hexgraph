@@ -1,6 +1,7 @@
 """Ghidra's analysis of a 100 MB+ monolith is bounded by a fast profile that disables the passes
 proven pathological on a huge binary (Call-Fixup Installer's O(n^2) AddressSet, the per-processor
-Constant Reference Analyzer, the decompile-every-function passes) while KEEPING the call-graph/
+Constant Reference Analyzer, the decompile-every-function passes, and the Non-Returning Functions
+analyzers whose ClearFlowAndRepair wedges on a monolith) while KEEPING the call-graph/
 reference analyzers. Since the PyGhidra re-platform these are pure host-side helpers in `pyghidra_lib`
 (`_slow_analyzer` + `_FAST_PROFILE_BYTES`), applied in-process by `_analyze` before AutoAnalysisManager
 runs. The analysis otherwise runs to completion — `re_analyze` runs it detached with a generous budget
@@ -25,6 +26,11 @@ def test_fast_profile_disables_the_proven_slow_passes():
     # processor-agnostic match for the constant-propagation passes ("PowerPC/ARM/x86 … "):
     assert L._slow_analyzer("PowerPC Constant Reference Analyzer")
     assert L._slow_analyzer("ARM Scalar Operand References")
+    # Non-Returning Functions analyzers: ClearFlowAndRepair wedges on a monolith (both variants).
+    assert L._slow_analyzer("Non-Returning Functions - Discovered")
+    assert L._slow_analyzer("Non-Returning Functions - Known")
+    # ...but a dotted SUB-option of it is still never disabled (the "." rule wins):
+    assert not L._slow_analyzer("Non-Returning Functions - Discovered.Create Analysis Bookmarks")
 
 
 def test_fast_profile_keeps_the_call_graph_analyzers():
