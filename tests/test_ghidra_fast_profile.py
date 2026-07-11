@@ -25,6 +25,11 @@ def test_fast_profile_disables_the_proven_slow_passes():
     # processor-agnostic match for the constant-propagation passes ("PowerPC/ARM/x86 … "):
     assert L._slow_analyzer("PowerPC Constant Reference Analyzer")
     assert L._slow_analyzer("ARM Scalar Operand References")
+    # Non-Returning Functions analyzers: ClearFlowAndRepair wedges on a monolith (both variants).
+    assert L._slow_analyzer("Non-Returning Functions - Discovered")
+    assert L._slow_analyzer("Non-Returning Functions - Known")
+    # ...but a dotted SUB-option of it is still never disabled (the "." rule wins):
+    assert not L._slow_analyzer("Non-Returning Functions - Discovered.Create Analysis Bookmarks")
 
 
 def test_fast_profile_keeps_the_call_graph_analyzers():

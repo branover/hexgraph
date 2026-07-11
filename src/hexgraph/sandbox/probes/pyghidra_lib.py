@@ -198,6 +198,14 @@ def _slow_analyzer(name: str) -> bool:
     if name in ("Call-Fixup Installer", "Decompiler Parameter ID", "Decompiler Switch Analysis",
                 "Aggressive Instruction Finder"):
         return True
+    # Non-Returning Functions ("- Discovered"/"- Known"): when a heavily-called routine is flagged
+    # non-returning, the analyzer's ClearFlowAndRepair walks the instruction-flow graph (a CodeManager
+    # DB lookup per node) to repair downstream flow. On a monolith with dense/mis-disassembled code
+    # that traversal explodes — observed wedged for >40h in FindNoReturnFunctionsAnalyzer.repairDamagedLocations
+    # on a ~900 MB image. Flow past no-return calls stays intact; we lose only the auto no-return marking,
+    # which does not affect on-demand xrefs/decompiles.
+    if name.startswith("Non-Returning Functions"):
+        return True
     return name.endswith("Constant Reference Analyzer") or name.endswith("Scalar Operand References")
 
 
