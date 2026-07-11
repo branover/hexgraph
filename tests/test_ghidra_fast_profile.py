@@ -1,6 +1,7 @@
 """Ghidra's analysis of a 100 MB+ monolith is bounded by a fast profile that disables the passes
 proven pathological on a huge binary (Call-Fixup Installer's O(n^2) AddressSet, the per-processor
-Constant Reference Analyzer, the decompile-every-function passes) while KEEPING the call-graph/
+Constant Reference Analyzer, the decompile-every-function passes, and the Non-Returning Functions
+analyzers whose ClearFlowAndRepair wedges on a monolith) while KEEPING the call-graph/
 reference analyzers. Since the PyGhidra re-platform these are pure host-side helpers in `pyghidra_lib`
 (`_slow_analyzer` + `_FAST_PROFILE_BYTES`), applied in-process by `_analyze` before AutoAnalysisManager
 runs. The analysis otherwise runs to completion — `re_analyze` runs it detached with a generous budget

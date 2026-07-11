@@ -188,11 +188,12 @@ def open_target(artifact, *, cold_analyze=True, read_only=False):
 
 
 def _slow_analyzer(name: str) -> bool:
-    """The auto-analysis passes disabled under the fast profile — matched by suffix so it's
-    architecture-agnostic ("PowerPC/ARM/x86 … Constant Reference Analyzer"). Mirrors the Jython
-    FAST_PROFILE_SCRIPT: drop the O(n^2) Call-Fixup Installer, the per-processor constant/scalar
-    propagation, and the decompile-EVERY-function passes; KEEP function/call-graph/reference
-    discovery (HexGraph decompiles on demand)."""
+    """The auto-analysis passes disabled under the fast profile — matched by name, with the
+    constant-prop passes matched by suffix so it's architecture-agnostic ("PowerPC/ARM/x86 …
+    Constant Reference Analyzer"). Mirrors the Jython FAST_PROFILE_SCRIPT: drop the O(n^2)
+    Call-Fixup Installer, the per-processor constant/scalar propagation, the decompile-EVERY-function
+    passes, and the Non-Returning Functions analyzers (their ClearFlowAndRepair wedges on a monolith);
+    KEEP function/call-graph/reference discovery (HexGraph decompiles on demand)."""
     if "." in name:
         return False
     if name in ("Call-Fixup Installer", "Decompiler Parameter ID", "Decompiler Switch Analysis",
