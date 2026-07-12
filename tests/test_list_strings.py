@@ -122,13 +122,17 @@ def test_no_pattern_index_pagination_past_old_cap(hg_home, tmp_path):
         assert "495 more" in out and "offset=5505" in out
 
 
-def test_non_latin1_pattern_matches_nothing_not_everything(hg_home, tmp_path):
-    """A pattern that isn't representable in latin-1 (e.g. CJK) can't match the ASCII string scan,
-    so it reports 0 — not a false 'match everything' from an empty-encoded pattern."""
+def test_non_ascii_pattern_matches_nothing_not_everything(hg_home, tmp_path):
+    """A pattern with any non-printable-ASCII char can't match the ASCII string scan, so it reports
+    0 — for a fully non-ASCII pattern AND a MIXED one (the ASCII part must not be greped alone)."""
     with session_scope() as s:
         ctx, p, t = _ctx(s, tmp_path, ["alpha_string", "beta_string", "gamma_string"])
-        out = run_tool(ctx, "list_strings", {"pattern": "中文"})   # CJK, dropped by latin-1
-        assert "0 total" in out and "(none)" in out
+        # fully non-ASCII (CJK): must not become a match-everything.
+        assert "0 total" in run_tool(ctx, "list_strings", {"pattern": "中文"})
+        ctx.cache.clear()
+        # mixed ASCII + non-ASCII: must NOT grep just the "gamma" part.
+        out = run_tool(ctx, "list_strings", {"pattern": "gamma中"})
+        assert "0 total" in out and "gamma_string" not in out
 
 
 # --- fallback: the recon sample, FLAGGED, when there is no byte artifact ------------------

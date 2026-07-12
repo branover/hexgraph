@@ -1020,9 +1020,13 @@ def _scan_artifact_strings(path: str, pattern: str) -> tuple[list[str], bool]:
     scan runs to EOF and `matches` is exact; an empty pattern early-stops at the cap so a huge binary
     isn't fully materialised. Only the matches are held, so memory stays bounded. Raises on an
     unreadable/zero-length artifact so the caller can fall back to the bounded facts."""
-    pat = pattern.lower().encode("latin-1", "ignore")
-    if pattern and not pat:
-        return [], False  # a non-empty pattern outside latin-1 can't match the ASCII string scan
+    low = pattern.lower()
+    # The scan yields printable-ASCII runs (0x20-0x7e); a pattern with ANY char outside that set
+    # cannot match, so short-circuit to no matches — rather than dropping the char and over-matching
+    # on the ASCII remainder (e.g. "gamma<cjk>" must not grep "gamma").
+    if pattern and any(not (0x20 <= ord(c) <= 0x7e) for c in low):
+        return [], False
+    pat = low.encode("latin-1")  # safe: every char is now printable ASCII (or the pattern is empty)
     seen: set[bytes] = set()
     matches: list[str] = []
     truncated = False
