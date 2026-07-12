@@ -40,8 +40,10 @@ def test_query_verb_records_observation_and_mutates_no_graph(hg_home):
         nodes_before = s.query(Node).count()
         edges_before = s.query(Edge).count()
 
+        # list_strings greps the real artifact directly, so assert on a string that is actually
+        # in the vuln_httpd fixture (not an injected metadata sample).
         out = run_tool(ctx, "list_strings", {"pattern": "cgi"})
-        assert "/cgi-bin/admin" in out
+        assert "cgi_handler" in out and "source=full" in out
 
         # ZERO graph mutation — an enumeration is an answer, not a graph object.
         assert s.query(Node).count() == nodes_before

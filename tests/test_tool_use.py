@@ -152,7 +152,9 @@ def test_read_imports_tool_offline(hg_home):
                            "strings": ["/cgi-bin/admin", "token="]}
         ctx = ToolContext(session=s, project=p, target=t)
         assert "strcpy" in run_tool(ctx, "read_imports", {})
-        assert "/cgi-bin/admin" in run_tool(ctx, "list_strings", {"pattern": "cgi"})
+        # list_strings greps the artifact directly: a "cgi" pattern finds the fixture's real
+        # cgi_handler string, and does not return a non-matching string.
+        assert "cgi_handler" in run_tool(ctx, "list_strings", {"pattern": "cgi"})
         assert "token=" not in run_tool(ctx, "list_strings", {"pattern": "cgi"})
 
 

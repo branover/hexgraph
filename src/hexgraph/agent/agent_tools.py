@@ -20,6 +20,7 @@ the fan-out guard). A per-call promotion budget backstops it, reporting any over
 from __future__ import annotations
 
 import logging
+import mmap
 import re
 from dataclasses import dataclass, field
 
@@ -64,6 +65,18 @@ _PROMOTE_BUDGET = 50
 # (the no-silent-caps discipline — never silently clip without saying so).
 _STRINGS_PAGE = 200
 _STRINGS_PAGE_MAX = 1000
+
+# When list_strings is given a `pattern`, it greps the WHOLE artifact directly (server-side,
+# no sandbox, no cap) instead of the binutils probe's bounded facts — the probe caps its
+# `strings` pass (see binutils_probe._MAX_STRINGS), which on a large binary (hundreds of MB,
+# millions of strings) silently hides every string past the cap, so a real `pattern` returned
+# "(none)" and read as "not present". The direct scan matches `strings -a -n 6` semantics
+# (printable ASCII runs >= 6). Only the MATCHES are materialised (bounded below); the scan
+# itself covers the entire file.
+_STR_SCAN_MIN_LEN = 6                 # mirror binutils_probe._MIN_STR_LEN
+_STR_SCAN_COLLECT_MAX = 20_000        # unique matches materialised for paging (page is <=1000)
+_STR_SCAN_COUNT_CAP = 500_000         # stop counting past this (report the total as a floor)
+_PRINTABLE_RUN = re.compile(rb"[\x20-\x7e]{%d,}" % _STR_SCAN_MIN_LEN)
 
 # list_functions / resolve_symbol pagination: same bounded-page discipline as list_strings —
 # a broad grep of the whole discovered-function list (a large binary has thousands) or the
@@ -247,14 +260,16 @@ _STATIC_SPECS = [
              "is_sink on any dangerous import ALREADY in the graph + folds mitigation flags onto the "
              "target; adds NO new graph nodes — promote what matters.",
              {"type": "object", "properties": {}}),
-    ToolSpec("list_strings", "GREP the target's FULL string table (the real strings(1) pass, NOT a "
-             "small recon sample) for a substring `pattern` — find a command template (.cgi, %s), a "
-             "config key (factory, aes), a path or URL anywhere in the binary. Server-side filtered + "
-             "PAGINATED: pass `pattern` to filter, `offset`/`limit` to page (default 200, max 1000); "
-             "the result reports the total match count + the next offset. With no `pattern` it lists "
-             "the table page by page. QUERY: records an Observation; adds no graph nodes. (Falls back "
-             "to the recon sample, flagged, only when the full strings pass is unavailable — non-ELF "
-             "or sandbox down. For OBFUSCATED stack/decoded strings a plain pass misses, use "
+    ToolSpec("list_strings", "GREP a substring `pattern` across the target's strings — find a command "
+             "template (.cgi, %s), a config key (factory, aes), a path or URL. With a `pattern` this "
+             "scans the WHOLE artifact directly (server-side, every printable string, NO cap), so on a "
+             "large binary a string that lives past the recon facts is still found and a 0-match result "
+             "means the pattern is genuinely absent (source=full). Server-side filtered + PAGINATED: "
+             "`offset`/`limit` page the matches (default 200, max 1000); the result reports the total "
+             "match count + the next offset. With NO `pattern` it pages the recon facts (bounded — for a "
+             "huge binary use a `pattern` to reach every string). QUERY: records an Observation; adds no "
+             "graph nodes. (Falls back to the recon sample, flagged, only when there is no byte artifact "
+             "or the scan can't run. For OBFUSCATED stack/decoded strings a plain pass misses, use "
              "floss_strings.)",
              {"type": "object", "properties": {
                  "pattern": {"type": "string", "description": "substring to grep the full string table for"},
@@ -992,6 +1007,41 @@ def _observations(ctx: ToolContext, name: str, args: dict) -> str:
                  + "\n".join(lines))
 
 
+def _scan_artifact_strings(path: str, pattern: str) -> tuple[list[str], int, bool]:
+    """Grep the ENTIRE on-disk artifact for printable strings matching `pattern` — server-side,
+    no sandbox, no cap on which part of the file is scanned (the fix for the binutils probe's
+    bounded facts hiding strings past its cap on a large binary).
+
+    mmaps the file and runs a printable-run regex (>= _STR_SCAN_MIN_LEN, matching `strings -a -n`)
+    over the whole image, keeping runs that contain `pattern` (case-insensitive substring).
+    Returns `(matches, total, count_truncated)` where `matches` is the first _STR_SCAN_COLLECT_MAX
+    UNIQUE matches (order-stable, deduped like `strings`) and `total` is the unique-match count
+    (stopped at _STR_SCAN_COUNT_CAP, then count_truncated=True so the caller flags the total as a
+    floor). Only the matches are materialised, so a broad pattern can't blow up memory. Raises on
+    an unreadable/zero-length artifact so the caller can fall back to the bounded facts."""
+    pat = pattern.lower().encode("latin-1", "ignore")
+    seen: set[bytes] = set()
+    matches: list[str] = []
+    total = 0
+    count_truncated = False
+    with open(path, "rb") as fh:
+        with mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+            for m in _PRINTABLE_RUN.finditer(mm):
+                run = m.group()
+                if pat and pat not in run.lower():
+                    continue
+                if run in seen:
+                    continue
+                seen.add(run)
+                total += 1
+                if len(matches) < _STR_SCAN_COLLECT_MAX:
+                    matches.append(run.decode("latin-1"))
+                if total >= _STR_SCAN_COUNT_CAP:
+                    count_truncated = True
+                    break
+    return matches, total, count_truncated
+
+
 def _full_string_table(ctx: ToolContext) -> tuple[list[str], str]:
     """The FULL `strings(1)` table for this target, for list_strings to grep — NOT the
     ~40-entry recon SAMPLE in target.metadata_json (the bug that made a real `.cgi`/`%s`/
@@ -1039,15 +1089,43 @@ def _full_string_table(ctx: ToolContext) -> tuple[list[str], str]:
 
 
 def _list_strings(ctx: ToolContext, args: dict) -> str:
-    """List/grep the target's FULL string table (not the recon sample), server-side filtered
-    by an optional substring `pattern` with offset/limit PAGINATION. QUERY: records an
-    Observation; adds no graph nodes. Bounded — reports the total match count + next offset
-    rather than silently clipping (the no-silent-caps discipline). Folds F13 (grep finds a
-    real string the sample omitted) and F15 (greppable full strings, no obs_get dance)."""
-    table, source = _full_string_table(ctx)
-    pat = (args.get("pattern") or "").lower()
-    matches = [s for s in table if pat in s.lower()] if pat else table
-    total = len(matches)
+    """Grep the target's strings, server-side filtered by an optional substring `pattern` with
+    offset/limit PAGINATION. With a `pattern` it scans the WHOLE artifact directly (source="full":
+    an mmap'd printable-run pass over every byte, no cap) so a string past the binutils probe's
+    bounded facts is still found — a real `pattern` that returned "(none)" before because the string
+    sat past the probe's cap on a large binary. No `pattern`, no byte artifact, or a failed scan
+    falls back to `_full_string_table` (the bounded facts / recon sample, flagged). QUERY: records an
+    Observation; adds no graph nodes. Bounded — reports the total match count + next offset rather
+    than silently clipping (the no-silent-caps discipline)."""
+    pat_raw = args.get("pattern") or ""
+    pat = pat_raw.lower()
+    path = str(ctx.target.path or "").strip()
+    # A `pattern` search greps the WHOLE artifact directly (server-side, uncapped) so a string
+    # that lives past the binutils probe's bounded facts is still found — the fix for the silent
+    # under-report on a large binary. Falls back to the bounded facts/sample when there is no byte
+    # artifact (a Channel-reached surface) or the direct scan cannot run.
+    matches: list[str] | None = None
+    source = ""
+    total = 0
+    count_truncated = False
+    if pat and path:
+        cache_key = f"strings_scan::{pat}"
+        scanned = ctx.cache.get(cache_key)
+        if scanned is None:
+            try:
+                scanned = _scan_artifact_strings(path, pat_raw)
+                ctx.cache[cache_key] = scanned
+            except Exception:  # noqa: BLE001 — best-effort; fall through to the bounded facts
+                logger.debug("full-artifact strings scan failed for target=%s; using facts",
+                             ctx.target.id, exc_info=True)
+                scanned = None
+        if scanned is not None:
+            matches, total, count_truncated = scanned
+            source = "full"
+    if matches is None:
+        table, source = _full_string_table(ctx)
+        matches = [s for s in table if pat in s.lower()] if pat else table
+        total = len(matches)
 
     def _bound(val, default, lo, hi):
         try:
@@ -1056,16 +1134,27 @@ def _list_strings(ctx: ToolContext, args: dict) -> str:
             return default
         return max(lo, min(v, hi))
 
-    offset = _bound(args.get("offset"), 0, 0, max(0, total))
+    # `pageable` is what we can actually index into: the direct scan materialises at most
+    # _STR_SCAN_COLLECT_MAX matches even when `total` is larger, so paging is bounded by it
+    # while the reported `total` stays the true count.
+    pageable = len(matches)
+    offset = _bound(args.get("offset"), 0, 0, max(0, pageable))
     limit = _bound(args.get("limit"), _STRINGS_PAGE, 1, _STRINGS_PAGE_MAX)
     page = matches[offset:offset + limit]
     next_offset = offset + len(page)
-    more = next_offset < total
+    more = next_offset < pageable
 
     pat_note = f" matching {pat!r}" if pat else ""
-    src_note = "" if source == "binutils" else (
-        " [recon SAMPLE only — the full strings pass needs the sandbox image; "
-        "results may be incomplete]")
+    if source == "sample":
+        src_note = (" [recon SAMPLE only — the full strings pass needs the sandbox image; "
+                    "results may be incomplete]")
+    elif source == "full" and count_truncated:
+        src_note = f" [total is a floor — the scan stopped counting at {_STR_SCAN_COUNT_CAP}]"
+    elif source == "full" and total > pageable:
+        src_note = (f" [first {pageable} of {total} matches materialised — "
+                    "narrow the pattern to reach the rest]")
+    else:
+        src_note = ""
     # The Observation records the page actually returned (keyed by pattern+offset+limit so a
     # different page is its own row), plus the total + source so a later reader sees the scope.
     _record_obs(ctx, tool="list_strings",
@@ -1081,7 +1170,7 @@ def _list_strings(ctx: ToolContext, args: dict) -> str:
     body = "\n".join(page) or "(none)"
     tail = ""
     if more:
-        tail = (f"\n…[{total - next_offset} more — re-call with offset={next_offset}"
+        tail = (f"\n…[{pageable - next_offset} more — re-call with offset={next_offset}"
                 + (f", limit={limit}" if limit != _STRINGS_PAGE else "") + "]")
     # Clip ONLY the body, reserving room for the header + the page tail, so the source flag and
     # the "N more / offset=…" marker can never be truncated away (the page is the bound; a clipped
