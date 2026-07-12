@@ -106,6 +106,31 @@ def test_limit_is_clamped_no_silent_flood(hg_home, tmp_path):
         assert "2000 more" in out and "offset=1000" in out
 
 
+# --- plain index pagination reaches PAST the old 5000 cap --------------------------------
+
+def test_no_pattern_index_pagination_past_old_cap(hg_home, tmp_path):
+    """With NO pattern, offset/limit page the FULL string table by index — including a window that
+    starts past the binutils probe's old 5000-string cap (the enumeration the cap used to truncate)."""
+    strings = [f"S{i:05d}" for i in range(6000)]     # 6000 unique, file-ordered
+    with session_scope() as s:
+        ctx, p, t = _ctx(s, tmp_path, strings)
+        out = run_tool(ctx, "list_strings", {"offset": 5500, "limit": 5})
+        assert "source=full" in out
+        assert "6000 total" in out
+        assert "S05500" in out and "S05504" in out   # strings past the old 5000 cap are reachable
+        assert "S05505" not in out                   # clipped to the requested window
+        assert "495 more" in out and "offset=5505" in out
+
+
+def test_non_latin1_pattern_matches_nothing_not_everything(hg_home, tmp_path):
+    """A pattern that isn't representable in latin-1 (e.g. CJK) can't match the ASCII string scan,
+    so it reports 0 — not a false 'match everything' from an empty-encoded pattern."""
+    with session_scope() as s:
+        ctx, p, t = _ctx(s, tmp_path, ["alpha_string", "beta_string", "gamma_string"])
+        out = run_tool(ctx, "list_strings", {"pattern": "中文"})   # CJK, dropped by latin-1
+        assert "0 total" in out and "(none)" in out
+
+
 # --- fallback: the recon sample, FLAGGED, when there is no byte artifact ------------------
 
 def test_falls_back_to_sample_without_byte_artifact(hg_home, tmp_path):
