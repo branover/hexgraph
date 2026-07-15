@@ -1969,9 +1969,9 @@ _GHIDRA_XREF_LEAD = (
 # NOT this case.)
 _GHIDRA_BRIDGE_ONLY_XREF_MSG = (
     "Cross-references need headless Ghidra's warm reference index, but Ghidra is configured in bridge "
-    "mode — the researcher bridge is decompile-only (no reference index / P-Code surface for xrefs or "
-    "search_code, and re_analyze builds no warm project in bridge mode). To get cross-references, set "
-    "features.ghidra.mode to headless and run re_analyze, or switch the backend to radare2.")
+    "mode — the researcher bridge is decompile-only (no reference index / P-Code surface for xrefs, and "
+    "re_analyze builds no warm project in bridge mode). To get cross-references, set features.ghidra.mode "
+    "to headless and run re_analyze, or switch the backend to radare2.")
 
 
 def _ghidra_xrefs_active() -> bool:
@@ -2029,9 +2029,10 @@ def _ghidra_xrefs(ctx: ToolContext, mode: str, subject: str | None) -> dict | No
 
     A live managed per-target bridge OWNS the Ghidra project, so `ghidra_op_backend` routes there first
     (the resident reference index answers with no per-call open and no project-lock conflict). If that
-    bridge is registered but unreachable/errors, we RETRY the headless warm project explicitly, so a
-    stale bridge degrades to the warm headless slot rather than dropping the query to r2. Best-effort:
-    never raises into the caller."""
+    bridge is registered but UNREACHABLE (its call raises), we RETRY the headless warm project
+    explicitly, so a dead bridge degrades to the warm headless slot rather than dropping the query to
+    r2. A LIVE bridge that RETURNS an error keeps holding its project lock, so we do NOT run a headless
+    op behind it (that returns None). Best-effort: never raises into the caller."""
     from hexgraph.sandbox.runner import docker_available
 
     if not docker_available():
