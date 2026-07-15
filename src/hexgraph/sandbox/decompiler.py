@@ -38,8 +38,14 @@ def focus_only_payload(out: dict) -> dict:
     The whole-program `functions` list is kept only as a bounded sample (the full inventory is its own
     `function_list` Observation); `functions_total` preserves the true whole-program count."""
     fns = (out or {}).get("functions", []) or []
+    # Guard against a present-but-None `functions_total` (a stale managed bridge returns
+    # `functions_total: resp.get(...)` = None), matching the isinstance guard at the user-facing sites —
+    # `.get(..., default)` would only default on a MISSING key and store null here.
+    ftotal = (out or {}).get("functions_total")
+    if not isinstance(ftotal, int) or ftotal < len(fns):
+        ftotal = len(fns)
     return {"functions": fns[:_FOCUS_PAYLOAD_FUNCTION_SAMPLE],
-            "functions_total": (out or {}).get("functions_total", len(fns)),
+            "functions_total": ftotal,
             "focus": (out or {}).get("focus")}
 
 

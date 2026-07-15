@@ -940,7 +940,14 @@ def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
             if out.get("error"):
                 return out["error"]
             fns = out.get("functions", [])
-            return _clip(f"re-analyzed ({len(fns)} functions):\n" + "\n".join(fns[:300]))
+            # Report the TRUE whole-program count (functions_total), not len(fns) — the returned list is
+            # a bounded slice, and the inline body shows only the first 300 (same slice-vs-total fix as
+            # list_functions / the decompile fallback).
+            ftotal = out.get("functions_total")
+            if not isinstance(ftotal, int) or ftotal < len(fns):
+                ftotal = len(fns)
+            more = "; showing first 300" if ftotal > 300 else ""
+            return _clip(f"re-analyzed ({ftotal} functions{more}):\n" + "\n".join(fns[:300]))
         if name == "check_decompiler":
             from hexgraph.agent.mcp_tools import check_decompiler
             d = check_decompiler()

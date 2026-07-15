@@ -15,7 +15,30 @@ tests/test_breadth_xrefs.py alongside the other Observation-substrate fallbacks.
 from __future__ import annotations
 
 from hexgraph.agent.agent_tools import _format_decomp
-from hexgraph.sandbox.decompiler import GhidraDecompiler, R2Decompiler
+from hexgraph.sandbox.decompiler import (
+    _FOCUS_PAYLOAD_FUNCTION_SAMPLE,
+    GhidraDecompiler,
+    R2Decompiler,
+    focus_only_payload,
+)
+
+
+def test_focus_only_payload_guards_none_functions_total():
+    """focus_only_payload derives functions_total from a PRESENT-but-None value (a stale managed bridge
+    returns `functions_total: None`), not only a missing key — else the stored payload would hold null.
+    It also caps the whole-program name list to a bounded sample (the full inventory is its own
+    `function_list` Observation)."""
+    # present-but-None ⇒ falls back to len(functions), not stored as null
+    p = focus_only_payload({"functions": ["a", "b", "c"], "functions_total": None,
+                            "focus": {"name": "a"}})
+    assert p["functions_total"] == 3
+    # a real total is preserved; the name list is a bounded sample, not the whole inventory
+    big = [f"f{i}" for i in range(1000)]
+    p2 = focus_only_payload({"functions": big, "functions_total": 9000, "focus": None})
+    assert p2["functions_total"] == 9000
+    assert len(p2["functions"]) == _FOCUS_PAYLOAD_FUNCTION_SAMPLE
+    # a missing key defaults to len too
+    assert focus_only_payload({"functions": ["x"], "focus": None})["functions_total"] == 1
 
 
 # --- (1) the seam fallback: Ghidra missed the focus → radare2 resolves it ----------
