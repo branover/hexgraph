@@ -74,6 +74,30 @@ def test_byte_scan_formats_hits_and_maps_to_functions(hg_home, monkeypatch):
         assert "2 hit(s)" in out
 
 
+def test_scan_bridge_mode_tries_warm_ghidra_then_falls_back_to_r2_raw(hg_home, monkeypatch):
+    """The byte/immediate scan's warm gate is `_ghidra_backend_enabled` (any Ghidra mode), NOT the
+    headless-only one — so a bridge-mode target isn't wrongly forced onto the cold path. And because
+    the r2 fallback is a RAW scan (no warm analysis needed), a researcher-bridge target where warm
+    Ghidra can't answer still gets REAL hits from r2, not a 'switch to headless' refusal."""
+    from hexgraph.engine.re import ghidra as G
+
+    monkeypatch.setattr(G, "ghidra_config", lambda: {"enabled": True, "mode": "bridge"})
+    tried = []
+    # Warm Ghidra scan is attempted (proving the broadened gate) but comes up cold => None => r2 raw.
+    monkeypatch.setattr(AT, "_ghidra_search",
+                        lambda ctx, **kw: (tried.append("ghidra"), None)[1])
+    fake = _wire_probe(monkeypatch, {"tool": "xrefs_probe", "mode": "search", "kind": "bytes",
+                                     "hits": [{"addr": "0x401000", "in_function": "cgi_handler"}],
+                                     "total": 1})
+    with session_scope() as s:
+        ctx, _p, _t = _ctx(s)
+        out = run_tool(ctx, "search_code", {"bytes_pattern": "deadbeef"})
+        assert tried == ["ghidra"]                              # broadened gate DID try warm Ghidra first
+        assert fake.calls[-1][0] == "xrefs_probe.py"            # then the r2 raw scan served it
+        assert "0x401000" in out and "cgi_handler" in out       # real hits, not a refusal
+        assert "decompile-only" not in out and "headless" not in out
+
+
 def test_immediate_scan_invokes_imm_mode(hg_home, monkeypatch):
     """An immediate/constant scan uses `--imm` (r2 `/vj`)."""
     result = {"tool": "xrefs_probe", "mode": "search", "kind": "immediate", "value": "0x1337",
