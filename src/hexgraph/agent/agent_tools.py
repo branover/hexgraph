@@ -510,15 +510,29 @@ def _format_decomp(out: dict, label: str, *, limit: int = _MAX) -> str:
     focus = out.get("focus")
     if not focus:
         defined = out.get("functions", []) or []
-        # "defined functions" (not "imports") — the list is the decompiler's DEFINED set, which
-        # for a stripped binary or a Ghidra/r2 inventory mismatch may not include the requested
-        # focus even though it exists. If the label is a function-NAME miss, point at the
-        # address-based path (decompile_at resolves the function CONTAINING a hex address from
-        # xrefs/strings, and r2 backs Ghidra when their inventories disagree).
-        hint = ("" if label.startswith("address ")
-                else " — if you have its address, try re_decompile_at(<addr>)")
-        return (f"{label} not found among the {len(defined)} defined functions"
-                + (f": {', '.join(defined[:40])}" if defined else "") + hint)
+        # The TRUE whole-program count — not len(defined), which is a (possibly capped) returned slice.
+        # Reporting the slice length as the total is what made a large firmware read as "only 400
+        # functions"; functions_total is the real inventory size.
+        total = out.get("functions_total")
+        if not isinstance(total, int) or total < len(defined):
+            total = len(defined)
+        # An ADDRESS that resolved to no function is a DIFFERENT failure than a missing NAME: the
+        # address isn't inside any defined function (unanalyzed region, data, a different segment, or
+        # simply not code). Dumping the function-name list can't help an address lookup — point at the
+        # raw-disassembly / deeper-analysis escape hatches instead.
+        if label.startswith("address "):
+            return (f"{label} is not inside any defined function (of {total} defined). It may be in an "
+                    f"unanalyzed region, data, or a different segment. Try re_disassemble_range(<addr>, "
+                    f"count=…) for a raw disassembly there regardless of function boundaries, or "
+                    f"re_decompile_at(<addr>, reanalyze=True) to force a deeper analysis pass.")
+        # A NAME miss: the decompiler's DEFINED set may not include the requested focus even though it
+        # exists (a stripped binary, or a Ghidra/r2 inventory mismatch). Show a SAMPLE of the inventory
+        # (never the whole thing) with the true total, and point at the address-based path.
+        shown = defined[:40]
+        more = f" (+{total - len(shown)} more)" if total > len(shown) else ""
+        return (f"{label} not found among the {total} defined functions"
+                + (f": {', '.join(shown)}{more}" if shown else "")
+                + " — if you have its address, try re_decompile_at(<addr>)")
     addr = f" @ {focus['address']}" if focus.get("address") else ""
     name = focus.get("name") or label
     promo = out.get("promotable_callees") or []
@@ -659,17 +673,20 @@ def _decomp(ctx: ToolContext, function: str | None, *,
         # call (that yielded no focus), not a list_functions call, so it must not pollute
         # the discoverability index under the wrong tool name.
         fns = out.get("functions", [])
+        ftotal = out.get("functions_total")
+        if not isinstance(ftotal, int) or ftotal < len(fns):
+            ftotal = len(fns)
         if focused:
             subj = function or address
             obs, _cached = _record_obs(
                 ctx, tool=req_tool, args=req_args, result_kind="function_list",
-                payload={"functions": fns},
-                summary=f"{subj!r} not found; {len(fns)} functions available")
+                payload={"functions": fns, "functions_total": ftotal},
+                summary=f"{subj!r} not found; {ftotal} functions available")
         else:
             obs, _cached = _record_obs(
                 ctx, tool=req_tool, args=req_args, result_kind="function_list",
-                payload={"functions": fns},
-                summary=f"{len(fns)} functions" + (" (re-analyzed)" if reanalyze else ""))
+                payload={"functions": fns, "functions_total": ftotal},
+                summary=f"{ftotal} functions" + (" (re-analyzed)" if reanalyze else ""))
         out["observation_id"] = obs.id if obs is not None else None
     return out
 
@@ -1232,18 +1249,26 @@ def _list_functions(ctx: ToolContext, args: dict) -> str:
     if isinstance(out, dict) and out.get("error"):
         return out["error"]
     names = [str(f) for f in (out.get("functions", []) or [])]
+    # The TRUE whole-program count. `names` is the inventory the decompiler emitted (the full list up
+    # to a defensive cap); functions_total is how many functions actually exist. Reporting len(names)
+    # as the total is the bug that made a large firmware look like it had only 400 functions.
+    grand_total = out.get("functions_total")
+    if not isinstance(grand_total, int) or grand_total < len(names):
+        grand_total = len(names)
+    withheld = grand_total - len(names)          # functions beyond the returned inventory cap (normally 0)
 
     pat = args.get("pattern") or ""
     use_regex = bool(args.get("regex"))
     match = _compile_grep(pat, regex=use_regex)
     matches = [n for n in names if match(n)] if pat else names
-    total = len(matches)
+    pageable = len(matches)                       # how many names we can actually page over
+    total = pageable if pat else grand_total      # the count reported to the agent
 
-    offset = _bound_page(args.get("offset"), 0, 0, max(0, total))
+    offset = _bound_page(args.get("offset"), 0, 0, max(0, pageable))
     limit = _bound_page(args.get("limit"), _FUNCS_PAGE, 1, _FUNCS_PAGE_MAX)
     page = matches[offset:offset + limit]
     next_offset = offset + len(page)
-    more = next_offset < total
+    more = next_offset < pageable
 
     pat_note = f" matching {pat!r}" if pat else ""
     # Record the page actually returned (keyed by pattern+offset+limit so a different page is its
@@ -1254,15 +1279,21 @@ def _list_functions(ctx: ToolContext, args: dict) -> str:
                 args={k: v for k, v in (("pattern", pat), ("offset", offset),
                                         ("limit", limit)) if v},
                 result_kind="function_list_page",
-                payload={"functions": page, "total": total, "offset": offset, "limit": limit},
+                payload={"functions": page, "total": total, "grand_total": grand_total,
+                         "offset": offset, "limit": limit},
                 summary=f"{total} functions{pat_note}; page {offset}-{next_offset}")
 
     header = f"functions{pat_note} ({total} total, showing {offset}-{next_offset})"
     body = "\n".join(page) or "(none)"
     tail = ""
     if more:
-        tail = (f"\n…[{total - next_offset} more — re-call with offset={next_offset}"
+        tail = (f"\n…[{pageable - next_offset} more — re-call with offset={next_offset}"
                 + (f", limit={limit}" if limit != _FUNCS_PAGE else "") + "]")
+    if withheld:
+        # The decompiler returned a bounded slice of a larger inventory — never let the page counts
+        # read as the whole program: name the true total and how many are beyond the returned set.
+        tail += (f"\n…[note: {grand_total} functions defined; {withheld} are beyond the returned "
+                 f"inventory and not listed here — re_decompile_at reaches any function by address]")
     prefix = f"{header}:\n"
     budget = _MAX - len(prefix) - len(tail)
     if budget > 0 and len(body) > budget:

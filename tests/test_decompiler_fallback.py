@@ -137,9 +137,24 @@ def test_not_found_wording_says_defined_functions_and_suggests_decompile_at():
     assert "re_decompile_at(<addr>)" in msg     # the address-based recovery hint for a NAME miss
 
 
-def test_not_found_wording_no_addr_hint_for_an_address_miss():
-    """An address miss already used the address path — don't tell it to use re_decompile_at."""
-    out = {"functions": ["main"], "focus": None}
+def test_not_found_wording_for_an_address_miss_points_at_raw_disasm():
+    """An address that resolves to no function gets a DISTINCT message: it explains the address isn't
+    inside a defined function and points at re_disassemble_range (raw disasm) + a reanalyze pass —
+    NOT a dump of the function-name list, which can't help an address lookup."""
+    out = {"functions": ["main", "helper"], "functions_total": 2, "focus": None}
     msg = _format_decomp(out, "address 0xdeadbeef")
-    assert "defined functions" in msg
-    assert "re_decompile_at" not in msg
+    assert "not inside any defined function" in msg
+    assert "re_disassemble_range" in msg
+    assert "reanalyze=True" in msg
+    assert "main" not in msg and "helper" not in msg   # no useless name-list dump for an address
+
+
+def test_not_found_wording_reports_true_total_not_capped_slice():
+    """The reported count is the TRUE whole-program total (functions_total), not the length of the
+    returned (possibly capped) name slice — the fix for a large firmware reading as 'only 400
+    functions'. A sample of the inventory is shown, marked '+N more' so it isn't read as the whole
+    set."""
+    out = {"functions": ["f0", "f1", "f2"], "functions_total": 3812, "focus": None}
+    msg = _format_decomp(out, "function 'cgi_handler'")
+    assert "3812 defined functions" in msg      # the true total, not 3 (the returned slice length)
+    assert "more" in msg                          # the sample is explicitly marked partial

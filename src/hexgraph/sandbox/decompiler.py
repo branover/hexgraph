@@ -17,6 +17,12 @@ from hexgraph.sandbox.executor import Executor, get_executor
 log = logging.getLogger(__name__)
 
 
+# A per-function decompilation payload keeps only a bounded SAMPLE of the whole-program name list (the
+# full inventory lives in the separate `function_list` Observation). This stops the full function-name
+# list — now returned in full, up to MAX_FUNCTION_NAMES — from bloating every per-function Observation.
+_FOCUS_PAYLOAD_FUNCTION_SAMPLE = 400
+
+
 def focus_only_payload(out: dict) -> dict:
     """Trim a decompiler result dict to a FOCUS-ONLY payload for a per-function `decompilation`
     Observation.
@@ -27,8 +33,14 @@ def focus_only_payload(out: dict) -> dict:
     (`_extract_functions`) and `search_decompiled` read only `focus` (whole-program calls/structs
     are enriched from SEPARATE call_graph/structs Observations recorded by enrich_recon), so
     dropping them here loses nothing — the focus's own callees stay inside `focus`. The single
-    source of truth so the agent-tool path and the single-pass static_analysis path stay in sync."""
-    return {"functions": (out or {}).get("functions", []), "focus": (out or {}).get("focus")}
+    source of truth so the agent-tool path and the single-pass static_analysis path stay in sync.
+
+    The whole-program `functions` list is kept only as a bounded sample (the full inventory is its own
+    `function_list` Observation); `functions_total` preserves the true whole-program count."""
+    fns = (out or {}).get("functions", []) or []
+    return {"functions": fns[:_FOCUS_PAYLOAD_FUNCTION_SAMPLE],
+            "functions_total": (out or {}).get("functions_total", len(fns)),
+            "focus": (out or {}).get("focus")}
 
 
 class Decompiler(ABC):
