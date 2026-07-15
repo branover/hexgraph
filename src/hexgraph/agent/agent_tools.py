@@ -1961,6 +1961,18 @@ _GHIDRA_XREF_LEAD = (
     "and retry (the target reverts to the warm headless project). This tool is warm-only and never runs "
     "a cold analysis itself.")
 
+# The honest message for the RESEARCHER jfx bridge (`features.ghidra.mode == "bridge"`), which is
+# decompile-only: it has no warm reference index / P-Code surface, so xrefs / search_code can't be
+# served from it AND re_analyze builds no slot in bridge mode (analysis._active_backend maps bridge →
+# None). So — unlike `_GHIDRA_XREF_LEAD` (a headless-mode cold miss that re_analyze fixes) — the fix is
+# to switch mode, not to re-analyze. (The managed resident bridge runs under headless mode, so it is
+# NOT this case.)
+_GHIDRA_BRIDGE_ONLY_XREF_MSG = (
+    "Cross-references need headless Ghidra's warm reference index, but Ghidra is configured in bridge "
+    "mode — the researcher bridge is decompile-only (no reference index / P-Code surface for xrefs or "
+    "search_code, and re_analyze builds no warm project in bridge mode). To get cross-references, set "
+    "features.ghidra.mode to headless and run re_analyze, or switch the backend to radare2.")
+
 
 def _ghidra_xrefs_active() -> bool:
     """True when HEADLESS Ghidra is the active decompiler backend. Narrow on purpose: re_script needs
@@ -1991,6 +2003,22 @@ def _ghidra_backend_enabled() -> bool:
         return False
 
 
+def _ghidra_bridge_only() -> bool:
+    """True when Ghidra is enabled in RESEARCHER-bridge mode (`mode == "bridge"`), a decompile-only
+    backend that can't serve xrefs / search_code. Used to give the honest `_GHIDRA_BRIDGE_ONLY_XREF_MSG`
+    ("switch to headless") instead of routing into a futile headless cold miss whose lead ("run
+    re_analyze") doesn't apply in bridge mode. A managed resident bridge runs under headless mode, so
+    it is NOT flagged here — and it can't be started in bridge mode anyway (there's no warm slot to
+    build one from). A settings hiccup ⇒ False (fall through to the normal path)."""
+    try:
+        from hexgraph.engine.re.ghidra import ghidra_config
+
+        g = ghidra_config()
+        return bool(g.get("enabled")) and (g.get("mode") or "headless") == "bridge"
+    except Exception:  # noqa: BLE001 — never let config break xrefs backend selection
+        return False
+
+
 def _ghidra_xrefs(ctx: ToolContext, mode: str, subject: str | None) -> dict | None:
     """A cross-reference query answered from the warm persistent Ghidra project's reference index
     (`GhidraDecompiler.xrefs` / the managed bridge). Returns the probe dict — SAME shape as the r2
@@ -2012,16 +2040,25 @@ def _ghidra_xrefs(ctx: ToolContext, mode: str, subject: str | None) -> dict | No
     from hexgraph.sandbox.decompiler import GhidraDecompiler, ghidra_op_backend
 
     primary = ghidra_op_backend(ctx.target)
-    backends = [primary]
+    raised = False
+    try:
+        out = primary.xrefs(ctx.target.path, mode=mode, subject=subject or None, project=ctx.project)
+    except Exception:  # noqa: BLE001 — the backend was UNREACHABLE (e.g. a dead managed bridge)
+        out, raised = None, True
+    if not raised:
+        # The backend ANSWERED (a dict — possibly not_found, or an error). Trust it and do NOT run a
+        # headless op behind it: a LIVE bridge that returned an error still holds the project lock a
+        # headless pass would conflict on. A good dict is the result; anything else ⇒ give up (None).
+        return out if isinstance(out, dict) and not out.get("error") else None
+    # primary RAISED ⇒ it was unreachable. Degrade a dead managed BRIDGE to the headless warm slot
+    # (headless can't conflict with a bridge that isn't answering); a headless primary has nothing to
+    # degrade to.
     if isinstance(primary, GhidraBridgeDecompiler):
-        # primary is a (managed) bridge — add headless as the degrade path if the bridge can't answer.
-        backends.append(GhidraDecompiler())
-    for backend in backends:
         try:
-            out = backend.xrefs(
+            out = GhidraDecompiler().xrefs(
                 ctx.target.path, mode=mode, subject=subject or None, project=ctx.project)
-        except Exception:  # noqa: BLE001 — try the next backend; a total failure returns None
-            continue
+        except Exception:  # noqa: BLE001
+            return None
         if isinstance(out, dict) and not out.get("error"):
             return out
     return None
@@ -2153,6 +2190,8 @@ def _xrefs(ctx: ToolContext, symbol: str | None) -> str:
     key = f"xrefs:{symbol or '*'}"
     if key in ctx.cache:
         return ctx.cache[key]
+    if _ghidra_bridge_only():   # researcher jfx bridge: decompile-only, can't serve xrefs — say so
+        return _GHIDRA_BRIDGE_ONLY_XREF_MSG
     # Prefer the warm Ghidra reference index whenever Ghidra is the configured backend (any mode): an
     # index lookup over the already-analyzed program, NOT a cold whole-binary r2 `aaa` sweep (which
     # re-analyzes every call and times out on a large target). Only a NON-Ghidra target reaches the r2
@@ -2262,7 +2301,13 @@ def _run_xrefs_probe(ctx: ToolContext, subject: str | None, mode: str):
     yet unreachable), we surface `_GHIDRA_XREF_LEAD` — NOT the r2 probe's "no warm radare2" lead, which
     names the wrong engine for a Ghidra user. r2 still runs as a genuine last resort (a misconfigured
     Ghidra with a warm r2 project can still answer), but its cold-miss lead is rewritten to the Ghidra
-    one so the message always matches the active backend."""
+    one so the message always matches the active backend.
+
+    In researcher-bridge mode (`_ghidra_bridge_only`) the query can't be served at all (decompile-only,
+    no slot re_analyze could build), so it returns the honest "switch to headless" message up front —
+    no futile headless attempt, no radare2 cold miss."""
+    if _ghidra_bridge_only():
+        return None, _GHIDRA_BRIDGE_ONLY_XREF_MSG
     ghidra = _ghidra_backend_enabled()
     if ghidra:
         out = _ghidra_xrefs(ctx, mode, subject)
@@ -2658,9 +2703,13 @@ def _search_code_scan(ctx: ToolContext, args: dict, *, bytes_pat, immediate) -> 
         return "search_code byte/immediate scan unavailable (Docker/sandbox not running)"
     subj = f"bytes {bytes_pat!r}" if bytes_pat else f"immediate {immediate!r}"
 
-    # Warm Ghidra first (reuses the warm project / a live bridge); r2 raw scan otherwise.
+    # Warm Ghidra first whenever Ghidra is the backend in ANY mode (reuses the warm project / a live
+    # managed bridge) — same gate as the xref family, so a bridge-mode user isn't wrongly forced onto
+    # the cold path here. Unlike xrefs, the r2 fallback is a RAW byte scan that needs no warm analysis,
+    # so researcher-bridge mode (where warm Ghidra search returns an error without spawning) still gets
+    # real results from it rather than a "switch to headless" refusal.
     out = _ghidra_search(ctx, bytes_pat=bytes_pat, immediate=immediate) \
-        if _ghidra_xrefs_active() else None
+        if _ghidra_backend_enabled() else None
     if out is None:
         out = _r2_search(ctx, bytes_pat=bytes_pat, immediate=immediate)
     if isinstance(out, str):  # a string error from the r2 fallback

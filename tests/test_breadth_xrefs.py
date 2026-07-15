@@ -573,14 +573,14 @@ def test_data_xrefs_string_value_subject_points_at_address_workflow(hg_home, mon
         assert "hex ADDRESS" in out
 
 
-def test_xrefs_bridge_mode_cold_returns_ghidra_lead_not_radare2(hg_home, monkeypatch):
-    """The reported bug: with Ghidra the active backend but its warm index unable to answer (a cold
-    project / an unreachable bridge => `_ghidra_xrefs` returns None), the cold-miss lead names GHIDRA,
-    never radare2 — even though the fallback path is the r2 probe. A Ghidra user must never be told to
-    'run re_analyze' to build a warm *radare2* project they don't use."""
+def test_xrefs_cold_miss_returns_ghidra_lead_not_radare2(hg_home, monkeypatch):
+    """With Ghidra the active (headless) backend but its warm index unable to answer (a cold project =>
+    `_ghidra_xrefs` returns None), the cold-miss lead names GHIDRA, never radare2 — even though the
+    fallback path is the r2 probe. A Ghidra user must never be told to build a warm *radare2* project
+    they don't use. (Exercises the `_run_xrefs_probe` rewrite, via data_xrefs.)"""
     monkeypatch.setattr(AT, "_ghidra_backend_enabled", lambda: True)
     monkeypatch.setattr("hexgraph.sandbox.decompiler.GhidraDecompiler",
-                        lambda: _FakeGhidra({}, []))              # every mode -> None (cold/unreachable)
+                        lambda: _FakeGhidra({}, []))              # every mode -> None (cold)
     # The r2 fallback probe hits its own cold-miss (no warm r2 project) and returns the radare2 lead.
     _wire(monkeypatch, {"tool": "xrefs_probe", "mode": "data", "needs_analysis": True,
                         "error": "No warm radare2 analysis for this target yet. Run re_analyze ..."})
@@ -589,6 +589,70 @@ def test_xrefs_bridge_mode_cold_returns_ghidra_lead_not_radare2(hg_home, monkeyp
         out = run_tool(ctx, "data_xrefs", {"address": "0x4007a0"})
         assert "Ghidra is the active decompiler backend" in out   # the rewritten, engine-correct lead
         assert "radare2" not in out                                # never the wrong-engine message
+
+
+def test_re_xrefs_cold_miss_returns_ghidra_lead_via_xrefs_path(hg_home, monkeypatch):
+    """The `_xrefs` (re_xrefs) path has its OWN cold-miss rewrite, distinct from `_run_xrefs_probe`'s:
+    Ghidra active but its index can't answer and the r2 fallback cold-misses => the Ghidra lead, never
+    radare2. (Covers the `_xrefs` inline rewrite the other tests don't reach.)"""
+    monkeypatch.setattr(AT, "_ghidra_backend_enabled", lambda: True)
+    monkeypatch.setattr("hexgraph.sandbox.decompiler.GhidraDecompiler",
+                        lambda: _FakeGhidra({}, []))              # callers/sinks -> None (cold)
+    _wire(monkeypatch, {"tool": "xrefs_probe", "needs_analysis": True,
+                        "error": "No warm radare2 analysis for this target yet. Run re_analyze ..."})
+    with session_scope() as s:
+        ctx, _p, _t = _ctx(s)
+        out = run_tool(ctx, "xrefs", {"symbol": "system"})
+        assert "Ghidra is the active decompiler backend" in out
+        assert "radare2" not in out
+
+
+def test_xrefs_dead_managed_bridge_degrades_to_headless(hg_home, monkeypatch):
+    """A managed bridge that's registered but UNREACHABLE (its xrefs RAISES) degrades to the headless
+    warm slot instead of dropping to r2 — the headline degrade path. (A LIVE bridge returning an error
+    dict must NOT trigger the headless op — that returns None, covered by the cold-miss tests.)"""
+    from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler
+
+    class _DeadBridge(GhidraBridgeDecompiler):
+        def xrefs(self, *a, **k):
+            raise RuntimeError("managed bridge unreachable")
+
+    monkeypatch.setattr(AT, "_ghidra_backend_enabled", lambda: True)
+    monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
+    monkeypatch.setattr("hexgraph.sandbox.decompiler.ghidra_op_backend",
+                        lambda target: _DeadBridge(ops=object()))
+    headless_calls = []
+    monkeypatch.setattr(
+        "hexgraph.sandbox.decompiler.GhidraDecompiler",
+        lambda: _FakeGhidra({"data": {"mode": "data", "subject": "0x1", "total": 1,
+                                      "data_refs": [{"from_function": "main", "at": "0x2",
+                                                     "kind": "DATA"}]}}, headless_calls))
+    monkeypatch.setattr("hexgraph.sandbox.executor.get_executor", lambda *a, **k: _NoR2Xrefs())
+    _gate_ok(monkeypatch)
+    with session_scope() as s:
+        ctx, _p, _t = _ctx(s)
+        out = run_tool(ctx, "data_xrefs", {"address": "0x1"})
+        assert "main" in out                        # the headless degrade served the refs
+        assert headless_calls == [("data", "0x1")]  # headless was the degrade; r2 (_NoR2Xrefs) never hit
+
+
+def test_xrefs_researcher_bridge_says_needs_headless_not_reanalyze(hg_home, monkeypatch):
+    """Researcher jfx bridge (mode=bridge, decompile-only) can't serve xrefs: an honest 'switch to
+    headless' message up front — NO Ghidra xref attempt, and NOT the misleading radare2 cold-miss."""
+    from hexgraph.engine.re import ghidra as G
+
+    monkeypatch.setattr(G, "ghidra_config", lambda: {"enabled": True, "mode": "bridge"})
+
+    def _no_attempt(*a, **k):
+        raise AssertionError("must not attempt a Ghidra xref in researcher-bridge mode")
+
+    monkeypatch.setattr(AT, "_ghidra_xrefs", _no_attempt)
+    with session_scope() as s:
+        ctx, _p, _t = _ctx(s)
+        out, err = AT._run_xrefs_probe(ctx, "0x401000", "data")
+        assert out is None
+        assert "decompile-only" in err and "headless" in err
+        assert "No warm radare2" not in err
 
 
 def test_call_graph_served_from_warm_ghidra(hg_home, monkeypatch):
