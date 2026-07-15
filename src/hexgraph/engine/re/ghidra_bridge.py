@@ -28,6 +28,10 @@ _SAFE_NAME = re.compile(r"^[A-Za-z0-9_.@$:]+$")
 # (analyze-at-address), mirroring the headless probe; otherwise the focus is a name.
 _ADDR = re.compile(r"^0x[0-9a-fA-F]+$")
 
+# Defensive upper bound on the returned function-name inventory (names are cheap; the full list rides
+# with `functions_total`, the true count). Mirrors pyghidra_lib.MAX_FUNCTION_NAMES.
+_MAX_FUNCTION_NAMES = 20000
+
 
 class BridgeUnavailable(RuntimeError):
     """The Ghidra Bridge client isn't installed or no server is reachable."""
@@ -86,7 +90,8 @@ class _RemoteOps:
             if resolved:
                 focus = {"name": resolved, "resolved": resolved, "pseudocode": pseudo,
                          "disasm": "", "callees": []}
-        return {"functions": names[:400], "focus": focus, "tool": "ghidra_bridge"}
+        return {"functions": names[:_MAX_FUNCTION_NAMES], "functions_total": len(names),
+                "focus": focus, "tool": "ghidra_bridge"}
 
     def _decompile_one(self, focus: str) -> tuple[str, str]:
         """Decompile the function identified by `focus` over the bridge — an exact NAME, or a
@@ -199,7 +204,8 @@ class _ManagedOps:
         resp = self._rpc(req)
         # An error / not-found focus reads as no focus, mirroring the headless probe.
         focus = None if resp.get("error") else resp.get("focus")
-        return {"functions": (resp.get("functions") or [])[:400], "focus": focus,
+        return {"functions": (resp.get("functions") or [])[:_MAX_FUNCTION_NAMES],
+                "functions_total": resp.get("functions_total"), "focus": focus,
                 "tool": "ghidra_bridge"}
 
     # The remaining Ghidra ops, each a single RPC to the resident program (the server runs the

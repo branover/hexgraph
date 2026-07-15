@@ -298,6 +298,12 @@ def _apply_rename(program, flat, addr, new_name) -> bool:
     return ok
 
 
+# The whole-program function-name inventory is returned in FULL (names are cheap) up to this defensive
+# upper bound, always alongside `functions_total` (the true count). The old hard [:400] made a large
+# firmware look like it had only 400 functions and hid the rest from list_functions entirely.
+MAX_FUNCTION_NAMES = 20000
+
+
 def decompile_core(program, flat, monitor, *, focus=None, rename=None) -> dict:
     """Ported POST_SCRIPT: whole-program inventory (functions/calls/structs) + a focused decompile
     with recovered facts. `focus` is a function NAME or hex ADDRESS; `rename` is (addr, new_name).
@@ -309,8 +315,9 @@ def decompile_core(program, flat, monitor, *, focus=None, rename=None) -> dict:
 
     fm = program.getFunctionManager()
     funcs = list(fm.getFunctions(True))
-    result = {"functions": [f.getName() for f in funcs][:400], "focus": None,
-              "calls": [], "structs": []}
+    all_names = [f.getName() for f in funcs]
+    result = {"functions": all_names[:MAX_FUNCTION_NAMES], "functions_total": len(all_names),
+              "focus": None, "calls": [], "structs": []}
 
     edges = []
     for f in funcs[:600]:
@@ -1158,7 +1165,8 @@ def bridge_dispatch(program, flat, monitor, req) -> dict:
             return {"ok": True, "functions_total": program.getFunctionManager().getFunctionCount()}
         if op == "list":
             names = [f.getName() for f in program.getFunctionManager().getFunctions(True)]
-            return {"functions": names[:400], "tool": "ghidra_bridge"}
+            return {"functions": names[:MAX_FUNCTION_NAMES], "functions_total": len(names),
+                    "tool": "ghidra_bridge"}
         if op == "decompile":
             result = decompile_core(program, flat, monitor, focus=req.get("focus"))
             result["tool"] = "ghidra_bridge"

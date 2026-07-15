@@ -83,7 +83,7 @@ def test_decompile_at_address_not_found_records_under_decompile_at(hg_home, monk
     with session_scope() as s:
         ctx, p, t = _ctx(s)
         out = run_tool(ctx, "decompile_at", {"address": "0xdeadbeef"})
-        assert "not found" in out
+        assert "not inside any defined function" in out   # the distinct address-miss message
         # no graph mutation, and the miss is attributed to the call actually made
         assert s.query(Node).filter(Node.node_type == "function").count() == 0
         obs = s.query(Observation).filter(Observation.target_id == t.id,

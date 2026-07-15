@@ -92,6 +92,24 @@ def test_pagination_bounds_and_reports_next_offset(hg_home, monkeypatch):
         assert "sub_0009" not in out2
 
 
+def test_reports_true_total_when_inventory_capped(hg_home, monkeypatch):
+    """When the decompiler returns a bounded slice of a larger inventory (functions_total exceeds the
+    returned list), the tool reports the TRUE total — the fix for a large firmware reading as 'only
+    400 functions' — and notes how many functions are beyond the returned inventory."""
+    monkeypatch.setattr(
+        AT, "_decomp",
+        lambda ctx, function, **kw: {"functions": [f"sub_{i:04d}" for i in range(300)],
+                                     "functions_total": 8000})
+    monkeypatch.setattr("hexgraph.engine.re.analysis.analysis_state",
+                        lambda project, target: {"state": "analyzed", "detail": "(warm)"})
+    with session_scope() as s:
+        ctx = _ctx(s)
+        out = run_tool(ctx, "list_functions", {})
+        assert "8000 total" in out                 # the TRUE count, not 300 (the returned slice)
+        assert "8000 functions defined" in out      # the capping note names the true inventory size
+        assert "7700 are beyond" in out             # 8000 - 300 withheld from the returned inventory
+
+
 def test_limit_is_clamped_to_ceiling(hg_home, monkeypatch):
     """An over-large limit clamps to the 1000 ceiling and still says there's more."""
     big = [f"fn_{i:05d}" for i in range(2500)]

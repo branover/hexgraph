@@ -187,6 +187,10 @@ _ADDR = re.compile(r"^0x[0-9a-fA-F]+$")
 # the returned text separately (the no-silent-caps marker). Generous enough to read a whole
 # blind-spot region in one pass.
 _RANGE_DEFAULT_LENGTH = 256
+# The function-name inventory is returned in FULL (names are cheap) up to this defensive upper bound,
+# always alongside `functions_total` (the true count). The old hard [:200] made a large firmware look
+# like it had only 200 functions and hid the rest from list_functions.
+_MAX_FUNCTION_NAMES = 20000
 _RANGE_MAX_LENGTH = 8192
 _RANGE_MAX_COUNT = 1024
 
@@ -555,8 +559,8 @@ def main() -> int:
 
         # `cached` mirrors ghidra_probe: True ⇒ served from a WARM persistent project (no `aaa`
         # this call), False ⇒ a cold analysis (or the uncached throwaway path).
-        print(json.dumps({"tool": "decompile_probe", "functions": functions[:200],
-                          "focus": focus, "cached": warm}))
+        print(json.dumps({"tool": "decompile_probe", "functions": functions[:_MAX_FUNCTION_NAMES],
+                          "functions_total": len(functions), "focus": focus, "cached": warm}))
         return 0
     finally:
         r2.quit()
