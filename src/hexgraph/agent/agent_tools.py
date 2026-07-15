@@ -1949,11 +1949,24 @@ def _solve_constraint(ctx: ToolContext, args: dict) -> str:
     return _clip("\n".join(lines))
 
 
+# The cold-miss / unreachable-backend lead the xref family returns when GHIDRA is the active backend
+# — deliberately Ghidra-named. The r2 xrefs_probe's own lead names "radare2", which is the WRONG engine
+# for a Ghidra user (they built a warm Ghidra project, not an r2 one) and tells them to analyze a
+# backend they don't use — the confusing message this fixes. re_analyze with Ghidra active builds the
+# Ghidra slot; a stale/unhealthy bridge reverts to the warm headless project via re_bridge_stop.
+_GHIDRA_XREF_LEAD = (
+    "No warm Ghidra analysis available for this target (Ghidra is the active decompiler backend). Run "
+    "re_analyze(target) FIRST — it builds the warm project ONCE (detached; poll until state='analyzed'), "
+    "then re-run this and it'll be instant. If a Ghidra bridge is running but unhealthy, re_bridge_stop "
+    "and retry (the target reverts to the warm headless project). This tool is warm-only and never runs "
+    "a cold analysis itself.")
+
+
 def _ghidra_xrefs_active() -> bool:
-    """True when headless Ghidra is the active decompiler backend, so cross-reference queries are
-    served from its warm persistent project's reference index (analyze-once) instead of the cold r2
-    xrefs sweep. Mirrors `get_taint_analyzer`'s selection; a settings hiccup ⇒ False (stay on the
-    always-available r2 path)."""
+    """True when HEADLESS Ghidra is the active decompiler backend. Narrow on purpose: re_script needs
+    the headless probe's warm project / P-Code surface specifically (radare2 and the bridge have no
+    equivalent), so it gates on THIS. For the cross-reference family use `_ghidra_backend_enabled`
+    instead — any warm-Ghidra mode (headless OR bridge) serves xrefs. A settings hiccup ⇒ False."""
     try:
         from hexgraph.engine.re.ghidra import ghidra_config
 
@@ -1963,30 +1976,55 @@ def _ghidra_xrefs_active() -> bool:
         return False
 
 
+def _ghidra_backend_enabled() -> bool:
+    """True when Ghidra is the configured decompiler backend in ANY mode (headless OR bridge), so the
+    cross-reference family serves from Ghidra's warm reference index rather than the cold r2 xrefs
+    sweep. Broader than `_ghidra_xrefs_active` (headless-only): a bridge-mode user — or a live managed
+    per-target bridge — is just as much a "Ghidra is the warm backend" case. Routing their xrefs to r2
+    wrongly reports "no warm radare2" for an r2 project that was never built (only Ghidra was analyzed);
+    gating on `enabled` here is what fixes that mis-route. A settings hiccup ⇒ False (stay on r2)."""
+    try:
+        from hexgraph.engine.re.ghidra import ghidra_config
+
+        return bool(ghidra_config().get("enabled"))
+    except Exception:  # noqa: BLE001 — never let config break xrefs backend selection
+        return False
+
+
 def _ghidra_xrefs(ctx: ToolContext, mode: str, subject: str | None) -> dict | None:
     """A cross-reference query answered from the warm persistent Ghidra project's reference index
-    (`GhidraDecompiler.xrefs`). Returns the probe dict — SAME shape as the r2 xrefs_probe, with a
-    `not_found` flag for an unknown symbol/address — on a run that COMPLETED (even an empty /
-    not-found one) so the caller trusts it and does NOT fall back to the cold r2 sweep. Returns
-    None ONLY when Ghidra could not run (Docker down, not built into the image, a probe fault, or a
-    top-level `error`), so the caller falls back to r2. Best-effort: never raises into the caller."""
+    (`GhidraDecompiler.xrefs` / the managed bridge). Returns the probe dict — SAME shape as the r2
+    xrefs_probe, with a `not_found` flag for an unknown symbol/address — on a run that COMPLETED (even
+    an empty / not-found one) so the caller TRUSTS it and does not look further. Returns None ONLY when
+    Ghidra genuinely could not run (Docker down, not built into the image, a probe fault, or a top-level
+    `error`); a Ghidra-backed caller then surfaces `_GHIDRA_XREF_LEAD`, never the r2 radare2 lead.
+
+    A live managed per-target bridge OWNS the Ghidra project, so `ghidra_op_backend` routes there first
+    (the resident reference index answers with no per-call open and no project-lock conflict). If that
+    bridge is registered but unreachable/errors, we RETRY the headless warm project explicitly, so a
+    stale bridge degrades to the warm headless slot rather than dropping the query to r2. Best-effort:
+    never raises into the caller."""
     from hexgraph.sandbox.runner import docker_available
 
     if not docker_available():
         return None
-    # A live per-target bridge OWNS the Ghidra project, so route the xref query to it — the resident
-    # reference index answers with no per-call open and no project-lock conflict; else the headless
-    # warm path. Either way a probe fault / top-level error returns None so the caller degrades to r2.
-    from hexgraph.sandbox.decompiler import ghidra_op_backend
+    from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler
+    from hexgraph.sandbox.decompiler import GhidraDecompiler, ghidra_op_backend
 
-    try:
-        out = ghidra_op_backend(ctx.target).xrefs(
-            ctx.target.path, mode=mode, subject=subject or None, project=ctx.project)
-    except Exception:  # noqa: BLE001 — a warm-path failure DEGRADES to r2, never aborts the tool
-        return None
-    if not isinstance(out, dict) or out.get("error"):
-        return None
-    return out
+    primary = ghidra_op_backend(ctx.target)
+    backends = [primary]
+    if isinstance(primary, GhidraBridgeDecompiler):
+        # primary is a (managed) bridge — add headless as the degrade path if the bridge can't answer.
+        backends.append(GhidraDecompiler())
+    for backend in backends:
+        try:
+            out = backend.xrefs(
+                ctx.target.path, mode=mode, subject=subject or None, project=ctx.project)
+        except Exception:  # noqa: BLE001 — try the next backend; a total failure returns None
+            continue
+        if isinstance(out, dict) and not out.get("error"):
+            return out
+    return None
 
 
 def _scripting_enabled() -> bool:
@@ -2115,12 +2153,12 @@ def _xrefs(ctx: ToolContext, symbol: str | None) -> str:
     key = f"xrefs:{symbol or '*'}"
     if key in ctx.cache:
         return ctx.cache[key]
-    # Prefer the warm persistent Ghidra project's reference index when headless Ghidra is active: an
+    # Prefer the warm Ghidra reference index whenever Ghidra is the configured backend (any mode): an
     # index lookup over the already-analyzed program, NOT a cold whole-binary r2 `aaa` sweep (which
-    # re-analyzes every call and times out on a large target). Fall back to the r2 xrefs probe only
-    # when Ghidra can't run.
-    out = _ghidra_xrefs(ctx, "callers" if symbol else "sinks", symbol) \
-        if _ghidra_xrefs_active() else None
+    # re-analyzes every call and times out on a large target). Only a NON-Ghidra target reaches the r2
+    # probe; a Ghidra backend that can't answer surfaces the Ghidra lead, never r2's radare2 one.
+    ghidra = _ghidra_backend_enabled()
+    out = _ghidra_xrefs(ctx, "callers" if symbol else "sinks", symbol) if ghidra else None
     if out is None:
         from hexgraph.sandbox.executor import get_executor
         from hexgraph.sandbox.runner import docker_available
@@ -2131,9 +2169,15 @@ def _xrefs(ctx: ToolContext, symbol: str | None) -> str:
             out = get_executor().run_json_probe(
                 "xrefs_probe.py", ctx.target.path,
                 extra_args=[symbol] if symbol else None,
+                project_mount=_r2_project_mount(ctx),
             )
         except Exception as exc:  # noqa: BLE001
             return f"xrefs failed: {exc}"
+        # A warm-MISS carries the re_analyze lead — surface it rather than formatting a false-empty
+        # sink map. Rewrite it to the Ghidra-named lead when Ghidra is the active backend (the r2
+        # probe's own lead names radare2, the wrong engine for a Ghidra user).
+        if isinstance(out, dict) and out.get("needs_analysis") and out.get("error"):
+            return _GHIDRA_XREF_LEAD if ghidra else out["error"]
     # Record the xref result (a QUERY) — the enrichment extractor tags is_sink on any
     # already-curated dangerous-import symbol; no graph nodes are created here.
     _record_obs(ctx, tool="xrefs", args={"symbol": symbol} if symbol else {},
@@ -2207,13 +2251,20 @@ def _r2_project_mount(ctx: ToolContext) -> str | None:
 
 
 def _run_xrefs_probe(ctx: ToolContext, subject: str | None, mode: str):
-    """Run a breadth xrefs query in `mode`, returning (out, error_text). Prefers the warm persistent
-    Ghidra project's reference index when headless Ghidra is active (analyze-once, fast on a large
-    target where the cold r2 sweep times out); falls back to the r2 xrefs_probe (`--mode
-    function|data|callgraph`) only when Ghidra can't run. The r2 probe is WARM-ONLY too — it RELOADS
-    the persistent r2 project (bind-mounted) and NEVER runs `aaa`; a cold slot returns the re_analyze
-    lead. `mode="callers"` passes no --mode flag on the r2 path (legacy compat)."""
-    if _ghidra_xrefs_active():
+    """Run a breadth xrefs query in `mode`, returning (out, error_text). Prefers the warm Ghidra
+    reference index whenever Ghidra is the configured backend in ANY mode (analyze-once, fast on a
+    large target where the cold r2 sweep times out); only a NON-Ghidra target reaches the r2
+    xrefs_probe (`--mode function|data|callgraph`). The r2 probe is WARM-ONLY too — it RELOADS the
+    persistent r2 project (bind-mounted) and NEVER runs `aaa`; a cold slot returns the re_analyze lead.
+    `mode="callers"` passes no --mode flag on the r2 path (legacy compat).
+
+    When Ghidra IS the backend but its warm index can't answer (cold project, or a bridge registered
+    yet unreachable), we surface `_GHIDRA_XREF_LEAD` — NOT the r2 probe's "no warm radare2" lead, which
+    names the wrong engine for a Ghidra user. r2 still runs as a genuine last resort (a misconfigured
+    Ghidra with a warm r2 project can still answer), but its cold-miss lead is rewritten to the Ghidra
+    one so the message always matches the active backend."""
+    ghidra = _ghidra_backend_enabled()
+    if ghidra:
         out = _ghidra_xrefs(ctx, mode, subject)
         if out is not None:
             return out, None
@@ -2229,11 +2280,12 @@ def _run_xrefs_probe(ctx: ToolContext, subject: str | None, mode: str):
                                             project_mount=_r2_project_mount(ctx))
     except Exception as exc:  # noqa: BLE001
         return None, f"{mode} xrefs failed: {exc}"
-    # A warm-MISS payload carries the re_analyze lead (a cold index mode, e.g. reached with the
-    # run_tool gate reporting `unavailable`). Surface it as the error so EVERY caller (function/data
-    # xrefs, call graph) points at re_analyze instead of formatting an empty result.
+    # A warm-MISS payload carries the re_analyze lead (a cold index mode). Surface it as the error so
+    # EVERY caller (function/data xrefs, call graph) points at re_analyze instead of formatting an
+    # empty result — but rewrite it to the Ghidra-named lead when Ghidra is the active backend (the r2
+    # probe's own lead names radare2, the wrong engine for a Ghidra user).
     if isinstance(out, dict) and out.get("needs_analysis") and out.get("error"):
-        return None, out["error"]
+        return None, (_GHIDRA_XREF_LEAD if ghidra else out["error"])
     return out, None
 
 
@@ -2304,6 +2356,22 @@ def _function_xrefs(ctx: ToolContext, function: str) -> str:
     return ctx.cache[key]
 
 
+def _no_data_xrefs_msg(subject: str) -> str:
+    """The 'no references' message for data_xrefs, tuned to what `subject` was. A hex address that
+    resolved to nothing is a genuine empty result; a subject that did NOT resolve to an address (a bare
+    name the index doesn't know — most often a string VALUE mistakenly passed here, e.g. a URL/path)
+    gets pointed at the resolve-the-string's-address workflow, since data_xrefs keys on an ADDRESS."""
+    s = (subject or "").strip()
+    if re.fullmatch(r"0x[0-9a-fA-F]+", s):
+        return (f"no references to {subject} found — nothing in the analyzed image points at this "
+                f"address (or it isn't a mapped address).")
+    return (f"{subject!r} did not resolve to an address, so data_xrefs found nothing. This tool keys on "
+            f"a hex ADDRESS (or a symbol that resolves to one), not a string VALUE. To find who "
+            f"references a string like this, first get its address — re_list_strings to locate it (each "
+            f"row carries the address), or re_resolve for a symbol — then re_data_xrefs on that 0x… "
+            f"address.")
+
+
 def _data_xrefs(ctx: ToolContext, address: str) -> str:
     """Every code/data/string reference TO an address. QUERY."""
     key = f"dxrefs:{address}"
@@ -2313,7 +2381,7 @@ def _data_xrefs(ctx: ToolContext, address: str) -> str:
     if err:
         return err
     if out.get("error") or out.get("not_found"):
-        return f"no resolvable references to {address!r}"
+        return _no_data_xrefs_msg(address)
     refs = out.get("data_refs") or []
     _record_obs(ctx, tool="data_xrefs", args={"address": address},
                 result_kind="data_xrefs", payload=out,
