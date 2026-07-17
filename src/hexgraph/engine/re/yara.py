@@ -295,6 +295,14 @@ def scan_target(
         return {"error": "no YARA rules available to scan with (bundled rules missing and no "
                          "user rules in the HEXGRAPH_HOME rules dir)"}
 
+    # Release the write lock before the (slow) YARA sandbox scan: a caller sweeping many
+    # artifacts (sweep_project) reaches here still holding the PREVIOUS artifact's just-promoted
+    # match nodes/edges, which would otherwise be pinned across this scan and starve other
+    # writers. scan_target records + promotes only AFTER the probe, so the only write held across
+    # it is the caller's pending one.
+    from hexgraph.db.session import release_write_lock
+
+    release_write_lock(session)
     try:
         facts = runner.run_json_probe(
             "yara_probe.py", artifact, extra_args=rules_dir_args, extra_ro_mounts=mounts,

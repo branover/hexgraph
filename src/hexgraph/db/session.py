@@ -195,6 +195,30 @@ def with_write_retry(fn: Callable[[Session], _T]) -> _T:
     return call_with_write_retry(_unit)
 
 
+def release_write_lock(session: Session) -> None:
+    """Commit any pending write so the single SQLite write lock is NOT held across the slow
+    sandbox/network/subprocess operation that follows. Call this IMMEDIATELY BEFORE such an
+    operation on any path that runs under a task's long-lived session.
+
+    Why this exists: under single-writer SQLite (WAL), a flushed-but-uncommitted write holds
+    the write lock until commit. A HexGraph task session interleaves DB writes (mark_running,
+    promoted nodes/edges, findings) with seconds-to-minutes sandbox work (a Docker probe, a
+    decompile, an emulator boot, a network probe). If the slow work runs with a write pending,
+    every other writer — another agent's task, the web app, an MCP server — blocks on the lock
+    for the whole duration and, past `busy_timeout`, crashes with "database is locked". That is
+    the recurring multi-agent contention (and the #283 ingest/recon failure): not two writes
+    racing, but one writer holding the lock across slow work. Committing first releases the lock;
+    `busy_timeout` then absorbs any brief re-acquire.
+
+    Semantics match `record_observation`'s durable checkpoint / `execute_recon`'s pre-probe
+    commit: a plain `session.commit()`, deliberately NOT the write-retry (a lock at commit
+    rolls the txn back and expunges the staged objects, so an in-place re-commit would lose
+    them — the unit must be rebuilt, which retry-here can't do). Safe to call when nothing is
+    pending: an all-reads (or empty) transaction just ends, which is cheap. The caller's ORM
+    objects stay usable afterward (`expire_on_commit=False`)."""
+    session.commit()
+
+
 def reset_engine_for_tests() -> None:
     """Drop the cached engine so a new HEXGRAPH_DB_PATH takes effect (tests only)."""
     global _engine, _Session

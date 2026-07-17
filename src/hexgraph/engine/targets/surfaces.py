@@ -225,8 +225,11 @@ def _egress_gate(session, project: Project, target: Target, *, tool: str, task_i
                       dest=dest, allowed=False, tool=tool,
                       detail="blocked: network egress not permitted by policy", durable=True)
         raise
+    # durable=True commits the audit-before-action (and any pending caller write, e.g. a task's
+    # mark_running) BEFORE the caller runs its network probe, so the single SQLite write lock is
+    # not held across it — the same rationale the deny path just above already commits under.
     record_egress(session, project_id=project.id, target_id=target.id, task_id=task_id,
-                  dest=dest, allowed=True, tool=tool, detail=scope.rationale)
+                  dest=dest, allowed=True, tool=tool, detail=scope.rationale, durable=True)
     return base_url, scope, dest
 
 
@@ -364,8 +367,10 @@ def _run_socket_probe(session: Session, project: Project, target: Target, *, tra
                       dest=dest, allowed=False, tool=tool,
                       detail="blocked: network egress not permitted by policy", durable=True)
         raise
+    # durable=True commits the audit-before-action before the socket probe below, so the write
+    # lock isn't held across the network op (see _egress_gate for the full rationale).
     record_egress(session, project_id=project.id, target_id=target.id, task_id=task_id,
-                  dest=dest, allowed=True, tool=tool, detail=scope.rationale)
+                  dest=dest, allowed=True, tool=tool, detail=scope.rationale, durable=True)
 
     runner = runner or get_executor()
     timeout = int(settings.get("features.network.timeout", 30) or 30)
@@ -459,8 +464,10 @@ def run_web_recon(session: Session, project: Project, target: Target, task=None,
                       dest=dest, allowed=False, tool="web_recon",
                       detail="blocked: network egress not permitted by policy", durable=True)
         raise
+    # durable=True commits the audit-before-action before the surface probe below, so the write
+    # lock isn't held across the network op (see _egress_gate for the full rationale).
     record_egress(session, project_id=project.id, target_id=target.id, task_id=task_id,
-                  dest=dest, allowed=True, tool="web_recon", detail=scope.rationale)
+                  dest=dest, allowed=True, tool="web_recon", detail=scope.rationale, durable=True)
 
     from hexgraph.sandbox.executor import get_executor
     from hexgraph import settings

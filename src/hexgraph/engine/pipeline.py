@@ -76,6 +76,15 @@ def _maybe_enrich_ghidra(session: Session, project: Project, target: Target, fac
         from hexgraph.engine.re.ghidra import enrich_enabled, enrich_target
 
         if enrich_enabled():
+            # Release the write lock before the (slow) Ghidra decompile inside enrich_target:
+            # the caller (analyze_target / a recon-children loop) reaches here holding uncommitted
+            # writes from the just-finished run_recon (mark_succeeded, and materialize_recon_nodes
+            # on a visible target), which would otherwise be pinned across the whole enrich —
+            # starving other writers. enrich_target itself decompiles FIRST then records, so the
+            # only write held across it is this pending one.
+            from hexgraph.db.session import release_write_lock
+
+            release_write_lock(session)
             enrich_target(session, project, target)
     except Exception:  # noqa: BLE001 — enrichment is an optional bonus pass
         pass

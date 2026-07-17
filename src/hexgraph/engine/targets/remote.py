@@ -106,8 +106,10 @@ def run_remote(session: Session, project: Project, target: Target, *, op: str,
                       dest=dest, allowed=False, tool=f"remote:{op}",
                       detail="blocked: remote access not permitted by policy", durable=True)
         raise
+    # durable=True commits the audit-before-action before the SSH/telnet probe below, so the
+    # write lock isn't held across the network op (see engine.targets.surfaces._egress_gate).
     record_egress(session, project_id=project.id, target_id=target.id, task_id=task_id,
-                  dest=dest, allowed=True, tool=f"remote:{op}", detail=scope.rationale)
+                  dest=dest, allowed=True, tool=f"remote:{op}", detail=scope.rationale, durable=True)
 
     runner = runner or get_executor()
     timeout = int(settings.get("features.remote.timeout", 30) or 30)

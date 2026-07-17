@@ -19,6 +19,7 @@ import os
 
 from sqlalchemy.orm import Session
 
+from hexgraph.db.session import release_write_lock
 from hexgraph.db.models import EdgeType, Project, Target, TargetKind, Task, TaskStatus
 from hexgraph.engine.graph.edges import add_edge
 from hexgraph.engine.findings.findings import persist_finding
@@ -260,8 +261,26 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
 
     toolctx = ToolContext(session=session, project=project, target=target)
     tools = available_tools(toolctx)
+
+    # Release the SQLite write lock before entering the agent loop, and again after EVERY tool
+    # call, so it is never held across a slow op the loop performs. Two kinds of slow op sit
+    # between the loop's writes: each tool's own sandbox work (a decompile/probe) AND the LLM
+    # completion round-trip between steps. Without this, a graph-mutating tool — e.g. a decompile
+    # that promotes a function node + `calls` edges — leaves an uncommitted write that is then
+    # held across the NEXT function's decompile and the intervening model call, which is the
+    # multi-agent "database is locked" contention. Committing after each tool call bounds every
+    # hold to the write itself (tools are slow-then-write intra-call, so this closes the
+    # INTER-call gap). The synthesized findings persisted after the loop are unaffected — they
+    # come after all sandbox work.
+    release_write_lock(session)
+
+    def _run_tool_and_checkpoint(call):
+        result = run_tool(toolctx, call.name, call.input)
+        release_write_lock(session)
+        return result
+
     findings, usage, transcript = run_findings_agentic(
-        backend, req, tools=tools, tool_runner=lambda c: run_tool(toolctx, c.name, c.input),
+        backend, req, tools=tools, tool_runner=_run_tool_and_checkpoint,
     )
 
     if task.type == "harness_generation":

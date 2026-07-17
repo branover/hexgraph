@@ -292,6 +292,12 @@ def execute_fuzzing(
     )
     prepared = get_fuzzer("source_lib", "libfuzzer").prepare(spec, project, target)
     src_path = prepared.artifact
+    # Release the write lock before the fuzz campaign (runs up to the full max_total_time budget):
+    # task.parent_finding_id (set above) would otherwise stay pinned across the entire run,
+    # starving every other writer. (mark_running is already checkpointed by run_task_sync.)
+    from hexgraph.db.session import release_write_lock
+
+    release_write_lock(session)
     try:
         result = runner.run_json_probe(
             prepared.probe, src_path, outdir=crash_dir, extra_args=prepared.extra_args,
@@ -322,6 +328,11 @@ def execute_fuzzing(
         )
         created += 1
         if cfg["triage"]:
+            # Commit the crash finding before the triage LLM round-trip so it isn't pinned across
+            # that network call. Deliberate: the crash finding is GROUNDED (a real libFuzzer crash)
+            # so — like the static-core findings — it is meant to persist even if the best-effort
+            # triage layer later fails; triage only ANNOTATES it. (release_write_lock imported above.)
+            release_write_lock(session)
             _triage(session, project, target, task, row, crash, source, function)
 
     from hexgraph.engine.runs import record_run
