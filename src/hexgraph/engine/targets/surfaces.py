@@ -233,6 +233,80 @@ def _egress_gate(session, project: Project, target: Target, *, tool: str, task_i
     return base_url, scope, dest
 
 
+def _probe_outcome(result) -> tuple[bool, str | None]:
+    """Classify a channel-probe RESULT as connected vs connection-failed by INSPECTING it.
+
+    Crucial: the sandbox probes report a socket-level failure (connection refused / timeout /
+    'No route to host') by RETURNING `{"ok": false, "error": ...}` — they do NOT raise — so an
+    exception-only check would miss exactly the failures this audit exists to record. We read the
+    probe's own success signal across its result shapes:
+      - http single request -> `{"response": {...}}`   (http_probe)
+      - http multi-step web_poc -> `{"steps": [ {...}, ... ]}`
+      - tcp / udp -> the flat `{"ok": bool, "error"?: ...}` dict itself
+    Rule: we REACHED the service if any attempt produced a real transport response — an HTTP
+    `status` (even 4xx/5xx is a genuine reply), or `ok: true` (a TCP banner, or a fire-and-forget
+    UDP send that the probe deems ok even with no datagram back). We FAILED to connect only when
+    every attempt reported a socket-level error and none produced a response. Returns
+    `(connected, error_detail)`."""
+    if not isinstance(result, dict):
+        return True, None  # unrecognized shape — never fabricate a failure
+    steps = result.get("steps")
+    if isinstance(steps, list):
+        responses = [r for r in steps if isinstance(r, dict)]
+    elif isinstance(result.get("response"), dict):
+        responses = [result["response"]]
+    else:
+        responses = [result]
+    if not responses:
+        return True, None  # nothing to classify (e.g. an empty steps list) — never fabricate a failure
+    if any(("status" in r) or (r.get("ok") is True) for r in responses):
+        return True, None
+    err = next((r.get("error") for r in responses if r.get("error")), None)
+    return False, err
+
+
+def _probe_with_outcome_audit(session, project: Project, target: Target, *, task_id, tool: str,
+                              dest: str, run):
+    """Run `run()` (the actual sandboxed network probe) and audit its REAL outcome as a
+    follow-up EgressEvent, distinct from `_egress_gate`'s pre-flight policy-allow event.
+
+    Without this, `net_list_egress` only ever showed the POLICY decision (allowed=True the
+    moment the destination passed the allowlist check) — if the probe itself then failed at
+    the socket layer (e.g. the sandbox container had no route to a lab-private subnet), that
+    failure surfaced to the caller but left NO trace in the audit log, so `net_list_egress`
+    misleadingly read "allowed: true" for a request that never actually connected. Recording the
+    real result here (tool suffixed `:connected`/`:connect_failed`) makes that gap diagnosable
+    directly from the audit log instead of needing to reproduce the failure by hand.
+
+    The outcome is derived by INSPECTING the probe result (`_probe_outcome`), because the probes
+    report a connection failure by RETURNING `{"ok": false, ...}`, not by raising; the try/except
+    is only the backstop for a HARD failure — the container/probe dying before it can emit JSON, in
+    which case `run_channel_probe` raises. Both events are `durable=True` so the audit survives even
+    a caller that rolls back on the ensuing error (audit-of-action, the rationale the deny path
+    already commits under)."""
+    from hexgraph.engine.audit import record_egress
+
+    try:
+        result = run()
+    except Exception as exc:
+        record_egress(session, project_id=project.id, target_id=target.id, task_id=task_id,
+                      dest=dest, allowed=True, tool=f"{tool}:connect_failed",
+                      detail=f"policy allowed egress, but the probe failed to run: {exc}",
+                      durable=True)
+        raise
+    connected, err = _probe_outcome(result)
+    if connected:
+        record_egress(session, project_id=project.id, target_id=target.id, task_id=task_id,
+                      dest=dest, allowed=True, tool=f"{tool}:connected",
+                      detail="connection succeeded", durable=True)
+    else:
+        record_egress(session, project_id=project.id, target_id=target.id, task_id=task_id,
+                      dest=dest, allowed=True, tool=f"{tool}:connect_failed",
+                      detail=f"policy allowed egress, but the connection attempt failed: "
+                             f"{err or 'unknown error'}", durable=True)
+    return result
+
+
 # Per-session cookie jars for free-form authed exploration via http_request. A fresh
 # sandbox container runs each request (no state between calls), so the host keeps the jar
 # and re-injects it. Keyed by (target_id, session_id); in-process (single-user local tool),
@@ -272,7 +346,8 @@ def run_http_request(session: Session, project: Project, target: Target, *, requ
     from hexgraph import settings
     from hexgraph.sandbox.executor import get_executor
 
-    base_url, scope, dest = _egress_gate(session, project, target, tool="http_request", task_id=task_id)
+    tool = "http_request"
+    base_url, scope, dest = _egress_gate(session, project, target, tool=tool, task_id=task_id)
     runner = runner or get_executor()
     timeout = int(settings.get("features.network.timeout", 30) or 30)
 
@@ -293,8 +368,10 @@ def run_http_request(session: Session, project: Project, target: Target, *, requ
 
     channel = {"base_url": base_url, "allow": sorted(scope.allow), "timeout": timeout,
                "request": req}
-    result = runner.run_channel_probe("http_probe.py", channel=channel,
-                                      net_container=_rehost_container(target))
+    result = _probe_with_outcome_audit(
+        session, project, target, task_id=task_id, tool=tool, dest=dest,
+        run=lambda: runner.run_channel_probe("http_probe.py", channel=channel,
+                                             net_container=_rehost_container(target)))
     resp = result.get("response") or result
     if jar is not None and isinstance(resp, dict):
         jar.update(_parse_set_cookie(resp.get("set_cookie") or []))
@@ -312,13 +389,16 @@ def run_web_poc(session: Session, project: Project, target: Target, *, steps: li
     from hexgraph import settings
     from hexgraph.sandbox.executor import get_executor
 
-    base_url, scope, dest = _egress_gate(session, project, target, tool="web_poc", task_id=task_id)
+    tool = "web_poc"
+    base_url, scope, dest = _egress_gate(session, project, target, tool=tool, task_id=task_id)
     runner = runner or get_executor()
     timeout = int(settings.get("features.network.timeout", 30) or 30)
     channel = {"base_url": base_url, "allow": sorted(scope.allow), "timeout": timeout,
                "steps": steps, "oracle": oracle}
-    return runner.run_channel_probe("http_probe.py", channel=channel,
-                                    net_container=_rehost_container(target))
+    return _probe_with_outcome_audit(
+        session, project, target, task_id=task_id, tool=tool, dest=dest,
+        run=lambda: runner.run_channel_probe("http_probe.py", channel=channel,
+                                             net_container=_rehost_container(target)))
 
 
 def _device_host(target: Target) -> str | None:
@@ -385,8 +465,10 @@ def _run_socket_probe(session: Session, project: Project, target: Target, *, tra
         channel["oracle"] = oracle
     if read_bytes is not None:
         channel["read_bytes"] = int(read_bytes)
-    return runner.run_channel_probe("tcp_probe.py", channel=channel,
-                                    net_container=net_container)
+    return _probe_with_outcome_audit(
+        session, project, target, task_id=task_id, tool=tool, dest=dest,
+        run=lambda: runner.run_channel_probe("tcp_probe.py", channel=channel,
+                                             net_container=net_container))
 
 
 def run_tcp_probe(session: Session, project: Project, target: Target, *, port: int,
@@ -478,6 +560,11 @@ def run_web_recon(session: Session, project: Project, target: Target, task=None,
                "endpoints": [{"method": e.get("method", "GET"), "path": e.get("path", "/")}
                              for e in endpoints],
                "timeout": timeout}
+    # NOT wrapped in _probe_with_outcome_audit (unlike http_request/web_poc/tcp): surface_probe
+    # returns a MULTI-endpoint liveness sweep ({"probes": [{"alive": bool, ...}, ...]}), not a
+    # single connect outcome, so _probe_outcome doesn't model this shape — a naive wrap would
+    # mislabel a fully-alive recon as :connect_failed. Modelling the sweep (connected = any probe
+    # alive) and wrapping it is a follow-up; the pre-flight policy-allow event above still audits.
     result = runner.run_channel_probe("surface_probe.py", channel=channel,
                                       net_container=_rehost_container(target))
 
