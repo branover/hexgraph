@@ -163,7 +163,9 @@ _HTTP_500 = {"tool": "http_probe", "base_url": "http://127.0.0.1:8080",
 # tcp/udp results are FLAT (`ok` at top level, no nested "response").
 _TCP_CONNFAIL = {"tool": "tcp_probe", "host": "127.0.0.1", "port": 8080, "ok": False,
                  "error": "OSError: [Errno 113] No route to host"}
-_TCP_OK = {"tool": "tcp_probe", "host": "127.0.0.1", "port": 8080, "ok": True, "raw": "banner"}
+# tcp SUCCESS: the real probe emits ok:True + the _decode fields (response/encoding), not "raw".
+_TCP_OK = {"tool": "tcp_probe", "host": "127.0.0.1", "port": 8080, "ok": True,
+           "response": "banner", "encoding": "utf-8"}
 
 
 def _web_surface(s, name):
@@ -269,6 +271,20 @@ def test_web_poc_multistep_connect_failed_when_no_step_reaches(hg_home):
     tools = _egress_tools(pid)
     assert "web_poc:connect_failed" in tools
     assert "web_poc:connected" not in tools
+
+
+def test_web_poc_empty_steps_is_not_a_connection_failure(hg_home):
+    """An empty `steps` result must NOT be labelled a connection failure — there was nothing to
+    classify, and `any([])` is False, so the classifier must default to connected (regression guard)."""
+    settings.update_settings({"features": {"network": {"enabled": True}}})
+    with session_scope() as s:
+        p, surface = _web_surface(s, "pocempty")
+        pid = p.id
+        run_web_poc(s, p, surface, steps=[{"method": "GET", "path": "/"}], oracle={},
+                    runner=_ChannelRunner({"tool": "http_probe", "steps": []}))
+    tools = _egress_tools(pid)
+    assert "web_poc:connect_failed" not in tools
+    assert "web_poc:connected" in tools
 
 
 def test_outcome_audit_is_durable_across_a_hard_failure_rollback(hg_home):

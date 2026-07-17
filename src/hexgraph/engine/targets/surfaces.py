@@ -257,6 +257,8 @@ def _probe_outcome(result) -> tuple[bool, str | None]:
         responses = [result["response"]]
     else:
         responses = [result]
+    if not responses:
+        return True, None  # nothing to classify (e.g. an empty steps list) — never fabricate a failure
     if any(("status" in r) or (r.get("ok") is True) for r in responses):
         return True, None
     err = next((r.get("error") for r in responses if r.get("error")), None)
@@ -558,6 +560,11 @@ def run_web_recon(session: Session, project: Project, target: Target, task=None,
                "endpoints": [{"method": e.get("method", "GET"), "path": e.get("path", "/")}
                              for e in endpoints],
                "timeout": timeout}
+    # NOT wrapped in _probe_with_outcome_audit (unlike http_request/web_poc/tcp): surface_probe
+    # returns a MULTI-endpoint liveness sweep ({"probes": [{"alive": bool, ...}, ...]}), not a
+    # single connect outcome, so _probe_outcome doesn't model this shape — a naive wrap would
+    # mislabel a fully-alive recon as :connect_failed. Modelling the sweep (connected = any probe
+    # alive) and wrapping it is a follow-up; the pre-flight policy-allow event above still audits.
     result = runner.run_channel_probe("surface_probe.py", channel=channel,
                                       net_container=_rehost_container(target))
 
