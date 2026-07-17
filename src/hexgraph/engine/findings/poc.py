@@ -323,6 +323,12 @@ def execute_poc(session: Session, project: Project, target: Target, task: Task,
     if not spec:
         raise ValueError("no PoC spec available — provide params.poc or run a backend that can craft one")
 
+    # Release the write lock before verify_poc EXECUTES the target in the sandbox: mark_running
+    # (checkpointed by run_task_sync) plus anything _generate_spec left pending would otherwise be
+    # held across the exec, starving other writers. verify_poc records its finding AFTER the run.
+    from hexgraph.db.session import release_write_lock
+
+    release_write_lock(session)
     verification = verify_poc(session, project, target, spec, runner=runner)
     write_trace(task, "poc.json", {"spec": verification.get("spec"), "verification": verification})
 

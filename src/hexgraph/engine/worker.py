@@ -13,7 +13,7 @@ import asyncio
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import SURFACE_KINDS, Project, Target, Task, TargetKind, TaskStatus
-from hexgraph.db.session import session_scope
+from hexgraph.db.session import release_write_lock, session_scope
 from datetime import datetime, timezone
 
 from hexgraph.engine.llm_tasks import LLM_TASK_TYPES, execute_llm_task
@@ -185,6 +185,15 @@ def run_task_sync(task_id: str) -> str:
 
         require(f"task.{task.type}")
         mark_running(task)
+        # Release the single SQLite write lock BEFORE _dispatch runs its (seconds-to-minutes)
+        # sandbox work. mark_running only mutates the ORM object; a handler's first DB access
+        # autoflushes it, acquiring the write lock, which would then be held across that
+        # handler's first Docker probe / decompile / boot — starving every other writer (the
+        # web app, another agent's task, an MCP server) until busy_timeout elapses. This one
+        # checkpoint covers the first slow op of EVERY task type in one place (handlers still
+        # release the lock again before any LATER slow work via their own checkpoints); it also
+        # makes the running status immediately visible to the web UI.
+        release_write_lock(session)
         try:
             _dispatch(session, project, target, task)
             if task.status == TaskStatus.running:

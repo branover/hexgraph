@@ -505,6 +505,13 @@ class SandboxBuilder(Builder):
             "vendor": "/vendor" if vendor_dir else None,
         }
         # Source mounted READ-ONLY at /src; the probe copies it into /scratch to build.
+        # Release the write lock before the (up to minutes-long) compile: run_build flushed the
+        # `build` row (status="building") on fetch_session, which would otherwise stay pinned
+        # across the whole compile and starve every other writer.
+        if fetch_session is not None:
+            from hexgraph.db.session import release_write_lock
+
+            release_write_lock(fetch_session)
         try:
             result = executor.run_probe(
                 "build_probe.py", None, outdir=outdir,
@@ -564,9 +571,12 @@ class SandboxBuilder(Builder):
         from hexgraph.engine.audit import record_egress
         if fetch_session is not None and project is not None:
             for dest in sorted(scope.allow):
+                # durable=True commits the audit row (and the still-pending `build` row) BEFORE
+                # the network fetch probe below, so the write lock isn't held across it —
+                # audit-before-action, the same rationale the deny path already commits under.
                 record_egress(fetch_session, project_id=project.id, target_id=target_id,
                               task_id=task_id, dest=dest, allowed=True, tool="build_fetch",
-                              detail=scope.rationale)
+                              detail=scope.rationale, durable=True)
 
         fetch_out = tempfile.mkdtemp(prefix="hexgraph-fetch-out-")
         fetch_payload = {
