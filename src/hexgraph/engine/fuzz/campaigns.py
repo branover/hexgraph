@@ -1262,6 +1262,15 @@ def verify_artifact(session: Session, artifact: FuzzArtifact, *, executor=None) 
                                         executor=executor)
 
     assert_allows_execution()
+    # Release the write lock before the target-executing replay below (verify_reproducer OR the
+    # poc_probe run): the reaper / crash-ingest callers reach here holding a just-persisted
+    # fuzz_crash finding + artifact (the backfill path), which would otherwise be pinned across
+    # the whole replay and starve other writers. (The network branch above already released via
+    # its bounded-egress audit.) The verify result is recorded by the caller AFTER the replay, so
+    # nothing is lost; the grounded crash finding is meant to persist regardless.
+    from hexgraph.db.session import release_write_lock
+
+    release_write_lock(session)
     # Re-verify on the SAME environment the campaign ran on (the fuzzer binary was built
     # there) — a remote campaign re-runs its reproducer on the remote, fail-closed under
     # features.fuzz_remote. A caller-supplied executor (tests) wins.

@@ -328,8 +328,10 @@ def execute_fuzzing(
         )
         created += 1
         if cfg["triage"]:
-            # Commit the crash finding before the triage LLM round-trip so it isn't pinned
-            # across that network call (release_write_lock imported above, same function scope).
+            # Commit the crash finding before the triage LLM round-trip so it isn't pinned across
+            # that network call. Deliberate: the crash finding is GROUNDED (a real libFuzzer crash)
+            # so — like the static-core findings — it is meant to persist even if the best-effort
+            # triage layer later fails; triage only ANNOTATES it. (release_write_lock imported above.)
             release_write_lock(session)
             _triage(session, project, target, task, row, crash, source, function)
 
