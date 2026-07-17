@@ -42,7 +42,8 @@ from hexgraph.db.session import session_scope
 from hexgraph.agent import mcp_tools as M
 from hexgraph.engine.audit import list_egress, record_egress
 from hexgraph.engine.targets.ingest import create_project
-from hexgraph.engine.targets.surfaces import register_web_surface
+from hexgraph.engine.targets.surfaces import (register_web_surface, run_http_request,
+                                              run_tcp_probe, run_web_poc)
 from hexgraph.engine.tasks import create_task
 from hexgraph.engine.worker import run_task_sync
 
@@ -126,6 +127,171 @@ def test_web_recon_denied_by_default_and_audited(hg_home):
         events = s.query(EgressEvent).filter(EgressEvent.project_id == pid).all()
         assert len(events) == 1
         assert events[0].allowed is False and events[0].dest == "127.0.0.1:8080"
+
+
+class _ChannelRunner:
+    """Stand-in sandbox executor returning a CANNED run_channel_probe result — the REAL contract:
+    a socket-level failure comes back as a JSON dict ({"ok": false, "error": ...}), NOT as a raised
+    exception (the sandbox probes catch and serialize it). `result` is that dict."""
+
+    def __init__(self, result):
+        self.result = result
+
+    def run_channel_probe(self, *a, **kw):
+        return self.result
+
+
+class _HardFailRunner:
+    """A HARD failure — the container/probe dies before emitting valid JSON, so run_channel_probe
+    itself RAISES (SandboxError). The audit's try/except backstop must still record connect_failed
+    (durably) and re-raise."""
+
+    def run_channel_probe(self, *a, **kw):
+        from hexgraph.sandbox.runner import SandboxError
+
+        raise SandboxError("probe http_probe did not emit valid JSON")
+
+
+# The real http_probe shapes: a socket failure is a nested {"response": {"ok": false, "error": ...}}
+# (NOT a raise); a real reply — including an HTTP error status — carries a `status`.
+_HTTP_CONNFAIL = {"tool": "http_probe", "base_url": "http://127.0.0.1:8080",
+                  "response": {"ok": False, "error": "URLError", "dest": "127.0.0.1:8080"}}
+_HTTP_OK = {"tool": "http_probe", "base_url": "http://127.0.0.1:8080",
+            "response": {"status": 200, "body": "ok"}}
+_HTTP_500 = {"tool": "http_probe", "base_url": "http://127.0.0.1:8080",
+             "response": {"status": 500, "body": "boom"}}
+# tcp/udp results are FLAT (`ok` at top level, no nested "response").
+_TCP_CONNFAIL = {"tool": "tcp_probe", "host": "127.0.0.1", "port": 8080, "ok": False,
+                 "error": "OSError: [Errno 113] No route to host"}
+_TCP_OK = {"tool": "tcp_probe", "host": "127.0.0.1", "port": 8080, "ok": True, "raw": "banner"}
+
+
+def _web_surface(s, name):
+    p = create_project(s, name=name)
+    surface = register_web_surface(s, p, "http://127.0.0.1:8080",
+                                   endpoints=[{"method": "GET", "path": "/"}])
+    return p, surface
+
+
+def _egress_tools(pid):
+    with session_scope() as s:
+        return [e.tool for e in (s.query(EgressEvent)
+                                 .filter(EgressEvent.project_id == pid)
+                                 .order_by(EgressEvent.created_at).all())]
+
+
+def test_http_request_audits_connect_failed_from_returned_error(hg_home):
+    """The REAL 'No route to host despite allowed:true' case: the probe RETURNS
+    {"ok": false, "error": ...} (it does NOT raise), so run_http_request returns normally — and
+    the outcome audit must STILL record :connect_failed. This is exactly what the old
+    exception-only check missed (it would have logged :connected)."""
+    settings.update_settings({"features": {"network": {"enabled": True}}})
+    with session_scope() as s:
+        p, surface = _web_surface(s, "connfail")
+        pid = p.id
+        resp = run_http_request(s, p, surface, request={"method": "GET", "path": "/"},
+                                runner=_ChannelRunner(_HTTP_CONNFAIL))
+        assert resp.get("ok") is False          # returned, not raised — as in production
+
+    tools = _egress_tools(pid)
+    assert "http_request" in tools                       # pre-flight policy-allow event
+    assert "http_request:connect_failed" in tools         # the real-outcome event
+    assert "http_request:connected" not in tools          # must NOT mislabel a failure as connected
+    with session_scope() as s:
+        failed = next(e for e in s.query(EgressEvent)
+                      .filter(EgressEvent.tool == "http_request:connect_failed").all())
+        assert failed.allowed is True                     # policy DID allow it
+        assert "URLError" in (failed.detail or "")        # the real socket error is captured
+
+
+def test_http_request_audits_connected_on_real_response(hg_home):
+    settings.update_settings({"features": {"network": {"enabled": True}}})
+    with session_scope() as s:
+        p, surface = _web_surface(s, "connok")
+        pid = p.id
+        resp = run_http_request(s, p, surface, request={"method": "GET", "path": "/"},
+                                runner=_ChannelRunner(_HTTP_OK))
+        assert resp["status"] == 200
+    tools = _egress_tools(pid)
+    assert "http_request:connected" in tools
+    assert "http_request:connect_failed" not in tools
+
+
+def test_http_error_status_counts_as_connected(hg_home):
+    """An HTTP 4xx/5xx is a REAL reply — the connection succeeded, the server just answered with an
+    error. It must audit :connected, never :connect_failed (guards the 'reached the service' rule)."""
+    settings.update_settings({"features": {"network": {"enabled": True}}})
+    with session_scope() as s:
+        p, surface = _web_surface(s, "http500")
+        pid = p.id
+        run_http_request(s, p, surface, request={"method": "GET", "path": "/"},
+                         runner=_ChannelRunner(_HTTP_500))
+    tools = _egress_tools(pid)
+    assert "http_request:connected" in tools
+    assert "http_request:connect_failed" not in tools
+
+
+def test_tcp_probe_audits_connect_failed_from_flat_result(hg_home):
+    """tcp/udp results are a FLAT {"ok": false, ...} (no nested 'response') — the classifier must
+    read that shape too, else a network-fuzz/service connect failure would mislabel as connected."""
+    settings.update_settings({"features": {"network": {"enabled": True}}})
+    with session_scope() as s:
+        p, surface = _web_surface(s, "tcpfail")
+        pid = p.id
+        run_tcp_probe(s, p, surface, port=8080, runner=_ChannelRunner(_TCP_CONNFAIL))
+    tools = _egress_tools(pid)
+    assert "tcp_probe:connect_failed" in tools
+    assert "tcp_probe:connected" not in tools
+
+
+def test_tcp_probe_audits_connected_on_flat_ok(hg_home):
+    settings.update_settings({"features": {"network": {"enabled": True}}})
+    with session_scope() as s:
+        p, surface = _web_surface(s, "tcpok")
+        pid = p.id
+        run_tcp_probe(s, p, surface, port=8080, runner=_ChannelRunner(_TCP_OK))
+    tools = _egress_tools(pid)
+    assert "tcp_probe:connected" in tools
+
+
+def test_web_poc_multistep_connect_failed_when_no_step_reaches(hg_home):
+    """A multi-step web_poc result is `{"steps": [...]}`; if EVERY step is a socket-level failure
+    the outcome is :connect_failed. (If any step got a real response, the connection was made — see
+    the connected variant of this rule in _probe_outcome.)"""
+    settings.update_settings({"features": {"network": {"enabled": True}}})
+    steps_result = {"tool": "http_probe", "base_url": "http://127.0.0.1:8080",
+                    "steps": [{"ok": False, "error": "URLError"}, {"ok": False, "error": "URLError"}]}
+    with session_scope() as s:
+        p, surface = _web_surface(s, "pocfail")
+        pid = p.id
+        run_web_poc(s, p, surface, steps=[{"method": "GET", "path": "/"}], oracle={},
+                    runner=_ChannelRunner(steps_result))
+    tools = _egress_tools(pid)
+    assert "web_poc:connect_failed" in tools
+    assert "web_poc:connected" not in tools
+
+
+def test_outcome_audit_is_durable_across_a_hard_failure_rollback(hg_home):
+    """A HARD failure (probe/container dies before emitting JSON) makes run_channel_probe RAISE. The
+    connect_failed audit is durable=True, so it must SURVIVE even though the caller's session_scope
+    ROLLS BACK on the propagating error — the whole point is a durable trace. Without durable=True
+    the rollback would discard it."""
+    settings.update_settings({"features": {"network": {"enabled": True}}})
+    from hexgraph.db.models import Project, Target
+    from hexgraph.sandbox.runner import SandboxError
+
+    with session_scope() as s:
+        p, surface = _web_surface(s, "hardfail")
+        s.commit()                              # commit stable ids that outlive the rollback below
+        pid, sid = p.id, surface.id
+
+    with pytest.raises(SandboxError):
+        with session_scope() as s:              # THIS scope rolls back on the raised error
+            run_http_request(s, s.get(Project, pid), s.get(Target, sid),
+                             request={"method": "GET", "path": "/"}, runner=_HardFailRunner())
+
+    tools = _egress_tools(pid)
+    assert "http_request:connect_failed" in tools           # survived the rollback (durable=True)
 
 
 def test_web_recon_refuses_public_target(hg_home):
