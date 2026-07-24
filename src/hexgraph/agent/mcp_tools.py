@@ -941,8 +941,8 @@ def resolve_address(target_id: str, address: str) -> str:
 
 def hexdump(target_id: str, address: str, length: int | None = None) -> str:
     """Raw bytes at a virtual ADDRESS as hex+ascii (bounded, default 256, max 4096) —
-    for inspecting DAT_ tables/keys/structs. Maps vaddr->file offset via ELF program
-    headers and reads the on-disk artifact server-side."""
+    for inspecting DAT_ tables/keys/structs. Reads the bytes in the sandbox via radare2
+    (`p8` at the vaddr) and renders the hexdump host-side."""
     a: dict = {"address": address}
     if length is not None:
         a["length"] = length

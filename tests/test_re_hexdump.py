@@ -1,19 +1,23 @@
 """re_hexdump dumps raw BYTES at a virtual ADDRESS as hex + ascii, bounded (default 256, max 4096).
 
 The raw-bytes view of a DAT_ table / embedded key / struct / string constant — for the objective's
-stack-canary/base-leak table reads. Maps the vaddr to a file offset via the ELF program headers and
-reads the on-disk artifact SERVER-SIDE (pyelftools over target.path) — no decompile, no Docker. A
-.bss/zero-fill address reads as 00 with a note; an unmapped address is REPORTED, not faked; when
-pyelftools is missing (it's probe-only per pyproject) it DEGRADES to an error pointing at
-re_disassemble_range rather than returning wrong bytes. Records a hexdump Observation, mutates no
-graph.
+stack-canary/base-leak table reads. The bytes are read in the SANDBOX via radare2 (`p8` at the
+vaddr, the same mapping re_disassemble_range uses) and the hexdump is rendered host-side, so the
+hostile ELF is parsed in the sandbox, never the host process. A .bss/zero-fill address reads as 00
+with a note; an UNMAPPED address is REPORTED, not faked (r2's raw `p8` returns 0xff io-fill for an
+unmapped read, so the probe classifies the vaddr against the PT_LOAD table first). Records a hexdump
+Observation, mutates no graph.
 
-Two layers, mirroring test_re_symbol / test_list_functions:
-  * UNIT — the vaddr->offset mapping (`elf_layout.vaddr_to_offset`) over a SYNTHETIC segment table,
-    and the render/clamp/degrade behaviour, none of which need pyelftools or Docker.
-  * INTEGRATION — one non-mocked dump over tests/fixtures/vuln_httpd (a real ELF), guarded by
-    importorskip('elftools') so it skips cleanly in a venv without the probe-only lib.
+Three layers, mirroring test_disassemble_range:
+  * PROBE UNIT — `decompile_probe._read_raw_bytes` over a synthetic PT_LOAD table via a fake r2:
+    the file-backed / .bss / unmapped classification, the p8 hex parse, and the byte clamp.
+  * TOOL UNIT — the render/clamp/error behaviour of the tool with `R2Decompiler.read_bytes` mocked
+    (no Docker), including the Docker-down degrade and the QUERY (one Observation, zero graph) contract.
+  * INTEGRATION — one non-mocked dump over tests/fixtures/vuln_httpd (a real ELF) through the real
+    sandbox, guarded by SANDBOX_READY, proving the file-backed / unmapped / .bss paths end-to-end.
 """
+
+import json
 
 import pytest
 
@@ -23,7 +27,7 @@ from hexgraph.db.session import session_scope
 from hexgraph.agent.agent_tools import ToolContext, run_tool
 from hexgraph.engine.targets.ingest import create_project, ingest_file
 
-from conftest import fixture_path
+from conftest import SANDBOX_READY, fixture_path
 
 
 def _ctx(s):
@@ -34,53 +38,91 @@ def _ctx(s):
     return ToolContext(session=s, project=p, target=t)
 
 
-# --- UNIT: the vaddr->file-offset mapping over a synthetic PT_LOAD segment table -----------
+# --- PROBE UNIT: the vaddr classification + p8 read over a synthetic PT_LOAD table -----------
 
-class _FakeSeg:
-    def __init__(self, **h):
-        self.header = h
+class _FakeR2:
+    """Minimal r2 for `_read_raw_bytes`: answers `iSSj` with a synthetic segment table and `p8`
+    with canned hex. `segs` are `(name, vaddr, filesz, memsz)` — r2's `iSSj` keys are
+    name/vaddr/size(=filesz)/vsize(=memsz)."""
 
+    def __init__(self, segs, p8="deadbeef"):
+        self._segs = [{"name": n, "vaddr": v, "size": f, "vsize": m} for (n, v, f, m) in segs]
+        self._p8 = p8
+        self.cmds = []
 
-class _FakeElf:
-    """Just enough of pyelftools' ELFFile for vaddr_to_offset: an iter_segments()."""
-    def __init__(self, segs):
-        self._segs = segs
-
-    def iter_segments(self):
-        return iter(self._segs)
-
-
-def _seg(p_vaddr, p_offset, p_filesz, p_memsz, p_type="PT_LOAD"):
-    return _FakeSeg(p_type=p_type, p_vaddr=p_vaddr, p_offset=p_offset,
-                    p_filesz=p_filesz, p_memsz=p_memsz)
-
-
-def test_vaddr_to_offset_maps_within_a_segment():
-    """An address inside a PT_LOAD's filesz maps to p_offset + (vaddr - p_vaddr)."""
-    elf = _FakeElf([_seg(0x401000, 0x1000, 0x200, 0x200)])
-    off, zero = EL.vaddr_to_offset(elf, 0x401040)
-    assert off == 0x1040 and zero is False
+    def cmd(self, c):
+        self.cmds.append(c)
+        if c == "iSSj":
+            return json.dumps(self._segs)
+        if c.startswith("p8 "):
+            return self._p8
+        return ""
 
 
-def test_vaddr_to_offset_flags_bss_zero_fill():
-    """An address in the memsz-beyond-filesz tail (.bss) is flagged zero_fill with no file off."""
-    elf = _FakeElf([_seg(0x403000, 0x2000, 0x100, 0x180)])   # filesz 0x100, memsz 0x180
-    off, zero = EL.vaddr_to_offset(elf, 0x403140)            # 0x140 >= filesz 0x100
-    assert off is None and zero is True
+def _dp():
+    from hexgraph.sandbox.probes import decompile_probe as DP
+    return DP
 
 
-def test_vaddr_to_offset_unmapped_is_none():
-    """An address in no loadable segment maps to nothing (reported, not faked)."""
-    elf = _FakeElf([_seg(0x401000, 0x1000, 0x200, 0x200)])
-    off, zero = EL.vaddr_to_offset(elf, 0x900000)
-    assert off is None and zero is False
+def test_probe_reads_file_backed_bytes_with_p8():
+    """A vaddr inside a PT_LOAD's filesz is read with `p8 <n> @ <addr>` and returned as hex."""
+    DP = _dp()
+    r2 = _FakeR2([("LOAD1", 0x401000, 0x200, 0x200)], p8="aabbccdd")
+    out = DP._read_raw_bytes(r2, "0x401040", length=4)
+    assert out == {"address": "0x401040", "length": 4, "hex": "aabbccdd", "zero_fill": False}
+    assert "p8 4 @ 0x401040" in r2.cmds
 
 
-def test_vaddr_to_offset_ignores_non_load_segments():
-    """A non-PT_LOAD segment covering the address is skipped (only PT_LOAD maps bytes)."""
-    elf = _FakeElf([_seg(0x401000, 0x1000, 0x200, 0x200, p_type="PT_DYNAMIC")])
-    off, zero = EL.vaddr_to_offset(elf, 0x401040)
-    assert off is None and zero is False
+def test_probe_bss_tail_is_zero_fill_and_never_reads_p8():
+    """A vaddr in the memsz-beyond-filesz tail (.bss) returns synthesized 00s with the flag and
+    issues NO p8 — the bytes are known to be zero, never a garbage/io-fill read."""
+    DP = _dp()
+    r2 = _FakeR2([("LOAD3", 0x403000, 0x100, 0x180)])          # filesz 0x100, memsz 0x180
+    out = DP._read_raw_bytes(r2, "0x403140", length=8)          # 0x140 >= filesz 0x100
+    assert out["zero_fill"] is True and out["hex"] == "00" * 8 and out["length"] == 8
+    assert not any(c.startswith("p8") for c in r2.cmds)
+
+
+def test_probe_unmapped_is_reported_not_faked():
+    """A vaddr in no PT_LOAD segment is an error — never r2's 0xff io-fill. NO p8 is issued."""
+    DP = _dp()
+    r2 = _FakeR2([("LOAD1", 0x401000, 0x200, 0x200)])
+    out = DP._read_raw_bytes(r2, "0x900000", length=16)
+    assert "error" in out and "not mapped" in out["error"] and "hex" not in out
+    assert not any(c.startswith("p8") for c in r2.cmds)
+
+
+def test_probe_ignores_non_load_segments():
+    """A non-PT_LOAD segment (r2 names it DYNAMIC/GNU_*/…) covering the address is skipped — only
+    LOAD* maps bytes — so the address reads as unmapped."""
+    DP = _dp()
+    r2 = _FakeR2([("GNU_RELRO", 0x401000, 0x200, 0x200)])
+    out = DP._read_raw_bytes(r2, "0x401040", length=4)
+    assert "error" in out and "not mapped" in out["error"]
+
+
+def test_probe_p8_hex_is_sanitised_to_whole_bytes():
+    """`p8` output is stripped to hex digits and trimmed to a whole byte, so separators/newlines or
+    an odd nibble can't yield bytes the host can't decode."""
+    DP = _dp()
+    r2 = _FakeR2([("LOAD1", 0x401000, 0x200, 0x200)], p8="aa bb\ncc d")   # spaces/newline + odd nibble
+    out = DP._read_raw_bytes(r2, "0x401000", length=4)
+    assert out["hex"] == "aabbcc" and out["length"] == 3                  # trailing 'd' dropped
+
+
+def test_probe_clamps_and_floors_length():
+    """The byte count is clamped to the ceiling and floored at 1 — a fat-fingered length can't pull
+    unbounded bytes out of the sandbox (mirrors the range-mode clamp)."""
+    DP = _dp()
+    r2 = _FakeR2([("LOAD1", 0x401000, 0x10000, 0x10000)])
+    DP._read_raw_bytes(r2, "0x401000", length=10_000_000)
+    assert f"p8 {DP._HEXDUMP_MAX_BYTES} @ 0x401000" in r2.cmds
+    r2 = _FakeR2([("LOAD1", 0x401000, 0x10000, 0x10000)])
+    DP._read_raw_bytes(r2, "0x401000", length=0)
+    assert "p8 1 @ 0x401000" in r2.cmds
+    r2 = _FakeR2([("LOAD1", 0x401000, 0x10000, 0x10000)])
+    DP._read_raw_bytes(r2, "0x401000", length=None)             # default when unset
+    assert f"p8 {DP._HEXDUMP_DEFAULT_BYTES} @ 0x401000" in r2.cmds
 
 
 def test_render_hexdump_shape():
@@ -91,19 +133,37 @@ def test_render_hexdump_shape():
     assert "|AB..|" in out
 
 
-# --- clamp: an over-large length clamps to the 4096 ceiling with a note --------------------
+def test_seam_bytes_args_builds_probe_argv():
+    """The decompiler seam builds `--bytes <addr> [--length N]`; length is omitted when unset."""
+    from hexgraph.sandbox.decompiler import _bytes_args
+
+    assert _bytes_args("0x1000", None) == ["--bytes", "0x1000"]
+    assert _bytes_args("0x1000", 256) == ["--bytes", "0x1000", "--length", "256"]
+
+
+# --- TOOL UNIT: the tool over a mocked R2Decompiler.read_bytes (no Docker) ------------------
+
+def _mock_read(monkeypatch, fn):
+    """Patch the sandbox seam the tool uses: Docker is 'up' and R2Decompiler.read_bytes returns
+    whatever `fn(address, length)` yields (wrapped in the probe's {'bytes': ...} envelope)."""
+    from hexgraph.sandbox.decompiler import R2Decompiler
+
+    monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
+    monkeypatch.setattr(
+        R2Decompiler, "read_bytes",
+        lambda self, artifact, address, length=None: {"bytes": fn(address, length)})
+
 
 def test_length_clamps_to_ceiling(hg_home, monkeypatch):
-    """A length past the ceiling clamps to 4096 and SAYS so (the no-silent-caps discipline). The
-    ELF read is stubbed so the test needs no pyelftools/Docker — only the host-side clamp is under
-    test (the clamped length is what's passed to read_bytes)."""
+    """A length past the ceiling clamps to 4096 host-side and SAYS so (no-silent-caps); the clamped
+    length is what's passed to the sandbox read."""
     seen = {}
 
-    def _fake_read(path, vaddr, length):
+    def _fn(address, length):
         seen["length"] = length
-        return {"data": b"\x00" * length, "address": vaddr, "length": length, "zero_fill": False}
+        return {"address": address, "length": length, "hex": "00" * (length or 0), "zero_fill": False}
 
-    monkeypatch.setattr(EL, "read_bytes", _fake_read)
+    _mock_read(monkeypatch, _fn)
     with session_scope() as s:
         ctx = _ctx(s)
         out = run_tool(ctx, "hexdump", {"address": "0x401000", "length": 99999})
@@ -114,18 +174,16 @@ def test_length_clamps_to_ceiling(hg_home, monkeypatch):
 def test_default_length_is_256(hg_home, monkeypatch):
     seen = {}
 
-    def _fake_read(path, vaddr, length):
+    def _fn(address, length):
         seen["length"] = length
-        return {"data": b"\x00" * length, "address": vaddr, "length": length, "zero_fill": False}
+        return {"address": address, "length": length, "hex": "00" * (length or 0), "zero_fill": False}
 
-    monkeypatch.setattr(EL, "read_bytes", _fake_read)
+    _mock_read(monkeypatch, _fn)
     with session_scope() as s:
         ctx = _ctx(s)
         run_tool(ctx, "hexdump", {"address": "0x401000"})
         assert seen["length"] == 256
 
-
-# --- error paths: a bad address, an unmapped address, a .bss note -------------------------
 
 def test_non_hex_address_is_a_friendly_error(hg_home):
     with session_scope() as s:
@@ -135,11 +193,10 @@ def test_non_hex_address_is_a_friendly_error(hg_home):
 
 
 def test_unmapped_address_is_reported_not_faked(hg_home, monkeypatch):
-    """An address in no PT_LOAD segment returns a clear 'not mapped' message, never a stack trace
-    or fabricated bytes."""
-    monkeypatch.setattr(EL, "read_bytes",
-                        lambda path, vaddr, length: {"error": f"address {vaddr:#x} is not mapped "
-                                                     "in any PT_LOAD segment"})
+    """An address the probe reports as unmapped surfaces as a clear 'not mapped' message with the
+    address, never a stack trace or fabricated bytes."""
+    _mock_read(monkeypatch, lambda address, length: {
+        "address": address, "error": f"address {address} is not mapped in any PT_LOAD segment"})
     with session_scope() as s:
         ctx = _ctx(s)
         out = run_tool(ctx, "hexdump", {"address": "0x900000"})
@@ -148,9 +205,8 @@ def test_unmapped_address_is_reported_not_faked(hg_home, monkeypatch):
 
 def test_bss_address_returns_zero_fill_with_note(hg_home, monkeypatch):
     """A .bss address dumps as 00 with the zero-fill note (bytes synthesized, not read as garbage)."""
-    monkeypatch.setattr(EL, "read_bytes",
-                        lambda path, vaddr, length: {"data": b"\x00" * length, "address": vaddr,
-                                                     "length": length, "zero_fill": True})
+    _mock_read(monkeypatch, lambda address, length: {
+        "address": address, "length": length, "hex": "00" * (length or 0), "zero_fill": True})
     with session_scope() as s:
         ctx = _ctx(s)
         out = run_tool(ctx, "hexdump", {"address": "0x403380", "length": 8})
@@ -158,30 +214,32 @@ def test_bss_address_returns_zero_fill_with_note(hg_home, monkeypatch):
         assert "00 00 00 00" in out
 
 
-# --- degraded: pyelftools import forced to fail -> point at re_disassemble_range ----------
+def test_malformed_bytes_from_sandbox_is_a_clean_error(hg_home, monkeypatch):
+    """If the sandbox ever returns undecodable hex, the tool reports it — never raises."""
+    _mock_read(monkeypatch, lambda address, length: {"address": address, "hex": "zznothex"})
+    with session_scope() as s:
+        ctx = _ctx(s)
+        out = run_tool(ctx, "hexdump", {"address": "0x402000", "length": 4})
+        assert "malformed bytes" in out
 
-def test_degraded_when_pyelftools_missing(hg_home, monkeypatch):
-    """With pyelftools unavailable, hexdump returns the degraded {error} pointing at
-    re_disassemble_range — it must NOT silently return wrong bytes."""
-    monkeypatch.setattr(EL, "read_bytes",
-                        lambda path, vaddr, length: {"error": "pyelftools not available in this "
-                                                     "environment", "degraded": True})
+
+def test_degraded_when_docker_down(hg_home, monkeypatch):
+    """With Docker/sandbox down the read can't run — the tool says so and points at the sandbox,
+    never silently returning wrong bytes."""
+    monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: False)
     with session_scope() as s:
         ctx = _ctx(s)
         out = run_tool(ctx, "hexdump", {"address": "0x402000"})
-        assert "re_disassemble_range" in out
-        assert "unavailable" in out
+        assert "unavailable" in out and "re_disassemble_range" in out
 
-
-# --- QUERY contract: one hexdump Observation, zero graph mutation -------------------------
 
 def test_records_observation_and_no_graph(hg_home, monkeypatch):
-    monkeypatch.setattr(EL, "read_bytes",
-                        lambda path, vaddr, length: {"data": b"ABCD", "address": vaddr,
-                                                     "length": 4, "zero_fill": False})
+    _mock_read(monkeypatch, lambda address, length: {
+        "address": address, "length": 4, "hex": "41424344", "zero_fill": False})   # 'ABCD'
     with session_scope() as s:
         ctx = _ctx(s)
-        run_tool(ctx, "hexdump", {"address": "0x402000", "length": 4})
+        out = run_tool(ctx, "hexdump", {"address": "0x402000", "length": 4})
+        assert "|ABCD|" in out
         assert s.query(Node).count() == 0
         assert s.query(Edge).count() == 0
         obs = s.query(Observation).filter(Observation.target_id == ctx.target.id,
@@ -190,13 +248,12 @@ def test_records_observation_and_no_graph(hg_home, monkeypatch):
         assert obs[0].content_hash == "hd123"
 
 
-# --- INTEGRATION: a real ELF (guarded by the probe-only pyelftools) ----------------------
+# --- INTEGRATION: a real ELF through the real sandbox (radare2 p8) ------------------------
 
+@pytest.mark.skipif(not SANDBOX_READY, reason="requires the sandbox image (radare2)")
 def test_integration_dumps_a_known_rodata_string(hg_home):
     """Over the real vuln_httpd ELF, dumping .rodata (0x402000) shows a known string in the ascii
-    pane and the matching hex — end-to-end through pyelftools, no Docker. Skips cleanly when the
-    probe-only pyelftools isn't installed in the venv."""
-    pytest.importorskip("elftools")
+    pane and the matching hex — end-to-end through the sandbox `p8`, recording one Observation."""
     with session_scope() as s:
         ctx = _ctx(s)
         out = run_tool(ctx, "hexdump", {"address": "0x402000", "length": 32})
@@ -204,7 +261,28 @@ def test_integration_dumps_a_known_rodata_string(hg_home):
         # 'hand' in hex — a within-group fragment (the hexdump -C gutter double-spaces at byte 8,
         # so the full 'handled' straddles the group boundary; assert a fragment that doesn't).
         assert "68 61 6e 64" in out
-        # And it recorded exactly one hexdump Observation, no graph mutation.
         assert s.query(Node).count() == 0
         obs = s.query(Observation).filter(Observation.result_kind == "hexdump").all()
         assert len(obs) == 1
+
+
+@pytest.mark.skipif(not SANDBOX_READY, reason="requires the sandbox image (radare2)")
+def test_integration_unmapped_is_reported_not_ff_fill(hg_home):
+    """The regression this fix exists for: an UNMAPPED address must be reported, NOT rendered as a
+    page of r2's 0xff io-fill. Proves the PT_LOAD classification runs before the p8 read."""
+    with session_scope() as s:
+        ctx = _ctx(s)
+        out = run_tool(ctx, "hexdump", {"address": "0x900000", "length": 32})
+        assert "not mapped" in out
+        assert "ff ff ff ff" not in out                   # never the faked io-fill
+
+
+@pytest.mark.skipif(not SANDBOX_READY, reason="requires the sandbox image (radare2)")
+def test_integration_bss_reads_zero_fill(hg_home):
+    """The real .bss (0x403380 in vuln_httpd, the LOAD segment's memsz tail) dumps as 00 with the
+    zero-fill note — mapped, backed by no file bytes."""
+    with session_scope() as s:
+        ctx = _ctx(s)
+        out = run_tool(ctx, "hexdump", {"address": "0x403380", "length": 8})
+        assert "zero-fill" in out
+        assert "00 00 00 00" in out

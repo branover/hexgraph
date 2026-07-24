@@ -1547,11 +1547,13 @@ def _hexdump(ctx: ToolContext, args: dict) -> str:
     raw-bytes view of a DAT_ table / embedded key / struct / string constant. QUERY: records an
     Observation; adds no graph nodes.
 
-    Maps the vaddr to a file offset via the ELF program headers and reads the on-disk artifact
-    server-side (`elf_layout.read_bytes`) — NO decompile, NO Docker. A .bss/zero-fill address reads
-    as 00 with a note; an unmapped address is REPORTED, not faked. When pyelftools isn't installed
-    (probe-only per pyproject) it DEGRADES to an error pointing at re_disassemble_range (which reads
-    raw bytes via r2), never silently returning wrong bytes. Kept OUT of _ANALYSIS_GATED_TOOLS."""
+    Reads the bytes in the SANDBOX via radare2 (`R2Decompiler.read_bytes` → `p8` at the vaddr, the
+    same mapping re_disassemble_range uses) and renders the hexdump host-side — so the hostile ELF is
+    parsed in the sandbox, never the host process. A .bss/zero-fill address reads as 00 with a note;
+    an UNMAPPED address is REPORTED, not faked (r2's raw `p8` would return 0xff io-fill, but the probe
+    classifies against the PT_LOAD table first). Needs no whole-program analysis — kept OUT of
+    _ANALYSIS_GATED_TOOLS. (The old host-side pyelftools read is gone: pyproject scopes the analysis
+    libs to the sandbox probes, so it was never installed host-side and always degraded.)"""
     addr = args.get("address")
     if not addr:
         return "error: 'address' argument is required (a hex virtual address, e.g. 0x4c1000)"
@@ -1574,18 +1576,24 @@ def _hexdump(ctx: ToolContext, args: dict) -> str:
         except (TypeError, ValueError):
             pass
 
-    out = _elf.read_bytes(ctx.target.path, vaddr, length)
-    if out.get("error"):
-        if out.get("degraded"):
-            # pyelftools missing / non-ELF: point at the r2 raw-bytes path rather than fake bytes.
-            return (f"hexdump unavailable ({out['error']}). Use re_disassemble_range(address="
-                    f"{addr}) for the raw bytes/instructions at this address (it reads via r2 in "
-                    "the sandbox).")
-        # A mapped-vs-unmapped miss: reported, never faked.
-        return f"{out['error']} ({addr})"
-
-    data = out.get("data") or b""
-    zero_fill = bool(out.get("zero_fill"))
+    from hexgraph.sandbox.decompiler import R2Decompiler
+    from hexgraph.sandbox.runner import docker_available
+    if not docker_available():
+        return ("hexdump unavailable (Docker/sandbox not running — the raw-byte read runs in the "
+                "sandbox). Use re_disassemble_range once the sandbox is up.")
+    try:
+        out = R2Decompiler().read_bytes(ctx.target.path, str(addr), length=length)
+    except Exception as exc:  # noqa: BLE001 — surface a reason, let the agent recover
+        return f"hexdump failed: {exc}"
+    payload = (out or {}).get("bytes") or {}
+    if payload.get("error"):
+        # A mapped-vs-unmapped miss (or a non-ELF/unreadable artifact): reported, never faked.
+        return f"{payload['error']} ({addr})"
+    try:
+        data = bytes.fromhex(payload.get("hex") or "")
+    except ValueError:
+        return f"hexdump failed: malformed bytes returned from the sandbox at {addr}"
+    zero_fill = bool(payload.get("zero_fill"))
     zf_note = " [.bss/zero-fill region — bytes are 00, backed by no file data]" if zero_fill else ""
     _record_obs(ctx, tool="hexdump", args={"address": addr, "length": length},
                 result_kind="hexdump",

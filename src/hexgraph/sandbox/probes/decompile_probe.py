@@ -17,6 +17,12 @@ paths above return "not found". It runs `pD <length> @ <addr>` (disassemble N
 bytes) or `pd <count> @ <addr>` (N instructions) and emits
 { range: {address, length|count, disasm} | {error} }.
 
+A BYTES mode (`--bytes <addr> [--length N]`) reads a RAW byte range as hex for
+re_hexdump — `p8 <N> @ <addr>` — classifying the vaddr against the PT_LOAD table so
+an UNMAPPED address is reported rather than faked (r2's `p8` returns 0xff io-fill for
+an unmapped read) and a .bss/zero-fill tail is flagged. Emits
+{ bytes: {address, length, hex, zero_fill} | {address, error} }.
+
 radare2 is the v1 decompiler (the Decompiler seam lets Ghidra drop in later).
 We use built-in `pdc` (pseudo-C) with a `pdf` (disassembly) fallback — no
 r2ghidra plugin required. No network; the target is analyzed, never executed.
@@ -194,6 +200,12 @@ _MAX_FUNCTION_NAMES = 20000
 _RANGE_MAX_LENGTH = 8192
 _RANGE_MAX_COUNT = 1024
 
+# Hexdump-mode defaults + ceiling — the raw-BYTES read that backs re_hexdump (`--bytes <addr>`).
+# `_HEXDUMP_MAX_BYTES` mirrors the host's `elf_layout.HEXDUMP_MAX`; the host clamps first, the probe
+# re-clamps defensively (never trust the host arg) exactly like the range ceilings above.
+_HEXDUMP_DEFAULT_BYTES = 256
+_HEXDUMP_MAX_BYTES = 4096
+
 
 def _name_candidates(fn: str) -> list[str]:
     fn = fn.lstrip(".")
@@ -303,6 +315,62 @@ def _disassemble_range(r2, address: str, *, length: int | None, count: int | Non
     return {"address": address, **meta, "disasm": disasm}
 
 
+def _load_load_segments(r2) -> list[dict]:
+    """The PT_LOAD segments as `{vaddr, filesz, memsz}` from r2's `iSSj`, sorted by vaddr.
+
+    r2 names the PT_LOAD program headers `LOAD0`, `LOAD1`, … (other types are PHDR/INTERP/
+    DYNAMIC/GNU_* — skipped), with `vaddr`=p_vaddr, `size`=p_filesz, `vsize`=p_memsz. This is the
+    memory map re_hexdump classifies a vaddr against, a faithful port of the old host-side
+    `elf_layout.vaddr_to_offset` onto r2 — needed because `p8` at an UNMAPPED address silently
+    returns r2's 0xff io-fill, so we must know the map to report 'not mapped' instead of faking it."""
+    try:
+        segs = json.loads(r2.cmd("iSSj") or "[]")
+    except (json.JSONDecodeError, TypeError):
+        return []
+    out: list[dict] = []
+    for s in segs:
+        if not isinstance(s, dict) or not str(s.get("name", "")).startswith("LOAD"):
+            continue
+        out.append({"vaddr": int(s.get("vaddr", 0)), "filesz": int(s.get("size", 0)),
+                    "memsz": int(s.get("vsize", 0))})
+    out.sort(key=lambda seg: seg["vaddr"])
+    return out
+
+
+def _read_raw_bytes(r2, address: str, *, length: int | None) -> dict:
+    """Read a RAW byte range at `address` for re_hexdump — NO analysis, NO function needed.
+
+    Classifies the vaddr against the PT_LOAD table (`_load_load_segments`) exactly as the old
+    host path did: an UNMAPPED address is reported (never the 0xff io-fill r2 returns for an
+    unmapped read), a .bss/zero-fill tail (in the memsz-beyond-filesz window) returns synthesized
+    00s with a flag, and a file-backed address is read with `p8` — r2 has the ELF mapped at its
+    vaddr, the same mapping `pD` uses in _disassemble_range. `address` is the already-`_ADDR`-
+    validated hex string, so `n` (an int) and it are the only things interpolated into the r2
+    command. Returns `{address, length, hex, zero_fill}` or `{address, error}`."""
+    n = length if length is not None else _HEXDUMP_DEFAULT_BYTES
+    n = max(1, min(n, _HEXDUMP_MAX_BYTES))
+    vaddr = int(address, 16)
+    seg = next((s for s in _load_load_segments(r2)
+                if s["vaddr"] <= vaddr < s["vaddr"] + s["memsz"]), None)
+    if seg is None:
+        return {"address": address,
+                "error": f"address {address} is not mapped in any PT_LOAD segment"}
+    if vaddr - seg["vaddr"] >= seg["filesz"]:
+        # In the memsz-beyond-filesz tail (.bss): mapped in memory, backed by NO file bytes → the
+        # window reads as zeros. Synthesize them with the flag so the host annotates it, exactly as
+        # the old pyelftools path did — never a garbage read.
+        return {"address": address, "length": n, "hex": "00" * n, "zero_fill": True}
+    raw = (r2.cmd(f"p8 {n} @ {address}") or "").strip()
+    # `p8` emits a bare hex string (2 chars/byte, no separators). Keep only hex digits and drop a
+    # trailing nibble so a stray character can never yield a half-byte the host can't decode.
+    hexstr = "".join(c for c in raw if c in "0123456789abcdefABCDEF").lower()
+    if len(hexstr) % 2:
+        hexstr = hexstr[:-1]
+    if not hexstr:
+        return {"address": address, "error": "no bytes at this address (r2 returned nothing)"}
+    return {"address": address, "length": len(hexstr) // 2, "hex": hexstr, "zero_fill": False}
+
+
 def _flag_value(rest: list[str], flag: str) -> str | None:
     """The value following `flag` in argv (`--length 256`), or None if absent/dangling."""
     if flag in rest:
@@ -397,7 +465,10 @@ def main() -> int:
     # TARGETED disassemble mode: `--disasm <name|0xADDR>` disassembles ONE function (via `af`) with
     # NO whole-binary `aaa` and NO `pdc` — the cheap path for re_disassemble on any target size.
     disasm_subject = _flag_value(rest, "--disasm")
-    _value_flags = {"--range", "--length", "--count", "--disasm"}  # consume their following value too
+    # BYTES mode: `--bytes <0xADDR>` reads a raw byte range as hex for re_hexdump (NO function, NO
+    # analysis). --length bounds it. Kept off the positionals like --range so it isn't read as a focus.
+    bytes_addr = _flag_value(rest, "--bytes")
+    _value_flags = {"--range", "--length", "--count", "--disasm", "--bytes"}  # consume their following value too
     positionals = []
     skip = False
     for tok in rest:
@@ -426,7 +497,7 @@ def main() -> int:
     # targeted disasm/range modes are already cheap (`af`/`pD`) and open plain. When the writable
     # slot is mounted, `_project_flags` reloads a warm project via `-p` (skipping `aaa`) or wipes
     # any partial state for a clean cold save.
-    use_project = disasm_subject is None and range_addr is None
+    use_project = disasm_subject is None and range_addr is None and bytes_addr is None
     proj_dir = marker = ""
     open_flags = ["-2"]  # -2 silences stderr
     warm = False
@@ -470,6 +541,20 @@ def main() -> int:
             count = _parse_int(_flag_value(rest, "--count"))
             rng = _disassemble_range(r2, range_addr, length=length, count=count)
             print(json.dumps({"tool": "decompile_probe", "range": rng}))
+            return 0
+        if bytes_addr is not None:
+            # BYTES mode: raw-byte read for re_hexdump. No analysis — `p8` reads mapped bytes at the
+            # vaddr, classified against the PT_LOAD table so an unmapped address is reported, not
+            # faked. Validate with the SAME strict regex as a focus so it can never inject.
+            if not _ADDR.match(bytes_addr):
+                print(json.dumps({"tool": "decompile_probe",
+                                  "bytes": {"address": bytes_addr,
+                                            "error": f"invalid address {bytes_addr!r} "
+                                                     "(expected hex like 0x401200)"}}))
+                return 0
+            length = _parse_int(_flag_value(rest, "--length"))
+            payload = _read_raw_bytes(r2, bytes_addr, length=length)
+            print(json.dumps({"tool": "decompile_probe", "bytes": payload}))
             return 0
         # WARM-ONLY enforcement (THE analysis invariant): the whole-binary decompile/list path must
         # NEVER run a cold `aaa` off its own bat — only the two EXPLICIT analysis entry points do:
