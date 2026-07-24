@@ -301,7 +301,7 @@ scoped to the target's exact bytes. The two rules that make this cheap:
   inverse — an address → its containing function, nearest symbol+offset, and section (turn a
   crash PC or a raw pointer into a name). **re_function_info** is one function's metadata (size,
   prototype, callers, callees) without paying for its pseudo-C.
-- **re_hexdump** — raw bytes at a virtual address (ELF program-header mapped). Read a `DAT_`
+- **re_hexdump** — raw bytes at a virtual address (read via r2 in the sandbox). Read a `DAT_`
   table, an embedded key/blob, or a struct the decompiler renders as an opaque pointer.
 - **re_search_code** — scan the WHOLE image for a byte pattern or an immediate (r2 `/x`//`/v`),
   plus a bounded decompile-on-demand grep: find every site that loads a magic constant or a

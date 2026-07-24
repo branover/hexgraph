@@ -1,19 +1,22 @@
-"""On-disk ELF layout reads for the LIGHTWEIGHT triage tools (`re_resolve`, `re_hexdump`).
+"""On-disk ELF layout reads for `re_resolve` (a lightweight symbol/section triage), plus the pure
+hexdump FORMATTER shared with re_hexdump.
 
-These two tools answer WITHOUT a decompile or a Docker round-trip — a crash-address /
-pointer / DAT_ orientation and a raw-bytes view — so they read the target's on-disk ELF
-directly with pyelftools instead of paying a probe. That maps a virtual address to a file
-offset (program headers), reports the section a vaddr falls in and each section's vaddr range
-(section table), and reads the symbol table WITH `st_value`+`st_size` so the containing
-FUNC / nearest symbol can be computed precisely (`facts.symbols` from the binutils probe carry
-nm rows without a size, so containment needs the ELF's own symtab).
+`re_resolve` answers a crash-address / pointer / DAT_ orientation WITHOUT a decompile by reading
+the target's on-disk ELF with pyelftools: it maps a virtual address to a file offset (program
+headers), reports the section a vaddr falls in and each section's vaddr range (section table), and
+reads the symbol table WITH `st_value`+`st_size` so the containing FUNC / nearest symbol can be
+computed precisely (`facts.symbols` from the binutils probe carry nm rows without a size, so
+containment needs the ELF's own symtab).
 
 **pyelftools is treated as PROBE-ONLY / best-effort here.** pyproject scopes the analysis libs
-(`r2pipe`/`lief`/`pyelftools`) to the sandbox probes, so the host/engine venv may not carry it.
-Every entry point GUARDS the import and returns a clean `{"error": ..., "degraded": True}` when
-it's missing — the callers fall back to a symbols-only answer (`re_resolve`) or point at
-`re_disassemble_range` (`re_hexdump`) rather than crashing or faking bytes. Read-only + offline:
-never executes the target, opens the file read-binary, and mutates nothing.
+(`r2pipe`/`lief`/`pyelftools`) to the sandbox probes, so the host/engine venv does NOT carry it.
+`resolve_layout` GUARDS the import and returns a clean `{"error": ..., "degraded": True}` when it's
+missing — `re_resolve` then falls back to a symbols-only answer from the binutils facts rather than
+crashing. Read-only + offline: never executes the target, opens the file read-binary, mutates nothing.
+
+`re_hexdump`'s raw-BYTE read lives in the SANDBOX (radare2 `p8` via `decompile_probe.py` /
+`R2Decompiler.read_bytes`), so the hostile ELF is parsed in the sandbox and never the host process.
+This module keeps only the pure `render_hexdump` formatter (+ the `HEXDUMP_MAX` ceiling) it shares.
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 # Hard ceiling on a single re_hexdump read — a bounded window so a fat-fingered length can't
 # pull megabytes into the context (the no-silent-caps discipline: the tool reports when it clamps).
+# The host clamps to this before the sandbox read; decompile_probe._HEXDUMP_MAX_BYTES mirrors it.
 HEXDUMP_MAX = 4096
 
 
@@ -141,56 +145,6 @@ def resolve_layout(path: str, vaddr: int) -> dict:
     nearest, containing = _nearest_and_containing(symbols, vaddr)
     return {"section": _section_of(sections, vaddr), "nearest_symbol": nearest,
             "containing_function": containing, "n_symbols": len(symbols)}
-
-
-def vaddr_to_offset(elf, vaddr: int) -> tuple[int | None, bool]:
-    """Map a virtual address to a file offset via the PT_LOAD program headers: for the segment
-    with `p_vaddr <= vaddr < p_vaddr + p_memsz`, the offset is `p_offset + (vaddr - p_vaddr)`.
-    Returns `(file_offset, zero_fill)` — `zero_fill` is True when the address is in a segment's
-    memsz-beyond-filesz tail (.bss), i.e. mapped but backed by NO file bytes (reads as 0). Returns
-    `(None, False)` when the address is in no loadable segment (unmapped)."""
-    for seg in elf.iter_segments():
-        h = seg.header
-        if h["p_type"] != "PT_LOAD":
-            continue
-        start = int(h["p_vaddr"])
-        memsz = int(h["p_memsz"])
-        if not (start <= vaddr < start + memsz):
-            continue
-        delta = vaddr - start
-        if delta < int(h["p_filesz"]):
-            return int(h["p_offset"]) + delta, False
-        return None, True  # in the memsz tail (.bss): mapped, zero-filled, no file bytes
-    return None, False
-
-
-def read_bytes(path: str, vaddr: int, length: int) -> dict:
-    """Read `length` bytes at virtual address `vaddr` from the on-disk ELF at `path`, mapping
-    vaddr->file offset via the program headers. Returns
-    `{data: bytes, address, length, zero_fill: bool}` on success — `zero_fill` True when the
-    range lands in a .bss/zero-fill region (the bytes are synthesized as 00, never read past the
-    file). Returns `{"error": ..., "degraded": True?}` when pyelftools is missing, the artifact
-    isn't a readable ELF, or the address isn't mapped (reported, never faked). Never raises."""
-    ELFFile = _elffile()
-    if ELFFile is None:
-        return {"error": "pyelftools not available in this environment", "degraded": True}
-    try:
-        with open(path, "rb") as fh:
-            elf = ELFFile(fh)
-            off, zero_fill = vaddr_to_offset(elf, vaddr)
-            if off is None and not zero_fill:
-                return {"error": f"address {vaddr:#x} is not mapped in any PT_LOAD segment"}
-            if zero_fill:
-                # A .bss / zero-fill region: mapped in memory but backed by no file bytes. Return
-                # the length as zeros with the flag so the caller annotates it, never reads garbage.
-                return {"data": b"\x00" * length, "address": vaddr, "length": length,
-                        "zero_fill": True}
-            fh.seek(off)
-            data = fh.read(length)
-    except Exception as exc:  # noqa: BLE001 — a non-ELF / unreadable artifact degrades cleanly
-        logger.debug("read_bytes failed for %s", path, exc_info=True)
-        return {"error": f"could not read ELF: {exc}", "degraded": True}
-    return {"data": data, "address": vaddr, "length": len(data), "zero_fill": False}
 
 
 def render_hexdump(data: bytes, base: int) -> str:
