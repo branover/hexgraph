@@ -347,9 +347,47 @@ def _merge_attrs(existing: dict[str, Any], incoming: dict[str, Any]) -> tuple[di
 
 # --- forward direction: enrich already-existing objects at write time ---------
 
+def _build_node_index(session: Session, *, project_id: str, target_id: str,
+                      node_types: set[str] | None) -> dict:
+    """One pass over the target's non-archived nodes → `{(node_type, subject_kind, key): [Node]}`
+    for O(1) fact matching, keyed under BOTH each node's name and address (a fact matches on one) —
+    the exact two comparisons the per-fact scans made.
+
+    Building this ONCE (instead of the `session.query(Node).all()` that `_matching_nodes` /
+    `_lookup_named` ran for EVERY fact) turns extract-at-write enrichment from O(facts × nodes)
+    into O(facts + nodes). The per-fact full scan held `record_observation`'s single SQLite write
+    lock for MINUTES on a large firmware (thousands of functions) — measured ~16s at 1000 funcs,
+    quadratic — starving every concurrent writer past the busy_timeout with "database is locked"
+    (the #288 lock-across-slow-work class, in the enrichment path its audit didn't reach).
+    `_materialize_relationship` never creates nodes (the both-endpoints-exist rule), so the node set
+    is FIXED across the loop and this single snapshot stays complete."""
+    index: dict = {}
+    q = (
+        session.query(Node)
+        .filter(Node.project_id == project_id, Node.target_id == target_id,
+                Node.archived.is_(False))
+    )
+    if node_types:
+        q = q.filter(Node.node_type.in_(node_types))
+    for n in q.all():
+        nk = name_key(n.fq_name or n.name)
+        if nk is not None:
+            index.setdefault((n.node_type, "name", nk), []).append(n)
+        ak = address_key(n.address)
+        if ak is not None:
+            index.setdefault((n.node_type, "address", ak), []).append(n)
+    return index
+
+
 def _matching_nodes(session: Session, *, project_id: str, target_id: str,
-                    node_type: str, subject_kind: str, subject_key: str) -> list[Node]:
-    """Existing, non-archived nodes that a name/address fact applies to."""
+                    node_type: str, subject_kind: str, subject_key: str,
+                    index: dict | None = None) -> list[Node]:
+    """Existing, non-archived nodes that a name/address fact applies to. With a prebuilt `index`
+    (the bulk extract-and-index path) this is an O(1) dict hit; without one it falls back to a
+    single filtered query. NEVER call the no-index form inside a per-fact loop — that is the
+    O(facts × nodes) scan that held the write lock for minutes (see `_build_node_index`)."""
+    if index is not None:
+        return index.get((node_type, subject_kind, subject_key), [])
     q = (
         session.query(Node)
         .filter(Node.project_id == project_id, Node.target_id == target_id,
@@ -383,10 +421,13 @@ def _enrich_node_now(session: Session, node: Node, fact: Fact,
 
 
 def _materialize_relationship(session: Session, *, project_id: str, target_id: str,
-                              fact: Fact, source_observation_id: str | None) -> bool:
+                              fact: Fact, source_observation_id: str | None,
+                              index: dict | None = None) -> bool:
     """Draw the relationship edge for a `pair` fact IFF both endpoint nodes already
     exist (the both-endpoints-exist rule). Idempotent: re-applying merges via
-    add_edge(merge=True) — list attrs (call_sites) accumulate as a set."""
+    add_edge(merge=True) — list attrs (call_sites) accumulate as a set. A prebuilt `index`
+    (the bulk extract-and-index path) makes the two endpoint lookups O(1) instead of a
+    per-fact node scan; the backward path passes none and falls back to a single query."""
     pair = _unpair(fact.subject_key)
     if pair is None:
         return False
@@ -394,8 +435,8 @@ def _materialize_relationship(session: Session, *, project_id: str, target_id: s
     if edge_type is None:
         return False
     src_key, dst_key = pair
-    src = _lookup_named(session, project_id, target_id, fact.node_type, src_key)
-    dst = _lookup_named(session, project_id, target_id, fact.node_type, dst_key)
+    src = _lookup_named(session, project_id, target_id, fact.node_type, src_key, index=index)
+    dst = _lookup_named(session, project_id, target_id, fact.node_type, dst_key, index=index)
     if src is None or dst is None:
         return False  # both endpoints must exist
     from hexgraph.db.models import Edge
@@ -426,7 +467,14 @@ def _materialize_relationship(session: Session, *, project_id: str, target_id: s
 
 
 def _lookup_named(session: Session, project_id: str, target_id: str,
-                  node_type: str, key: str) -> Node | None:
+                  node_type: str, key: str, index: dict | None = None) -> Node | None:
+    """The single node named `key` (canonical) for an edge-endpoint lookup. With a prebuilt
+    `index` (the bulk path) it's an O(1) dict hit; without one it falls back to a filtered query.
+    Same O(facts × nodes)-avoidance note as `_matching_nodes` — never call the no-index form per
+    fact."""
+    if index is not None:
+        matches = index.get((node_type, "name", key))
+        return matches[0] if matches else None
     for n in (
         session.query(Node)
         .filter(Node.project_id == project_id, Node.target_id == target_id,
@@ -455,6 +503,16 @@ def extract_and_index(session: Session, *, project_id: str, target_id: str,
     except Exception:  # noqa: BLE001 — extraction must never break the tool call
         return 0
 
+    # Index the target's nodes ONCE for the whole payload (the O(facts + nodes) fix). Without
+    # this, `_matching_nodes` / `_lookup_named` ran `session.query(Node).all()` for EVERY fact —
+    # O(facts × nodes), which on a large firmware held `record_observation`'s write lock for
+    # MINUTES and starved every concurrent writer ("database is locked"). The node set is fixed
+    # across this loop (`_materialize_relationship` never creates nodes), so one snapshot suffices.
+    node_index = _build_node_index(
+        session, project_id=project_id, target_id=target_id,
+        node_types={f.node_type for f in facts},
+    ) if facts else {}
+
     written = 0
     for fact in facts:
         status = _persist_fact(session, project_id=project_id, target_id=target_id,
@@ -473,13 +531,13 @@ def extract_and_index(session: Session, *, project_id: str, target_id: str,
             for node in _matching_nodes(
                 session, project_id=project_id, target_id=target_id,
                 node_type=fact.node_type, subject_kind=fact.subject_kind,
-                subject_key=fact.subject_key,
+                subject_key=fact.subject_key, index=node_index,
             ):
                 _enrich_node_now(session, node, fact, source_observation_id)
         elif fact.subject_kind == "pair":
             _materialize_relationship(
                 session, project_id=project_id, target_id=target_id,
-                fact=fact, source_observation_id=source_observation_id)
+                fact=fact, source_observation_id=source_observation_id, index=node_index)
     session.flush()
     return written
 
