@@ -22,6 +22,7 @@ from hexgraph.db.models import (
     AnalysisRun, Annotation, ContextBundle, ContextItem, Edge, EgressEvent,
     Finding, FuzzArtifact, Node, Project, Target, Task,
 )
+from hexgraph.db.session import release_write_lock
 
 
 def archive_node(session: Session, project_id: str, node_id: str) -> Node:
@@ -134,6 +135,11 @@ def delete_project(session: Session, project_id: str) -> dict:
             model.project_id == project_id).delete(synchronize_session=False)
     session.delete(proj)
     session.flush()
+    # Commit the deletes (the transactional part) BEFORE the filesystem cleanup: shutil.rmtree of a
+    # whole project data dir (GBs of unpacked firmware + CAS) must not run under the single SQLite
+    # write lock, or every concurrent writer blocks for the entire tree walk. The rmtree is
+    # best-effort cleanup that needs no lock; if it fails the project is still gone from the DB.
+    release_write_lock(session)
     if data_dir:
         shutil.rmtree(data_dir, ignore_errors=True)
     return {"deleted_project": project_id, "rows": removed}

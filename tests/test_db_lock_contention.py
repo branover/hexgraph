@@ -309,3 +309,124 @@ def test_apply_rename_releases_lock_before_ghidra_propagate(hg_home, monkeypatch
                           kind="rename", value="parse_config", origin="agent")
 
     assert captured.get("fresh_write_ok") is True, captured.get("err")
+
+
+def test_ingest_file_copies_the_artifact_off_the_write_lock(hg_home, tmp_path, monkeypatch):
+    """ingest_file must copy + hash the artifact BEFORE the target-row flush, so copying a multi-GB
+    firmware never runs under the single write lock. Proven from INSIDE a fake copy: a fresh
+    connection must be able to WRITE while the 'copy' runs — impossible if the row were flushed first."""
+    import shutil
+
+    from hexgraph.engine.targets.ingest import create_project, ingest_file
+
+    f = tmp_path / "bin"
+    f.write_bytes(ELF)
+    captured = {}
+    real_copy = shutil.copy2
+
+    def spy_copy(src, dst, *a, **k):
+        # We are mid artifact-copy. A fresh writer must be able to proceed — only true if ingest_file
+        # has NOT flushed the target row yet.
+        conn = get_session()
+        try:
+            conn.execute(text("UPDATE project SET name = name WHERE id = :i"), {"i": captured["pid"]})
+            conn.commit()
+            captured["fresh_write_ok"] = True
+        except Exception as exc:  # noqa: BLE001
+            captured["fresh_write_ok"] = False
+            captured["err"] = str(exc)
+        finally:
+            conn.close()
+        return real_copy(src, dst, *a, **k)
+
+    monkeypatch.setattr(shutil, "copy2", spy_copy)
+    with session_scope() as s:
+        p = create_project(s, name="ingest-copy-lock")
+        captured["pid"] = p.id
+        s.commit()  # commit the project so the competing writer has a committed row to update
+        ingest_file(s, p, f, name="bin")
+
+    assert captured.get("fresh_write_ok") is True, captured.get("err")
+
+
+def test_delete_project_commits_before_the_rmtree(hg_home, monkeypatch):
+    """delete_project must commit the row deletes BEFORE shutil.rmtree of the (GB-scale) data dir,
+    so the tree walk doesn't hold the write lock. Proven from INSIDE a fake rmtree: a fresh writer
+    (against a DIFFERENT project) must be able to WRITE while the 'rmtree' runs."""
+    import hexgraph.engine.graph.removal as removal
+    from hexgraph.engine.graph.removal import delete_project
+    from hexgraph.engine.targets.ingest import create_project
+
+    captured = {}
+
+    def spy_rmtree(path, *a, **k):
+        conn = get_session()
+        try:
+            conn.execute(text("UPDATE project SET name = name WHERE id = :i"),
+                         {"i": captured["bystander_pid"]})
+            conn.commit()
+            captured["fresh_write_ok"] = True
+        except Exception as exc:  # noqa: BLE001
+            captured["fresh_write_ok"] = False
+            captured["err"] = str(exc)
+        finally:
+            conn.close()
+
+    monkeypatch.setattr(removal.shutil, "rmtree", spy_rmtree)
+    with session_scope() as s:
+        bystander = create_project(s, name="bystander")   # a different project the writer updates
+        captured["bystander_pid"] = bystander.id
+        victim = create_project(s, name="victim")
+        vid = victim.id
+        s.commit()
+        delete_project(s, vid)
+
+    assert captured.get("fresh_write_ok") is True, captured.get("err")
+
+
+def test_unpack_registration_loop_releases_the_lock_between_children(hg_home, tmp_path, monkeypatch):
+    """The unpack/dir-import registration loop commits each child before hashing+copying the next,
+    so the lock isn't pinned across hundreds of children. Driven through ingest_directory (which
+    shares the pattern): a competing writer fires from inside the SECOND child's artifact copy and
+    must succeed — only true if the FIRST child's row+edge were already committed."""
+    import shutil
+
+    from hexgraph.engine.targets.dirimport import ingest_directory
+    from hexgraph.engine.targets.ingest import create_project
+
+    src = tmp_path / "rootfs" / "usr"
+    src.mkdir(parents=True)
+    (src / "a").write_bytes(ELF)
+    (src / "b").write_bytes(ELF + b"\x01")  # distinct bytes so it's a SECOND registered child
+    captured = {"reg_copies": 0}
+    real_copy = shutil.copy2
+
+    def spy_copy(s_, d_, *a, **k):
+        # ingest_file copies into artifacts/<id>/; the directory walk copies into the extracted
+        # tree. Fire only on a REGISTRATION copy (artifacts), and only on the SECOND child — by then
+        # the FIRST child's row+edge must already be committed (the per-child release) for a fresh
+        # writer to acquire the lock during this copy.
+        if "artifacts" in str(d_):
+            captured["reg_copies"] += 1
+            if captured["reg_copies"] == 2:
+                conn = get_session()
+                try:
+                    conn.execute(text("UPDATE project SET name = name WHERE id = :i"),
+                                 {"i": captured["pid"]})
+                    conn.commit()
+                    captured["fresh_write_ok"] = True
+                except Exception as exc:  # noqa: BLE001
+                    captured["fresh_write_ok"] = False
+                    captured["err"] = str(exc)
+                finally:
+                    conn.close()
+        return real_copy(s_, d_, *a, **k)
+
+    monkeypatch.setattr(shutil, "copy2", spy_copy)
+    with session_scope() as s:
+        p = create_project(s, name="dir-loop-lock")
+        captured["pid"] = p.id
+        s.commit()
+        ingest_directory(s, p, tmp_path / "rootfs", name="rootfs")
+
+    assert captured.get("fresh_write_ok") is True, captured.get("err")

@@ -69,29 +69,34 @@ def ingest_file(
     # Content hash at ingest time (not just from recon) so target identity —
     # archive/restore matching and cross-target dedup — works even when recon
     # hasn't run (no Docker, or --no-recon). Recon later rewrites the same value.
+    from hexgraph.db.models import new_uuid
     from hexgraph.engine.targets.targets import file_sha256
 
-    # Create the row first so its UUID is assigned, then copy into a per-target
-    # subdir keyed on that id and record the final path. The dir is unique per
-    # target, so the basename within it can never collide with another target's.
-    target = Target(
-        project_id=project.id,
-        parent_id=parent.id if parent else None,
-        name=name or src.name,
-        path="",  # filled once the id is assigned (see below)
-        kind=TargetKind.unknown,  # refined by the sandboxed recon task (M2)
-        visible=visible,
-    )
-    session.add(target)
-    session.flush()  # assign id
-
-    dst_dir = Path(project.data_dir) / "artifacts" / target.id
+    # Do the COPY + HASH with NO DB write pending, THEN insert the fully-formed row. The id is the
+    # row's own default (`new_uuid`); assigning it in Python up front lets us build the per-target
+    # subdir and copy first. The dir is unique per target, so the basename within it can never
+    # collide with another target's. WHY the ordering matters: a `session.flush()` before the copy
+    # would hold the single SQLite write lock across `shutil.copy2` of a multi-GB firmware image —
+    # starving every concurrent writer (the web app, a second ingest, an agent's MCP server) for the
+    # whole copy, past the busy_timeout → "database is locked". Copying off the lock keeps the write
+    # to the row insert itself (milliseconds).
+    target_id = new_uuid()
+    dst_dir = Path(project.data_dir) / "artifacts" / target_id
     dst_dir.mkdir(parents=True, exist_ok=True)
     dst = dst_dir / src.name
     shutil.copy2(src, dst)
 
-    target.path = str(dst)
-    target.metadata_json = {"size": dst.stat().st_size, "original_path": str(src),
-                            "sha256": file_sha256(str(dst))}
+    target = Target(
+        id=target_id,
+        project_id=project.id,
+        parent_id=parent.id if parent else None,
+        name=name or src.name,
+        path=str(dst),
+        kind=TargetKind.unknown,  # refined by the sandboxed recon task (M2)
+        visible=visible,
+        metadata_json={"size": dst.stat().st_size, "original_path": str(src),
+                       "sha256": file_sha256(str(dst))},
+    )
+    session.add(target)
     session.flush()
     return target
