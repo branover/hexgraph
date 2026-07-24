@@ -19,6 +19,7 @@ for the lock). These tests cover the gaps this change closes:
 """
 
 import sqlite3
+import warnings
 
 import pytest
 from sqlalchemy.exc import OperationalError
@@ -381,9 +382,18 @@ def test_record_obs_rolls_back_a_doomed_session(hg_home, monkeypatch):
     from hexgraph.engine.targets.ingest import create_project
 
     def _doom(session, **kw):
-        # Mimic the durable checkpoint losing the lock: a failed statement dooms the session
-        # (SQLAlchemy then refuses further use until rollback), exactly what a lost-lock commit does.
-        session.execute(text("INSERT INTO __no_such_table__ VALUES (1)"))
+        # Mimic the durable checkpoint losing the lock: a failed FLUSH dooms the session
+        # (SQLAlchemy deactivates the transaction and refuses further use until rollback),
+        # exactly what a lost-lock commit inside record_observation's _checkpoint does. It MUST
+        # be a real flush-time failure — a raw session.execute() does NOT deactivate the txn in
+        # SQLAlchemy 2.0, so the session would stay usable and this test would pass even WITHOUT
+        # the _record_obs rollback (guarding nothing). A duplicate primary key is such a failure
+        # and relies only on PK uniqueness (robust to model column changes); the identity-map
+        # SAWarning it raises is expected and irrelevant to what we assert, so it's silenced.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            session.add(Project(id=kw["project_id"], name="dup", data_dir="x"))
+            session.flush()
 
     with session_scope() as s:
         p = create_project(s, name="obs-doom")
