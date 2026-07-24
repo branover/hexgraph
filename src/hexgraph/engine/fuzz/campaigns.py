@@ -707,9 +707,13 @@ def reap_campaign(session: Session, row: FuzzCampaign, *, executor=None,
             if status and not status.get("compiled", True):
                 row.error = (status.get("stderr") or "compile failed")[:500]
         row.finished_at = _now()
-        # Release again before the Docker teardown so the snapshot-ref + status writes above aren't
-        # held across the `docker stop`/`rm` of both containers.
-        release_write_lock(session)
+        # NB: the finalize (status=terminal + finished_at) + record_run below are DELIBERATELY not
+        # committed before the teardown. They stay in the transaction so a `stop_detached` that
+        # raises (a wedged daemon) rolls the whole reap back via reap_all's per-campaign except —
+        # the campaign keeps its running/building status and is retried next tick, rather than being
+        # marked terminal (dropping out of the reap filter) with its container leaked. The brief
+        # hold across the ~stop-grace teardown is bounded; the 512 MB corpus gzip — the real hold —
+        # already ran lock-free after the release above.
         if row.container_name and not is_mock:
             executor.stop_detached(row.container_name, remove=True)
         # Launch-and-join (§5.8b): tear down the service container we started too, so the
