@@ -1551,7 +1551,8 @@ def _hexdump(ctx: ToolContext, args: dict) -> str:
     same mapping re_disassemble_range uses) and renders the hexdump host-side — so the hostile ELF is
     parsed in the sandbox, never the host process. A .bss/zero-fill address reads as 00 with a note;
     an UNMAPPED address is REPORTED, not faked (r2's raw `p8` would return 0xff io-fill, but the probe
-    classifies against the PT_LOAD table first). Needs no whole-program analysis — kept OUT of
+    classifies against r2's IO map first and clamps a read to the mapped region). Needs no
+    whole-program analysis — kept OUT of
     _ANALYSIS_GATED_TOOLS. (The old host-side pyelftools read is gone: pyproject scopes the analysis
     libs to the sandbox probes, so it was never installed host-side and always degraded.)"""
     addr = args.get("address")
@@ -1595,12 +1596,15 @@ def _hexdump(ctx: ToolContext, args: dict) -> str:
         return f"hexdump failed: malformed bytes returned from the sandbox at {addr}"
     zero_fill = bool(payload.get("zero_fill"))
     zf_note = " [.bss/zero-fill region — bytes are 00, backed by no file data]" if zero_fill else ""
+    # The probe clamps a read to the end of the mapped region (so an over-long range can't spill
+    # into unmapped space and fake bytes) — surface that so the shorter count reads as deliberate.
+    seg_note = f" [{payload['note']}]" if payload.get("note") else ""
     _record_obs(ctx, tool="hexdump", args={"address": addr, "length": length},
                 result_kind="hexdump",
                 payload={"address": addr, "length": len(data), "zero_fill": zero_fill,
                          "hex": data.hex()},
                 summary=f"{len(data)} bytes at {addr}" + (" (.bss)" if zero_fill else ""))
-    header = f"hexdump @ {addr} ({len(data)} bytes){clamp_note}{zf_note}"
+    header = f"hexdump @ {addr} ({len(data)} bytes){clamp_note}{zf_note}{seg_note}"
     return _clip(f"{header}:\n{_elf.render_hexdump(data, vaddr)}")
 
 

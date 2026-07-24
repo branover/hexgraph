@@ -194,9 +194,9 @@ class R2Decompiler(Decompiler):
     def read_bytes(self, artifact: str, address: str, *, length: int | None = None) -> dict:
         """Read a RAW byte range at `address` (no function, no analysis) — the sandbox source for
         re_hexdump's hex+ascii view. Returns the probe's
-        {tool, bytes: {address, length, hex, zero_fill} | {address, error}} payload. Always
+        {tool, bytes: {address, length, hex, zero_fill[, note]} | {address, error}} payload. Always
         radare2: `p8` reads the mapped bytes at the vaddr (the same mapping `pD` uses in
-        disassemble_range), classified against the PT_LOAD table so an UNMAPPED address is reported
+        disassemble_range), classified against r2's IO map (`omj`) so an UNMAPPED address is reported
         rather than the 0xff io-fill r2 returns. Reads/parses the hostile bytes in the SANDBOX, never
         the host — the byte-read that used to run host-side via pyelftools (never shipped host-side,
         so it always degraded) now lives here."""

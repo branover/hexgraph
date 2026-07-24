@@ -9,12 +9,13 @@ unmapped read, so the probe classifies the vaddr against the PT_LOAD table first
 Observation, mutates no graph.
 
 Three layers, mirroring test_disassemble_range:
-  * PROBE UNIT — `decompile_probe._read_raw_bytes` over a synthetic PT_LOAD table via a fake r2:
-    the file-backed / .bss / unmapped classification, the p8 hex parse, and the byte clamp.
+  * PROBE UNIT — `decompile_probe._read_raw_bytes` over a synthetic IO map (`omj`) via a fake r2:
+    the file-backed / .bss / unmapped classification, the mapped-region clamp, and the p8 hex parse.
   * TOOL UNIT — the render/clamp/error behaviour of the tool with `R2Decompiler.read_bytes` mocked
     (no Docker), including the Docker-down degrade and the QUERY (one Observation, zero graph) contract.
-  * INTEGRATION — one non-mocked dump over tests/fixtures/vuln_httpd (a real ELF) through the real
-    sandbox, guarded by SANDBOX_READY, proving the file-backed / unmapped / .bss paths end-to-end.
+  * INTEGRATION — non-mocked dumps through the real sandbox (guarded by SANDBOX_READY): vuln_httpd
+    (ET_EXEC) for file-backed / unmapped / .bss, and libupnp.so (ET_DYN/PIE) for the shared-object
+    path r2's iSSj can't serialize but omj can.
 """
 
 import json
@@ -38,22 +39,22 @@ def _ctx(s):
     return ToolContext(session=s, project=p, target=t)
 
 
-# --- PROBE UNIT: the vaddr classification + p8 read over a synthetic PT_LOAD table -----------
+# --- PROBE UNIT: the vaddr classification + p8 read over a synthetic IO map (omj) -----------
 
 class _FakeR2:
-    """Minimal r2 for `_read_raw_bytes`: answers `iSSj` with a synthetic segment table and `p8`
-    with canned hex. `segs` are `(name, vaddr, filesz, memsz)` — r2's `iSSj` keys are
-    name/vaddr/size(=filesz)/vsize(=memsz)."""
+    """Minimal r2 for `_read_raw_bytes`: answers `omj` with a synthetic IO map and `p8` with canned
+    hex. `maps` are `(start, end_inclusive, name)` — r2's `omj` keys are from/to/name, where a
+    `fmap.*` name is a file-backed region and `mmap.*` a .bss/zero-fill region."""
 
-    def __init__(self, segs, p8="deadbeef"):
-        self._segs = [{"name": n, "vaddr": v, "size": f, "vsize": m} for (n, v, f, m) in segs]
+    def __init__(self, maps, p8="deadbeef"):
+        self._maps = [{"from": s, "to": e, "name": n} for (s, e, n) in maps]
         self._p8 = p8
         self.cmds = []
 
     def cmd(self, c):
         self.cmds.append(c)
-        if c == "iSSj":
-            return json.dumps(self._segs)
+        if c == "omj":
+            return json.dumps(self._maps)
         if c.startswith("p8 "):
             return self._p8
         return ""
@@ -65,62 +66,81 @@ def _dp():
 
 
 def test_probe_reads_file_backed_bytes_with_p8():
-    """A vaddr inside a PT_LOAD's filesz is read with `p8 <n> @ <addr>` and returned as hex."""
+    """A vaddr inside a file-backed IO map is read with `p8 <n> @ <addr>` and returned as hex."""
     DP = _dp()
-    r2 = _FakeR2([("LOAD1", 0x401000, 0x200, 0x200)], p8="aabbccdd")
+    r2 = _FakeR2([(0x401000, 0x4011ff, "fmap.LOAD1")], p8="aabbccdd")
     out = DP._read_raw_bytes(r2, "0x401040", length=4)
     assert out == {"address": "0x401040", "length": 4, "hex": "aabbccdd", "zero_fill": False}
     assert "p8 4 @ 0x401040" in r2.cmds
 
 
-def test_probe_bss_tail_is_zero_fill_and_never_reads_p8():
-    """A vaddr in the memsz-beyond-filesz tail (.bss) returns synthesized 00s with the flag and
-    issues NO p8 — the bytes are known to be zero, never a garbage/io-fill read."""
+def test_probe_bss_map_is_zero_fill_and_never_reads_p8():
+    """A vaddr in a .bss/zero-fill map (`mmap.*`) returns synthesized 00s with the flag and issues
+    NO p8 — the bytes are known-zero, never a garbage/io-fill read."""
     DP = _dp()
-    r2 = _FakeR2([("LOAD3", 0x403000, 0x100, 0x180)])          # filesz 0x100, memsz 0x180
-    out = DP._read_raw_bytes(r2, "0x403140", length=8)          # 0x140 >= filesz 0x100
+    r2 = _FakeR2([(0x403000, 0x40337f, "fmap.LOAD3"), (0x403380, 0x403387, "mmap.LOAD3")])
+    out = DP._read_raw_bytes(r2, "0x403380", length=8)
     assert out["zero_fill"] is True and out["hex"] == "00" * 8 and out["length"] == 8
+    assert "note" not in out
     assert not any(c.startswith("p8") for c in r2.cmds)
 
 
 def test_probe_unmapped_is_reported_not_faked():
-    """A vaddr in no PT_LOAD segment is an error — never r2's 0xff io-fill. NO p8 is issued."""
+    """A vaddr in no IO map is an error — never r2's 0xff io-fill. NO p8 is issued."""
     DP = _dp()
-    r2 = _FakeR2([("LOAD1", 0x401000, 0x200, 0x200)])
+    r2 = _FakeR2([(0x401000, 0x4011ff, "fmap.LOAD1")])
     out = DP._read_raw_bytes(r2, "0x900000", length=16)
     assert "error" in out and "not mapped" in out["error"] and "hex" not in out
     assert not any(c.startswith("p8") for c in r2.cmds)
 
 
-def test_probe_ignores_non_load_segments():
-    """A non-PT_LOAD segment (r2 names it DYNAMIC/GNU_*/…) covering the address is skipped — only
-    LOAD* maps bytes — so the address reads as unmapped."""
+def test_probe_clamps_read_to_end_of_mapped_region():
+    """A read that would spill past mapped memory is clamped (never the 0xff io-fill past the end)
+    and noted. The contiguous run crosses a file-backed map straight into its adjacent .bss map."""
     DP = _dp()
-    r2 = _FakeR2([("GNU_RELRO", 0x401000, 0x200, 0x200)])
-    out = DP._read_raw_bytes(r2, "0x401040", length=4)
-    assert "error" in out and "not mapped" in out["error"]
+    # fmap.LOAD3 [..0x40337f] immediately followed by mmap.LOAD3 [0x403380..0x403387], then a GAP.
+    # A 32-byte read from 0x403378 spans the fmap tail + the whole bss (contiguous) but must stop
+    # at 0x403388 — i.e. 16 bytes — never reading into the gap past the mapped end.
+    r2 = _FakeR2([(0x403148, 0x40337f, "fmap.LOAD3"), (0x403380, 0x403387, "mmap.LOAD3"),
+                  (0x500000, 0x500fff, "fmap.OTHER")], p8="00" * 16)
+    out = DP._read_raw_bytes(r2, "0x403378", length=32)
+    assert out["length"] == 16 and out["zero_fill"] is False
+    assert out.get("note") and "clamped" in out["note"]
+    assert "p8 16 @ 0x403378" in r2.cmds
+
+
+def test_probe_read_does_not_cross_a_gap():
+    """The contiguous-extent walk stops at a GAP between maps — a read near a map's end clamps to
+    that map, never jumping across unmapped space to the next map."""
+    DP = _dp()
+    r2 = _FakeR2([(0x1000, 0x1fff, "fmap.A"), (0x3000, 0x3fff, "fmap.B")], p8="00" * 16)
+    out = DP._read_raw_bytes(r2, "0x1ff0", length=64)
+    assert out["length"] == 16 and out.get("note")           # clamped to 0x1fff, not extended to 0x3000
+    assert "p8 16 @ 0x1ff0" in r2.cmds
 
 
 def test_probe_p8_hex_is_sanitised_to_whole_bytes():
     """`p8` output is stripped to hex digits and trimmed to a whole byte, so separators/newlines or
     an odd nibble can't yield bytes the host can't decode."""
     DP = _dp()
-    r2 = _FakeR2([("LOAD1", 0x401000, 0x200, 0x200)], p8="aa bb\ncc d")   # spaces/newline + odd nibble
+    r2 = _FakeR2([(0x401000, 0x4011ff, "fmap.LOAD1")], p8="aa bb\ncc d")   # spaces/newline + odd nibble
     out = DP._read_raw_bytes(r2, "0x401000", length=4)
     assert out["hex"] == "aabbcc" and out["length"] == 3                  # trailing 'd' dropped
 
 
 def test_probe_clamps_and_floors_length():
     """The byte count is clamped to the ceiling and floored at 1 — a fat-fingered length can't pull
-    unbounded bytes out of the sandbox (mirrors the range-mode clamp)."""
+    unbounded bytes out of the sandbox (mirrors the range-mode clamp). Uses a large map so the
+    mapped-region clamp doesn't bind first."""
     DP = _dp()
-    r2 = _FakeR2([("LOAD1", 0x401000, 0x10000, 0x10000)])
+    big = [(0x401000, 0x421000, "fmap.BIG")]
+    r2 = _FakeR2(big)
     DP._read_raw_bytes(r2, "0x401000", length=10_000_000)
     assert f"p8 {DP._HEXDUMP_MAX_BYTES} @ 0x401000" in r2.cmds
-    r2 = _FakeR2([("LOAD1", 0x401000, 0x10000, 0x10000)])
+    r2 = _FakeR2(big)
     DP._read_raw_bytes(r2, "0x401000", length=0)
     assert "p8 1 @ 0x401000" in r2.cmds
-    r2 = _FakeR2([("LOAD1", 0x401000, 0x10000, 0x10000)])
+    r2 = _FakeR2(big)
     DP._read_raw_bytes(r2, "0x401000", length=None)             # default when unset
     assert f"p8 {DP._HEXDUMP_DEFAULT_BYTES} @ 0x401000" in r2.cmds
 
@@ -286,3 +306,19 @@ def test_integration_bss_reads_zero_fill(hg_home):
         out = run_tool(ctx, "hexdump", {"address": "0x403380", "length": 8})
         assert "zero-fill" in out
         assert "00 00 00 00" in out
+
+
+@pytest.mark.skipif(not SANDBOX_READY, reason="requires the sandbox image (radare2)")
+def test_integration_pie_shared_object_reads_header(hg_home):
+    """A PIE/ET_DYN shared object (libupnp.so) maps + reads correctly through the sandbox — the ELF
+    header at 0x0 shows the magic in the hex and `ELF` in the ascii pane. Guards the shared-object
+    path specifically: r2's `iSSj` can serialize empty for a .so, but the `omj` IO map does not, so
+    a segment-table approach would have failed closed here."""
+    with session_scope() as s:
+        p = create_project(s, name="hexdump-pie")
+        t = ingest_file(s, p, fixture_path("libupnp.so"), name="libupnp")
+        s.flush()
+        ctx = ToolContext(session=s, project=p, target=t)
+        out = run_tool(ctx, "hexdump", {"address": "0x0", "length": 16})
+        assert "7f 45 4c 46" in out               # ELF magic bytes, proving a real mapped read
+        assert "ELF" in out                        # its ascii pane
