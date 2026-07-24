@@ -19,6 +19,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import EdgeType, Project, Target, TargetKind
+from hexgraph.db.session import release_write_lock
 from hexgraph.engine.graph.edges import add_edge
 from hexgraph.engine.targets.filesystem import persistent_base, record_manifest
 from hexgraph.engine.targets.ingest import ingest_file
@@ -151,6 +152,10 @@ def ingest_directory(
         entry["child_target_id"] = child.id
         seen_sha[digest] = child.id
         children.append(child)
+        # Commit each child before hashing/copying the next: the first child's row+edge flush would
+        # otherwise pin the SQLite write lock across every LATER child's full-file file_sha256 + copy
+        # (the same registration-loop hold fixed in unpack_firmware). Releasing per child bounds it.
+        release_write_lock(session)
 
     record_manifest(target, method="directory_import", root_rel="", files=files)
     # COMMIT the registered tree (root + children + manifest) before returning to the caller's
