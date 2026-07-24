@@ -334,7 +334,11 @@ def start_campaign(session: Session, project: Project, target: Target, *,
         surface=spec.surface, engine=prepared.engine,
         harness_node_id=spec.harness_node_id, build_spec_id=spec.build_spec_id,
         task_id=task.id if task else None,
-        container_name=container_name, outdir=outdir,
+        # container_name stays None until the container is actually launched (below): a
+        # running row committed by the pre-launch release with a non-None container_name
+        # would be finalized+torn-down by a concurrent reaper (poll → gone ⇒ done) in the
+        # window before start_detached creates it. Set from the launch handle just below.
+        container_name=None, outdir=outdir,
         config_json={**spec.to_dict(), "coverage_instrumented": prepared.coverage_instrumented},
         resources_json=res.to_dict(), status="running",
         stats_json={"execs": 0, "edges_covered": 0, "crash_count": 0, "peak_rss": 0,
@@ -358,14 +362,17 @@ def start_campaign(session: Session, project: Project, target: Target, *,
 
     # Release the write lock BEFORE the container launch (`docker run -d`, doubled for launch-and-join,
     # slower for a remote fuzz-env daemon): the campaign row is flushed above and would otherwise pin
-    # the lock across the launch. Committing here is safe for the reaper — a "running" row with
-    # container_name still None reaps as done=False (no container to poll), so it is never finalized
-    # prematurely; container_name lands right after the launch.
+    # the lock across the launch. Safe for a concurrent reaper ONLY because the row is committed with
+    # container_name=None (set at construction above): reap_campaign finalizes a running row via
+    # `elif row.container_name and not is_mock` (poll → gone ⇒ done), so a None container_name reaps as
+    # done=False and is never finalized/torn-down in the window before start_detached creates it.
+    # row.container_name lands from the launch handle right after this.
     release_write_lock(session)
 
     try:
         if prepared.probe == MOCK_PROBE:
             _launch_mock(row, prepared, spec)
+            row.container_name = container_name  # mock has no handle; adopt the pre-gen name post-launch
         elif prepared.requires_egress:
             # NETWORK-FUZZ (boofuzz): the ONLY place a campaign relaxes --network none.
             # Build the bounded local scope, assert egress + AUDIT the EgressEvent BEFORE

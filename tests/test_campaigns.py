@@ -1222,3 +1222,38 @@ def test_start_campaign_releases_the_lock_before_the_launch(hg_home, monkeypatch
         C.start_campaign(s, p, t, spec=spec)
 
     assert captured.get("fresh_write_ok") is True, captured.get("err")
+
+
+def test_start_campaign_commits_container_name_none_during_the_launch_window(hg_home, monkeypatch):
+    """Regression: the pre-launch release must commit the running row with container_name=None.
+    reap_campaign finalizes+tears down a running row via `row.container_name and not is_mock`
+    (poll → gone ⇒ done); if the row were committed with the pre-generated name BEFORE
+    start_detached creates that container, a concurrent reaper polling in the launch window would
+    see exists=False and finalize the campaign + `stop_detached(remove=True)` the container out
+    from under the launch. Proven from a FRESH connection (what the reaper reads) mid-launch: the
+    committed row is `running` with container_name still None; it is adopted only after the launch."""
+    _mock_env(monkeypatch)
+    _enable_fuzzing()
+    seen = {}
+    real_launch = C._launch_mock
+
+    def spy_launch(row, prepared, spec):
+        conn = get_session()
+        try:
+            fresh = conn.get(FuzzCampaign, row.id)
+            seen["status"] = fresh.status if fresh else "MISSING"
+            seen["container_name"] = fresh.container_name if fresh else "MISSING"
+        finally:
+            conn.close()
+        return real_launch(row, prepared, spec)
+
+    monkeypatch.setattr(C, "_launch_mock", spy_launch)
+    with session_scope() as s:
+        p, t = _project_with_target(s)
+        spec = FuzzCampaignSpec(target_id=t.id, surface="source_lib", harness_source=HARNESS,
+                                function="cgi_handler", target_sources=["/x.c"])
+        row = C.start_campaign(s, p, t, spec=spec)
+
+    assert seen.get("status") == "running", seen
+    assert seen.get("container_name") is None, seen   # the reaper's poll branch short-circuits
+    assert row.container_name                          # adopted once the launch returns
