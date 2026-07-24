@@ -536,7 +536,7 @@ class Task(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     project_id: Mapped[str] = mapped_column(ForeignKey("project.id"))
-    target_id: Mapped[str] = mapped_column(ForeignKey("target.id"))
+    target_id: Mapped[str] = mapped_column(ForeignKey("target.id"), index=True)
     type: Mapped[str] = mapped_column(String(50))
     # The thing this task interrogates (P3): NODE|EDGE|SELECTION|HYPOTHESIS|TARGET.
     # `target_id` stays the resolved primary target the sandbox/decompiler operate on.
@@ -567,7 +567,7 @@ class Finding(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     project_id: Mapped[str] = mapped_column(ForeignKey("project.id"))
-    target_id: Mapped[str] = mapped_column(ForeignKey("target.id"))
+    target_id: Mapped[str] = mapped_column(ForeignKey("target.id"), index=True)
     task_id: Mapped[str] = mapped_column(ForeignKey("task.id"))
 
     title: Mapped[str] = mapped_column(String(200))

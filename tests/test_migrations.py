@@ -220,3 +220,20 @@ def test_backup_written_on_upgrade(tmp_path, monkeypatch):
     assert res["action"] == "upgraded"
     assert (tmp_path / "hg.db.bak").exists()
     reset_engine_for_tests()
+
+
+def test_finding_and_task_target_id_are_indexed_at_head(tmp_path, monkeypatch):
+    """The merge-scan indexes (migration 3a6f3dd519ff) exist at head, so _absorb_target's per-dup
+    Finding/Task target_id re-homes are index-served, not full table scans."""
+    monkeypatch.setenv("HEXGRAPH_DB_PATH", str(tmp_path / "hg.db"))
+    from hexgraph.db.migrate import prepare_database
+    from hexgraph.db.session import db_url, reset_engine_for_tests
+
+    reset_engine_for_tests()
+    prepare_database()
+    insp = inspect(create_engine(db_url()))
+    finding_ix = {ix["name"] for ix in insp.get_indexes("finding")}
+    task_ix = {ix["name"] for ix in insp.get_indexes("task")}
+    assert "ix_finding_target_id" in finding_ix, finding_ix
+    assert "ix_task_target_id" in task_ix, task_ix
+    reset_engine_for_tests()
