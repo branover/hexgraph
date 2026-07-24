@@ -217,3 +217,95 @@ def test_agent_loop_checkpoints_graph_write_between_tool_calls(hg_home, monkeypa
     assert n["i"] >= 2, "the agentic scenario should have made at least two tool calls"
     assert seen.get("committed_between_calls") is True, seen
     assert seen.get("fresh_write_ok") is True, seen.get("err")
+
+
+def test_static_analysis_releases_lock_before_the_taint_pass(hg_home, monkeypatch):
+    """A `static_analysis` task promotes the decompiled function graph (a write) and then runs the
+    grounded-taint pass (`run_static_core` → `analyze_taint`, a seconds-to-minutes sandboxed Ghidra
+    P-Code sweep). The materialized-node write must be RELEASED before that pass, not held across
+    it. Proven from INSIDE a fake run_static_core: a FRESH connection must be able to WRITE while it
+    'runs' — impossible if the materialize write were still pinned on the task session."""
+    import hexgraph.engine.llm_tasks as LT
+    import hexgraph.engine.re.static_core as SC
+    from hexgraph.engine.graph.nodes import get_or_create_node
+
+    captured = {}
+
+    def fake_gather(target, ctx, project):
+        return "// void f(){}"  # truthy → _materialize_decomp_graph runs (leaves a pending write)
+
+    def fake_materialize(session, project_id, target_id, decomp):
+        # Stand in for the decomp-graph promote: a write + flush, NOT committed.
+        get_or_create_node(session, project_id=project_id, target_id=target_id,
+                           node_type="function", name="taint_marker", created_by="test")
+
+    def fake_static_core(session, project, target, *, task):
+        # We are now "inside the Ghidra taint sweep". A fresh connection must be able to WRITE,
+        # which is only true if the materialize write above was already committed (lock released).
+        conn = get_session()
+        try:
+            conn.execute(text("UPDATE project SET name = name WHERE id = :i"), {"i": captured["pid"]})
+            conn.commit()
+            captured["fresh_write_ok"] = True
+        except Exception as exc:  # noqa: BLE001
+            captured["fresh_write_ok"] = False
+            captured["err"] = str(exc)
+        finally:
+            conn.close()
+        return []
+
+    monkeypatch.setattr(LT, "_gather_decompilation", fake_gather)
+    monkeypatch.setattr(LT, "_materialize_decomp_graph", fake_materialize)
+    monkeypatch.setattr(SC, "run_static_core", fake_static_core)
+
+    with session_scope() as s:
+        p = create_project(s, name="taint-lock")
+        captured["pid"] = p.id
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        t.metadata_json = {"imports": ["strcpy"], "mitigations": {"canary": False}, "strings": []}
+        task = create_task(s, project=p, target_id=t.id, type="static_analysis",
+                           params={"mock_scenario": "agentic_overflow", "function": "cgi_handler"})
+        tid = task.id
+
+    run_task_sync(tid)
+    assert captured.get("fresh_write_ok") is True, captured.get("err")
+
+
+def test_apply_rename_releases_lock_before_ghidra_propagate(hg_home, monkeypatch):
+    """Confirming a function rename commits the durable graph rename and RELEASES the write lock
+    before the best-effort headless-Ghidra propagate + re-decompile (seconds-to-tens-of-seconds).
+    Proven from INSIDE a fake propagate: a fresh connection must be able to WRITE while it 'runs'."""
+    import hexgraph.engine.re.ghidra as ghidra_mod
+    from hexgraph.engine.graph.annotations import create_annotation
+    from hexgraph.engine.graph.nodes import get_or_create_node
+
+    captured = {}
+
+    def fake_propagate(session, node, new_name):
+        conn = get_session()
+        try:
+            conn.execute(text("UPDATE project SET name = name WHERE id = :i"), {"i": captured["pid"]})
+            conn.commit()
+            captured["fresh_write_ok"] = True
+        except Exception as exc:  # noqa: BLE001
+            captured["fresh_write_ok"] = False
+            captured["err"] = str(exc)
+        finally:
+            conn.close()
+
+    # `_apply_rename` does `from hexgraph.engine.re.ghidra import propagate_function_rename` at call
+    # time, so patch it on the SOURCE module.
+    monkeypatch.setattr(ghidra_mod, "propagate_function_rename", fake_propagate)
+
+    with session_scope() as s:
+        p = create_project(s, name="rename-lock")
+        captured["pid"] = p.id
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        # A placeholder-named function node so an agent's rename auto-confirms → _apply_rename fires.
+        node = get_or_create_node(s, project_id=p.id, target_id=t.id, node_type="function",
+                                  name="fcn.00401234", created_by="test")
+        s.flush()
+        create_annotation(s, project_id=p.id, node_kind="node", node_id=node.id,
+                          kind="rename", value="parse_config", origin="agent")
+
+    assert captured.get("fresh_write_ok") is True, captured.get("err")

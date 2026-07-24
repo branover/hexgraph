@@ -225,6 +225,12 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
         ctx.tool_outputs["decompilation"] = decomp
         _materialize_decomp_graph(session, project.id, target.id, decomp)
 
+    # Release the write lock before the deterministic-core pass: _materialize_decomp_graph promotes
+    # function nodes (an uncommitted write), and run_static_core → analyze_taint below runs a
+    # seconds-to-minutes sandboxed Ghidra taint sweep — holding that write across it starves every
+    # concurrent writer past the busy_timeout (the #288 class, in a pre-agent-loop slow op it missed).
+    release_write_lock(session)
+
     # Phase 4 deterministic core (design §6): for static_analysis, compute grounded source→sink
     # taint and emit a finding per flow BEFORE the LLM synthesizes — so the model reasons over a
     # graph that already carries real taint/sink truth. Backend-independent + always-on; degrades
@@ -246,6 +252,10 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
     from hexgraph.llm.cassette import maybe_wrap_cassette
     from hexgraph.llm.prompting import system_prompt
 
+    # Release again before assembling the bundle: run_static_core persisted grounded findings (a
+    # write), and build_context_bundle does its own CAS/ContextItem writes — don't hold the findings
+    # write across it (the grounded findings are durable-by-design anyway; see the note above).
+    release_write_lock(session)
     bundle = build_context_bundle(session, project, target, task, ctx)
     task.context_bundle_id = bundle.row.id
 
