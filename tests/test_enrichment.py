@@ -377,3 +377,69 @@ def test_extract_structs_filters_noise_by_name_not_just_flag():
     ]}
     kept = {f.subject_key for f in E._extract_structs(payload)}
     assert kept == {"Circle", "config_t"}, kept
+
+
+# --- performance regression: enrichment must scan the node table O(1) times, not per fact ----
+
+def _target_with_functions(s, n: int):
+    """A bare target with `n` pre-existing function nodes (no recon), for the enrichment-cost
+    guard. Returns (project_id, target_id)."""
+    from hexgraph.db.models import Target
+
+    p = create_project(s, name=f"perf-{n}")
+    t = Target(project_id=p.id, name="fw", path="/tmp/fw", kind="binary", metadata_json={})
+    s.add(t)
+    s.flush()
+    for i in range(n):
+        get_or_create_node(s, project_id=p.id, target_id=t.id, node_type="function",
+                           name=f"func_{i}", created_by="seed")
+    return p.id, t.id
+
+
+def _node_selects_for_function_list(hg_home_unused, n: int) -> int:
+    """Count `SELECT ... FROM node` round-trips issued while recording ONE function_list
+    Observation of `n` functions (with callees, so pair-fact endpoint lookups run too)."""
+    from sqlalchemy import event
+
+    from hexgraph.db.session import get_engine
+
+    with session_scope() as s:
+        pid, tid = _target_with_functions(s, n)
+
+    payload = {"functions": [
+        {"name": f"func_{i}", "address": f"0x{0x400000 + i * 16:x}", "size": 64,
+         "callees": [f"func_{(i + 1) % n}"]} for i in range(n)]}
+
+    count = {"node": 0}
+
+    def _before(conn, cursor, statement, parameters, context, executemany):
+        stmt = statement.lstrip().lower()
+        if stmt.startswith("select") and "from node" in stmt:
+            count["node"] += 1
+
+    eng = get_engine()
+    event.listen(eng, "before_cursor_execute", _before)
+    try:
+        with session_scope() as s:
+            O.record_observation(
+                s, project_id=pid, target_id=tid, source="agent", tool="list_functions",
+                args={}, result_kind="function_list", payload=payload, summary="x",
+                content_hash=HASH, node_refs=[])
+    finally:
+        event.remove(eng, "before_cursor_execute", _before)
+    return count["node"]
+
+
+def test_enrichment_scans_the_node_table_a_bounded_number_of_times(hg_home):
+    """Regression guard for the O(facts × nodes) write-lock stall. Extract-at-write must build ONE
+    node index per Observation, NOT re-scan the node table once per fact: the old
+    `session.query(Node).all()` in `_matching_nodes` / `_lookup_named` ran per fact, held
+    `record_observation`'s single SQLite write lock for MINUTES on a large firmware, and starved
+    every concurrent writer with "database is locked". The number of node SELECTs must stay small
+    and NOT grow with the number of functions."""
+    small = _node_selects_for_function_list(hg_home, 15)
+    large = _node_selects_for_function_list(hg_home, 90)   # 6× the facts
+    # O(1) in the fact count: the 6×-larger payload issues no more node scans than the small one
+    # (the pre-fix code would have issued ~90+ here vs ~15 — clearly fact-proportional).
+    assert large <= small, (small, large)
+    assert large <= 4, large     # just the one index build (+ any incidental), never per-fact
