@@ -18,6 +18,8 @@ extract-at-write + join-at-create), exactly the §9 test matrix:
 Mock backend, offline — no Docker, no key.
 """
 
+import re
+
 from hexgraph.db.models import Edge, EnrichmentFact, Node
 from hexgraph.db.session import session_scope
 from hexgraph.engine.re import enrichment as E
@@ -411,10 +413,13 @@ def _node_selects_for_function_list(hg_home_unused, n: int) -> int:
          "callees": [f"func_{(i + 1) % n}"]} for i in range(n)]}
 
     count = {"node": 0}
+    # `\bfrom node\b` (word-boundary), not a bare "from node" substring, so a future `node_*`
+    # table (e.g. `from node_annotation`) can't be miscounted as a scan of the `node` table.
+    _node_from = re.compile(r"\bfrom node\b")
 
     def _before(conn, cursor, statement, parameters, context, executemany):
         stmt = statement.lstrip().lower()
-        if stmt.startswith("select") and "from node" in stmt:
+        if stmt.startswith("select") and _node_from.search(stmt):
             count["node"] += 1
 
     eng = get_engine()
