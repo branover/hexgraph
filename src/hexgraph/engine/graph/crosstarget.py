@@ -24,7 +24,11 @@ _LINK_COMMIT_EVERY = 500
 
 def link_same_code(session: Session, project_id: str) -> int:
     """Create `similar_to` edges between same-content function nodes in different
-    targets. Idempotent. Returns edges created."""
+    targets. Idempotent. Returns edges created.
+
+    NB: on a large clique this commits the caller's session every `_LINK_COMMIT_EVERY` edges to
+    bound the write-lock hold — so it is NOT transaction-neutral. Both current callers (the MCP
+    `link_same_code` tool and the recon pipeline) run it as a self-contained unit, which is fine."""
     nodes = (
         session.query(Node)
         .filter(Node.project_id == project_id, Node.node_type == NodeType.function.value,

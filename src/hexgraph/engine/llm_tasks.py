@@ -388,8 +388,8 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
     # Release the write lock before the merge + reachability tail: the findings persisted above are
     # durable, so don't hold that write across merge_duplicate_nodes (a whole-project node load +
     # reparents) NOR the per-finding reachability argument below (which rebuilds the node/edge index
-    # each finding — reads, but held under a pending write they starve concurrent writers). Commit
-    # here, then again after the merge so the read-heavy reachability pass runs lock-free.
+    # each finding). Commit here, then again after the merge so the reachability pass STARTS
+    # lock-free; each finding then commits its own evidence upgrade before the next traversal.
     release_write_lock(session)
     merge_duplicate_nodes(session, project.id)
     release_write_lock(session)
@@ -409,6 +409,10 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
                 argue_reachability_for_finding(session, fid)
             except Exception:  # noqa: BLE001 — reachability is advisory, never fatal
                 pass
+            # Commit each finding's reachability upgrade (evidence_json write) before the NEXT
+            # finding's whole-graph traversal, so the argument pass never pins the lock across the
+            # remaining findings' index rebuilds (a many-findings project's crash/graph work).
+            release_write_lock(session)
 
     # Discipline loop, Layer 1 (design-working-memory.md §6): auto-draft the closing
     # AGENT journal entry from the tool-call trace + the findings, so journaling is a
