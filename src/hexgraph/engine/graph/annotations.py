@@ -11,6 +11,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Annotation, Finding, Node, Target
+from hexgraph.db.session import release_write_lock
 from hexgraph.engine.graph.nodes import is_placeholder_name
 
 KINDS = {"rename", "note", "tag", "type_decl"}
@@ -105,6 +106,13 @@ def _apply_rename(session: Session, node: Node, new_name: str) -> None:
     attrs["name_history"] = history
     node.attrs_json = attrs
     node.name = new_name  # display name; fq_name stays the durable identity
+
+    # Commit the confirmed graph rename (durable — and it releases the SQLite write lock) BEFORE the
+    # best-effort Ghidra propagation below: propagate_function_rename runs a headless-Ghidra rename +
+    # re-decompile (seconds-to-tens-of-seconds on a large project), and holding this rename write
+    # across it starves every concurrent writer past the busy_timeout. Mirrors
+    # pipeline._maybe_enrich_ghidra, which releases before its Ghidra decompile.
+    release_write_lock(session)
 
     # Phase 3 rename round-trip: best-effort, propagate the rename INTO the persistent Ghidra
     # project and re-decompile so it sticks for every future decompile. A no-op unless headless
