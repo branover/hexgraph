@@ -29,9 +29,10 @@ def enabled_groups(override: set[str] | None = None) -> set[str]:
     return {g for g in GROUPS if settings.get(f"features.mcp.{g}", True)}
 
 
-# Messages returned to the agent on a DB OperationalError. BOTH are deliberately
-# content-free w.r.t. the query: they MUST NOT echo the failing SQL or its bound
-# parameters (which `str(OperationalError)` bakes into the message), only the gist.
+# Messages returned to the agent on a DB error (any SQLAlchemyError). BOTH are deliberately
+# content-free w.r.t. the query: they MUST NOT echo the failing SQL or its bound parameters
+# (which str() bakes into the message for StatementError subclasses AND PendingRollbackError),
+# only the gist.
 _WRITE_CONTENTION_ERROR = "transient write contention — please retry"
 _DB_ERROR = "database error (the query is withheld for safety) — see the server log"
 
@@ -49,18 +50,21 @@ def invoke_tool(spec: dict, arguments: dict | None) -> object:
     Re-running is duplicate-safe: a retry only fires after a FAILED, rolled-back commit, so
     nothing was persisted on the prior attempt.
 
-    A `sqlalchemy.exc.OperationalError` is the one error class whose `str()` bakes in the
-    raw failing SQL *and* its bound parameter values, so returning `str(exc)` to the agent
-    would leak the query (and any values it carries). We never do that. Instead we map it
-    to a structured, content-free `{"error": ...}`:
+    A SQLAlchemy error's `str()` can bake in the raw failing SQL *and* its bound parameter
+    VALUES, so returning `str(exc)` to the agent would leak the query (and any values it carries).
+    We never do that. We catch the SQLAlchemy base class — NOT just `OperationalError` — because
+    the SQL is baked in by more than one type: every `StatementError` subclass (OperationalError,
+    IntegrityError, …) AND `PendingRollbackError`, which re-prints the original doomed-transaction
+    "[SQL: …][parameters: …]" and is NOT an OperationalError (so the old narrow catch leaked it).
+    Instead we map to a structured, content-free `{"error": ...}`:
       - a transient lock/busy error → a *retryable* message (the agent should retry; the
         write-group retry above was simply exhausted, or the tool wasn't a write tool);
-      - any other OperationalError (schema drift, corruption, disk full) → a generic
-        "database error" message, and the original exception is LOGGED server-side (so the
-        "see the server log" hint is true) while the SQL text stays out of the response.
-    Every NON-OperationalError propagates unchanged, so genuine bugs still surface their
-    real message. This runs in a worker thread (it does blocking DB work)."""
-    from sqlalchemy.exc import OperationalError
+      - any other DB error (schema drift, corruption, disk full) → a generic "database error"
+        message, and the original exception is LOGGED server-side (so the "see the server log"
+        hint is true) while the SQL text stays out of the response.
+    Every NON-SQLAlchemy error propagates unchanged, so genuine bugs still surface their real
+    message. This runs in a worker thread (it does blocking DB work)."""
+    from sqlalchemy.exc import SQLAlchemyError
 
     from hexgraph.db.session import _is_lock_error, call_with_write_retry
 
@@ -72,13 +76,13 @@ def invoke_tool(spec: dict, arguments: dict | None) -> object:
         if spec.get("group") == "write":
             return call_with_write_retry(_run)
         return _run()
-    except OperationalError as exc:
+    except SQLAlchemyError as exc:
         # NB: never include str(exc) / exc.statement / exc.params in the returned payload.
         if _is_lock_error(exc):
             return {"error": _WRITE_CONTENTION_ERROR}
         # Non-transient DB error: log the real exception (with traceback) server-side so the
         # operator can diagnose it, then return only the content-free message to the agent.
-        logger.exception("MCP tool %r hit a non-transient database error", spec.get("name"))
+        logger.exception("MCP tool %r hit a database error", spec.get("name"))
         return {"error": _DB_ERROR}
 
 

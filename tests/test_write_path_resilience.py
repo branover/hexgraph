@@ -19,6 +19,7 @@ for the lock). These tests cover the gaps this change closes:
 """
 
 import sqlite3
+import warnings
 
 import pytest
 from sqlalchemy.exc import OperationalError
@@ -42,6 +43,22 @@ def _non_lock_error() -> OperationalError:
         "SELECT * FROM finding",
         (),
         sqlite3.OperationalError("no such table: finding"),
+    )
+
+
+def _pending_rollback_error():
+    """A PendingRollbackError shaped exactly like the real doomed-session one: it re-prints the
+    original failed statement's SQL + bound params in its str() (the thing we must NOT leak), it
+    carries the lock message, and it is NOT an OperationalError — so a catch narrowed to
+    OperationalError lets it through. This is the leak reported on the `list_strings` failure."""
+    from sqlalchemy.exc import PendingRollbackError
+
+    return PendingRollbackError(
+        "This Session's transaction has been rolled back due to a previous exception during flush. "
+        "To begin a new transaction with this Session, first issue Session.rollback(). Original "
+        "exception was: (sqlite3.OperationalError) database is locked "
+        "[SQL: INSERT INTO observation (id, summary) VALUES (?, ?)] "
+        "[parameters: ('obs-id', 'SUPER_SECRET_SUMMARY')]"
     )
 
 
@@ -319,3 +336,82 @@ def test_mcp_run_group_tool_is_not_retried(monkeypatch):
     out = invoke_tool({"name": "task_run", "group": "run", "fn": task}, {})
     assert calls["n"] == 1                      # ran once, NOT retried
     assert "retry" in out["error"].lower()      # still sanitized + flagged retryable for the agent
+
+
+# ── the doomed-session leak: a PendingRollbackError is NOT an OperationalError ───────────
+
+def test_mcp_seam_sanitizes_pending_rollback_error():
+    """The reported `list_strings` leak: when a tool's durable observation checkpoint lost the
+    lock, the swallowed failure left the session doomed, and the `_tool` scope's exit commit then
+    raised a PendingRollbackError whose str() RE-PRINTS the original INSERT's SQL + bound params.
+    That is a SQLAlchemyError but NOT an OperationalError, so the old narrow catch surfaced it raw.
+    The seam now catches the SQLAlchemy base class and returns only the retryable message."""
+    from hexgraph.agent.mcp_server import invoke_tool
+
+    exc = _pending_rollback_error()
+    # sanity: the raw message really carries the SQL + the secret bound value
+    assert "SUPER_SECRET_SUMMARY" in str(exc) and "INSERT INTO observation" in str(exc)
+
+    spec = {"name": "re_list_strings", "group": "read",
+            "fn": lambda **kw: (_ for _ in ()).throw(exc)}
+    out = invoke_tool(spec, {"target_id": "t"})
+
+    assert isinstance(out, dict) and "error" in out
+    assert "retry" in out["error"].lower()      # the wrapped 'database is locked' → retryable
+    blob = str(out)
+    for secret in ("SUPER_SECRET_SUMMARY", "INSERT INTO observation", "[SQL:", "[parameters:",
+                   "PendingRollbackError", "database is locked"):
+        assert secret not in blob, f"sanitized MCP error leaked {secret!r}: {blob!r}"
+
+
+# ── best-effort observation recording recovers a doomed session (no task failure / leak) ─
+
+def test_record_obs_rolls_back_a_doomed_session(hg_home, monkeypatch):
+    """A record_observation that DOOMS the caller's session (a lost lock at the durable checkpoint
+    leaves the transaction needing a rollback) must never break the tool call. `_record_obs` rolls
+    back so the session is USABLE again and returns (None, False); without it the doomed session
+    resurfaces downstream — failing the whole LLM task (the agent loop's post-tool commit) or
+    leaking the raw INSERT SQL at the MCP seam."""
+    from sqlalchemy import text
+
+    import hexgraph.agent.agent_tools as AT
+    from hexgraph.agent.agent_tools import ToolContext
+    from hexgraph.db.models import Project, Target
+    from hexgraph.db.session import session_scope
+    from hexgraph.engine import observations as O
+    from hexgraph.engine.targets.ingest import create_project
+
+    def _doom(session, **kw):
+        # Mimic the durable checkpoint losing the lock: a failed FLUSH dooms the session
+        # (SQLAlchemy deactivates the transaction and refuses further use until rollback),
+        # exactly what a lost-lock commit inside record_observation's _checkpoint does. It MUST
+        # be a real flush-time failure — a raw session.execute() does NOT deactivate the txn in
+        # SQLAlchemy 2.0, so the session would stay usable and this test would pass even WITHOUT
+        # the _record_obs rollback (guarding nothing). A duplicate primary key is such a failure
+        # and relies only on PK uniqueness (robust to model column changes); the identity-map
+        # SAWarning it raises is expected and irrelevant to what we assert, so it's silenced.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            session.add(Project(id=kw["project_id"], name="dup", data_dir="x"))
+            session.flush()
+
+    with session_scope() as s:
+        p = create_project(s, name="obs-doom")
+        t = Target(project_id=p.id, name="fw", path="/tmp/fw", kind="executable", metadata_json={})
+        s.add(t)
+        s.flush()
+        pid = p.id
+        s.commit()  # prior work committed (like the agent loop's per-tool checkpoint)
+        ctx = ToolContext(session=s, project=p, target=t)
+
+        monkeypatch.setattr(O, "record_observation", _doom)
+        obs, cached = AT._record_obs(ctx, tool="list_strings", args={}, result_kind="strings",
+                                     payload={"x": 1}, summary="x")
+        assert (obs, cached) == (None, False)          # swallowed — best-effort, never breaks the tool
+
+        # The session must be USABLE again: a real write commits with NO PendingRollbackError.
+        s.execute(text("UPDATE project SET name = 'recovered' WHERE id = :i"), {"i": pid})
+        s.commit()
+
+    with session_scope() as s2:
+        assert s2.get(Project, pid).name == "recovered"   # the recovery write persisted
