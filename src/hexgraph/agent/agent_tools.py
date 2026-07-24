@@ -583,8 +583,19 @@ def _record_obs(ctx: ToolContext, *, tool: str, args: dict | None, result_kind: 
             content_hash=O.content_hash_for(ctx.target), node_refs=node_refs or [],
         )
     except Exception:  # noqa: BLE001 — discoverability is best-effort, never load-bearing
-        # Swallow so a store hiccup never breaks the tool call, but debug-log so genuine
-        # CAS/DB corruption is diagnosable rather than silently invisible.
+        # A store failure (a lock lost at the durable checkpoint, a CAS hiccup, DB corruption)
+        # must never break the tool call. But a failed commit/flush leaves the session DOOMED —
+        # SQLAlchemy requires a rollback before it can be used again — so ROLL BACK here. Without
+        # it the doomed session resurfaces downstream: the in-process agent loop's post-tool
+        # `release_write_lock` commit raises (failing the WHOLE task), and the MCP `_tool` scope's
+        # exit commit raises a PendingRollbackError that the OperationalError sanitizer misses,
+        # leaking the raw INSERT SQL + bound parameters to the agent. Rolling back drops this tool's
+        # Observation (and any graph write it made in the same txn) on a transient lock — acceptable:
+        # it's reusable analysis the agent can re-request, and #291 makes such a lock rare.
+        try:
+            ctx.session.rollback()
+        except Exception:  # noqa: BLE001 — never let a rollback error mask the best-effort return
+            pass
         logger.debug("failed to record observation for tool=%s on target=%s",
                      tool, ctx.target.id, exc_info=True)
         return None, False

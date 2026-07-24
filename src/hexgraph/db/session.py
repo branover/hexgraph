@@ -37,14 +37,17 @@ _WRITE_RETRY_BASE_SLEEP = 0.05     # seconds; doubles each attempt (0.05, 0.1, 0
 _WRITE_RETRY_MAX_SLEEP = 0.5       # cap per-attempt sleep so total backoff stays bounded
 
 
-def _is_lock_error(exc: OperationalError) -> bool:
+def _is_lock_error(exc: Exception) -> bool:
     """True only for the transient lock/busy family — never for structural errors
     (corruption, disk full, schema drift) which must surface immediately, unmasked.
 
-    Covers all three SQLite lock messages: SQLITE_BUSY ('database is locked') from a
-    busy_timeout that elapsed; the alternate 'database is busy' wording; and SQLITE_LOCKED
-    ('database table is locked'), a table-level lock that's equally transient under fan-out
-    and must NOT fall through to the generic non-retryable branch."""
+    Accepts any exception (not only `OperationalError`): a `PendingRollbackError` from a doomed
+    session re-prints the original "database is locked" in its message, and the MCP error seam
+    routes it through here too. Matches on the message string (`.orig` when present, else the
+    exception itself), covering all three SQLite lock messages: SQLITE_BUSY ('database is locked')
+    from a busy_timeout that elapsed; the alternate 'database is busy' wording; and SQLITE_LOCKED
+    ('database table is locked'), a table-level lock that's equally transient under fan-out and
+    must NOT fall through to the generic non-retryable branch."""
     msg = str(getattr(exc, "orig", exc)).lower()
     return (
         "database is locked" in msg
