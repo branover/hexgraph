@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from hexgraph.db.models import (
     Build, BuildSpec as BuildSpecRow, EdgeType, Project, SourceTree, Target, TargetKind,
 )
+from hexgraph.db.session import release_write_lock
 from hexgraph.engine import cas
 from hexgraph.engine.build.build import (
     BUILD_SYSTEMS, BuildError, BuildPhase, BuildSpec, BuildUnavailable, Instrumentation,
@@ -155,6 +156,11 @@ def run_build(session: Session, project: Project, spec_row: BuildSpecRow, *,
     if tree is None or tree.project_id != project.id:
         raise BuildError("source tree not found in this project")
 
+    # Release the write lock before hashing the whole source tree: create_build_spec flushed the
+    # build_spec row just before this on the same session, and tree_content_sha reads + sha256s
+    # every file — on a large imported tree (the kernel-scale case the code anticipates) that's
+    # seconds of I/O the spec-row write would otherwise be pinned across.
+    release_write_lock(session)
     # A TRUE byte-content hash (not the row's cheap size-based manifest hash) — so the
     # reproducibility triple + cache key reflect the ACTUAL bytes built (a same-size edit
     # changes it, preventing a stale-artifact cache hit).

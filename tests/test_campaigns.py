@@ -4,11 +4,12 @@ MockFuzzer + a fake executor; the real-AFL++ e2e is Docker-gated in test_fuzz_e2
 """
 
 import pytest
+from sqlalchemy import text
 
 from hexgraph.db.models import (
     Edge, EdgeType, Finding, FuzzArtifact, FuzzCampaign, Target, TargetKind,
 )
-from hexgraph.db.session import session_scope
+from hexgraph.db.session import get_session, session_scope
 from hexgraph.engine.fuzz import campaigns as C
 from hexgraph.engine.findings.findings import persist_finding
 from hexgraph.engine.fuzzers import FuzzerError, get_fuzzer, resolve_engine
@@ -1155,3 +1156,104 @@ def test_verify_finding_reproducer_reads_ref(hg_home):
                               finding=fin, finding_type="fuzz_crash")
         res = verify_finding_reproducer(s, p, row, runner=_CrashRunner())
         assert res["verified"] is True
+
+
+# ── the write lock is released across the reaper's corpus gzip + the campaign launch ──────
+
+def _competing_writer_probe(captured):
+    """A fresh connection tries to WRITE; records whether it could acquire the write lock. Used
+    from INSIDE a slow op to prove the caller released the lock before it."""
+    conn = get_session()
+    try:
+        conn.execute(text("UPDATE project SET name = name WHERE id = :i"), {"i": captured["pid"]})
+        conn.commit()
+        captured["fresh_write_ok"] = True
+    except Exception as exc:  # noqa: BLE001
+        captured["fresh_write_ok"] = False
+        captured["err"] = str(exc)
+    finally:
+        conn.close()
+
+
+def test_reap_campaign_releases_the_lock_before_the_corpus_snapshot(hg_home, monkeypatch):
+    """reap_campaign must commit the ingested crash findings + stats and RELEASE the write lock
+    before _snapshot_corpus (which gzips a corpus up to 512 MB). Proven from inside a fake snapshot:
+    a fresh connection must be able to WRITE while it 'runs' — impossible if the ingest write were
+    still pinned on the reaper's session."""
+    _mock_env(monkeypatch)
+    _enable_fuzzing()
+    captured = {}
+
+    def spy_snapshot(session, project, row):
+        _competing_writer_probe(captured)
+
+    monkeypatch.setattr(C, "_snapshot_corpus", spy_snapshot)
+    with session_scope() as s:
+        p, t = _project_with_target(s)
+        captured["pid"] = p.id
+        spec = FuzzCampaignSpec(target_id=t.id, surface="source_lib", harness_source=HARNESS,
+                                function="cgi_handler", target_sources=["/x.c"])
+        row = C.start_campaign(s, p, t, spec=spec)   # commits (start releases before launch)
+        C.reap_campaign(s, s.get(FuzzCampaign, row.id))
+
+    assert captured.get("fresh_write_ok") is True, captured.get("err")
+
+
+def test_start_campaign_releases_the_lock_before_the_launch(hg_home, monkeypatch):
+    """start_campaign must flush the campaign row then RELEASE the write lock before the container
+    launch (docker run -d). Proven from inside a fake launch: a fresh connection must WRITE while
+    the 'launch' runs — impossible if the campaign-row write were still pinned."""
+    _mock_env(monkeypatch)
+    _enable_fuzzing()
+    captured = {}
+    real_launch = C._launch_mock
+
+    def spy_launch(row, prepared, spec):
+        _competing_writer_probe(captured)
+        return real_launch(row, prepared, spec)
+
+    monkeypatch.setattr(C, "_launch_mock", spy_launch)
+    with session_scope() as s:
+        p, t = _project_with_target(s)
+        captured["pid"] = p.id
+        s.commit()  # commit the project so the competing writer has a committed row to update
+        spec = FuzzCampaignSpec(target_id=t.id, surface="source_lib", harness_source=HARNESS,
+                                function="cgi_handler", target_sources=["/x.c"])
+        C.start_campaign(s, p, t, spec=spec)
+
+    assert captured.get("fresh_write_ok") is True, captured.get("err")
+
+
+def test_start_campaign_commits_container_name_none_during_the_launch_window(hg_home, monkeypatch):
+    """Regression: the pre-launch release must commit the running row with container_name=None.
+    reap_campaign finalizes+tears down a running row via `row.container_name and not is_mock`
+    (poll → gone ⇒ done); if the row were committed with the pre-generated name BEFORE
+    start_detached creates that container, a concurrent reaper polling in the launch window would
+    see exists=False and finalize the campaign + `stop_detached(remove=True)` the container out
+    from under the launch. Proven from a FRESH connection (what the reaper reads) mid-launch: the
+    committed row is `running` with container_name still None; it is adopted only after the launch."""
+    _mock_env(monkeypatch)
+    _enable_fuzzing()
+    seen = {}
+    real_launch = C._launch_mock
+
+    def spy_launch(row, prepared, spec):
+        conn = get_session()
+        try:
+            fresh = conn.get(FuzzCampaign, row.id)
+            seen["status"] = fresh.status if fresh else "MISSING"
+            seen["container_name"] = fresh.container_name if fresh else "MISSING"
+        finally:
+            conn.close()
+        return real_launch(row, prepared, spec)
+
+    monkeypatch.setattr(C, "_launch_mock", spy_launch)
+    with session_scope() as s:
+        p, t = _project_with_target(s)
+        spec = FuzzCampaignSpec(target_id=t.id, surface="source_lib", harness_source=HARNESS,
+                                function="cgi_handler", target_sources=["/x.c"])
+        row = C.start_campaign(s, p, t, spec=spec)
+
+    assert seen.get("status") == "running", seen
+    assert seen.get("container_name") is None, seen   # the reaper's poll branch short-circuits
+    assert row.container_name                          # adopted once the launch returns

@@ -408,8 +408,13 @@ def verify_callback(session, project, target, spec, runner, nonce, *, is_web, is
     listener = CallbackListener(host=bind_host).start()  # loopback/private only (fail-closed)
     try:
         dest = f"{listener.bound_host}:{listener.bound_port}"
+        # durable=True commits the listener-start audit (releasing the write lock) BEFORE the
+        # binary-path run_exploit (which executes the target) + the up-to-15s listener.wait below —
+        # matching the deny path and every surfaces.py audit. Without it the write is held across the
+        # exec + wait.
         record_egress(session, project_id=project.id, target_id=target.id, dest=dest, allowed=True,
-                      tool="callback_listener", detail="bounded local callback listener (ingress)")
+                      tool="callback_listener", detail="bounded local callback listener (ingress)",
+                      durable=True)
 
         sub = _sub_token(spec, "{{CALLBACK}}", listener.token())
         run = run_exploit(session, project, target, sub, runner, is_web=is_web, is_tcp=is_tcp)
