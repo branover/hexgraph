@@ -1,30 +1,18 @@
-"""On-disk ELF layout reads for `re_resolve` (a lightweight symbol/section triage), plus the pure
-hexdump FORMATTER shared with re_hexdump.
+"""Pure ELF-layout COMPUTE for re_resolve, plus the hexdump FORMATTER shared with re_hexdump.
 
-`re_resolve` answers a crash-address / pointer / DAT_ orientation WITHOUT a decompile by reading
-the target's on-disk ELF with pyelftools: it maps a virtual address to a file offset (program
-headers), reports the section a vaddr falls in and each section's vaddr range (section table), and
-reads the symbol table WITH `st_value`+`st_size` so the containing FUNC / nearest symbol can be
-computed precisely (`facts.symbols` from the binutils probe carry nm rows without a size, so
-containment needs the ELF's own symtab).
-
-**pyelftools is treated as PROBE-ONLY / best-effort here.** pyproject scopes the analysis libs
-(`r2pipe`/`lief`/`pyelftools`) to the sandbox probes, so the host/engine venv does NOT carry it.
-`resolve_layout` GUARDS the import and returns a clean `{"error": ..., "degraded": True}` when it's
-missing — `re_resolve` then falls back to a symbols-only answer from the binutils facts rather than
-crashing. Read-only + offline: never executes the target, opens the file read-binary, mutates nothing.
-
-`re_hexdump`'s raw-BYTE read lives in the SANDBOX (radare2 `p8` via `decompile_probe.py` /
-`R2Decompiler.read_bytes`), so the hostile ELF is parsed in the sandbox and never the host process.
-This module keeps only the pure `render_hexdump` formatter (+ the `HEXDUMP_MAX` ceiling) it shares.
+NO I/O and NO pyelftools here: the hostile ELF is parsed in the SANDBOX (radare2), and these
+functions turn the sandbox-sourced plain dicts into an answer. For re_resolve the section + sized
+symbol tables come from `decompile_probe.py --layout` (`iSj`/`isj`) via
+`R2Decompiler.resolve_layout`, and `section_of` / `nearest_and_containing` compute the
+{section, nearest_symbol, containing_function} triage from them. For re_hexdump the raw bytes come
+from radare2 `p8` and `render_hexdump` lays them out. Host-side, side-effect-free, never touches
+the target bytes — the pyelftools symbol/section reads that used to run in the host process (but
+were never shipped host-side, so they always degraded) now live entirely in the sandbox.
 """
 
 from __future__ import annotations
 
 import bisect
-import logging
-
-logger = logging.getLogger(__name__)
 
 # Hard ceiling on a single re_hexdump read — a bounded window so a fat-fingered length can't
 # pull megabytes into the context (the no-silent-caps discipline: the tool reports when it clamps).
@@ -32,73 +20,21 @@ logger = logging.getLogger(__name__)
 HEXDUMP_MAX = 4096
 
 
-def _elffile():
-    """The pyelftools `ELFFile` class, or None when the (probe-only) lib isn't installed in
-    this venv — the caller degrades instead of raising."""
-    try:
-        from elftools.elf.elffile import ELFFile
-    except ImportError:  # pyelftools is probe-only per pyproject; host venv may lack it
-        return None
-    return ELFFile
-
-
-def available() -> bool:
-    """True when pyelftools can be imported in this process (host/engine venv)."""
-    return _elffile() is not None
-
-
-def _load_alloc_sections(elf) -> list[dict]:
-    """The SHF_ALLOC sections with vaddr ranges, as `{name, vaddr, size, nobits}` sorted by
-    vaddr — the section table `re_resolve` maps an address into and `re_hexdump` notes .bss on.
-    `nobits` flags SHT_NOBITS (.bss): mapped in memory but with NO file bytes (zero-fill)."""
-    SHF_ALLOC = 0x2
-    out: list[dict] = []
-    for sec in elf.iter_sections():
-        h = sec.header
-        if not (h["sh_flags"] & SHF_ALLOC) or h["sh_addr"] == 0:
-            continue
-        out.append({"name": sec.name, "vaddr": int(h["sh_addr"]), "size": int(h["sh_size"]),
-                    "nobits": h["sh_type"] == "SHT_NOBITS"})
-    out.sort(key=lambda s: s["vaddr"])
-    return out
-
-
-def _section_of(sections: list[dict], vaddr: int) -> str | None:
-    """The name of the section whose [vaddr, vaddr+size) window contains `vaddr`, or None."""
+def section_of(sections: list[dict], vaddr: int) -> str | None:
+    """The name of the section whose [vaddr, vaddr+size) window contains `vaddr`, or None.
+    `sections` are the sandbox-sourced `{name, vaddr, size}` dicts (the mapped, vaddr>0 entries)."""
     for sec in sections:
         if sec["vaddr"] <= vaddr < sec["vaddr"] + sec["size"]:
             return sec["name"]
     return None
 
 
-def _load_func_symbols(elf) -> list[dict]:
-    """Defined symbols WITH an address, as `{name, value, size, is_func}` sorted by value — for
-    the nearest-symbol + containing-FUNC computation. Reads `.symtab` when present (a non-stripped
-    binary), else `.dynsym` (a stripped binary keeps only exported dynamic symbols; a private
-    FUN_* has no entry either way — that's why re_resolve is PARTIAL on a stripped target)."""
-    from elftools.elf.sections import SymbolTableSection
-
-    tab = elf.get_section_by_name(".symtab")
-    if not isinstance(tab, SymbolTableSection):
-        tab = elf.get_section_by_name(".dynsym")
-    if not isinstance(tab, SymbolTableSection):
-        return []
-    out: list[dict] = []
-    for sym in tab.iter_symbols():
-        val = int(sym["st_value"])
-        if not sym.name or val == 0:
-            continue
-        info = sym["st_info"]
-        out.append({"name": sym.name, "value": val, "size": int(sym["st_size"]),
-                    "is_func": info["type"] == "STT_FUNC"})
-    out.sort(key=lambda s: s["value"])
-    return out
-
-
-def _nearest_and_containing(symbols: list[dict], vaddr: int) -> tuple[dict | None, dict | None]:
-    """From address-sorted `symbols`, the nearest symbol AT-OR-BELOW `vaddr` (`{name, offset}`)
-    and the containing FUNC when one covers it (`{name, address, size, end}`). Uses a binary
-    search over the sorted values so a large symbol table stays cheap."""
+def nearest_and_containing(symbols: list[dict], vaddr: int) -> tuple[dict | None, dict | None]:
+    """From value-sorted `symbols` (`{name, value, size, is_func}` from the sandbox), the nearest
+    symbol AT-OR-BELOW `vaddr` (`{name, address, offset}`) and the containing FUNC when one covers
+    it (`{name, address, size, end}`). Binary-searches the sorted values so a large symbol table
+    stays cheap. `containing_function` is None on a stripped target (only dynsym exports are known)
+    — the PARTIAL case."""
     if not symbols:
         return None, None
     values = [s["value"] for s in symbols]
@@ -121,30 +57,6 @@ def _nearest_and_containing(symbols: list[dict], vaddr: int) -> tuple[dict | Non
                 containing = {"name": s["name"], "address": s["value"], "size": s["size"],
                               "end": s["value"] + s["size"]}
     return nearest, containing
-
-
-def resolve_layout(path: str, vaddr: int) -> dict:
-    """Assemble the lightweight triage answer for `vaddr` from the on-disk ELF at `path`:
-    `{section, nearest_symbol, containing_function}` — WITHOUT a decompile. `nearest_symbol` is
-    `{name, address, offset}` (the closest defined symbol at-or-below the address), `section` is
-    the containing SHF_ALLOC section name (always, when the address is mapped), and
-    `containing_function` is the covering FUNC symbol `{name, address, size, end}` when the symbol
-    table knows it (None on a stripped target — that's the PARTIAL case). Returns
-    `{"error": ..., "degraded": True}` when pyelftools is unavailable; never raises."""
-    ELFFile = _elffile()
-    if ELFFile is None:
-        return {"error": "pyelftools not available in this environment", "degraded": True}
-    try:
-        with open(path, "rb") as fh:
-            elf = ELFFile(fh)
-            sections = _load_alloc_sections(elf)
-            symbols = _load_func_symbols(elf)
-    except Exception as exc:  # noqa: BLE001 — a non-ELF / unreadable artifact degrades cleanly
-        logger.debug("resolve_layout failed for %s", path, exc_info=True)
-        return {"error": f"could not read ELF: {exc}", "degraded": True}
-    nearest, containing = _nearest_and_containing(symbols, vaddr)
-    return {"section": _section_of(sections, vaddr), "nearest_symbol": nearest,
-            "containing_function": containing, "n_symbols": len(symbols)}
 
 
 def render_hexdump(data: bytes, base: int) -> str:

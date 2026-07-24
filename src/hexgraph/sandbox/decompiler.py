@@ -203,6 +203,18 @@ class R2Decompiler(Decompiler):
         return self.runner.run_json_probe(
             "decompile_probe.py", artifact, extra_args=_bytes_args(address, length))
 
+    def resolve_layout(self, artifact: str) -> dict:
+        """The section table + sized symbol table (no function, no analysis) — the sandbox source
+        for re_resolve's crash-address triage. Returns the probe's
+        {tool, layout: {sections: [{name, vaddr, size}], symbols: [{name, value, size, is_func}]}}
+        payload; the host (`elf_layout.section_of` / `nearest_and_containing`) computes the
+        {section, nearest_symbol, containing_function} answer from it. Always radare2 (`iSj` + `isj`),
+        so the hostile ELF is parsed in the SANDBOX, never the host — the symbol/section read that
+        used to run host-side via pyelftools (never shipped host-side, so it always degraded) now
+        lives here."""
+        return self.runner.run_json_probe(
+            "decompile_probe.py", artifact, extra_args=["--layout"])
+
     def disassemble_func(self, artifact: str, subject: str) -> dict:
         """TARGETED disassembly of the function at `subject` (a NAME or hex ADDRESS): a single `af`
         (one-function analysis) + `pdf`, NEVER a whole-binary `aaa` and NEVER `pdc`. `af` is bounded
