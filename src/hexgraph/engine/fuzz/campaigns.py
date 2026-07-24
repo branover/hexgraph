@@ -37,6 +37,7 @@ from sqlalchemy.orm import Session
 from hexgraph.db.models import (
     EdgeType, FuzzArtifact, FuzzCampaign, Project, Target, TargetKind, Task,
 )
+from hexgraph.db.session import release_write_lock
 from hexgraph.engine import cas
 from hexgraph.engine.graph.edges import add_edge
 from hexgraph.engine.findings.findings import persist_finding
@@ -355,6 +356,13 @@ def start_campaign(session: Session, project: Project, target: Target, *,
         row.config_json = {**row.config_json, "_harness_artifact": prepared.artifact}
         session.flush()
 
+    # Release the write lock BEFORE the container launch (`docker run -d`, doubled for launch-and-join,
+    # slower for a remote fuzz-env daemon): the campaign row is flushed above and would otherwise pin
+    # the lock across the launch. Committing here is safe for the reaper — a "running" row with
+    # container_name still None reaps as done=False (no container to poll), so it is never finalized
+    # prematurely; container_name lands right after the launch.
+    release_write_lock(session)
+
     try:
         if prepared.probe == MOCK_PROBE:
             _launch_mock(row, prepared, spec)
@@ -614,6 +622,10 @@ def reap_all(session: Session, *, executor=None, allow_replay_backfill: bool = F
         try:
             total += reap_campaign(session, row, executor=executor,
                                    allow_replay_backfill=allow_replay_backfill)
+            # Commit each campaign's reap before the next: without this, one campaign's finalize
+            # writes pin the write lock across the NEXT campaign's poll_detached (which, for a remote
+            # executor, streams /out back over Docker) — up to MAX_HOST_INSTANCES sequential holds.
+            release_write_lock(session)
         except Exception:  # noqa: BLE001 — one bad campaign must not kill the reaper
             session.rollback()
     # WORKER-ONLY: re-symbolize already-ingested representatives an on-read reap left with
@@ -670,6 +682,12 @@ def reap_campaign(session: Session, row: FuzzCampaign, *, executor=None,
 
     if done:
         _enforce_corpus_quota(row)
+        # Release the write lock BEFORE the finalize snapshots + container teardown: the crash
+        # findings + stats ingested above are durable-worthy, and _snapshot_corpus gzips a corpus up
+        # to CORPUS_QUOTA_BYTES (512 MB) — tens of seconds of CPU. Holding the ingest write across
+        # that (and, for a remote executor, across the next campaign's poll) starves every concurrent
+        # writer past the busy_timeout. Commit here so the gzip runs lock-free.
+        release_write_lock(session)
         # Preserve corpus in CAS (resumable) before tearing down.
         _snapshot_corpus(session, project, row)
         _snapshot_coverage(session, project, row)
@@ -682,6 +700,9 @@ def reap_campaign(session: Session, row: FuzzCampaign, *, executor=None,
             if status and not status.get("compiled", True):
                 row.error = (status.get("stderr") or "compile failed")[:500]
         row.finished_at = _now()
+        # Release again before the Docker teardown so the snapshot-ref + status writes above aren't
+        # held across the `docker stop`/`rm` of both containers.
+        release_write_lock(session)
         if row.container_name and not is_mock:
             executor.stop_detached(row.container_name, remove=True)
         # Launch-and-join (§5.8b): tear down the service container we started too, so the
@@ -1268,8 +1289,6 @@ def verify_artifact(session: Session, artifact: FuzzArtifact, *, executor=None) 
     # the whole replay and starve other writers. (The network branch above already released via
     # its bounded-egress audit.) The verify result is recorded by the caller AFTER the replay, so
     # nothing is lost; the grounded crash finding is meant to persist regardless.
-    from hexgraph.db.session import release_write_lock
-
     release_write_lock(session)
     # Re-verify on the SAME environment the campaign ran on (the fuzzer binary was built
     # there) — a remote campaign re-runs its reproducer on the remote, fail-closed under
@@ -1375,6 +1394,10 @@ def _verify_network_artifact(session, project, target, campaign, artifact, *, ex
         prepared = get_fuzzer(spec.surface, spec.engine).prepare(spec, project, target)
         resources = resolve_resources(campaign.resources_json)
         svc_name = None
+        # Symmetry with verify_artifact's non-network path: release the write lock before the
+        # launch-and-join `docker run -d`. Reached with a pending write via promote_artifact(to_poc),
+        # which seeds + flushes the PoC spec before calling verify_artifact.
+        release_write_lock(session)
         try:
             svc_name = _launch_service(session, project, target, campaign, prepared, port,
                                        executor=svc_executor, resources=resources)
