@@ -934,8 +934,8 @@ def resolve_symbol(target_id: str, pattern: str | None = None,
 
 def resolve_address(target_id: str, address: str) -> str:
     """Given a hex ADDRESS, return {containing_function?, nearest_symbol+offset, section}
-    WITHOUT a full decompile — lightweight crash-addr / pointer / DAT_ triage. Assembled
-    server-side from the symbol + section tables (pyelftools over the on-disk ELF)."""
+    WITHOUT a full decompile — lightweight crash-addr / pointer / DAT_ triage. Assembled in the
+    sandbox from radare2's section + sized-symbol tables (iSj/isj), computed host-side."""
     return _tool(target_id, "resolve_address", {"address": address})
 
 

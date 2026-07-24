@@ -161,8 +161,8 @@ _STATIC_SPECS = [
                  "limit": {"type": "integer", "description": "max rows to return (default 200, clamped 1–1000)"}}}),
     ToolSpec("resolve_address", "Triage a hex ADDRESS (a crash address, a pointer, a DAT_ label) "
              "WITHOUT a full decompile: returns {nearest_symbol + offset, section, "
-             "containing_function (name+bounds when the symbol table knows it)}. Assembled "
-             "server-side from the symbol + section tables (pyelftools over the on-disk ELF) — "
+             "containing_function (name+bounds when the symbol table knows it)}. Assembled in the "
+             "sandbox from radare2's section + sized-symbol tables (iSj/isj), computed host-side — "
              "cheap orientation before you spend a decompile_at. On a stripped binary it still "
              "resolves the section + nearest symbol (a FUN_ name needs a decompile). QUERY: "
              "records an Observation; adds no graph nodes.",
@@ -1497,14 +1497,16 @@ def _resolve_address(ctx: ToolContext, args: dict) -> str:
     containing_function} — a crash-addr / pointer / DAT_ orientation. QUERY: records an
     Observation; adds no graph nodes.
 
-    Assembled server-side from the on-disk ELF via pyelftools (`elf_layout.resolve_layout`):
-    section (always, when the address is mapped) + nearest defined symbol + the containing FUNC
-    when the symbol table knows it. PARTIAL by design — on a STRIPPED binary a private FUN_* has
-    no symtab entry, so `containing_function` is None and only the section + nearest dynsym come
-    back (a FUN_ name needs the warm decompiler). When pyelftools isn't installed in this venv
-    (it's probe-only per pyproject) it DEGRADES to a symbols-only nearest over the binutils
-    facts.symbols index — never a decompile, never a crash. Kept OUT of _ANALYSIS_GATED_TOOLS: it
-    must answer without a warm Ghidra project."""
+    Assembled from the SANDBOX: radare2 supplies the section table (`iSj`) + the sized symbol
+    table (`isj`) via `R2Decompiler.resolve_layout`, and `elf_layout.section_of` /
+    `nearest_and_containing` compute the answer host-side — so the hostile ELF is parsed in the
+    sandbox, never the host process. section (when the address is mapped) + nearest defined symbol +
+    the containing FUNC when the symbol table knows it. PARTIAL by design — on a STRIPPED binary a
+    private FUN_* has no symbol-table entry, so `containing_function` is None and only the section +
+    nearest exported symbol come back (a FUN_ name needs the warm decompiler). When Docker/the
+    sandbox is unavailable it DEGRADES to a symbols-only nearest over the binutils facts.symbols
+    index — never a decompile, never a crash. Kept OUT of _ANALYSIS_GATED_TOOLS: it must answer
+    without a warm Ghidra project."""
     addr = args.get("address")
     if not addr:
         return "error: 'address' argument is required (a hex address, e.g. 0x401200)"
@@ -1515,19 +1517,28 @@ def _resolve_address(ctx: ToolContext, args: dict) -> str:
         return "resolve_address needs a byte artifact (a Channel-reached surface has no ELF)"
 
     from hexgraph.engine.re import elf_layout as _elf
+    from hexgraph.sandbox.decompiler import R2Decompiler
+    from hexgraph.sandbox.runner import docker_available
 
-    layout = _elf.resolve_layout(ctx.target.path, vaddr)
-    section = layout.get("section")
-    nearest = layout.get("nearest_symbol")
-    containing = layout.get("containing_function")
-    degraded = bool(layout.get("degraded"))
+    section = nearest = containing = None
+    degraded = False
     note = ""
+    if docker_available():
+        try:
+            out = R2Decompiler().resolve_layout(ctx.target.path)
+            layout = (out or {}).get("layout") or {}
+            section = _elf.section_of(layout.get("sections") or [], vaddr)
+            nearest, containing = _elf.nearest_and_containing(layout.get("symbols") or [], vaddr)
+        except Exception:  # noqa: BLE001 — degrade to the facts index rather than crash the tool
+            degraded = True
+    else:
+        degraded = True
     if degraded:
-        # pyelftools missing / the artifact isn't a readable ELF: fall back to the symbols-only
-        # nearest over binutils facts (name+addr, no section/containment — those need the ELF).
+        # Docker/sandbox down (or the layout read failed): fall back to the symbols-only nearest
+        # over the binutils facts.symbols index (name+addr, no section/containment — those need the
+        # sandbox ELF layout).
         nearest = _nearest_symbol_over_index(_symbol_index(ctx), vaddr)
-        note = (" [degraded: pyelftools unavailable — nearest symbol only; "
-                f"{layout.get('error', 'no ELF layout')}]")
+        note = " [degraded: sandbox unavailable — nearest symbol only]"
 
     _record_obs(ctx, tool="resolve_address", args={"address": addr},
                 result_kind="address_resolve",
@@ -1543,7 +1554,7 @@ def _resolve_address(ctx: ToolContext, args: dict) -> str:
                      f"[{containing['address']:#x}-{containing['end']:#x}, size {containing['size']}]")
     else:
         lines.append("- containing_function: (unknown — a stripped FUN_ needs a decompile)"
-                     if not degraded else "- containing_function: (unavailable — needs pyelftools)")
+                     if not degraded else "- containing_function: (unavailable — sandbox down)")
     if nearest:
         lines.append(f"- nearest_symbol: {nearest['name']} @ {nearest['address']:#x} "
                      f"(+{nearest['offset']:#x})")

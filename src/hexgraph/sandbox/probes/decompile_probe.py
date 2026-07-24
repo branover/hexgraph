@@ -24,6 +24,12 @@ an unmapped read), the read is clamped to the end of the mapped region, and a
 .bss/zero-fill region is flagged. Emits
 { bytes: {address, length, hex, zero_fill[, note]} | {address, error} }.
 
+A LAYOUT mode (`--layout`) returns the section table + sized symbol table for
+re_resolve — `iSj` (mapped sections) + `isj` (defined symbols with vaddr/size/type) —
+with NO function and NO analysis; the host (`elf_layout.section_of` /
+`nearest_and_containing`) computes the {section, nearest_symbol, containing_function}
+answer. Emits { layout: {sections: [...], symbols: [...]} }.
+
 radare2 is the v1 decompiler (the Decompiler seam lets Ghidra drop in later).
 We use built-in `pdc` (pseudo-C) with a `pdf` (disassembly) fallback — no
 r2ghidra plugin required. No network; the target is analyzed, never executed.
@@ -384,6 +390,40 @@ def _read_raw_bytes(r2, address: str, *, length: int | None) -> dict:
     return {**payload, "note": note} if note else payload
 
 
+def _load_layout(r2) -> dict:
+    """Sections + sized symbols for re_resolve: `{sections: [{name, vaddr, size}], symbols:
+    [{name, value, size, is_func}]}` (symbols sorted by value). Sections come from `iSj` (the
+    mapped, vaddr>0 entries — the vaddr ranges an address falls in); symbols from `isj` (r2's
+    defined symbols, symtab ∪ dynsym, each with a vaddr, a size, and a FUNC/OBJ type). The HOST
+    (`elf_layout.section_of` / `nearest_and_containing`) computes the {section, nearest_symbol,
+    containing_function} answer from these plain dicts — the hostile ELF is parsed in the sandbox,
+    never the host process. A stripped binary yields only dynsym exports (no private FUN_), so
+    `containing_function` is PARTIAL, exactly as the old symtab/dynsym pyelftools path was."""
+    try:
+        secs = json.loads(r2.cmd("iSj") or "[]")
+    except (json.JSONDecodeError, TypeError):
+        secs = []
+    sections = [{"name": str(s.get("name", "")), "vaddr": int(s.get("vaddr", 0)),
+                 "size": int(s.get("vsize", 0))}
+                for s in secs if isinstance(s, dict) and int(s.get("vaddr", 0)) > 0]
+    try:
+        syms = json.loads(r2.cmd("isj") or "[]")
+    except (json.JSONDecodeError, TypeError):
+        syms = []
+    symbols: list[dict] = []
+    for s in syms:
+        if not isinstance(s, dict):
+            continue
+        val = int(s.get("vaddr", 0))
+        name = s.get("name") or s.get("realname") or ""
+        if not name or val == 0:  # skip UND imports (vaddr 0) and unnamed rows
+            continue
+        symbols.append({"name": str(name), "value": val, "size": int(s.get("size", 0)),
+                        "is_func": s.get("type") == "FUNC"})
+    symbols.sort(key=lambda x: x["value"])  # nearest_and_containing bisects over sorted values
+    return {"sections": sections, "symbols": symbols}
+
+
 def _flag_value(rest: list[str], flag: str) -> str | None:
     """The value following `flag` in argv (`--length 256`), or None if absent/dangling."""
     if flag in rest:
@@ -481,6 +521,9 @@ def main() -> int:
     # BYTES mode: `--bytes <0xADDR>` reads a raw byte range as hex for re_hexdump (NO function, NO
     # analysis). --length bounds it. Kept off the positionals like --range so it isn't read as a focus.
     bytes_addr = _flag_value(rest, "--bytes")
+    # LAYOUT mode: `--layout` returns the section table + sized symbol table (iSj/isj) for
+    # re_resolve — NO function, NO analysis; the host computes the {section, nearest, containing}.
+    layout_mode = "--layout" in rest
     _value_flags = {"--range", "--length", "--count", "--disasm", "--bytes"}  # consume their following value too
     positionals = []
     skip = False
@@ -510,7 +553,8 @@ def main() -> int:
     # targeted disasm/range modes are already cheap (`af`/`pD`) and open plain. When the writable
     # slot is mounted, `_project_flags` reloads a warm project via `-p` (skipping `aaa`) or wipes
     # any partial state for a clean cold save.
-    use_project = disasm_subject is None and range_addr is None and bytes_addr is None
+    use_project = (disasm_subject is None and range_addr is None and bytes_addr is None
+                   and not layout_mode)
     proj_dir = marker = ""
     open_flags = ["-2"]  # -2 silences stderr
     warm = False
@@ -568,6 +612,11 @@ def main() -> int:
             length = _parse_int(_flag_value(rest, "--length"))
             payload = _read_raw_bytes(r2, bytes_addr, length=length)
             print(json.dumps({"tool": "decompile_probe", "bytes": payload}))
+            return 0
+        if layout_mode:
+            # LAYOUT mode: the section + sized-symbol tables for re_resolve. No analysis (iSj/isj are
+            # available on open); the host computes the {section, nearest, containing} from them.
+            print(json.dumps({"tool": "decompile_probe", "layout": _load_layout(r2)}))
             return 0
         # WARM-ONLY enforcement (THE analysis invariant): the whole-binary decompile/list path must
         # NEVER run a cold `aaa` off its own bat — only the two EXPLICIT analysis entry points do:
