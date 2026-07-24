@@ -13,7 +13,13 @@ from collections import defaultdict
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Edge, EdgeType, Node, NodeType
+from hexgraph.db.session import release_write_lock
 from hexgraph.engine.graph.edges import add_edge
+
+# Commit the accumulated similar_to edges every this many so a large same-content clique doesn't
+# hold the single SQLite write lock across thousands of inserts (bounds the hold; busy_timeout
+# absorbs the brief re-acquire).
+_LINK_COMMIT_EVERY = 500
 
 
 def link_same_code(session: Session, project_id: str) -> int:
@@ -29,6 +35,16 @@ def link_same_code(session: Session, project_id: str) -> int:
     for n in nodes:
         by_hash[n.content_hash].append(n)
 
+    # Pre-load the project's existing similar_to pairs ONCE (as undirected {src,dst} keys) instead
+    # of a per-pair `session.query(Edge).first()` — that existence check ran O(pairs) round-trips
+    # under the write lock (the #291 O(N²) shape) and, being a directed src/dst match, could even
+    # miss an edge stored in the opposite order. One query + an O(1) set lookup fixes both.
+    existing: set[frozenset[str]] = {
+        frozenset((src, dst)) for src, dst in
+        session.query(Edge.src_id, Edge.dst_id).filter(
+            Edge.project_id == project_id, Edge.type == EdgeType.similar_to.value).all()
+    }
+
     created = 0
     for group in by_hash.values():
         # only link across distinct targets
@@ -39,16 +55,14 @@ def link_same_code(session: Session, project_id: str) -> int:
                 a, b = group[i], group[j]
                 if a.target_id == b.target_id:
                     continue
-                exists = (
-                    session.query(Edge)
-                    .filter(Edge.project_id == project_id, Edge.type == EdgeType.similar_to.value,
-                            Edge.src_id == a.id, Edge.dst_id == b.id)
-                    .first()
-                )
-                if exists:
+                key = frozenset((a.id, b.id))
+                if key in existing:
                     continue
                 add_edge(session, project_id=project_id, src=("node", a.id), dst=("node", b.id),
                          type=EdgeType.similar_to, origin="derived", confidence=1.0, directed=False,
                          weight=1.0, attrs={"by": "content_hash"})
+                existing.add(key)
                 created += 1
+                if created % _LINK_COMMIT_EVERY == 0:
+                    release_write_lock(session)
     return created

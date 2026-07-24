@@ -25,6 +25,7 @@ from collections import defaultdict
 from sqlalchemy.orm import Session
 
 from hexgraph.db.models import Annotation, Edge, Finding, Node, Target, Task
+from hexgraph.db.session import release_write_lock
 from hexgraph.engine.graph.edges import edges_touching
 from hexgraph.engine.graph.nodes import normalize_symbol_name
 
@@ -167,6 +168,9 @@ def merge_duplicate_targets(session: Session, project_id: str) -> int:
                 continue
             _absorb_target(session, keeper, dup)
             removed += 1
+            # Commit each absorbed target before the next: bounds the write-lock hold when a project
+            # has many duplicate targets (the Finding/Task target_id re-homes are index-served now).
+            release_write_lock(session)
     session.flush()
     return removed
 

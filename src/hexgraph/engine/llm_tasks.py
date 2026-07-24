@@ -385,7 +385,14 @@ def execute_llm_task(session: Session, project: Project, target: Target, task: T
     # decompiler `sym.foo` colliding with an agent's `foo`) into one node.
     from hexgraph.engine.graph.nodemerge import merge_duplicate_nodes
 
+    # Release the write lock before the merge + reachability tail: the findings persisted above are
+    # durable, so don't hold that write across merge_duplicate_nodes (a whole-project node load +
+    # reparents) NOR the per-finding reachability argument below (which rebuilds the node/edge index
+    # each finding — reads, but held under a pending write they starve concurrent writers). Commit
+    # here, then again after the merge so the read-heavy reachability pass runs lock-free.
+    release_write_lock(session)
     merge_duplicate_nodes(session, project.id)
+    release_write_lock(session)
 
     # Standard B, static (docs/design/design-verification-oracles.md Phase 4): now that the agent has
     # built the graph (input/sink nodes + taints/calls dataflow) and dupes are folded, try to

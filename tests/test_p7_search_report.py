@@ -77,6 +77,50 @@ def test_cross_target_same_code(hg_home):
         assert len(edges) == 1 and edges[0].origin == "derived"
 
 
+def test_link_same_code_preloads_edges_once_not_per_pair(hg_home):
+    """Regression: link_same_code must pre-load the existing similar_to edges ONCE, not run a
+    per-pair `query(Edge).first()` — that was an O(pairs) scan held under the write lock across a
+    large same-content clique. On an idempotent re-run over a K-node clique the edge SELECT count
+    must stay a small constant, not grow with the K*(K-1)/2 pairs."""
+    import re
+
+    from sqlalchemy import event
+
+    from hexgraph.db.models import Target, TargetKind
+    from hexgraph.db.session import get_engine
+
+    K = 6
+    body = "void f(){ strcpy(buf, x); }"
+    with session_scope() as s:
+        p = create_project(s, name="clique")
+        pid = p.id
+        for i in range(K):
+            t = Target(project_id=pid, name=f"t{i}", path=f"/tmp/t{i}",
+                       kind=TargetKind.executable, metadata_json={})
+            s.add(t)
+            s.flush()
+            materialize_function(s, project_id=pid, target_id=t.id, name="f", pseudocode=body)
+        assert link_same_code(s, pid) == K * (K - 1) // 2      # full clique across K targets
+
+        # SECOND (idempotent) run: every pair already exists, so add_edge is never called; the ONLY
+        # edge SELECT is the one pre-load. The old per-pair existence check would be K*(K-1)/2 = 15.
+        count = {"edge_selects": 0}
+        _from_edge = re.compile(r"\bfrom edge\b")
+
+        def _before(conn, cur, stmt, params, ctx, many):
+            low = stmt.lstrip().lower()
+            if low.startswith("select") and _from_edge.search(low):
+                count["edge_selects"] += 1
+
+        eng = get_engine()
+        event.listen(eng, "before_cursor_execute", _before)
+        try:
+            assert link_same_code(s, pid) == 0
+        finally:
+            event.remove(eng, "before_cursor_execute", _before)
+        assert count["edge_selects"] <= 2, count               # one pre-load, NOT O(pairs)
+
+
 def test_nday_propagate_flow(hg_home):
     """The n-day MCP flow: link_same_code flags which side has a finding, and
     propagate_finding clones it onto the bare sibling wired derived_from→ source."""
