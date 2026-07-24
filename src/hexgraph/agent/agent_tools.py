@@ -161,8 +161,8 @@ _STATIC_SPECS = [
                  "limit": {"type": "integer", "description": "max rows to return (default 200, clamped 1–1000)"}}}),
     ToolSpec("resolve_address", "Triage a hex ADDRESS (a crash address, a pointer, a DAT_ label) "
              "WITHOUT a full decompile: returns {nearest_symbol + offset, section, "
-             "containing_function (name+bounds when the symbol table knows it)}. Assembled "
-             "server-side from the symbol + section tables (pyelftools over the on-disk ELF) — "
+             "containing_function (name+bounds when the symbol table knows it)}. Assembled in the "
+             "sandbox from radare2's section + sized-symbol tables (iSj/isj), computed host-side — "
              "cheap orientation before you spend a decompile_at. On a stripped binary it still "
              "resolves the section + nearest symbol (a FUN_ name needs a decompile). QUERY: "
              "records an Observation; adds no graph nodes.",
