@@ -187,11 +187,9 @@ def test_taint_asks_the_seam_so_a_live_bridge_serves_it(env, monkeypatch):
     """`GhidraTaintAnalyzer`'s OWN backend default must ask `ghidra_op_backend`, not name
     `GhidraDecompiler()`.
 
-    Defence in depth, NOT a live bug: the production path already routed correctly, because
-    `_target_taint_analyzer` injects `ghidra_op_backend(target)` and `analyze_taint` is the only
-    caller. What was wrong is that the class's own fallback — reachable by constructing
-    `GhidraTaintAnalyzer()` directly, as a future caller or a test easily might — named the
-    implementation, so it would open the warm slot HEADLESS behind a live bridge's resident
+    This is now the production path itself: `_target_taint_analyzer` injects nothing, so every
+    `analyze_taint` lands here (see test_production_taint_path_degrades_a_gone_bridge). Naming the
+    implementation instead would open the warm slot HEADLESS behind a live bridge's resident
     project — which fails outright (LockException at the project open), not merely contends.
     Every other PER-CALL Ghidra op asks the seam; now this one does too at both layers.
     (`enrich_target` asks it as well — see
@@ -346,9 +344,10 @@ def test_enrich_target_refuses_when_the_bridge_returns_an_error(env, monkeypatch
     assert not recorded          # no empty "0 functions" facts written to the substrate
 
 
-def test_run_ghidra_op_retries_headless_when_a_bridge_is_UNREACHABLE(env, monkeypatch):
-    """A bridge that RAISES holds nothing, so headless is safe — and better than failing an op
-    whose warm slot is sitting right there."""
+def test_run_ghidra_op_retries_headless_when_a_bridge_is_GONE(env, monkeypatch):
+    """A bridge whose container is GONE holds nothing, so headless is safe — and better than
+    failing an op whose warm slot is sitting right there. The realistic sequence: routing saw the
+    bridge alive, and by the time the op ran the container had been reaped."""
     from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler
     from hexgraph.sandbox.decompiler import GhidraDecompiler, run_ghidra_op
 
@@ -356,10 +355,12 @@ def test_run_ghidra_op_retries_headless_when_a_bridge_is_UNREACHABLE(env, monkey
     monkeypatch.setattr("hexgraph.engine.re.ghidra_bridge.connect_managed",
                         lambda host, port: types.SimpleNamespace(host=host, port=port))
     B.start_bridge(s, p, t, runner=_FakeExec())
-    calls = []
+    calls, gone = [], []
+    # A gone container yields no ip, so bridge_endpoint stops reporting an endpoint (bridge.py).
+    monkeypatch.setattr(B, "_container_ip", lambda name: None if gone else "172.17.0.9")
 
     def _dead(self, *a, **k):
-        calls.append("bridge"); raise ConnectionRefusedError("container gone")
+        calls.append("bridge"); gone.append(1); raise ConnectionRefusedError("container gone")
 
     monkeypatch.setattr(GhidraBridgeDecompiler, "run_taint", _dead)
     monkeypatch.setattr(GhidraDecompiler, "run_taint",
@@ -368,6 +369,36 @@ def test_run_ghidra_op_retries_headless_when_a_bridge_is_UNREACHABLE(env, monkey
     out = run_ghidra_op(t, "run_taint", "/artifact")
     assert calls == ["bridge", "headless"]          # tried the bridge, degraded to headless
     assert out == {"taint": {"flows": []}}
+
+
+def test_run_ghidra_op_does_NOT_retry_when_a_raising_bridge_is_STILL_SERVING(env, monkeypatch):
+    """An exception is NOT evidence the bridge is dead, and this is the case that proves it.
+
+    `serve_bridge` is single-threaded behind a listen backlog, so a bridge BUSY inside one op still
+    ACCEPTS the next connection; the host read then trips `_ManagedOps`' 600s timeout and `_rpc`
+    reports `BridgeUnavailable("... unreachable: timed out")` — from a bridge that is very much
+    alive and still owns the project. Degrading there would run a headless op (for `rename`, a
+    WRITE) on the project it holds, which is the exact collision this helper exists to prevent. So
+    liveness is OBSERVED after the failure (`bridge_endpoint`), never inferred from the exception.
+    """
+    from hexgraph.engine.re.ghidra_bridge import BridgeUnavailable, GhidraBridgeDecompiler
+    from hexgraph.sandbox.decompiler import GhidraDecompiler, run_ghidra_op
+
+    s, p, t = env  # env's _serving is True -> the bridge is still accepting connections
+    monkeypatch.setattr("hexgraph.engine.re.ghidra_bridge.connect_managed",
+                        lambda host, port: types.SimpleNamespace(host=host, port=port))
+    B.start_bridge(s, p, t, runner=_FakeExec())
+    headless = []
+    monkeypatch.setattr(GhidraBridgeDecompiler, "rename_function",
+                        lambda self, *a, **k: (_ for _ in ()).throw(
+                            BridgeUnavailable("managed Ghidra bridge at 172.17.0.9:4768 "
+                                              "unreachable: timed out")))
+    monkeypatch.setattr(GhidraDecompiler, "rename_function",
+                        lambda self, *a, **k: headless.append(1) or {"focus": {}})
+
+    with pytest.raises(BridgeUnavailable):
+        run_ghidra_op(t, "rename_function", "/artifact", address="0x401000", new_name="parse")
+    assert not headless          # NO headless WRITE behind a bridge that still owns the project
 
 
 def test_run_ghidra_op_does_NOT_retry_when_a_live_bridge_returns_an_error(env, monkeypatch):
@@ -401,6 +432,40 @@ def test_run_ghidra_op_reraises_when_headless_itself_fails(env, monkeypatch):
                         lambda self, *a, **k: (_ for _ in ()).throw(RuntimeError("docker down")))
     with pytest.raises(RuntimeError, match="docker down"):
         run_ghidra_op(t, "run_taint", "/artifact")
+
+
+def test_production_taint_path_degrades_a_gone_bridge(env, monkeypatch):
+    """The degradation has to reach the PRODUCTION taint path, not just `run_ghidra_op` in isolation.
+
+    `analyze_taint` always selects through `_target_taint_analyzer`, which used to INJECT
+    `ghidra_op_backend(target)`. That pinned instance routes to a live bridge perfectly well but
+    cannot degrade a gone one — the injected object short-circuits the seam — so the whole taint
+    call site silently kept the old no-degradation behaviour. Selection now injects nothing and
+    `analyze` re-asks the seam per call. Asserting this at the SELECTOR (not on a hand-built
+    analyzer) is the point: that is the layer that regressed."""
+    from hexgraph.engine.re import taint as T
+    from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler
+    from hexgraph.sandbox.decompiler import GhidraDecompiler
+
+    s, p, t = env
+    monkeypatch.setattr("hexgraph.engine.re.ghidra_bridge.connect_managed",
+                        lambda host, port: types.SimpleNamespace(host=host, port=port))
+    monkeypatch.setattr(T, "get_taint_analyzer", lambda: T.GhidraTaintAnalyzer())
+    B.start_bridge(s, p, t, runner=_FakeExec())
+    calls, gone = [], []
+    monkeypatch.setattr(B, "_container_ip", lambda name: None if gone else "172.17.0.9")
+
+    def _dead(self, *a, **k):
+        calls.append("bridge"); gone.append(1); raise ConnectionRefusedError("container gone")
+
+    monkeypatch.setattr(GhidraBridgeDecompiler, "run_taint", _dead)
+    monkeypatch.setattr(GhidraDecompiler, "run_taint",
+                        lambda self, *a, **k: calls.append("headless") or {
+                            "taint": {"flows": [], "analyzed": 7}})
+
+    out = T._target_taint_analyzer(t).analyze("/artifact", project=p, target=t)
+    assert calls == ["bridge", "headless"]   # the SELECTED analyzer degraded, not just the helper
+    assert out["available"] and out["analyzed"] == 7 and out["error"] is None
 
 
 def test_bridge_start_doc_does_not_advertise_a_capability_tradeoff(env):

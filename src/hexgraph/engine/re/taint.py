@@ -73,15 +73,14 @@ class GhidraTaintAnalyzer(TaintAnalyzer):
             # GhidraDecompiler() here would open that same project a second time, which FAILS
             # (LockException at the project open).
             #
-            # Defence in depth, not a live-bug fix: production reaches this class through
-            # `_target_taint_analyzer`, which already injects ghidra_op_backend(target), so this
-            # default is reachable only by constructing GhidraTaintAnalyzer() directly. It should
-            # still be correct for whoever does that next. With no bridge up it resolves to the
-            # same headless backend as before.
+            # This is the PRODUCTION path: `_target_taint_analyzer` deliberately injects nothing so
+            # the backend resolves HERE, per call. `run_ghidra_op` both routes to a live bridge and
+            # degrades a GONE one to headless — a pre-resolved instance can do the first but not
+            # the second, which is why the injection was dropped. With no bridge up it resolves to
+            # the same headless backend as ever. An injected `decompiler=` (tests, future callers)
+            # is still used verbatim, below.
             from hexgraph.sandbox.decompiler import run_ghidra_op
 
-            # Resolve per call rather than pinning a backend object: run_ghidra_op also degrades a
-            # DEAD bridge to headless, which a pre-resolved instance cannot do.
             def _run(a, **kw):
                 return run_ghidra_op(target, "run_taint", a, **kw)
 
@@ -119,16 +118,18 @@ def get_taint_analyzer() -> TaintAnalyzer:
 
 
 def _target_taint_analyzer(target: Any) -> TaintAnalyzer:
-    """The taint analyzer for a SPECIFIC target: the Ghidra analyzer bound to the target's op backend
+    """The taint analyzer for a SPECIFIC target: the Ghidra analyzer that asks the target's op seam
     — the live managed bridge if one is up (reuse the resident project; a headless taint pass would
     otherwise conflict on the project lock the bridge holds) else headless — or the Null analyzer when
-    Ghidra isn't active. This is what routes taint to the bridge like the other Ghidra ops."""
-    base = get_taint_analyzer()
-    if isinstance(base, GhidraTaintAnalyzer):
-        from hexgraph.sandbox.decompiler import ghidra_op_backend
+    Ghidra isn't active. This is what routes taint to the bridge like the other Ghidra ops.
 
-        return GhidraTaintAnalyzer(decompiler=ghidra_op_backend(target))
-    return base
+    Deliberately injects NO backend. Pinning `ghidra_op_backend(target)` here resolved the bridge
+    just as well, but froze the choice: the op then had no way to degrade a GONE bridge to the warm
+    headless slot, because that decision belongs to the call, not to selection time. `analyze` gets
+    `target` on every call (see `analyze_taint`), so it re-asks the same seam through
+    `run_ghidra_op`, which routes AND degrades."""
+    base = get_taint_analyzer()
+    return GhidraTaintAnalyzer() if isinstance(base, GhidraTaintAnalyzer) else base
 
 
 def _source_label(source: dict) -> str:
