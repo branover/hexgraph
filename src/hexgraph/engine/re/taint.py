@@ -86,10 +86,13 @@ class GhidraTaintAnalyzer(TaintAnalyzer):
 
             run_taint = _run
         else:
+            # An INJECTED backend is used verbatim (tests, and any caller pinning one). Only this
+            # branch can lack the method — the seam path above always resolves a Ghidra backend,
+            # both of which implement run_taint — so the guard below belongs to it alone.
             run_taint = getattr(deco, "run_taint", None)
-        if run_taint is None:
-            return {"available": False, "flows": [], "analyzed": 0,
-                    "error": "active decompiler has no taint backend"}
+            if run_taint is None:
+                return {"available": False, "flows": [], "analyzed": 0,
+                        "error": "active decompiler has no taint backend"}
         try:
             out = run_taint(artifact, project=project) or {}
         except Exception as exc:  # noqa: BLE001 — a sandbox/Ghidra failure DEGRADES (no flows,

@@ -548,8 +548,13 @@ def run_ghidra_op(target, op: str, *args, **kwargs):
     result contracts (`_ghidra_xrefs` treats an error dict as "give up", `enrich_target` checks
     `"error" in data`), and this helper deliberately does not second-guess them."""
     backend = ghidra_op_backend(target)
+    # Resolve the attribute OUTSIDE the try. A bad `op` name (or a backend missing the method) is
+    # a programming error, and inside the try it would be indistinguishable from a call failure —
+    # so it would be misread as "the bridge died", silently retried headless, and raise the same
+    # AttributeError there anyway with the real cause buried.
+    bound = getattr(backend, op)
     try:
-        return getattr(backend, op)(*args, **kwargs)
+        return bound(*args, **kwargs)
     except Exception as exc:
         from hexgraph.engine.re.bridge import bridge_endpoint
         from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler
