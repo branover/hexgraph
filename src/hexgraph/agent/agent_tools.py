@@ -2686,6 +2686,29 @@ def _bridge_live(target) -> bool:
         return False
 
 
+def _bridge_is_offerable() -> bool:
+    """Whether `re_bridge_start` is a REAL option in THIS install, checked before we spend a line
+    telling an agent to reach for it. The managed bridge is HEADLESS-Ghidra-only and network-gated,
+    so on the default install (radare2 decompiler, `features.network` off) the advice isn't merely
+    useless, it's WRONG three ways over: nothing is "re-opening a Ghidra project per call" (r2 is
+    decompiling, and persists its own project), the quoted per-call figures measure a path the
+    caller isn't on, and `start_bridge` would answer `denied` anyway. Advice that can't be taken
+    costs a turn AND teaches a false cost model — worse than saying nothing.
+
+    `ghidra_bridge` mode is excluded alongside radare2: it attaches to the researcher's own running
+    Ghidra and has no warm project of ours to serve, so `start_bridge` answers `unavailable` there
+    too. Same `_resolve_name(None)` authority `meta_check_decompiler` reports as `active`, so this
+    can't drift from what the agent is told elsewhere. Advice only, like `_bridge_live` — the
+    capability gate itself stays where it belongs, at the policy seam."""
+    try:
+        from hexgraph.policy import current_policy
+        from hexgraph.sandbox.decompiler import _resolve_name
+
+        return _resolve_name(None) == "ghidra" and bool(current_policy().allow_network)
+    except Exception:  # noqa: BLE001 — a nudge must never break the tool it decorates
+        return False
+
+
 def _search_code_grep(ctx: ToolContext, args: dict, *, query: str, functions) -> str:
     """The decompile-on-demand grep: grep the pseudo-C of ONLY the caller-named `functions` for
     `query`. BOUNDED by `functions` so the cost stays the caller's to control — an empty/missing
@@ -2741,10 +2764,13 @@ def _search_code_grep(ctx: ToolContext, args: dict, *, query: str, functions) ->
     # Every body already in the Observation store, in ONE pass — these cost nothing.
     warm = O.decompiled_bodies(ctx.session, ctx.target.id, names=names)
     # This is the one place that knows the cold count BEFORE paying it, so it's the honest place to
-    # say a bridge would help. Free when there's no bridge registered: bridge_endpoint returns
-    # immediately without a docker call in that case, which is exactly the case we nudge in.
+    # say a bridge would help — but only where it genuinely WOULD. Ordered cheapest-first, and each
+    # test has to pass for the next to run: the count is free; `_bridge_is_offerable` is a settings
+    # read; only `_bridge_live` can touch Docker, and just when a bridge entry is recorded (with
+    # none — the case we actually nudge in — `bridge_endpoint` returns immediately, no docker call).
     cold_total = sum(1 for n in names if not warm.get(normalize_symbol_name(n) or ""))
-    nudge_bridge = cold_total >= _BRIDGE_NUDGE_MIN_COLD and not _bridge_live(ctx.target)
+    nudge_bridge = (cold_total >= _BRIDGE_NUDGE_MIN_COLD and _bridge_is_offerable()
+                    and not _bridge_live(ctx.target))
 
     q = query.lower()
     hits: list[dict] = []
@@ -2835,11 +2861,16 @@ def _search_code_grep(ctx: ToolContext, args: dict, *, query: str, functions) ->
     if misses:
         lines.append(f"not decompiled: {', '.join(misses)}")
     if nudge_bridge:
+        # Keep this in agreement with re_bridge_start's own description (mcp_catalog) and the VR
+        # skill: the SAME measured figures WITH the target they came from, and the same two
+        # exceptions. A shorter summary that drops the exceptions is not a summary, it's a trap —
+        # re_script and a cold re_analyze/re_reanalyze each open the project themselves.
         lines.append(
             f"[{cold_total} of these need a real decompile. Ghidra is re-opening the project per "
-            f"call; re_bridge_start(target) keeps it resident — measured ~20s/call vs ~9s/call on "
-            f"a large binary, with a ~6s one-off boot. It costs no capability: every Ghidra op "
-            f"routes to the resident project. re_bridge_stop when you're done.]")
+            f"call; re_bridge_start(target) keeps it resident — measured on a ~940MB image at "
+            f"~20s/call vs ~9s/call, with a ~6s one-off boot. Every Ghidra op then routes to the "
+            f"resident project, EXCEPT re_script and a COLD re_analyze/re_reanalyze, which open it "
+            f"themselves and need re_bridge_stop first. re_bridge_stop when you're done.]")
     if stopped:
         hint = (f"…[stopped after {_SEARCH_GREP_BUDGET_S}s — a decompile costs tens of "
                 f"seconds and this call had {remaining} function(s) left. Re-call with "
