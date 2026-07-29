@@ -38,7 +38,7 @@ class _FakeAnalyzer(T.TaintAnalyzer):
     name = "fake"
     available = True
 
-    def analyze(self, artifact, *, project=None):
+    def analyze(self, artifact, *, project=None, target=None):
         return {"available": True, "flows": _FAKE_FLOWS, "analyzed": 2, "error": None}
 
 

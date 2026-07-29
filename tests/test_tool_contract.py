@@ -199,6 +199,38 @@ def test_gated_tools_name_their_feature_in_the_description():
              "re_recover_constant", "finding_verify_poc", "net_http_request", "net_tcp_request",
              "net_remote_list_files", "net_remote_read_file", "net_remote_run", "net_remote_launch",
              "src_build", "src_save_revision", "fuzz_start", "fuzz_list_environments",
-             "re_bridge_start", "re_bridge_stop", "re_bridge_status"]
+             "re_bridge_start", "re_bridge_stop", "re_bridge_status",
+             # Every fuzz verb that RE-LAUNCHES or REPLAYS executes the target, so each must name
+             # the feature to enable. These three used to say only "the surface-correct policy gate
+             # is applied inside" — true, but it leaves the agent unable to act on the refusal.
+             "fuzz_resume", "fuzz_verify_artifact", "fuzz_minimize_artifact"]
     for name in gated:
         assert "features." in by_name[name], f"{name} doesn't name its features.* gate"
+
+
+def test_analysis_gated_tools_say_they_need_a_saved_analysis():
+    """The OTHER thing an agent must not discover only by being refused.
+
+    The whole-program RE verbs require a saved analysis and return an actionable re_analyze lead on
+    a warm miss (docs/mcp.md, "Analysis is explicit"). That requirement was documented for humans
+    but absent from the descriptions agents actually read — so a first decompile on a cold target
+    got refused with no forewarning. Same principle as the features.* gate clause: state the tier
+    up front so the agent can PLAN (run re_analyze first) instead of reacting to an error."""
+    by_name = {s["name"]: s["description"] for s in M.catalog()}
+    needs_analysis = ["re_decompile_function", "re_decompile_at", "re_list_functions",
+                      "re_xrefs", "re_function_xrefs", "re_data_xrefs", "re_call_graph",
+                      "re_reanalyze", "re_search_code"]
+    for name in needs_analysis:
+        assert "re_analyze" in by_name[name], (
+            f"{name} requires a saved analysis but never points the agent at re_analyze")
+
+
+def test_gate_clauses_use_one_consistent_slot():
+    """`Gated:` is a FIXED slot (CLAUDE.md). A variant spelling still reads fine to a human but is
+    invisible to anything scanning for the slot — re_script used to say `GATED:`.
+
+    Scans the RAW `_CATALOG`, not `catalog()`: the latter hides feature-gated tools under default
+    settings, and re_script — the tool that actually had the wrong casing — is one of them, so a
+    catalog()-based check silently passes over exactly the entries most likely to drift."""
+    for (_group, name, _fn, desc, _schema) in M._CATALOG:
+        assert "GATED:" not in desc, f"{name} uses 'GATED:'; the slot is 'Gated:'"

@@ -79,8 +79,28 @@ class _FakeAnalyzer(T.TaintAnalyzer):
     def __init__(self, flows):
         self._flows = flows
 
-    def analyze(self, artifact, *, project=None):
+    def analyze(self, artifact, *, project=None, target=None):
         return {"available": True, "flows": self._flows, "analyzed": 2, "error": None}
+
+
+def test_analyze_taint_threads_the_target_to_the_analyzer(hg_home):
+    """`analyze_taint` has the target and must PASS it to the analyzer. Without it a per-target
+    seam is unreachable, so the Ghidra backend silently resolves to headless even when that
+    target has a live managed bridge owning its project."""
+    got = {}
+
+    class _Spy(T.TaintAnalyzer):
+        name, available = "spy", True
+
+        def analyze(self, artifact, *, project=None, target=None):
+            got["target"] = target
+            return {"available": True, "flows": [], "analyzed": 0, "error": None}
+
+    with session_scope() as s:
+        p = create_project(s, name="taint-target")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        T.analyze_taint(s, p, t, analyzer=_Spy())
+        assert got["target"] is t
 
 
 def test_analyze_taint_records_observation_and_promotes_graph(hg_home):

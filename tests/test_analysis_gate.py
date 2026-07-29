@@ -186,7 +186,7 @@ def test_taint_task_gates_on_cold_analysis(hg_home, monkeypatch):
     _fake_state(monkeypatch, "none")
 
     class _ExplodingTaint(T.GhidraTaintAnalyzer):
-        def analyze(self, artifact, *, project=None):
+        def analyze(self, artifact, *, project=None, target=None):
             raise AssertionError("must not run taint when the analysis gate is cold")
 
     with session_scope() as s:

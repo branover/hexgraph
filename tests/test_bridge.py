@@ -183,6 +183,54 @@ def test_ghidra_op_backend_routes_to_live_bridge(env, monkeypatch):
     assert isinstance(ghidra_op_backend(), GhidraDecompiler)    # no target -> headless
 
 
+def test_taint_asks_the_seam_so_a_live_bridge_serves_it(env, monkeypatch):
+    """The grounded taint pass must ASK `ghidra_op_backend`, not construct `GhidraDecompiler()`.
+
+    It was the one Ghidra op that named its implementation instead of the seam, so with a bridge up
+    it opened the warm slot HEADLESS behind the resident project — the exact project-lock conflict
+    every other op routes via ghidra_op_backend to avoid. The bridge has served `taint` since the
+    PyGhidra re-platform (pyghidra_lib.bridge_dispatch); nothing was calling it."""
+    from hexgraph.engine.re import taint as T
+    from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler
+    from hexgraph.sandbox.decompiler import GhidraDecompiler
+
+    s, p, t = env
+    monkeypatch.setattr("hexgraph.engine.re.ghidra_bridge.connect_managed",
+                        lambda host, port: types.SimpleNamespace(host=host, port=port))
+    seen = []
+
+    def _spy(self, artifact, *, project=None):
+        seen.append(type(self))
+        return {"taint": {"flows": [], "analyzed": 0}}
+
+    monkeypatch.setattr(GhidraDecompiler, "run_taint", _spy)
+    monkeypatch.setattr(GhidraBridgeDecompiler, "run_taint", _spy)
+
+    # No bridge: the seam resolves to headless, exactly as before this fix.
+    T.GhidraTaintAnalyzer().analyze("/artifact", project=p, target=t)
+    assert seen == [GhidraDecompiler]
+
+    # Live bridge: taint must route THERE, not open a second headless view of the same project.
+    B.start_bridge(s, p, t, runner=_FakeExec())
+    T.GhidraTaintAnalyzer().analyze("/artifact", project=p, target=t)
+    assert seen == [GhidraDecompiler, GhidraBridgeDecompiler]
+
+
+def test_bridge_start_doc_does_not_advertise_a_capability_tradeoff(env):
+    """The advertised description is what an agent reads before deciding to start a bridge. It used
+    to say re_xrefs falls back to radare2 and emulation/rename are unavailable — true once, but the
+    'later release' it promised had already shipped, so the text was deterring agents from the fast
+    path with a cost that no longer exists. Pin the corrected claim."""
+    from hexgraph.agent.mcp_catalog import catalog
+
+    doc = {x["name"]: x for x in catalog()}["re_bridge_start"]["description"]
+    assert "falls back to radare2" not in doc
+    assert "later release" not in doc
+    assert "re_xrefs" in doc                    # ...it names the ops the bridge DOES serve
+    assert "taint" in doc
+    assert "re_reanalyze" in doc                # ...and the one genuine exception (cold re-import)
+
+
 def test_endpoint_none_when_bridge_dead(env, monkeypatch):
     s, p, t = env
     B.start_bridge(s, p, t, runner=_FakeExec())            # records endpoint
