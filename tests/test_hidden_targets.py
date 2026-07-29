@@ -162,6 +162,34 @@ def test_set_visible_detaches_ghidra_enrichment(hg_home, monkeypatch):
         assert len(spawned) == 1
 
 
+def test_set_visible_enriches_an_already_visible_target(hg_home, monkeypatch):
+    """`enrich=True` is gated on the CALLER asking, NOT on the visibility TRANSITION.
+
+    Reveal and "run a long Ghidra analysis" are separate decisions, so a target revealed earlier
+    (or revealed by the bulk `reveal_dir`, which never enriches visible children) must still be
+    enrichable by name. Gating on `not was_visible` made the second call a silent no-op and left an
+    undocumented hide-then-reveal dance as the only way through — see
+    test_ghidra_enrichment_self_heals_after_lost_task, which still exercises that older path."""
+    monkeypatch.setattr("hexgraph.engine.re.ghidra.enrich_enabled", lambda: True)
+    spawned = []
+    monkeypatch.setattr("hexgraph.engine.worker.spawn_detached_task",
+                        lambda task_id: spawned.append(task_id) or 1)
+    with session_scope() as s:
+        p = create_project(s, name="reveal-then-enrich")
+        child = _executable_child(s, p)
+        cid, pid = child.id, p.id
+
+    with session_scope() as s:
+        first = set_visible(s, pid, cid, True)              # plain reveal, no enrichment
+        assert first["visible"] is True and first["enrichment_queued"] is False
+        assert len(spawned) == 0
+
+        # Now ask for enrichment on the ALREADY-visible target. No hide step.
+        second = set_visible(s, pid, cid, True, enrich=True)
+        assert second["enrichment_queued"] is True
+        assert len(spawned) == 1
+
+
 def test_set_visible_does_not_enrich_by_default(hg_home, monkeypatch):
     """Real incident: revealing auto-enriched every executable, even though the operator
     never asked for it — a directory of a dozen+ binaries silently queued a dozen+ background
@@ -289,6 +317,36 @@ def test_ghidra_enrich_task_dispatches_to_enrich_target(hg_home, monkeypatch):
     assert calls == [cid]
     with session_scope() as s:
         assert s.get(Target, cid).metadata_json.get("ghidra_enriched") is True
+
+
+def test_ghidra_enrich_task_leaves_a_soft_failure_retryable(hg_home, monkeypatch):
+    """The other half of "only on success", which nothing pinned.
+
+    `ghidra_enriched` is a PERMANENT gate — `reveal._needs_ghidra_enrichment` never re-queues a
+    target carrying it — so stamping it on an `ok=False` return would burn the target for good.
+    That branch became reachable in normal use once enrichment started routing through the Ghidra
+    seam: a live bridge returning an error surfaces as `ok=False` rather than an exception, and the
+    `except: continue` path the batch test exercises never touches this check."""
+    def _fake_enrich(session, project, target):
+        return {"ok": False, "detail": "a live Ghidra bridge returned an error"}
+
+    monkeypatch.setattr("hexgraph.engine.re.ghidra.enrich_target", _fake_enrich)
+    from hexgraph.engine.tasks import create_task
+    from hexgraph.engine.worker import run_task_sync
+
+    with session_scope() as s:
+        p = create_project(s, name="dispatch-enrich-soft-fail")
+        child = _executable_child(s, p)
+        task = create_task(s, project=p, target_id=child.id, type="ghidra_enrich")
+        task_id, cid = task.id, child.id
+
+    assert run_task_sync(task_id) == "succeeded"     # a soft failure isn't a task crash...
+    with session_scope() as s:
+        meta = s.get(Target, cid).metadata_json or {}
+        assert meta.get("ghidra_enriched") is not True   # ...but it must NOT burn the target
+        from hexgraph.engine.targets.reveal import _needs_ghidra_enrichment
+        monkeypatch.setattr("hexgraph.engine.re.ghidra.enrich_enabled", lambda: True)
+        assert _needs_ghidra_enrichment(s.get(Target, cid)) is True   # a later reveal retries
 
 
 def test_ghidra_enrich_batch_task_processes_all_targets_sequentially(hg_home, monkeypatch):

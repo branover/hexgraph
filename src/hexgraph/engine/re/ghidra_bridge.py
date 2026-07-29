@@ -198,15 +198,39 @@ class _ManagedOps:
         return None
 
     def decompile(self, program: str | None, function: str | None) -> dict:
+        """The FULL whole-program inventory plus an optional focus — the same payload the headless
+        probe returns, because it is the same core (`pyghidra_lib.decompile_core`, reached through
+        `bridge_dispatch`'s `decompile` op).
+
+        `calls` and `structs` are passed through rather than dropped. The server has always sent
+        them; discarding them here silently made the bridge a decompile-only backend, which is why
+        recon enrichment — the one consumer that reads the whole inventory — could not be served by
+        a live bridge at all. `functions` is re-clipped to the same 20000 cap the core already
+        applies, which is a no-op today and stays as a belt-and-braces bound on a payload that
+        arrives over a socket.
+
+        A server-side `error` also PROPAGATES rather than being dropped. `bridge_dispatch` returns
+        one for any exception inside `decompile_core`, and the whole-program inventory is the
+        expensive JVM-heavy call. Swallowing it was survivable while the bridge was decompile-only
+        (an empty inventory + `focus: None` reads as "nothing found"), but enrichment's ONLY guard
+        is `if "error" in data` — so a dropped error would record 0 functions / 0 calls / 0 structs
+        as authoritative substrate facts AND return ok=True, after which the worker stamps
+        `ghidra_enriched` on the target and `reveal._needs_ghidra_enrichment` never retries it, not
+        even after `re_bridge_stop`. The per-call path already returns early on a top-level `error`
+        (`agent_tools._decompile`), so surfacing it beats masquerading as an empty binary."""
         req: dict = {"op": "decompile"}
         if function:
             req["focus"] = function
         resp = self._rpc(req)
         # An error / not-found focus reads as no focus, mirroring the headless probe.
         focus = None if resp.get("error") else resp.get("focus")
-        return {"functions": (resp.get("functions") or [])[:_MAX_FUNCTION_NAMES],
-                "functions_total": resp.get("functions_total"), "focus": focus,
-                "tool": "ghidra_bridge"}
+        out = {"functions": (resp.get("functions") or [])[:_MAX_FUNCTION_NAMES],
+               "functions_total": resp.get("functions_total"), "focus": focus,
+               "calls": resp.get("calls") or [], "structs": resp.get("structs") or [],
+               "tool": "ghidra_bridge"}
+        if resp.get("error"):
+            out["error"] = resp["error"]
+        return out
 
     # The remaining Ghidra ops, each a single RPC to the resident program (the server runs the
     # matching core and returns the SAME JSON the headless probe would). Payloads mirror the
