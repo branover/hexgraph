@@ -323,6 +323,48 @@ def test_reveal_dir_partitions_rather_than_refusing_the_whole_batch(hg_home, mon
     assert "re_bridge_stop" in out["enrichment_detail"]
 
 
+def test_the_advertised_recovery_actually_works_after_stopping_the_bridge(hg_home, monkeypatch):
+    """Follow the instruction we hand out, and check it WORKS.
+
+    The refusal tells the agent to stop the bridge and enrich again. Gating enrichment on the
+    visibility TRANSITION made that impossible: the target is already visible by then, so the
+    second call was a silent no-op and only an undocumented hide-then-reveal dance worked. A
+    recovery path an agent cannot follow is the same defect as a refusal it never sees — assert
+    the round trip, not just the refusal."""
+    from hexgraph.db.session import session_scope
+    from hexgraph.engine.targets import reveal as R
+    from hexgraph.engine.targets.ingest import create_project, ingest_file
+
+    from conftest import fixture_path
+
+    bridged = {"up": True}
+    monkeypatch.setattr(B, "bridge_endpoint",
+                        lambda t: ("172.17.0.9", 4768) if bridged["up"] else None)
+    monkeypatch.setattr(R, "_needs_ghidra_enrichment", lambda t: True)
+    monkeypatch.setattr(R, "_materialize_recon_only", lambda *a, **k: {"kind": "executable"})
+    queued = []
+    monkeypatch.setattr(R, "_ensure_ghidra_enrichment",
+                        lambda *a, **k: queued.append(1) or True)
+
+    with session_scope() as s:
+        p = create_project(s, name="recover")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        t.visible = False
+        s.flush()
+
+        first = R.set_visible(s, p.id, t.id, True, enrich=True)
+        assert first["enrichment_queued"] is False and "re_bridge_stop" in first["enrichment_detail"]
+        assert not queued
+
+        # Do exactly what the detail says: stop the bridge, then enrich again. No hide step.
+        bridged["up"] = False
+        second = R.set_visible(s, p.id, t.id, True, enrich=True)
+
+    assert second["enrichment_queued"] is True       # the advertised recovery actually recovers
+    assert "enrichment_detail" not in second
+    assert len(queued) == 1
+
+
 def test_bridge_start_doc_does_not_advertise_a_capability_tradeoff(env):
     """The advertised description is what an agent reads before deciding to start a bridge. It used
     to say re_xrefs falls back to radare2 and emulation/rename are unavailable — true once, but the

@@ -197,13 +197,22 @@ def set_visible(session: Session, project_id: str, target_id: str, visible: bool
     t.visible = visible
     materialized = False
     enrichment_queued = False
-    blocked = enrichment_blocked_reason(t) if (visible and not was_visible and enrich) else None
-    if visible and not was_visible:
+    # Enrichment is gated on the CALLER asking for it, not on the visibility TRANSITION. Gating it
+    # on `not was_visible` made "run re_bridge_stop, then reveal again to enrich" — the recovery
+    # this very function hands out — impossible to follow: a second reveal of an already-visible
+    # target was a silent no-op, and the only thing that worked was an undocumented hide-then-
+    # reveal dance. `enrich=True` is already an explicit per-call opt-in on ONE target, so honoring
+    # it on an already-visible target is what the caller asked for, not a surprise. (reveal_dir
+    # deliberately does NOT reconsider visible children — with prefix="" that's the dozen-analyses
+    # stampede its own docstring records; it points at THIS verb instead.)
+    wants_enrich = bool(visible and enrich)
+    blocked = enrichment_blocked_reason(t) if wants_enrich else None
+    if visible and (not was_visible or wants_enrich):
         project = session.get(Project, project_id)
         # Don't queue enrichment we KNOW will no-op; the detached task can't report back, so the
         # agent would see enrichment_queued=True and a succeeded task with nothing enriched.
         enrichment_queued = _materialize_on_reveal(
-            session, project, t, enrich=enrich and blocked is None)
+            session, project, t, enrich=wants_enrich and blocked is None)
         materialized = True
     session.flush()
     out = {"target_id": t.id, "name": t.name, "visible": t.visible, "materialized": materialized,
@@ -293,6 +302,8 @@ def reveal_dir(session: Session, project_id: str, firmware_target_id: str, prefi
         out["enrichment_blocked"] = blocked_ids
         out["enrichment_detail"] = (
             f"{len(blocked_ids)} of {len(to_enrich)} target(s) were NOT queued for enrichment: a "
-            f"live Ghidra bridge holds their project — run re_bridge_stop on them, then reveal "
-            f"again to enrich those (the rest were queued normally)")
+            f"live Ghidra bridge holds their project. Run re_bridge_stop on each, then enrich it "
+            f"with target_set_visible(target_id, visible=true, enrich=true) — re-running "
+            f"target_reveal_dir will NOT pick them up, because it only acts on children that are "
+            f"still hidden. The ids are in enrichment_blocked; the rest were queued normally.")
     return out
