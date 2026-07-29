@@ -115,6 +115,20 @@ _SEARCH_FUNCS_MAX = 50
 _SEARCH_PAGE = 100
 _SEARCH_PAGE_MAX = 500
 
+# The decompile-on-demand grep's WALL-CLOCK budget. `_SEARCH_FUNCS_MAX` bounds how many
+# functions one call decompiles, but NOT how long that takes: a warm decompile is tens of
+# seconds on a large target and the per-decompile sandbox timeout is size-scaled up to
+# `resources.SIZE_TIMEOUT_CAP_SECONDS` (3600s), so a full page of cold functions could run for
+# HOURS with no output — the caller just sees a hung tool. Instead we stop starting new
+# decompiles once this budget is spent and return the hits found so far plus the offset to
+# resume from (the no-silent-caps discipline: the result says exactly how far it got).
+#
+# The budget is checked BEFORE each decompile, so one pathological function can still overrun
+# it by up to its own sandbox timeout — bounding a decompile already in flight is the sandbox's
+# job, not ours. Reuse (below) makes resuming cheap: the functions this call already decompiled
+# come back from the Observation store for free on the follow-up call.
+_SEARCH_GREP_BUDGET_S = 300
+
 # re_script (run_script): the max size (bytes, UTF-8) of an agent-supplied PyGhidra/Jython script.
 # Enforced host-side for a fast, clear rejection; the PROBE re-checks the SAME cap on the decoded
 # body (defence in depth — never trust the host). Kept in lockstep with
@@ -282,19 +296,24 @@ _STATIC_SPECS = [
                                                "max_chars": {"type": "integer", "description": _MAX_CHARS_DESC}},
               "required": ["query"]}),
     ToolSpec("search_code", "Search the WHOLE binary's code (not just already-decompiled bodies — "
-             "search_decompiled covers those): a BYTE/opcode pattern (`bytes_pattern`, hex pairs) or "
-             "an IMMEDIATE constant (`immediate`) scanned across the mapped image (each hit mapped to "
-             "its function), OR a decompile-on-demand GREP (`query`) over a BOUNDED candidate set you "
-             "name in `functions` (so YOU control the cost — an unbounded whole-binary decompile is "
-             "intentionally NOT offered). To find CALLERS of a symbol/sink use xrefs (whole-program, "
-             "indexed) — this does not duplicate it. Paginated. QUERY: records an Observation; adds no "
-             "graph nodes.",
+             "search_decompiled covers those). Two modes, VERY different costs. CHEAP: a BYTE/opcode "
+             "pattern (`bytes_pattern`, hex pairs) or an IMMEDIATE constant (`immediate`) scanned "
+             "across the mapped image, each hit mapped to its function. EXPENSIVE: a decompile-on-"
+             "demand GREP (`query` + `functions`) — every named function with no already-recorded "
+             "body costs a REAL DECOMPILE, tens of seconds each on a large target, so 30 functions "
+             "is ~10 minutes. Already-decompiled bodies are reused for free. Before paying for the "
+             "rest: search_decompiled greps already-decompiled bodies with no decompile, and xrefs "
+             "finds CALLERS of a symbol/sink (whole-program, indexed) — this does not duplicate it. "
+             "Paginated; the grep stops after a wall-clock budget and reports the resume offset. "
+             "QUERY: records an Observation; adds no graph nodes.",
              {"type": "object", "properties": {
                  "bytes_pattern": {"type": "string", "description": "hex byte pattern to scan for, e.g. 'deadbeef' or '48 8b'"},
                  "immediate": {"type": "string", "description": "an immediate/constant value to find (hex or decimal)"},
-                 "functions": {"type": "array", "description": "bound the decompile-on-demand grep to these functions (with `query`)"},
+                 "functions": {"type": "array", "description": "bound the decompile-on-demand grep to these functions (with `query`). EACH one not already decompiled costs a full decompile — name only real candidates"},
                  "query": {"type": "string", "description": "substring to grep in the decompiled bodies of `functions`"},
-                 "offset": {"type": "integer"}, "limit": {"type": "integer"}}}),
+                 "offset": {"type": "integer", "description": "page start: into the HITS for a scan, into the FUNCTIONS list for a grep"},
+                 "limit": {"type": "integer", "description": "page size: hits for a scan (default 100, max 500); functions to decompile for a grep (default and max 50)"},
+                 "max_chars": {"type": "integer", "description": _MAX_CHARS_DESC}}}),
     ToolSpec("check_decompiler", "Verify the decompiler decompile_function/disassemble use ACTUALLY "
              "works (not just the configured name): radare2 needs the sandbox image up; Ghidra needs "
              "WITH_GHIDRA=1 (headless) or a reachable bridge. Run it if a decompile fails so you don't "
@@ -468,22 +487,47 @@ def _effective_limit(max_chars) -> int:
         return _MAX
 
 
-def _clip_body(s: str, *, limit: int, obs_id: str | None) -> str:
+def _clip_with_hint(body: str, *, hint: str, limit: int, obs_id: str | None) -> str:
+    """Clip `body` to `limit` but ALWAYS keep `hint` — the paging/resume line — attached.
+
+    Appending the hint and then clipping the whole string drops the hint exactly when the result
+    is big, which is exactly when the agent most needs to know more pages exist. Both surviving
+    recovery paths (a larger max_chars, obs_get) return only the CURRENT page, so losing the line
+    leaves the agent with no signal that there IS a next page. Reserving room for the hint costs a
+    little body text and keeps the paging contract intact at any size."""
+    tail = f"\n{hint}" if hint else ""
+    # `reserve` is what keeps the advertised max_chars honest: the clip must be told that the
+    # caller appends `tail` afterwards, or the number it prints is a FIXED POINT (see _clip_body).
+    return _clip_body(body, limit=max(_MAX_FLOOR, limit - len(tail)),
+                      obs_id=obs_id, reserve=len(tail)) + tail
+
+
+def _clip_body(s: str, *, limit: int, obs_id: str | None, reserve: int = 0) -> str:
     """Truncate a body-returning tool's text to `limit` chars, but instead of the bare
     `…[truncated]` marker emit an ACTIONABLE one that names BOTH recovery paths and the sizes:
     re-call with a larger max_chars, or get_observation(<id>) for the full body. The full body
-    is always in the Observation, so a head-truncation can never silently hide a tail sink."""
+    is always in the Observation, so a head-truncation can never silently hide a tail sink.
+
+    `reserve` is the number of chars the CALLER appends after this returns — a paging hint held
+    outside the clip (`_clip_with_hint`). It changes nothing about what gets truncated, only the
+    max_chars figure advertised, which has to cover the caller's WHOLE final string. Without it
+    that figure is a fixed point: the caller derives its clip limit by subtracting the hint, so
+    re-calling with the advertised N leaves N - len(hint) for the body, truncates again, and
+    prints the identical N — an agent following the instruction would loop forever."""
     s = s or ""
     if len(s) <= limit:
         return s
     full = len(s)
+    # What the agent must actually pass to get the whole final string back: this body PLUS
+    # whatever the caller appends to it.
+    need = full + reserve
     # Name BOTH tool forms — the in-process agent loop has `get_observation`, the MCP surface
     # advertises `obs_get`; both return the full body uncapped. Suggest a larger max_chars only
     # when it can actually reach the full size (it clamps at _MAX_CEILING); past that, the
     # observation tool is the only way to the full body.
     obs = f"get_observation/obs_get('{obs_id}')" if obs_id else None
-    if full <= _MAX_CEILING:
-        knob = f"re-call with max_chars\u2265{full}"
+    if need <= _MAX_CEILING:
+        knob = f"re-call with max_chars\u2265{need}"
         tail = f"{knob}, or {obs} for the full body" if obs else f"{knob} for the full body"
     else:
         tail = f"{obs} for the full body" if obs else "the full body is in the Observation store"
@@ -2634,61 +2678,165 @@ def _search_code(ctx: ToolContext, args: dict) -> str:
 
 
 def _search_code_grep(ctx: ToolContext, args: dict, *, query: str, functions) -> str:
-    """The decompile-on-demand grep: decompile ONLY the caller-named `functions` and grep their
-    pseudo-C for `query`. BOUNDED by `functions` (capped at _SEARCH_FUNCS_MAX) so the cost stays
-    the caller's to control — an empty/missing `functions` returns a clear 'name candidates'
-    message, NEVER an unbounded whole-binary decompile. QUERY: records an Observation."""
-    names = [str(f) for f in (functions or []) if str(f).strip()]
-    if not names:
+    """The decompile-on-demand grep: grep the pseudo-C of ONLY the caller-named `functions` for
+    `query`. BOUNDED by `functions` so the cost stays the caller's to control — an empty/missing
+    `functions` returns a clear 'name candidates' message, NEVER an unbounded whole-binary
+    decompile. QUERY: records an Observation; adds no graph nodes beyond what a decompile promotes.
+
+    This is the EXPENSIVE search of the three (see the `search_code` spec): every function with no
+    already-recorded body costs a real decompile. Three things keep that honest:
+
+    * **Reuse before decompile.** Ghidra's project database persists the analysis but NOT the
+      pseudo-C, so the Observation store is the only pseudocode cache. One pass over it
+      (`observations.decompiled_bodies`) serves every already-decompiled function for FREE; only
+      the rest are decompiled. A repeat call — including the resume after a budget stop — is
+      therefore nearly free.
+    * **Paginated over the FUNCTIONS list** (offset/limit, `_SEARCH_FUNCS_MAX` per page) rather
+      than silently truncating to the first N, so the caller can walk a long candidate list.
+    * **Wall-clock budgeted** (`_SEARCH_GREP_BUDGET_S`): we stop starting new decompiles once it's
+      spent and report the resume offset instead of running for hours.
+
+    The SQLite write lock is released before each decompile: this loop interleaves DB writes (the
+    Observation + the node/edges a decompile promotes) with tens-of-seconds sandbox work, and
+    holding the single writer lock across that is exactly the contention `release_write_lock`
+    exists to prevent."""
+    import time
+
+    from hexgraph.db.session import release_write_lock
+    from hexgraph.engine import observations as O
+    from hexgraph.engine.graph.nodes import normalize_symbol_name
+
+    all_names = [str(f) for f in (functions or []) if str(f).strip()]
+    if not all_names:
         return ("search_code(query=…) needs `functions` — name the candidate functions to grep "
                 "so the decompile cost is bounded and yours to control (an unbounded whole-binary "
                 "decompile is intentionally not offered). Use re_list_functions to pick candidates, "
                 "then pass them here; to search ALREADY-decompiled bodies with no new decompile use "
                 "re_search_decompiled, and to find CALLERS of a symbol use re_xrefs.")
-    clipped = len(names) > _SEARCH_FUNCS_MAX
-    names = names[:_SEARCH_FUNCS_MAX]
+
+    # Page over the FUNCTIONS list. Unlike the scan mode's page (over cheap, already-computed
+    # hits) each item here can cost a decompile, so the page cap is _SEARCH_FUNCS_MAX.
+    total = len(all_names)
+    offset = _bound_page(args.get("offset"), 0, 0, max(0, total))
+    limit = _bound_page(args.get("limit"), _SEARCH_FUNCS_MAX, 1, _SEARCH_FUNCS_MAX)
+    names = all_names[offset:offset + limit]
+
+    # An out-of-range page searched NOTHING, which is not the same as finding nothing. Say so
+    # before doing any work, or an agent paging blindly (offset += limit until it "runs out")
+    # reads the boundary page's clean no-hits line as an authoritative negative on its candidates.
+    if not names:
+        return (f"search_code grep {query!r}: offset={offset} is past the end of your "
+                f"{total}-function list — NOTHING was searched, so this is NOT a negative result. "
+                f"Valid offsets are 0..{max(0, total - 1)}.")
+
+    # Every body already in the Observation store, in ONE pass — these cost nothing.
+    warm = O.decompiled_bodies(ctx.session, ctx.target.id, names=names)
 
     q = query.lower()
     hits: list[dict] = []
     decompiled = 0
+    reused = 0
     misses: list[str] = []
+    deadline = time.monotonic() + _SEARCH_GREP_BUDGET_S
+    searched = 0   # names actually examined, so the resume offset is exact
+    stopped = False
+
     for fn in names:
-        out = _decomp(ctx, fn)
-        if isinstance(out, dict) and out.get("error"):
-            misses.append(f"{fn} ({out['error']})")
-            continue
-        focus = out.get("focus") if isinstance(out, dict) else None
-        body = (focus or {}).get("pseudocode") if focus else None
-        if not body:
-            misses.append(f"{fn} (no body — unresolved or no analysis)")
-            continue
-        decompiled += 1
+        body = warm.get(normalize_symbol_name(fn) or "")
+        name = fn
+        if body:
+            reused += 1
+            searched += 1
+        else:
+            # The budget gates only work we haven't STARTED — a warm hit above never consults it.
+            # We BREAK rather than continue so `searched` stays a contiguous prefix and the resume
+            # offset is exact; a `continue` would let `next_offset` permanently skip cold functions
+            # that were never examined. The cost is that warm names after the stop are skipped too,
+            # which is fine — they're deferred to the resume, where they come back free.
+            if time.monotonic() >= deadline:
+                stopped = True
+                break
+            # Release the write lock BEFORE the slow sandbox decompile — the previous iteration's
+            # promoted node/edges are flushed-but-uncommitted, and holding the single SQLite
+            # writer lock across a decompile blocks the web app and every other agent.
+            release_write_lock(ctx.session)
+            out = _decomp(ctx, fn)
+            # Counted as examined even when it yields no body: a resume must not retry a function
+            # this call already paid a decompile for.
+            searched += 1
+            if isinstance(out, dict) and out.get("error"):
+                misses.append(f"{fn} ({out['error']})")
+                continue
+            focus = out.get("focus") if isinstance(out, dict) else None
+            body = (focus or {}).get("pseudocode") if focus else None
+            if not body:
+                misses.append(f"{fn} (no body — unresolved or no analysis)")
+                continue
+            decompiled += 1
+            name = focus.get("name") or fn
         matched = [ln.strip() for ln in body.splitlines() if q in ln.lower()]
         if matched:
-            hits.append({"function": focus.get("name") or fn, "lines": matched})
+            hits.append({"function": name, "lines": matched})
 
-    _record_obs(ctx, tool="search_code",
-                args={k: v for k, v in (("query", query), ("functions", names)) if v},
-                result_kind="search_code",
-                payload={"mode": "grep", "query": query, "functions": names,
-                         "decompiled": decompiled, "hits": hits, "misses": misses},
-                summary=f"grep {query!r} over {len(names)} function(s): "
-                        f"{len(hits)} matched (decompiled {decompiled})")
+    examined = searched
+    next_offset = offset + examined
+    remaining = total - next_offset
 
-    header = (f"search_code grep {query!r} over {len(names)} named function(s) "
-              f"(decompiled {decompiled}):")
-    note = (f"\n[bounded to the first {_SEARCH_FUNCS_MAX} of your {len(functions)} functions]"
-            if clipped else "")
-    lines = [header + note]
+    # A budget-stopped run is recorded as `partial`, NOT `ok`. Observation dedup ("analyze once,
+    # reuse forever") assumes a given (tool, args) yields the same result every time — true of a
+    # decompile, but NOT of a wall-clock-bounded grep, which examines however many functions it
+    # got through. Only `ok` rows dedup, so marking a partial keeps it from shadowing a later
+    # complete run of the SAME args with a stale, short payload. It stays readable via
+    # list_observations / search_observations / get_observation, none of which filter on status;
+    # only `observation_index`'s roll-up hides it, which is the right call — a budget-stopped grep
+    # is not an authoritative "this has been analyzed" entry for the context bundle.
+    obs, _cached = _record_obs(
+        ctx, tool="search_code",
+        args={k: v for k, v in (("query", query), ("functions", names),
+                                ("offset", offset), ("limit", limit)) if v},
+        result_kind="search_code",
+        payload={"mode": "grep", "query": query, "functions": names,
+                 "decompiled": decompiled, "reused": reused, "hits": hits,
+                 "misses": misses, "total": total, "offset": offset,
+                 "examined": examined, "budget_stopped": stopped},
+        status="partial" if stopped else "ok",
+        summary=f"grep {query!r} over {examined} function(s): {len(hits)} matched "
+                f"(decompiled {decompiled}, reused {reused})"
+                + (" — PARTIAL, budget stopped" if stopped else ""))
+
+    # Echo a non-default limit in the resume hint. Without it an agent that deliberately bounded
+    # its page (limit=4) and follows this instruction literally gets the default 50 back — up to
+    # 50 decompiles where it asked for 4, which is the "looks hung" failure this whole path exists
+    # to remove, reintroduced by our own instruction.
+    resume = f"offset={next_offset}" + (f", limit={limit}" if limit != _SEARCH_FUNCS_MAX else "")
+    header = (f"search_code grep {query!r} over {examined} of {total} named function(s) "
+              f"(decompiled {decompiled}, reused {reused} already-decompiled):")
+    lines = [header]
     if hits:
         for h in hits:
             lines.append(f"- {h['function']}:")
             lines += [f"    {ln}" for ln in h["lines"]]
     else:
-        lines.append(f"(no line in the decompiled bodies of the named functions contains {query!r})")
+        lines.append(f"(no line in the searched bodies contains {query!r})")
     if misses:
         lines.append(f"not decompiled: {', '.join(misses)}")
-    return _clip("\n".join(lines))
+    if stopped:
+        hint = (f"…[stopped after {_SEARCH_GREP_BUDGET_S}s — a decompile costs tens of "
+                f"seconds and this call had {remaining} function(s) left. Re-call with "
+                f"{resume} to continue; the {examined} already searched come "
+                f"back free from the Observation store.]")
+    elif remaining > 0:
+        hint = f"…[{remaining} more of your {total} function(s) — re-call with {resume}]"
+    else:
+        hint = ""
+    # A grep over a full page can match many lines across many functions, so this result really
+    # does overflow the inline cap. Truncate with the ACTIONABLE marker (which names obs_get, the
+    # full size, and max_chars) rather than the bare one: every hit is in the Observation, so a cut
+    # tail must never silently hide a call site the agent was searching for. `max_chars` is a real
+    # advertised param on this tool — the marker must never name a recovery path that doesn't exist.
+    return _clip_with_hint("\n".join(lines), hint=hint,
+                           limit=_effective_limit(args.get("max_chars")),
+                           obs_id=obs.id if obs is not None else None)
 
 
 def _ghidra_search(ctx: ToolContext, *, bytes_pat, immediate) -> dict | None:
@@ -2760,23 +2908,30 @@ def _search_code_scan(ctx: ToolContext, args: dict, *, bytes_pat, immediate) -> 
     next_offset = offset + len(page)
     more = next_offset < total
 
-    _record_obs(ctx, tool="search_code",
-                args={k: v for k, v in (("bytes_pattern", bytes_pat), ("immediate", immediate),
-                                        ("offset", offset), ("limit", limit)) if v is not None and v != 0},
-                result_kind="search_code",
-                payload={"mode": "scan", "bytes_pattern": bytes_pat, "immediate": immediate,
-                         "hits": page, "total": total, "offset": offset, "limit": limit},
-                summary=f"scan {subj}: {total} hit(s); page {offset}-{next_offset}")
+    obs, _cached = _record_obs(
+        ctx, tool="search_code",
+        args={k: v for k, v in (("bytes_pattern", bytes_pat), ("immediate", immediate),
+                                ("offset", offset), ("limit", limit)) if v is not None and v != 0},
+        result_kind="search_code",
+        payload={"mode": "scan", "bytes_pattern": bytes_pat, "immediate": immediate,
+                 "hits": page, "total": total, "offset": offset, "limit": limit},
+        summary=f"scan {subj}: {total} hit(s); page {offset}-{next_offset}")
 
     header = f"search_code scan for {subj} ({total} hit(s), showing {offset}-{next_offset}):"
     body = "\n".join(
         f"- {h['addr']}" + (f"  in {h['in_function']}" if h.get("in_function") else "  (no function)")
         for h in page) or "(none)"
-    tail = ""
+    hint = ""
     if more:
-        tail = (f"\n…[{total - next_offset} more — re-call with offset={next_offset}"
+        hint = (f"…[{total - next_offset} more — re-call with offset={next_offset}"
                 + (f", limit={limit}" if limit != _SEARCH_PAGE else "") + "]")
-    return _clip(f"{header}\n{body}{tail}")
+    # Both modes of this tool honour max_chars and clip with the SAME actionable marker — a param
+    # advertised on the tool must work whichever mode the agent used, or a scan caller gets it
+    # silently ignored (the quiet half of the failure the grep's marker had loudly) — and both keep
+    # the paging hint attached through a clip (see _clip_with_hint).
+    return _clip_with_hint(f"{header}\n{body}", hint=hint,
+                           limit=_effective_limit(args.get("max_chars")),
+                           obs_id=obs.id if obs is not None else None)
 
 
 def _fuzz(ctx: ToolContext, args: dict) -> str:

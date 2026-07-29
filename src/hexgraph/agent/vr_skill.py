@@ -303,9 +303,15 @@ scoped to the target's exact bytes. The two rules that make this cheap:
   prototype, callers, callees) without paying for its pseudo-C.
 - **re_hexdump** — raw bytes at a virtual address (read via r2 in the sandbox). Read a `DAT_`
   table, an embedded key/blob, or a struct the decompiler renders as an opaque pointer.
-- **re_search_code** — scan the WHOLE image for a byte pattern or an immediate (r2 `/x`//`/v`),
-  plus a bounded decompile-on-demand grep: find every site that loads a magic constant or a
-  known opcode sequence, even where no function is defined yet.
+- **re_search_code** — scan the WHOLE image for a byte pattern or an immediate (r2 `/x`//`/v`):
+  find every site that loads a magic constant or a known opcode sequence, even where no function
+  is defined yet. That scan is cheap (a warm memory scan). Its other mode, the decompile-on-demand
+  grep (`query` + `functions`), is the expensive one: every function you name that hasn't been
+  decompiled yet costs a full decompile, tens of seconds each, so naming thirty of them is a
+  ten-minute call. Reach for it only once the cheap searches are exhausted — `re_search_decompiled`
+  greps bodies you already have for nothing, and `re_xrefs` answers "who calls this" from the
+  indexed call graph in seconds. Bodies already in the Observation store are reused free, so the
+  grep is cheap over functions you have decompiled already.
 - **re_search_symbols_project** — search symbol NAMES across EVERY target in the project (the
   name analogue of `re_yara_sweep`): which loaded library defines or imports `system`, an
   `EVP_*`, a vendor helper — routes you to the right binary before you decompile.

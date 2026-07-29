@@ -1072,10 +1072,14 @@ def search_decompiled(target_id: str, query: str, max_chars: int | None = None) 
 def search_code(target_id: str, bytes_pattern: str | None = None,
                 immediate: str | None = None, functions: list | None = None,
                 query: str | None = None, offset: int | None = None,
-                limit: int | None = None) -> str:
-    """Search the WHOLE binary's code: a byte/opcode pattern (bytes_pattern, hex),
-    an immediate/constant (immediate), or a decompile-on-demand grep (query) over a
-    bounded candidate set (functions). Callers-of-a-symbol -> use re_xrefs."""
+                limit: int | None = None, max_chars: int | None = None) -> str:
+    """Search the WHOLE binary's code: a byte/opcode pattern (bytes_pattern, hex) or an
+    immediate/constant (immediate) — both cheap, a warm memory scan — or a decompile-on-demand
+    grep (query) over a bounded candidate set (functions), which is EXPENSIVE: each named
+    function with no already-recorded body costs a full decompile (tens of seconds on a large
+    target). Already-decompiled bodies are reused free; the grep pages over `functions` and
+    stops on a wall-clock budget, reporting the offset to resume from.
+    Callers-of-a-symbol -> use re_xrefs."""
     a: dict = {}
     if bytes_pattern:
         a["bytes_pattern"] = bytes_pattern
@@ -1089,6 +1093,8 @@ def search_code(target_id: str, bytes_pattern: str | None = None,
         a["offset"] = offset
     if limit is not None:
         a["limit"] = limit
+    if max_chars is not None:
+        a["max_chars"] = max_chars
     return _tool(target_id, "search_code", a)
 
 

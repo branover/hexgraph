@@ -188,6 +188,17 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
   re-running a whole-binary pass. Either way, until a first analysis has warmed the project they point you at
   `re_analyze` instead of quietly analyzing (see the next point) — no per-call verb ever launches a cold pass
   of its own.
+- **The searches are not equally cheap, and they say so.** `re_search_decompiled` mines bodies you have
+  already decompiled and costs nothing beyond a store read. `re_search_code`'s byte and immediate scans are
+  a fast memory scan over the warm project. Its third mode, the decompile-on-demand grep, is the expensive
+  one: you name the candidate functions, and every one that hasn't been decompiled yet costs a full
+  decompile. That is tens of seconds each on a large target, because headless Ghidra spawns a fresh
+  container and JVM per function, so naming thirty functions is a call that runs for about ten minutes.
+  Bodies already recorded in the Observation store are reused for free, which is what makes a second pass
+  over the same functions nearly instant. The grep pages over the function list and stops once it has spent
+  its wall-clock budget, returning what it found plus the offset to resume from rather than running for
+  hours in silence. Reach for it after the cheap searches, and remember that "who calls this function" is a
+  question `re_xrefs` answers from the reference index in seconds.
 - **Analysis is explicit — `re_analyze` first, then the per-call verbs.** The whole-program tools
   (`re_decompile_function`/`re_decompile_at`, `re_list_functions`, and the xref family
   `re_xrefs`/`re_function_xrefs`/`re_data_xrefs`/`re_call_graph`) **require a saved analysis**: on a warm
