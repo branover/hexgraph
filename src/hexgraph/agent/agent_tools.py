@@ -129,6 +129,12 @@ _SEARCH_PAGE_MAX = 500
 # come back from the Observation store for free on the follow-up call.
 _SEARCH_GREP_BUDGET_S = 300
 
+# How many COLD functions (no recorded body, so each costs a real decompile) make a resident Ghidra
+# bridge worth suggesting. Measured on a ~940MB image: ~20s/call headless vs ~9s/call resident with
+# a ~6s one-off boot, so the bridge saves roughly 11s per cold function and repays its boot almost
+# immediately — but it is still a container, so don't propose one for a sweep of two.
+_BRIDGE_NUDGE_MIN_COLD = 5
+
 # re_script (run_script): the max size (bytes, UTF-8) of an agent-supplied PyGhidra/Jython script.
 # Enforced host-side for a fast, clear rejection; the PROBE re-checks the SAME cap on the decoded
 # body (defence in depth — never trust the host). Kept in lockstep with
@@ -2665,6 +2671,21 @@ def _search_code(ctx: ToolContext, args: dict) -> str:
             "program, indexed).")
 
 
+def _bridge_live(target) -> bool:
+    """Whether `target` has a live managed Ghidra bridge — for ADVICE only, never for safety.
+
+    Deliberately `bridge_endpoint`, not `bridge_confirmed_gone`: the question here is "would
+    suggesting a bridge help?", where being wrong costs one redundant sentence in either direction.
+    The safety question — "is it safe to run a headless op?" — is the opposite, and answers it with
+    positive evidence of death (`sandbox.decompiler.run_ghidra_op`). Don't merge the two."""
+    try:
+        from hexgraph.engine.re.bridge import bridge_endpoint
+
+        return bridge_endpoint(target) is not None
+    except Exception:  # noqa: BLE001 — a nudge must never break the tool it decorates
+        return False
+
+
 def _search_code_grep(ctx: ToolContext, args: dict, *, query: str, functions) -> str:
     """The decompile-on-demand grep: grep the pseudo-C of ONLY the caller-named `functions` for
     `query`. BOUNDED by `functions` so the cost stays the caller's to control — an empty/missing
@@ -2719,6 +2740,11 @@ def _search_code_grep(ctx: ToolContext, args: dict, *, query: str, functions) ->
 
     # Every body already in the Observation store, in ONE pass — these cost nothing.
     warm = O.decompiled_bodies(ctx.session, ctx.target.id, names=names)
+    # This is the one place that knows the cold count BEFORE paying it, so it's the honest place to
+    # say a bridge would help. Free when there's no bridge registered: bridge_endpoint returns
+    # immediately without a docker call in that case, which is exactly the case we nudge in.
+    cold_total = sum(1 for n in names if not warm.get(normalize_symbol_name(n) or ""))
+    nudge_bridge = cold_total >= _BRIDGE_NUDGE_MIN_COLD and not _bridge_live(ctx.target)
 
     q = query.lower()
     hits: list[dict] = []
@@ -2808,6 +2834,12 @@ def _search_code_grep(ctx: ToolContext, args: dict, *, query: str, functions) ->
         lines.append(f"(no line in the searched bodies contains {query!r})")
     if misses:
         lines.append(f"not decompiled: {', '.join(misses)}")
+    if nudge_bridge:
+        lines.append(
+            f"[{cold_total} of these need a real decompile. Ghidra is re-opening the project per "
+            f"call; re_bridge_start(target) keeps it resident — measured ~20s/call vs ~9s/call on "
+            f"a large binary, with a ~6s one-off boot. It costs no capability: every Ghidra op "
+            f"routes to the resident project. re_bridge_stop when you're done.]")
     if stopped:
         hint = (f"…[stopped after {_SEARCH_GREP_BUDGET_S}s — a decompile costs tens of "
                 f"seconds and this call had {remaining} function(s) left. Re-call with "

@@ -583,6 +583,63 @@ def test_advertised_max_chars_actually_returns_the_untruncated_result(hg_home, m
         assert "8 more" in second and "offset=2" in second
 
 
+def test_grep_names_the_bridge_when_a_cold_sweep_would_pay_for_it(hg_home, monkeypatch):
+    """The grep knows its own cost before it pays it — it counts cold functions before the loop —
+    so it can say when a resident bridge is worth starting.
+
+    Measured on a ~940MB image: ~20s/call headless against ~9s/call resident, a ~6s one-off boot.
+    So the nudge belongs on a COLD sweep of several functions, and nowhere else: not when the
+    bodies are already in the Observation store (those cost nothing), and not when a bridge is
+    already up (it's being used)."""
+    names = [f"fn_{i:02d}" for i in range(AT._BRIDGE_NUDGE_MIN_COLD)]
+    _stub_decomp_bodies(monkeypatch, {n: f"void {n}(){{ memcpy(a,b,c); }}" for n in names})
+    monkeypatch.setattr("hexgraph.engine.re.bridge.bridge_endpoint", lambda t: None)
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        out = run_tool(ctx, "search_code", {"query": "memcpy", "functions": names})
+        assert "re_bridge_start" in out
+        assert "9s" in out or "20s" in out          # states the measured cost, not a vague "faster"
+
+
+def test_grep_does_NOT_nudge_when_a_bridge_is_already_live(hg_home, monkeypatch):
+    """Telling an agent to start what it already started is noise it pays context for."""
+    names = [f"fn_{i:02d}" for i in range(AT._BRIDGE_NUDGE_MIN_COLD)]
+    _stub_decomp_bodies(monkeypatch, {n: f"void {n}(){{ memcpy(a,b,c); }}" for n in names})
+    monkeypatch.setattr("hexgraph.engine.re.bridge.bridge_endpoint",
+                        lambda t: ("172.17.0.9", 4768))
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        out = run_tool(ctx, "search_code", {"query": "memcpy", "functions": names})
+        assert "re_bridge_start" not in out
+
+
+def test_grep_does_NOT_nudge_for_a_warm_or_small_sweep(hg_home, monkeypatch):
+    """No nudge when there's nothing to save: bodies already in the store are free, and a couple of
+    cold functions don't repay a container."""
+    from hexgraph.engine import observations as O
+
+    monkeypatch.setattr("hexgraph.engine.re.bridge.bridge_endpoint", lambda t: None)
+    names = [f"fn_{i:02d}" for i in range(AT._BRIDGE_NUDGE_MIN_COLD)]
+    _stub_decomp_bodies(monkeypatch, {n: f"void {n}(){{ memcpy(a,b,c); }}" for n in names})
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        # all warm -> nothing to speed up
+        for n in names:
+            O.record_observation(
+                s, project_id=p.id, target_id=t.id, source="agent",
+                tool="decompile_function", args={"function": n}, result_kind="decompilation",
+                payload={"focus": {"name": n, "pseudocode": f"void {n}(){{ memcpy(a,b,c); }}"}},
+                summary=f"decompiled {n}", content_hash=O.content_hash_for(t), node_refs=[n])
+        assert "re_bridge_start" not in run_tool(
+            ctx, "search_code", {"query": "memcpy", "functions": names})
+
+        # a cold sweep BELOW the threshold -> not worth a container
+        few = [f"cold_{i}" for i in range(AT._BRIDGE_NUDGE_MIN_COLD - 1)]
+        _stub_decomp_bodies(monkeypatch, {n: f"void {n}(){{ memcpy(a,b,c); }}" for n in few})
+        assert "re_bridge_start" not in run_tool(
+            ctx, "search_code", {"query": "memcpy", "functions": few})
+
+
 def test_grep_records_one_observation_and_no_graph(hg_home, monkeypatch):
     _stub_decomp_bodies(monkeypatch, {"f": "void f(){ memcpy(a,b,c); }"})
     with session_scope() as s:
