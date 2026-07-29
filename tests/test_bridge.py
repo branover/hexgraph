@@ -192,7 +192,10 @@ def test_taint_asks_the_seam_so_a_live_bridge_serves_it(env, monkeypatch):
     caller. What was wrong is that the class's own fallback — reachable by constructing
     `GhidraTaintAnalyzer()` directly, as a future caller or a test easily might — named the
     implementation, so it would open the warm slot HEADLESS behind a live bridge's resident
-    project. Every other Ghidra op asks the seam; now this one does too at both layers."""
+    project — which fails outright (LockException at the project open), not merely contends.
+    Every other PER-CALL Ghidra op asks the seam; now this one does too at both layers.
+    (`enrich_target` still doesn't — it needs an inventory the bridge can't serve yet, so it
+    refuses with an actionable lead instead; see test_enrich_target_refuses_behind_a_bridge.)"""
     from hexgraph.engine.re import taint as T
     from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler
     from hexgraph.sandbox.decompiler import GhidraDecompiler
@@ -217,6 +220,30 @@ def test_taint_asks_the_seam_so_a_live_bridge_serves_it(env, monkeypatch):
     B.start_bridge(s, p, t, runner=_FakeExec())
     T.GhidraTaintAnalyzer().analyze("/artifact", project=p, target=t)
     assert seen == [GhidraDecompiler, GhidraBridgeDecompiler]
+
+
+def test_enrich_target_refuses_behind_a_bridge_with_an_actionable_lead(env, monkeypatch):
+    """The THIRD bridge exception. A live bridge holds the target's Ghidra project for its whole
+    life, and a second open of it raises LockException at the PROJECT open — read-only doesn't
+    help and there's no stale lock to steal. Enrichment can't route to the bridge like the
+    per-call ops do (it needs functions+calls+structs; the bridge's decompile op serves only
+    truncated names), so until the bridge serves that inventory it must refuse with a lead the
+    caller can act on rather than dying in an opaque Java traceback."""
+    from hexgraph.engine.re import ghidra as G
+    from hexgraph.sandbox.decompiler import GhidraDecompiler
+
+    s, p, t = env
+    monkeypatch.setattr("hexgraph.engine.re.ghidra_bridge.connect_managed",
+                        lambda host, port: types.SimpleNamespace(host=host, port=port))
+    called = []
+    monkeypatch.setattr(GhidraDecompiler, "decompile",
+                        lambda self, *a, **k: called.append(1) or {"functions": []})
+
+    B.start_bridge(s, p, t, runner=_FakeExec())
+    out = G.enrich_target(s, p, t)
+    assert out["ok"] is False
+    assert "re_bridge_stop" in out["detail"]        # names the action, not just the failure
+    assert not called                               # never attempted the conflicting open
 
 
 def test_bridge_start_doc_does_not_advertise_a_capability_tradeoff(env):

@@ -178,14 +178,17 @@ poll it (re-call `re_analyze` until state=`analyzed`), and then those per-call t
 (`re_disassemble` and `re_binutils_facts`/`re_list_strings` need no analysis — use them freely while
 it warms.) Then, on a LARGE target you expect to work through — more than a handful of decompiles — start a
 resident bridge: `re_bridge_start(target)` keeps the analyzed project open behind an RPC server, so
-each call returns in a fraction of a second instead of paying a fresh container + JVM + project open
-every time (tens of seconds each on a big binary; it is the difference between a ten-minute sweep and
-a ten-second one). It costs you NO capability — every Ghidra op for that target routes to the
+each call skips the fresh container + JVM + project open it would
+otherwise pay. Measured on a ~940MB image that is about 20s/call headless against 9s/call resident —
+roughly half, not instant, and the boot costs ~6s once. Worth it for a sweep of many functions; not
+worth it for one or two. It costs you NO capability — every Ghidra op for that target routes to the
 resident project, not just `re_decompile_*` but `re_xrefs`/`re_function_xrefs`/`re_data_xrefs`, the
-taint pass, `re_recover_constant` and rename. Two things need the bridge stopped first
-(`re_bridge_stop`, restart after): a COLD re-analysis (`re_reanalyze`), which is a fresh import the
-resident project can't serve, and `re_script`, which opens the warm project in its own container
-instead of over the bridge and so contends for the project the bridge holds. `re_bridge_stop` when done
+taint pass, `re_recover_constant` and rename. Three things need the bridge stopped first
+(`re_bridge_stop`, restart after), because each opens the project itself and a second open fails
+outright: a COLD re-analysis (`re_reanalyze`); `re_script`, which runs your script against the warm
+project in its own container; and recon enrichment (`target_set_visible`/`target_reveal_dir` with
+`enrich=true`), which needs an inventory the bridge can't serve yet and refuses with a lead while a
+bridge is up. `re_bridge_stop` when done
 (needs features.network). The spine of it: get the authoritative facts (`re_binutils_facts`,
 `re_list_strings` — GREP the FULL string table, not a sample) → map the sinks and who reaches
 them (`re_xrefs` with no symbol) → read the

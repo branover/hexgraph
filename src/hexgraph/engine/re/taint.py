@@ -69,10 +69,15 @@ class GhidraTaintAnalyzer(TaintAnalyzer):
         deco = self._decompiler
         if deco is None:
             # ASK THE SEAM, don't name the implementation. A live managed bridge OWNS the target's
-            # Ghidra project and serves `taint` itself (pyghidra_lib.bridge_dispatch); constructing
-            # GhidraDecompiler() here instead ran a headless open BEHIND that resident bridge —
-            # exactly the project-lock conflict every other Ghidra op routes via ghidra_op_backend
-            # to avoid. With no bridge up this resolves to the same headless backend as before.
+            # Ghidra project and serves `taint` itself (pyghidra_lib.bridge_dispatch); naming
+            # GhidraDecompiler() here would open that same project a second time, which FAILS
+            # (LockException at the project open).
+            #
+            # Defence in depth, not a live-bug fix: production reaches this class through
+            # `_target_taint_analyzer`, which already injects ghidra_op_backend(target), so this
+            # default is reachable only by constructing GhidraTaintAnalyzer() directly. It should
+            # still be correct for whoever does that next. With no bridge up it resolves to the
+            # same headless backend as before.
             from hexgraph.sandbox.decompiler import ghidra_op_backend
 
             deco = ghidra_op_backend(target)

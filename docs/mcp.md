@@ -219,15 +219,19 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
   `re_decompile_*` opens the target's project fresh — cheap on a small binary, but seconds per call on a large
   one (the warm cache skips *re-analysis*, not the per-call *open*). `re_bridge_start(target)` launches a
   long-lived sandbox container that opens the project **once** and keeps it resident behind an RPC server;
-  after that, **every** Ghidra op for that target reuses it and returns in a fraction of a second — not just
+  after that, **every** per-call Ghidra op for that target reuses it and gets roughly twice as fast — on a
+  ~940 MB image we measured about 20s per call headless against 9s resident, with a one-off ~6s boot — not just
   `re_decompile_function`/`re_decompile_at`/`re_list_functions`, but also `re_xrefs`/`re_function_xrefs`, the
   taint pass, `re_recover_constant` (P-Code emulation), and function rename (persisted back into the resident
   project). Poll `re_bridge_status` (it may take a moment to open a huge project); stop it with `re_bridge_stop`.
   It needs a saved Ghidra analysis first (`re_analyze`) and **`features.network`** (the container is reached on
   a loopback/private address, audited). While a bridge is live it *owns* the project, so every Ghidra op routes
-  to it rather than a conflicting headless open. Two things still want their own open and so need the
-  bridge stopped first: a cold re-analysis (`re_reanalyze`), and `re_script`, which runs your script
-  against the warm project in its own container rather than over the bridge. Also on the CLI: `hexgraph ghidra-bridge start|stop|status <target>`.
+  to it rather than a conflicting headless open. Three things still want their own open and so need the
+  bridge stopped first, since a second open of the project fails outright: a cold re-analysis
+  (`re_reanalyze`); `re_script`, which runs your script against the warm project in its own container;
+  and recon enrichment (`target_set_visible`/`target_reveal_dir` with `enrich=true`), which needs a
+  full function/call/struct inventory the bridge does not serve yet, so it refuses with a lead
+  pointing at `re_bridge_stop` instead of failing opaquely. Also on the CLI: `hexgraph ghidra-bridge start|stop|status <target>`.
 - **`re_script` is the escape hatch over the warm analysis DB (gated, off by default).** The curated `re_*`
   verbs answer the common questions; the full Ghidra analysis holds more than any fixed verb exposes.
   `re_script(target, script=…)` runs an agent-supplied **Python 3** script in the sandbox against the same warm
