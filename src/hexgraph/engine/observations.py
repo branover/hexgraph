@@ -341,6 +341,69 @@ def search_decompiled(
     return out
 
 
+def decompiled_bodies(
+    session: Session, target_id: str, *, names: list[str],
+) -> dict[str, str]:
+    """The pseudocode ALREADY recorded for `names` on this target — the read side of
+    "analyze once, reuse forever" for callers that would otherwise re-decompile.
+
+    Why this exists: Ghidra's project database persists the ANALYSIS (functions, xrefs,
+    P-Code, types) but never the decompiler's pseudo-C — `DecompInterface` re-runs per
+    request. So the Observation store is the ONLY pseudocode cache, and a caller that
+    doesn't consult it re-pays a full decompile (a container spawn + JVM start + project
+    open, tens of seconds on a large target) for a function it already decompiled.
+
+    ONE pass over the target's `decompilation` Observations, newest first, stopping as soon
+    as every requested name is resolved. Keys are NORMALIZED names
+    (`engine.graph.nodes.normalize_symbol_name`) so a caller's `foo` matches a focus recorded
+    as `sym.foo`; the newest decompilation of a function wins. Names with no recorded body —
+    or a recorded body that is empty — are simply absent from the result, which is the
+    caller's signal to decompile them. Read-only: records nothing, mutates no graph."""
+    from hexgraph.engine.graph.nodes import normalize_symbol_name
+
+    wanted = {normalize_symbol_name(n) for n in (names or []) if n and normalize_symbol_name(n)}
+    if not wanted:
+        return {}
+    rows = (
+        session.query(Observation)
+        .filter(Observation.target_id == target_id,
+                Observation.result_kind == "decompilation",
+                Observation.status == "ok")
+        .order_by(Observation.created_at.desc())
+        .all()
+    )
+    if not rows:
+        return {}
+    project = session.get(Project, rows[0].project_id)
+    if project is None:
+        return {}
+    out: dict[str, str] = {}
+    for r in rows:
+        if not r.result_cas:
+            continue
+        raw = cas.get_text(project, r.result_cas)
+        if not raw:
+            continue
+        try:
+            payload = json.loads(raw)
+        except (ValueError, TypeError):
+            continue
+        focus = payload.get("focus") if isinstance(payload, dict) else None
+        if not isinstance(focus, dict):
+            continue
+        key = normalize_symbol_name(focus.get("name") or "")
+        # Newest wins: rows are newest-first, so never overwrite an already-resolved name.
+        if not key or key not in wanted or key in out:
+            continue
+        body = focus.get("pseudocode") or ""
+        if not body:
+            continue
+        out[key] = body
+        if len(out) == len(wanted):
+            break  # every requested name resolved — no reason to read more CAS blobs
+    return out
+
+
 def observation_index(session: Session, target_id: str) -> dict[str, Any]:
     """A compact roll-up of prior analysis on a target for the context bundle
     (design §5.6.1): per-`result_kind` counts + a handful of recent ids, so an agent

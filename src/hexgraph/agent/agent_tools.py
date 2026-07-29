@@ -115,6 +115,20 @@ _SEARCH_FUNCS_MAX = 50
 _SEARCH_PAGE = 100
 _SEARCH_PAGE_MAX = 500
 
+# The decompile-on-demand grep's WALL-CLOCK budget. `_SEARCH_FUNCS_MAX` bounds how many
+# functions one call decompiles, but NOT how long that takes: a warm decompile is tens of
+# seconds on a large target and the per-decompile sandbox timeout is size-scaled up to
+# `resources.SIZE_TIMEOUT_CAP_SECONDS` (3600s), so a full page of cold functions could run for
+# HOURS with no output — the caller just sees a hung tool. Instead we stop starting new
+# decompiles once this budget is spent and return the hits found so far plus the offset to
+# resume from (the no-silent-caps discipline: the result says exactly how far it got).
+#
+# The budget is checked BEFORE each decompile, so one pathological function can still overrun
+# it by up to its own sandbox timeout — bounding a decompile already in flight is the sandbox's
+# job, not ours. Reuse (below) makes resuming cheap: the functions this call already decompiled
+# come back from the Observation store for free on the follow-up call.
+_SEARCH_GREP_BUDGET_S = 300
+
 # re_script (run_script): the max size (bytes, UTF-8) of an agent-supplied PyGhidra/Jython script.
 # Enforced host-side for a fast, clear rejection; the PROBE re-checks the SAME cap on the decoded
 # body (defence in depth — never trust the host). Kept in lockstep with
@@ -282,19 +296,23 @@ _STATIC_SPECS = [
                                                "max_chars": {"type": "integer", "description": _MAX_CHARS_DESC}},
               "required": ["query"]}),
     ToolSpec("search_code", "Search the WHOLE binary's code (not just already-decompiled bodies — "
-             "search_decompiled covers those): a BYTE/opcode pattern (`bytes_pattern`, hex pairs) or "
-             "an IMMEDIATE constant (`immediate`) scanned across the mapped image (each hit mapped to "
-             "its function), OR a decompile-on-demand GREP (`query`) over a BOUNDED candidate set you "
-             "name in `functions` (so YOU control the cost — an unbounded whole-binary decompile is "
-             "intentionally NOT offered). To find CALLERS of a symbol/sink use xrefs (whole-program, "
-             "indexed) — this does not duplicate it. Paginated. QUERY: records an Observation; adds no "
-             "graph nodes.",
+             "search_decompiled covers those). Two modes, VERY different costs. CHEAP: a BYTE/opcode "
+             "pattern (`bytes_pattern`, hex pairs) or an IMMEDIATE constant (`immediate`) scanned "
+             "across the mapped image, each hit mapped to its function. EXPENSIVE: a decompile-on-"
+             "demand GREP (`query` + `functions`) — every named function with no already-recorded "
+             "body costs a REAL DECOMPILE, tens of seconds each on a large target, so 30 functions "
+             "is ~10 minutes. Already-decompiled bodies are reused for free. Before paying for the "
+             "rest: search_decompiled greps already-decompiled bodies with no decompile, and xrefs "
+             "finds CALLERS of a symbol/sink (whole-program, indexed) — this does not duplicate it. "
+             "Paginated; the grep stops after a wall-clock budget and reports the resume offset. "
+             "QUERY: records an Observation; adds no graph nodes.",
              {"type": "object", "properties": {
                  "bytes_pattern": {"type": "string", "description": "hex byte pattern to scan for, e.g. 'deadbeef' or '48 8b'"},
                  "immediate": {"type": "string", "description": "an immediate/constant value to find (hex or decimal)"},
-                 "functions": {"type": "array", "description": "bound the decompile-on-demand grep to these functions (with `query`)"},
+                 "functions": {"type": "array", "description": "bound the decompile-on-demand grep to these functions (with `query`). EACH one not already decompiled costs a full decompile — name only real candidates"},
                  "query": {"type": "string", "description": "substring to grep in the decompiled bodies of `functions`"},
-                 "offset": {"type": "integer"}, "limit": {"type": "integer"}}}),
+                 "offset": {"type": "integer", "description": "page start: into the HITS for a scan, into the FUNCTIONS list for a grep"},
+                 "limit": {"type": "integer", "description": "page size: hits for a scan (default 100, max 500); functions to decompile for a grep (default and max 50)"}}}),
     ToolSpec("check_decompiler", "Verify the decompiler decompile_function/disassemble use ACTUALLY "
              "works (not just the configured name): radare2 needs the sandbox image up; Ghidra needs "
              "WITH_GHIDRA=1 (headless) or a reachable bridge. Run it if a decompile fails so you don't "
@@ -2634,60 +2652,129 @@ def _search_code(ctx: ToolContext, args: dict) -> str:
 
 
 def _search_code_grep(ctx: ToolContext, args: dict, *, query: str, functions) -> str:
-    """The decompile-on-demand grep: decompile ONLY the caller-named `functions` and grep their
-    pseudo-C for `query`. BOUNDED by `functions` (capped at _SEARCH_FUNCS_MAX) so the cost stays
-    the caller's to control — an empty/missing `functions` returns a clear 'name candidates'
-    message, NEVER an unbounded whole-binary decompile. QUERY: records an Observation."""
-    names = [str(f) for f in (functions or []) if str(f).strip()]
-    if not names:
+    """The decompile-on-demand grep: grep the pseudo-C of ONLY the caller-named `functions` for
+    `query`. BOUNDED by `functions` so the cost stays the caller's to control — an empty/missing
+    `functions` returns a clear 'name candidates' message, NEVER an unbounded whole-binary
+    decompile. QUERY: records an Observation; adds no graph nodes beyond what a decompile promotes.
+
+    This is the EXPENSIVE search of the three (see the `search_code` spec): every function with no
+    already-recorded body costs a real decompile. Three things keep that honest:
+
+    * **Reuse before decompile.** Ghidra's project database persists the analysis but NOT the
+      pseudo-C, so the Observation store is the only pseudocode cache. One pass over it
+      (`observations.decompiled_bodies`) serves every already-decompiled function for FREE; only
+      the rest are decompiled. A repeat call — including the resume after a budget stop — is
+      therefore nearly free.
+    * **Paginated over the FUNCTIONS list** (offset/limit, `_SEARCH_FUNCS_MAX` per page) rather
+      than silently truncating to the first N, so the caller can walk a long candidate list.
+    * **Wall-clock budgeted** (`_SEARCH_GREP_BUDGET_S`): we stop starting new decompiles once it's
+      spent and report the resume offset instead of running for hours.
+
+    The SQLite write lock is released before each decompile: this loop interleaves DB writes (the
+    Observation + the node/edges a decompile promotes) with tens-of-seconds sandbox work, and
+    holding the single writer lock across that is exactly the contention `release_write_lock`
+    exists to prevent."""
+    import time
+
+    from hexgraph.db.session import release_write_lock
+    from hexgraph.engine import observations as O
+    from hexgraph.engine.graph.nodes import normalize_symbol_name
+
+    all_names = [str(f) for f in (functions or []) if str(f).strip()]
+    if not all_names:
         return ("search_code(query=…) needs `functions` — name the candidate functions to grep "
                 "so the decompile cost is bounded and yours to control (an unbounded whole-binary "
                 "decompile is intentionally not offered). Use re_list_functions to pick candidates, "
                 "then pass them here; to search ALREADY-decompiled bodies with no new decompile use "
                 "re_search_decompiled, and to find CALLERS of a symbol use re_xrefs.")
-    clipped = len(names) > _SEARCH_FUNCS_MAX
-    names = names[:_SEARCH_FUNCS_MAX]
+
+    # Page over the FUNCTIONS list. Unlike the scan mode's page (over cheap, already-computed
+    # hits) each item here can cost a decompile, so the page cap is _SEARCH_FUNCS_MAX.
+    total = len(all_names)
+    offset = _bound_page(args.get("offset"), 0, 0, max(0, total))
+    limit = _bound_page(args.get("limit"), _SEARCH_FUNCS_MAX, 1, _SEARCH_FUNCS_MAX)
+    names = all_names[offset:offset + limit]
+
+    # Every body already in the Observation store, in ONE pass — these cost nothing.
+    warm = O.decompiled_bodies(ctx.session, ctx.target.id, names=names)
 
     q = query.lower()
     hits: list[dict] = []
     decompiled = 0
+    reused = 0
     misses: list[str] = []
+    deadline = time.monotonic() + _SEARCH_GREP_BUDGET_S
+    searched = 0   # names actually examined, so the resume offset is exact
+    stopped = False
+
     for fn in names:
-        out = _decomp(ctx, fn)
-        if isinstance(out, dict) and out.get("error"):
-            misses.append(f"{fn} ({out['error']})")
-            continue
-        focus = out.get("focus") if isinstance(out, dict) else None
-        body = (focus or {}).get("pseudocode") if focus else None
-        if not body:
-            misses.append(f"{fn} (no body — unresolved or no analysis)")
-            continue
-        decompiled += 1
+        body = warm.get(normalize_symbol_name(fn) or "")
+        name = fn
+        if body:
+            reused += 1
+            searched += 1
+        else:
+            # The budget gates only work we haven't STARTED; a warm hit is free, so a spent
+            # budget never blocks one.
+            if time.monotonic() >= deadline:
+                stopped = True
+                break
+            # Release the write lock BEFORE the slow sandbox decompile — the previous iteration's
+            # promoted node/edges are flushed-but-uncommitted, and holding the single SQLite
+            # writer lock across a decompile blocks the web app and every other agent.
+            release_write_lock(ctx.session)
+            out = _decomp(ctx, fn)
+            # Counted as examined even when it yields no body: a resume must not retry a function
+            # this call already paid a decompile for.
+            searched += 1
+            if isinstance(out, dict) and out.get("error"):
+                misses.append(f"{fn} ({out['error']})")
+                continue
+            focus = out.get("focus") if isinstance(out, dict) else None
+            body = (focus or {}).get("pseudocode") if focus else None
+            if not body:
+                misses.append(f"{fn} (no body — unresolved or no analysis)")
+                continue
+            decompiled += 1
+            name = focus.get("name") or fn
         matched = [ln.strip() for ln in body.splitlines() if q in ln.lower()]
         if matched:
-            hits.append({"function": focus.get("name") or fn, "lines": matched})
+            hits.append({"function": name, "lines": matched})
+
+    examined = searched
+    next_offset = offset + examined
+    remaining = total - next_offset
 
     _record_obs(ctx, tool="search_code",
-                args={k: v for k, v in (("query", query), ("functions", names)) if v},
+                args={k: v for k, v in (("query", query), ("functions", names),
+                                        ("offset", offset), ("limit", limit)) if v},
                 result_kind="search_code",
                 payload={"mode": "grep", "query": query, "functions": names,
-                         "decompiled": decompiled, "hits": hits, "misses": misses},
-                summary=f"grep {query!r} over {len(names)} function(s): "
-                        f"{len(hits)} matched (decompiled {decompiled})")
+                         "decompiled": decompiled, "reused": reused, "hits": hits,
+                         "misses": misses, "total": total, "offset": offset,
+                         "examined": examined, "budget_stopped": stopped},
+                summary=f"grep {query!r} over {examined} function(s): {len(hits)} matched "
+                        f"(decompiled {decompiled}, reused {reused})")
 
-    header = (f"search_code grep {query!r} over {len(names)} named function(s) "
-              f"(decompiled {decompiled}):")
-    note = (f"\n[bounded to the first {_SEARCH_FUNCS_MAX} of your {len(functions)} functions]"
-            if clipped else "")
-    lines = [header + note]
+    header = (f"search_code grep {query!r} over {examined} of {total} named function(s) "
+              f"(decompiled {decompiled}, reused {reused} already-decompiled):")
+    lines = [header]
     if hits:
         for h in hits:
             lines.append(f"- {h['function']}:")
             lines += [f"    {ln}" for ln in h["lines"]]
     else:
-        lines.append(f"(no line in the decompiled bodies of the named functions contains {query!r})")
+        lines.append(f"(no line in the searched bodies contains {query!r})")
     if misses:
         lines.append(f"not decompiled: {', '.join(misses)}")
+    if stopped:
+        lines.append(f"…[stopped after {_SEARCH_GREP_BUDGET_S}s — a decompile costs tens of "
+                     f"seconds and this call had {remaining} function(s) left. Re-call with "
+                     f"offset={next_offset} to continue; the {examined} already searched come "
+                     f"back free from the Observation store.]")
+    elif remaining > 0:
+        lines.append(f"…[{remaining} more of your {total} function(s) — re-call with "
+                     f"offset={next_offset}]")
     return _clip("\n".join(lines))
 
 

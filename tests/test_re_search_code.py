@@ -216,15 +216,124 @@ def test_grep_also_refuses_empty_list(hg_home, monkeypatch):
 
 
 def test_grep_bounds_candidate_count(hg_home, monkeypatch):
-    """Even a LARGE `functions` list is bounded — at most _SEARCH_FUNCS_MAX are decompiled, and
-    the result says it clipped (the caller's cost stays bounded, the no-silent-caps discipline)."""
+    """Even a LARGE `functions` list is bounded — at most _SEARCH_FUNCS_MAX are decompiled per
+    call. The overflow is PAGED, not dropped: the result names the remainder and the offset to
+    resume from (the no-silent-caps discipline)."""
     names = [f"fn_{i:03d}" for i in range(AT._SEARCH_FUNCS_MAX + 25)]
     calls = _stub_decomp_bodies(monkeypatch, {n: f"void {n}(){{}}" for n in names})
     with session_scope() as s:
         ctx, p, t = _ctx(s)
         out = run_tool(ctx, "search_code", {"query": "void", "functions": names})
         assert len(calls) == AT._SEARCH_FUNCS_MAX      # clamped to the ceiling
-        assert "bounded to the first" in out
+        assert "25 more" in out and f"offset={AT._SEARCH_FUNCS_MAX}" in out
+
+
+def test_grep_pages_over_the_functions_list(hg_home, monkeypatch):
+    """offset/limit page over the FUNCTIONS list (not the hits): a grep item can cost a whole
+    decompile, so the caller must be able to walk a long candidate list a page at a time."""
+    names = [f"fn_{i:02d}" for i in range(10)]
+    calls = _stub_decomp_bodies(monkeypatch, {n: f"void {n}(){{ memcpy(a,b,c); }}" for n in names})
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        out = run_tool(ctx, "search_code",
+                       {"query": "memcpy", "functions": names, "limit": 4})
+        assert calls == names[:4]                      # ONLY the first page was decompiled
+        assert "fn_00" in out and "fn_03" in out
+        assert "fn_04" not in out                      # the next page was not touched
+        assert "6 more" in out and "offset=4" in out
+
+
+def test_grep_reuses_recorded_bodies_instead_of_re_decompiling(hg_home, monkeypatch):
+    """The reuse fix. Ghidra's project database persists the ANALYSIS but never the pseudo-C, so
+    the Observation store is the only pseudocode cache — a function already decompiled must be
+    grepped from the store for FREE, never re-decompiled (that re-pay is what made a 30-function
+    grep a ~10-minute call)."""
+    from hexgraph.engine import observations as O
+
+    # Any decompile at all is a failure here, so the stub's body is one the assertions reject.
+    calls = _stub_decomp_bodies(monkeypatch, {"parse_request": "void SHOULD_NOT_DECOMPILE(){}"})
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        O.record_observation(
+            s, project_id=p.id, target_id=t.id, source="agent",
+            tool="decompile_function", args={"function": "parse_request"},
+            result_kind="decompilation",
+            payload={"focus": {"name": "parse_request",
+                               "pseudocode": "int parse_request(char *b){ strcpy(dst, b); }"}},
+            summary="decompiled parse_request", content_hash=O.content_hash_for(t))
+        out = run_tool(ctx, "search_code",
+                       {"query": "strcpy", "functions": ["parse_request"]})
+        assert calls == []                             # NO decompile — the stored body served it
+        assert "strcpy(dst, b)" in out                 # ...and it really grepped that body
+        assert "SHOULD_NOT_DECOMPILE" not in out
+        assert "reused 1" in out                       # the result says the work was free
+
+
+def test_grep_decompiles_only_the_functions_with_no_stored_body(hg_home, monkeypatch):
+    """Reuse is per-function, not all-or-nothing: a mixed page decompiles ONLY the misses."""
+    from hexgraph.engine import observations as O
+
+    calls = _stub_decomp_bodies(monkeypatch, {"cold_fn": "void cold_fn(){ memcpy(a,b,c); }"})
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        O.record_observation(
+            s, project_id=p.id, target_id=t.id, source="agent",
+            tool="decompile_function", args={"function": "warm_fn"},
+            result_kind="decompilation",
+            payload={"focus": {"name": "warm_fn", "pseudocode": "void warm_fn(){ memcpy(x,y,z); }"}},
+            summary="decompiled warm_fn", content_hash=O.content_hash_for(t))
+        out = run_tool(ctx, "search_code",
+                       {"query": "memcpy", "functions": ["warm_fn", "cold_fn"]})
+        assert calls == ["cold_fn"]                    # the warm one was never re-decompiled
+        assert "warm_fn" in out and "cold_fn" in out   # both still matched
+        assert "decompiled 1, reused 1" in out
+
+
+def test_grep_releases_the_write_lock_before_each_decompile(hg_home, monkeypatch):
+    """The lock fix. This loop interleaves DB writes (the Observation + the node/edges a decompile
+    promotes) with tens-of-seconds sandbox work; under single-writer SQLite, holding the write lock
+    across that blocks the web app and every other agent for the whole run. Assert the commit
+    happens BEFORE each decompile, not just once."""
+    order = []
+
+    def _fake(ctx, function, **kw):
+        order.append(f"decompile:{function}")
+        return {"focus": {"name": function, "pseudocode": f"void {function}(){{ log(); }}"}}
+
+    monkeypatch.setattr(AT, "_decomp", _fake)
+    monkeypatch.setattr("hexgraph.db.session.release_write_lock",
+                        lambda sess: order.append("release"))
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        run_tool(ctx, "search_code", {"query": "log", "functions": ["a_fn", "b_fn"]})
+    assert order == ["release", "decompile:a_fn", "release", "decompile:b_fn"]
+
+
+def test_grep_stops_on_the_wall_clock_budget_and_reports_the_resume_offset(hg_home, monkeypatch):
+    """The budget fix. _SEARCH_FUNCS_MAX bounds how MANY functions a call decompiles but not how
+    LONG that takes — with a size-scaled per-decompile timeout up to an hour, a full page could run
+    for hours with no output. Once the budget is spent we stop starting new decompiles and report
+    the offset to resume from, rather than hanging the caller."""
+    clock = {"t": 1000.0}
+    monkeypatch.setattr("time.monotonic", lambda: clock["t"])
+    monkeypatch.setattr(AT, "_SEARCH_GREP_BUDGET_S", 300)
+    names = [f"fn_{i}" for i in range(10)]
+    calls = []
+
+    def _fake(ctx, function, **kw):
+        calls.append(function)
+        clock["t"] += 100.0        # each decompile burns 100s of the 300s budget
+        return {"focus": {"name": function, "pseudocode": f"void {function}(){{ memcpy(a,b,c); }}"}}
+
+    monkeypatch.setattr(AT, "_decomp", _fake)
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        out = run_tool(ctx, "search_code", {"query": "memcpy", "functions": names})
+        assert calls == names[:3]                      # stopped once the budget was spent
+        assert "stopped after 300s" in out
+        assert "offset=3" in out                       # ...and says exactly where to resume
+        assert "fn_0" in out and "fn_2" in out         # partial results still returned
+
 
 
 def test_grep_reports_undecompilable_functions(hg_home, monkeypatch):
@@ -251,6 +360,57 @@ def test_grep_records_one_observation_and_no_graph(hg_home, monkeypatch):
 
 
 # ======================================================================================
+# observations.decompiled_bodies — the pseudocode cache the grep reads before decompiling
+# ======================================================================================
+
+def test_decompiled_bodies_normalizes_names_and_takes_the_newest(hg_home):
+    """The helper keys on the NORMALIZED name (so a caller's `foo` matches a focus recorded as
+    `sym.foo`), returns only the requested names, and lets the NEWEST decompilation win."""
+    from hexgraph.engine import observations as O
+
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+
+        def _rec(name, body, args):
+            O.record_observation(
+                s, project_id=p.id, target_id=t.id, source="agent",
+                tool="decompile_function", args=args, result_kind="decompilation",
+                payload={"focus": {"name": name, "pseudocode": body}},
+                summary=f"decompiled {name}", content_hash=O.content_hash_for(t))
+
+        _rec("sym.parse_request", "OLD BODY", {"function": "parse_request", "v": 1})
+        _rec("sym.parse_request", "NEW BODY", {"function": "parse_request", "v": 2})
+        _rec("unwanted_fn", "void unwanted_fn(){}", {"function": "unwanted_fn"})
+
+        got = O.decompiled_bodies(s, t.id, names=["parse_request", "never_decompiled"])
+        assert got == {"parse_request": "NEW BODY"}    # normalized key, newest wins, scoped to ask
+
+
+def test_decompiled_bodies_skips_empty_bodies(hg_home):
+    """A recorded decompilation with no pseudocode is NOT a usable cache hit — it must be absent
+    so the caller decompiles rather than grepping an empty body and reporting a false miss."""
+    from hexgraph.engine import observations as O
+
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        O.record_observation(
+            s, project_id=p.id, target_id=t.id, source="agent",
+            tool="decompile_function", args={"function": "hollow_fn"},
+            result_kind="decompilation", payload={"focus": {"name": "hollow_fn", "pseudocode": ""}},
+            summary="decompiled hollow_fn", content_hash=O.content_hash_for(t))
+        assert O.decompiled_bodies(s, t.id, names=["hollow_fn"]) == {}
+
+
+def test_decompiled_bodies_empty_when_nothing_asked_or_recorded(hg_home):
+    from hexgraph.engine import observations as O
+
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        assert O.decompiled_bodies(s, t.id, names=[]) == {}
+        assert O.decompiled_bodies(s, t.id, names=["anything"]) == {}
+
+
+# ======================================================================================
 # Contract: no mode given routes to the three modes + re_xrefs (never an unbounded run)
 # ======================================================================================
 
@@ -270,6 +430,23 @@ def test_catalog_doc_routes_callers_to_xrefs():
     assert "re_xrefs" in doc or "xrefs" in doc
     # and it advertises the bounded-cost framing (no unbounded whole-binary decompile)
     assert "functions" in doc
+
+
+def test_catalog_doc_states_the_grep_cost_before_the_agent_pays_it():
+    """An agent can only choose between the cheap scan and the expensive grep if the description
+    PRICES them. The grep costs a real decompile per not-yet-decompiled function, which is what
+    turned a 30-function call into a ~10-minute one — that has to be visible up front, not
+    discovered by waiting."""
+    from hexgraph.agent.mcp_catalog import catalog
+
+    tool = {t["name"]: t for t in catalog()}["re_search_code"]
+    doc = tool["description"].lower()
+    assert "expensive" in doc and "decompile" in doc
+    assert "cheap" in doc                               # ...and which mode is the cheap one
+    assert "reused" in doc or "reuse" in doc            # already-decompiled bodies come back free
+    # the per-function cost is spelled out on the arg that incurs it
+    funcs_desc = tool["schema"]["properties"]["functions"]["description"].lower()
+    assert "decompile" in funcs_desc
 
 
 # ======================================================================================
