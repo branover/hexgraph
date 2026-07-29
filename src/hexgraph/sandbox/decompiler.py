@@ -522,3 +522,52 @@ def ghidra_op_backend(target=None) -> Decompiler:
         except Exception:  # noqa: BLE001 — routing is an optimization, never load-bearing
             pass
     return GhidraDecompiler()
+
+
+def run_ghidra_op(target, op: str, *args, **kwargs):
+    """Run a Ghidra op through the seam, degrading a GONE managed bridge to the headless slot.
+
+    The whole point is one distinction, and getting it backwards corrupts a project:
+
+    * A bridge that is **GONE** — container reaped, socket dead — holds nothing, so re-running the
+      op headless is safe, and better than failing an op whose warm slot is right there. That is
+      the degradation.
+    * A bridge that is **ALIVE** still OWNS the project. A headless open behind it would collide on
+      the project lock (`LockException`), so its answer PROPAGATES to the caller untouched — never
+      retried. That covers a returned error dict AND a raised exception, because an exception is
+      NOT evidence of death: `serve_bridge` is single-threaded with a listen backlog, so a bridge
+      busy inside one op still ACCEPTS the next connection and the host read then trips
+      `_ManagedOps`' timeout — `socket.timeout` is an `OSError`, which `_rpc` reports as
+      `BridgeUnavailable("unreachable")` from a bridge that is very much alive. So liveness is
+      OBSERVED after the failure (`bridge_endpoint`, the same probe routing used), never inferred
+      from the exception. Erring toward "still alive" is the safe direction: the cost is one failed
+      op, where the other way round is a second writer on a live project (`rename` is a WRITE).
+
+    Only a managed bridge degrades; a headless primary has nothing to fall back to, so its
+    exception re-raises. Returns whatever the backend returned, unexamined: callers own their own
+    result contracts (`_ghidra_xrefs` treats an error dict as "give up", `enrich_target` checks
+    `"error" in data`), and this helper deliberately does not second-guess them."""
+    backend = ghidra_op_backend(target)
+    # Resolve the attribute OUTSIDE the try. A bad `op` name (or a backend missing the method) is
+    # a programming error, and inside the try it would be indistinguishable from a call failure —
+    # so it would be misread as "the bridge died", silently retried headless, and raise the same
+    # AttributeError there anyway with the real cause buried.
+    bound = getattr(backend, op)
+    try:
+        return bound(*args, **kwargs)
+    except Exception as exc:
+        from hexgraph.engine.re.bridge import bridge_confirmed_gone
+        from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler
+
+        if not isinstance(backend, GhidraBridgeDecompiler):
+            raise  # headless primary — nothing to degrade to
+        if not bridge_confirmed_gone(target):
+            # Alive, or we couldn't tell. Either way it may still own the project, so a headless op
+            # would collide — re-raise. Note this asks for POSITIVE evidence of death rather than
+            # reusing `bridge_endpoint`, which reads "couldn't tell" as None: the failure that
+            # brought us here is usually a timeout from a LOADED bridge, exactly when a short
+            # connect probe misses, so uncertainty has to mean "assume alive".
+            raise
+        log.debug("ghidra bridge is gone; degrading %s to headless (%s: %s)",
+                  op, type(exc).__name__, exc)
+    return getattr(GhidraDecompiler(), op)(*args, **kwargs)

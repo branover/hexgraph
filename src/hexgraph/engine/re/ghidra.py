@@ -141,7 +141,7 @@ def enrich_target(session, project, target) -> dict:
     Returns a summary of what was recorded; raises only on a hard sandbox failure
     (caller guards)."""
     from hexgraph.engine import observations as O
-    from hexgraph.sandbox.decompiler import ghidra_op_backend
+    from hexgraph.sandbox.decompiler import run_ghidra_op
 
     # ASK THE SEAM, like every other Ghidra op. A live managed bridge HOLDS this target's project
     # for its whole life and a second open of it fails hard (LockException at the PROJECT open —
@@ -152,7 +152,7 @@ def enrich_target(session, project, target) -> dict:
     #
     # Passing `project` keeps the headless path persisting its analysis to the Ghidra-project
     # cache for later decompiles; the bridge ignores it, because a live bridge IS the warm project.
-    data = ghidra_op_backend(target).decompile(target.path, project=project)
+    data = run_ghidra_op(target, "decompile", target.path, project=project)
     if "error" in data:
         return {"ok": False, "detail": data["error"]}
 
@@ -221,13 +221,16 @@ def propagate_function_rename(session, node, new_name: str) -> dict:
     if not docker_available():
         return {"propagated": False, "reason": "Docker/sandbox not running"}
 
-    from hexgraph.sandbox.decompiler import ghidra_op_backend
+    from hexgraph.sandbox.decompiler import run_ghidra_op
 
     # A live bridge OWNS the project → rename over it (persisted into the resident project via the
     # server's mid-life save); else headless. Both persist, so every future decompile sees the name.
+    # A DEAD bridge degrades to headless rather than losing the rename (run_ghidra_op); a live one
+    # that returns an error does not, because it still holds the lock a headless write would hit.
     try:
-        out = ghidra_op_backend(target).rename_function(
-            target.path, address=str(node.address), new_name=new_name, project=project)
+        out = run_ghidra_op(target, "rename_function",
+                            target.path, address=str(node.address), new_name=new_name,
+                            project=project)
     except Exception as exc:  # noqa: BLE001 — propagation must never break the graph rename
         return {"propagated": False, "reason": f"rename probe failed: {exc}"}
     if not isinstance(out, dict) or out.get("error"):
