@@ -174,7 +174,8 @@ Observation. Work cheap-to-expensive and check `obs_list(target_id)` before any 
 radare2): the whole-program tools (`re_decompile_*`, `re_list_functions`, the `re_xrefs` family,
 `re_call_graph`) require a saved analysis and will tell you to run `re_analyze(target)` on a miss — a
 DETACHED, single-flight whole-binary analysis with a generous budget that a per-call timeout can't cut short. Kick it off,
-poll it (re-call `re_analyze` until state=`analyzed`), and then those per-call tools are instant.
+poll it (re-call `re_analyze` until state=`analyzed`), and then those per-call tools are fast — seconds
+each on a large binary (~20s/call on a ~940MB image), not instant, but no longer a whole-binary pass.
 (`re_disassemble` and `re_binutils_facts`/`re_list_strings` need no analysis — use them freely while
 it warms.) Then, on a LARGE target you expect to work through — more than a handful of decompiles — start a
 resident bridge: `re_bridge_start(target)` keeps the analyzed project open behind an RPC server, so

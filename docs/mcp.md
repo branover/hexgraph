@@ -207,7 +207,8 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
   never become warm). `re_analyze(target)` runs the analysis as a **detached** background job with its own
   generous, size-scaled budget, so it finishes and commits the warm project. It's **single-flight** (a second
   `re_analyze` of the same target attaches to the running one, never a duplicate) and idempotent: re-call it to
-  poll (`state` walks `none → running → analyzed`), and once `analyzed` every gated verb is instant.
+  poll (`state` walks `none → running → analyzed`), and once `analyzed` every gated verb is fast — seconds
+  per call rather than a whole-binary pass (on a ~940 MB image we measured about 20s per decompile).
   `re_recover_constant` (P-Code emulation) and the `static_analysis` taint pass gate the same way — they run
   the deeper analysis over the warm project, so on a cold target they return the `re_analyze` lead rather than
   analyzing themselves. `re_disassemble` (targeted) and `re_search_decompiled` (reads the store) need no

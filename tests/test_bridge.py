@@ -246,6 +246,40 @@ def test_enrich_target_refuses_behind_a_bridge_with_an_actionable_lead(env, monk
     assert not called                               # never attempted the conflicting open
 
 
+def test_reveal_surfaces_the_bridge_refusal_to_the_caller(hg_home, monkeypatch):
+    """The refusal has to reach the AGENT, not just happen.
+
+    `enrich_target`'s guard runs inside a DETACHED task, and a detached task can't report: `Task`
+    has no result column, `mark_succeeded` writes only status + finished_at, and the worker reads
+    `ok` and drops `detail`. So a guard that only fires there leaves the agent seeing
+    enrichment_queued=True and a succeeded task with nothing enriched — byte-identical to the
+    silent failure it replaced. The queue point must refuse synchronously and say why."""
+    from hexgraph.db.session import session_scope
+    from hexgraph.engine.targets import reveal as R
+    from hexgraph.engine.targets.ingest import create_project, ingest_file
+
+    from conftest import fixture_path
+
+    # Stub the BRIDGE, not the reason function, so the real wording is what gets asserted.
+    monkeypatch.setattr(B, "bridge_endpoint", lambda t: ("172.17.0.9", 4768))
+    queued = []
+    monkeypatch.setattr(R, "_ensure_ghidra_enrichment",
+                        lambda *a, **k: queued.append(1) or True)
+    monkeypatch.setattr(R, "_needs_ghidra_enrichment", lambda t: True)
+
+    with session_scope() as s:
+        p = create_project(s, name="revealblock")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        t.visible = False
+        s.flush()
+        out = R.set_visible(s, p.id, t.id, True, enrich=True)
+
+    assert out["enrichment_queued"] is False          # nothing queued that would silently no-op
+    assert "enrichment_detail" in out                 # ...and the caller is TOLD why
+    assert "re_bridge_stop" in out["enrichment_detail"]
+    assert not queued                                 # the detached task was never spawned
+
+
 def test_bridge_start_doc_does_not_advertise_a_capability_tradeoff(env):
     """The advertised description is what an agent reads before deciding to start a bridge. It used
     to say re_xrefs falls back to radare2 and emulation/rename are unavailable — true once, but the

@@ -156,7 +156,8 @@ def _slot_ctx(project, target, *, runner):
 def analysis_state(project, target, *, runner=None) -> dict:
     """Read-only: the analysis state of `target` for the ACTIVE backend's warm slot. Starts nothing.
     Returns ``{state, detail, container?}`` where state is one of:
-      analyzed    — a committed warm analysis is ready (per-call tools will be instant)
+      analyzed    — a committed warm analysis is ready (per-call tools reuse it: seconds
+                    per call on a large binary, not a fresh whole-binary pass)
       running     — a detached analysis is in progress (attach / keep polling)
       failed      — the analysis container exited WITHOUT committing a warm analysis
       none        — no saved analysis and nothing running (call re_analyze to build it)

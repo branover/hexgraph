@@ -89,6 +89,27 @@ def _materialize_on_reveal(session: Session, project: Project, target: Target, *
         return False
 
 
+def enrichment_blocked_reason(target: Target) -> str | None:
+    """Why Ghidra enrichment CANNOT run for `target` right now, or None to proceed.
+
+    Today the one reason is a live managed Ghidra bridge: it holds the target's project open for
+    its whole life, and enrichment needs its own open (it reads the full function/call/struct
+    inventory a bridge doesn't serve), so a second open fails outright with a `LockException`.
+
+    This is checked at the QUEUE point, synchronously, because a detached task cannot tell the
+    agent anything. `Task` has no result column, `mark_succeeded` records only status +
+    finished_at, and the worker reads `enrich_target`'s `ok` and drops its `detail` — so a run
+    that refuses inside the worker is reported to the agent as a SUCCESS with nothing enriched.
+    Refusing here is what turns that silent no-op into an answer the agent can act on."""
+    from hexgraph.engine.re.bridge import bridge_endpoint
+
+    if bridge_endpoint(target):
+        return ("a live Ghidra bridge holds this target's project — run re_bridge_stop first, "
+                "then reveal again to enrich (a bridge cannot serve the full "
+                "function/call/struct inventory enrichment needs)")
+    return None
+
+
 def _ensure_ghidra_enrichment(session: Session, project: Project, target: Target) -> bool:
     """Kick off `target`'s optional Ghidra enrichment (`engine.re.ghidra.enrich_target`) in a
     DETACHED background OS process if it isn't already in flight — same pattern as
@@ -176,13 +197,20 @@ def set_visible(session: Session, project_id: str, target_id: str, visible: bool
     t.visible = visible
     materialized = False
     enrichment_queued = False
+    blocked = enrichment_blocked_reason(t) if (visible and not was_visible and enrich) else None
     if visible and not was_visible:
         project = session.get(Project, project_id)
-        enrichment_queued = _materialize_on_reveal(session, project, t, enrich=enrich)
+        # Don't queue enrichment we KNOW will no-op; the detached task can't report back, so the
+        # agent would see enrichment_queued=True and a succeeded task with nothing enriched.
+        enrichment_queued = _materialize_on_reveal(
+            session, project, t, enrich=enrich and blocked is None)
         materialized = True
     session.flush()
-    return {"target_id": t.id, "name": t.name, "visible": t.visible, "materialized": materialized,
-            "enrichment_queued": enrichment_queued}
+    out = {"target_id": t.id, "name": t.name, "visible": t.visible, "materialized": materialized,
+           "enrichment_queued": enrichment_queued}
+    if blocked:
+        out["enrichment_detail"] = blocked
+    return out
 
 
 def reveal_dir(session: Session, project_id: str, firmware_target_id: str, prefix: str, *,
@@ -238,11 +266,20 @@ def reveal_dir(session: Session, project_id: str, firmware_target_id: str, prefi
                 to_enrich.append(c.id)
             revealed_ids.append(c.id)
     session.flush()
-    enrichment_queued = _ensure_batch_ghidra_enrichment(session, project, fw, to_enrich)
-    return {
+    # One bridge holds one target's project, but reveal_dir enriches a whole set in ONE detached
+    # run; if any of them is bridged that run can't do its job and can't say so, so refuse the
+    # batch with the reason rather than reporting a queued task that will silently enrich nothing.
+    blocked = next((r for r in (enrichment_blocked_reason(session.get(Target, tid))
+                                for tid in to_enrich) if r), None) if to_enrich else None
+    enrichment_queued = (0 if blocked else
+                         _ensure_batch_ghidra_enrichment(session, project, fw, to_enrich))
+    out = {
         "firmware_target_id": firmware_target_id,
         "prefix": prefix,
         "revealed": len(revealed_ids),
         "target_ids": revealed_ids,
         "enrichment_queued": enrichment_queued,
     }
+    if blocked:
+        out["enrichment_detail"] = blocked
+    return out
