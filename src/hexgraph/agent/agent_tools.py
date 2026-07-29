@@ -2745,6 +2745,12 @@ def _search_code_grep(ctx: ToolContext, args: dict, *, query: str, functions) ->
     next_offset = offset + examined
     remaining = total - next_offset
 
+    # A budget-stopped run is recorded as `partial`, NOT `ok`. Observation dedup ("analyze once,
+    # reuse forever") assumes a given (tool, args) yields the same result every time — true of a
+    # decompile, but NOT of a wall-clock-bounded grep, which examines however many functions it
+    # got through. Only `ok` rows dedup, so marking a partial keeps it from shadowing a later
+    # complete run of the SAME args with a stale, short payload. `list_observations` doesn't
+    # filter on status, so the partial stays discoverable either way.
     _record_obs(ctx, tool="search_code",
                 args={k: v for k, v in (("query", query), ("functions", names),
                                         ("offset", offset), ("limit", limit)) if v},
@@ -2753,8 +2759,10 @@ def _search_code_grep(ctx: ToolContext, args: dict, *, query: str, functions) ->
                          "decompiled": decompiled, "reused": reused, "hits": hits,
                          "misses": misses, "total": total, "offset": offset,
                          "examined": examined, "budget_stopped": stopped},
+                status="partial" if stopped else "ok",
                 summary=f"grep {query!r} over {examined} function(s): {len(hits)} matched "
-                        f"(decompiled {decompiled}, reused {reused})")
+                        f"(decompiled {decompiled}, reused {reused})"
+                        + (" — PARTIAL, budget stopped" if stopped else ""))
 
     header = (f"search_code grep {query!r} over {examined} of {total} named function(s) "
               f"(decompiled {decompiled}, reused {reused} already-decompiled):")

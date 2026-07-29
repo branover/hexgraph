@@ -334,6 +334,48 @@ def test_grep_stops_on_the_wall_clock_budget_and_reports_the_resume_offset(hg_ho
         assert "offset=3" in out                       # ...and says exactly where to resume
         assert "fn_0" in out and "fn_2" in out         # partial results still returned
 
+        # A budget-stopped run is recorded as `partial`, never `ok`: only ok rows dedup, and a
+        # wall-clock-bounded result is not the deterministic "analyze once, reuse forever" kind,
+        # so an ok row here would shadow a later COMPLETE run of the same args with a short payload.
+        obs = s.query(Observation).filter(Observation.target_id == t.id,
+                                          Observation.result_kind == "search_code").all()
+        assert len(obs) == 1 and obs[0].status == "partial"
+
+
+def test_budget_stopped_partial_does_not_shadow_a_later_complete_run(hg_home, monkeypatch):
+    """The dedup consequence, end to end: re-calling the SAME args after a budget stop must record
+    a fresh COMPLETE Observation rather than returning the stale partial one."""
+    clock = {"t": 1000.0}
+    monkeypatch.setattr("time.monotonic", lambda: clock["t"])
+    monkeypatch.setattr(AT, "_SEARCH_GREP_BUDGET_S", 300)
+    names = [f"fn_{i}" for i in range(5)]
+    burn = {"on": True}
+
+    def _fake(ctx, function, **kw):
+        if burn["on"]:
+            clock["t"] += 100.0
+        return {"focus": {"name": function, "pseudocode": f"void {function}(){{ memcpy(a,b,c); }}"}}
+
+    monkeypatch.setattr(AT, "_decomp", _fake)
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        args = {"query": "memcpy", "functions": names}
+        out1 = run_tool(ctx, "search_code", dict(args))
+        assert "stopped after" in out1
+
+        # Same args again, this time with budget to spare (and a fresh per-call decompile cache).
+        burn["on"] = False
+        clock["t"] = 1000.0
+        ctx.cache.clear()
+        out2 = run_tool(ctx, "search_code", dict(args))
+        assert "stopped after" not in out2
+        assert "over 5 of 5" in out2                   # the complete run really completed
+
+        rows = s.query(Observation).filter(Observation.target_id == t.id,
+                                           Observation.result_kind == "search_code").all()
+        statuses = sorted(r.status for r in rows)
+        assert statuses == ["ok", "partial"]           # the partial did NOT dedup-shadow the complete run
+
 
 
 def test_grep_reports_undecompilable_functions(hg_home, monkeypatch):
