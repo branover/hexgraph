@@ -16,6 +16,8 @@ functions get decompiled (the cost bound) and record nothing of their own, so th
 Observation asserted is unambiguously search_code's.
 """
 
+import types
+
 import hexgraph.agent.agent_tools as AT
 from hexgraph.db.models import Edge, Node, Observation
 from hexgraph.db.session import session_scope
@@ -371,10 +373,41 @@ def test_grep_releases_the_write_lock_before_each_decompile(hg_home, monkeypatch
     monkeypatch.setattr(AT, "_decomp", _fake)
     monkeypatch.setattr("hexgraph.db.session.release_write_lock",
                         lambda sess: order.append("release"))
+    # Two functions is deliberately BELOW _BRIDGE_NUDGE_MIN_COLD, so the nudge branch (which has a
+    # release of its own) can't run and this stays a clean per-decompile assertion. Pinned, so the
+    # exact sequence below doesn't silently depend on that constant staying above 2.
+    assert len(["a_fn", "b_fn"]) < AT._BRIDGE_NUDGE_MIN_COLD
     with session_scope() as s:
         ctx, p, t = _ctx(s)
         run_tool(ctx, "search_code", {"query": "log", "functions": ["a_fn", "b_fn"]})
     assert order == ["release", "decompile:a_fn", "release", "decompile:b_fn"]
+
+
+def test_grep_releases_the_write_lock_before_the_bridge_probe(hg_home, monkeypatch):
+    """The nudge branch's own release, which nothing pinned — removing it broke no test.
+
+    `_bridge_live` shells out to `docker inspect` when a bridge entry exists, and this runs inside
+    the tool's session_scope, so it is a slow op like the decompiles below it. Every other slow op
+    on this path releases first (and test_db_lock_contention pins eleven such sites individually);
+    this one was the odd one out."""
+    order = []
+    monkeypatch.setattr(AT, "_bridge_is_offerable", lambda: True)
+    monkeypatch.setattr(AT, "_bridge_live",
+                        lambda t: order.append("bridge_probe") or False)
+    monkeypatch.setattr(AT, "_decomp",
+                        lambda ctx, function, **kw: order.append(f"decompile:{function}") or
+                        {"focus": {"name": function, "pseudocode": "void f(){ log(); }"}})
+    monkeypatch.setattr("hexgraph.db.session.release_write_lock",
+                        lambda sess: order.append("release"))
+
+    names = [f"fn_{i}" for i in range(AT._BRIDGE_NUDGE_MIN_COLD)]
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        run_tool(ctx, "search_code", {"query": "log", "functions": names})
+
+    assert order[:2] == ["release", "bridge_probe"]     # released BEFORE the docker call
+    assert order[2] == "release"                        # ...and the per-decompile ones still fire
+    assert order[3] == "decompile:fn_0"
 
 
 def test_grep_stops_on_the_wall_clock_budget_and_reports_the_resume_offset(hg_home, monkeypatch):
@@ -581,6 +614,174 @@ def test_advertised_max_chars_actually_returns_the_untruncated_result(hg_home, m
         # ONE follow-up of the advertised size returns the whole thing — hint still attached.
         assert "truncated" not in second.lower()
         assert "8 more" in second and "offset=2" in second
+
+
+def _bridge_offerable(monkeypatch):
+    """Make the managed bridge a REAL option for these tests: headless Ghidra active AND
+    features.network on. The nudge is gated on both, so every nudge test — the NEGATIVES most of
+    all — has to establish this first, or a "no nudge" assertion passes for the wrong reason: the
+    default install is radare2 + no network, where the bridge is never offered whatever the sweep
+    looks like. (`_decomp` is stubbed in these tests, so naming a decompiler runs nothing.)"""
+    monkeypatch.setenv("HEXGRAPH_DECOMPILER", "ghidra")
+    monkeypatch.setattr("hexgraph.policy.current_policy",
+                        lambda: types.SimpleNamespace(allow_network=True))
+
+
+def test_grep_names_the_bridge_when_a_cold_sweep_would_pay_for_it(hg_home, monkeypatch):
+    """The grep knows its own cost before it pays it — it counts cold functions before the loop —
+    so it can say when a resident bridge is worth starting.
+
+    Measured on a ~940MB image: ~20s/call headless against ~9s/call resident, a ~6s one-off boot.
+    So the nudge belongs on a COLD sweep of several functions, and nowhere else: not when the
+    bodies are already in the Observation store (those cost nothing), and not when a bridge is
+    already up (it's being used)."""
+    names = [f"fn_{i:02d}" for i in range(AT._BRIDGE_NUDGE_MIN_COLD)]
+    _stub_decomp_bodies(monkeypatch, {n: f"void {n}(){{ memcpy(a,b,c); }}" for n in names})
+    monkeypatch.setattr("hexgraph.engine.re.bridge.bridge_endpoint", lambda t: None)
+    _bridge_offerable(monkeypatch)
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        out = run_tool(ctx, "search_code", {"query": "memcpy", "functions": names})
+        assert "re_bridge_start" in out
+        assert "9s" in out or "20s" in out          # states the measured cost, not a vague "faster"
+
+
+def test_the_bridge_nudge_keeps_its_provenance_and_its_exceptions(hg_home, monkeypatch):
+    """What the nudge SAYS has to survive being shortened, because a short summary of a caveated
+    claim is how a helpful line becomes a trap.
+
+    Two things it must not drop. The measurement keeps the target it was taken on (~940MB) — it's
+    one datapoint, and an agent can only judge how far it transfers if it's told what it came from.
+    And the bridge OWNS the project, so re_script and a COLD re_analyze/re_reanalyze — each of
+    which opens the project itself — FAIL while it's up (mcp_catalog's re_bridge_start entry says
+    exactly this, and vr_skill repeats it). "It costs no capability" WITHOUT those two named is
+    strictly more wrong than the text it summarises."""
+    names = [f"fn_{i:02d}" for i in range(AT._BRIDGE_NUDGE_MIN_COLD)]
+    _stub_decomp_bodies(monkeypatch, {n: f"void {n}(){{ memcpy(a,b,c); }}" for n in names})
+    monkeypatch.setattr("hexgraph.engine.re.bridge.bridge_endpoint", lambda t: None)
+    _bridge_offerable(monkeypatch)
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        out = run_tool(ctx, "search_code", {"query": "memcpy", "functions": names})
+        assert "940MB" in out, "the measurement lost the target it was taken on"
+        for op in ("re_script", "re_reanalyze", "re_bridge_stop"):
+            assert op in out, f"the nudge doesn't name {op}, which the bridge blocks/needs"
+
+
+def test_grep_does_NOT_nudge_when_the_bridge_is_not_an_option(hg_home, monkeypatch):
+    """Advice an agent can't act on is worse than silence: it costs a turn AND teaches a false cost
+    model. The managed bridge is headless-Ghidra-only and network-gated, so on the DEFAULT install
+    nothing is "re-opening a Ghidra project per call" (radare2 is decompiling, and persists its own
+    project) and re_bridge_start would answer denied/unavailable. Three non-offerable installs, one
+    reason each — then the same sweep WITH both in place, so these negatives can't pass for some
+    unrelated reason the nudge never appears."""
+    names = [f"fn_{i:02d}" for i in range(AT._BRIDGE_NUDGE_MIN_COLD)]
+    _stub_decomp_bodies(monkeypatch, {n: f"void {n}(){{ memcpy(a,b,c); }}" for n in names})
+    monkeypatch.setattr("hexgraph.engine.re.bridge.bridge_endpoint", lambda t: None)
+    net_on = lambda: types.SimpleNamespace(allow_network=True)          # noqa: E731
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+
+        def _call():
+            return run_tool(ctx, "search_code", {"query": "memcpy", "functions": names})
+
+        # the default decompiler: no Ghidra project is being re-opened, so there's nothing to fix
+        monkeypatch.setattr("hexgraph.policy.current_policy", net_on)
+        monkeypatch.setenv("HEXGRAPH_DECOMPILER", "radare2")
+        assert "re_bridge_start" not in _call()
+
+        # ghidra_bridge mode attaches to the researcher's OWN Ghidra — no warm project of ours for
+        # a managed bridge to serve, so start_bridge answers 'unavailable'
+        monkeypatch.setenv("HEXGRAPH_DECOMPILER", "ghidra_bridge")
+        assert "re_bridge_start" not in _call()
+
+        # headless Ghidra, but egress is still gated -> start_bridge answers 'denied'
+        monkeypatch.setenv("HEXGRAPH_DECOMPILER", "ghidra")
+        monkeypatch.setattr("hexgraph.policy.current_policy",
+                            lambda: types.SimpleNamespace(allow_network=False))
+        assert "re_bridge_start" not in _call()
+
+        # ...and with both in place the SAME sweep does fire
+        monkeypatch.setattr("hexgraph.policy.current_policy", net_on)
+        assert "re_bridge_start" in _call()
+
+
+def test_grep_does_NOT_nudge_when_a_bridge_is_already_live(hg_home, monkeypatch):
+    """Telling an agent to start what it already started is noise it pays context for."""
+    names = [f"fn_{i:02d}" for i in range(AT._BRIDGE_NUDGE_MIN_COLD)]
+    _stub_decomp_bodies(monkeypatch, {n: f"void {n}(){{ memcpy(a,b,c); }}" for n in names})
+    monkeypatch.setattr("hexgraph.engine.re.bridge.bridge_endpoint",
+                        lambda t: ("172.17.0.9", 4768))
+    _bridge_offerable(monkeypatch)
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        out = run_tool(ctx, "search_code", {"query": "memcpy", "functions": names})
+        assert "re_bridge_start" not in out
+
+
+def test_grep_does_NOT_nudge_for_a_warm_or_small_sweep(hg_home, monkeypatch):
+    """No nudge when there's nothing to save: bodies already in the store are free, and a couple of
+    cold functions don't repay a container."""
+    from hexgraph.engine import observations as O
+
+    monkeypatch.setattr("hexgraph.engine.re.bridge.bridge_endpoint", lambda t: None)
+    _bridge_offerable(monkeypatch)
+    names = [f"fn_{i:02d}" for i in range(AT._BRIDGE_NUDGE_MIN_COLD)]
+    _stub_decomp_bodies(monkeypatch, {n: f"void {n}(){{ memcpy(a,b,c); }}" for n in names})
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        # all warm -> nothing to speed up
+        for n in names:
+            O.record_observation(
+                s, project_id=p.id, target_id=t.id, source="agent",
+                tool="decompile_function", args={"function": n}, result_kind="decompilation",
+                payload={"focus": {"name": n, "pseudocode": f"void {n}(){{ memcpy(a,b,c); }}"}},
+                summary=f"decompiled {n}", content_hash=O.content_hash_for(t), node_refs=[n])
+        assert "re_bridge_start" not in run_tool(
+            ctx, "search_code", {"query": "memcpy", "functions": names})
+
+        # a cold sweep BELOW the threshold -> not worth a container
+        few = [f"cold_{i}" for i in range(AT._BRIDGE_NUDGE_MIN_COLD - 1)]
+        _stub_decomp_bodies(monkeypatch, {n: f"void {n}(){{ memcpy(a,b,c); }}" for n in few})
+        assert "re_bridge_start" not in run_tool(
+            ctx, "search_code", {"query": "memcpy", "functions": few})
+
+
+def test_nudge_counts_only_the_COLD_functions_and_survives_a_clip(hg_home, monkeypatch):
+    """Two gaps the first pass left.
+
+    The printed count must be the COLD subset, not the whole sweep — every earlier test used an
+    all-cold or all-warm set, so `{cold_total}` -> `{total}` passed all of them. Warm bodies cost
+    nothing, so quoting the total would overstate what a bridge saves.
+
+    And the nudge must survive truncation. It is worth most on a big cold sweep, which is exactly
+    the result that overflows the inline cap, so it rides in the reserved tail with the paging hint
+    rather than in the clippable body."""
+    from hexgraph.engine import observations as O
+
+    monkeypatch.setattr("hexgraph.engine.re.bridge.bridge_endpoint", lambda t: None)
+    monkeypatch.setattr(AT, "_bridge_is_offerable", lambda: True)
+    warm_names = [f"warm_{i}" for i in range(4)]
+    cold_names = [f"cold_{i}" for i in range(AT._BRIDGE_NUDGE_MIN_COLD)]
+    # long bodies so the rendered result overflows the inline cap
+    body = "\n".join(f"  memcpy(dst_{i}, src, n);" for i in range(400))
+    _stub_decomp_bodies(monkeypatch, {n: body for n in warm_names + cold_names})
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        for n in warm_names:
+            O.record_observation(
+                s, project_id=p.id, target_id=t.id, source="agent",
+                tool="decompile_function", args={"function": n}, result_kind="decompilation",
+                payload={"focus": {"name": n, "pseudocode": body}},
+                summary=f"decompiled {n}", content_hash=O.content_hash_for(t), node_refs=[n])
+        out = run_tool(ctx, "search_code",
+                       {"query": "memcpy", "functions": warm_names + cold_names})
+
+    assert "truncated" in out.lower()                    # it really did overflow...
+    assert "re_bridge_start" in out                      # ...and the nudge survived the clip
+    n_cold = AT._BRIDGE_NUDGE_MIN_COLD
+    assert f"[{n_cold} of these need a real decompile" in out   # the COLD count...
+    assert f"[{n_cold + len(warm_names)} of these" not in out   # ...not the whole sweep
 
 
 def test_grep_records_one_observation_and_no_graph(hg_home, monkeypatch):
