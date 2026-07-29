@@ -475,6 +475,56 @@ def test_grep_truncation_names_the_observation_holding_every_hit(hg_home, monkey
         assert obs.id in out                          # the marker points at the full payload
 
 
+def test_truncation_marker_only_names_recovery_paths_that_exist(hg_home, monkeypatch):
+    """The marker tells the agent how to recover a clipped body. Every path it names must be REAL:
+    it advertises `max_chars`, so `max_chars` has to be an advertised param of this tool AND
+    accepted by the MCP wrapper. Naming a param the tool doesn't take is a hard TypeError over
+    MCP, and — worse because it's silent — a no-op on the in-process agent-loop path."""
+    from hexgraph.agent import mcp_tools
+    from hexgraph.agent.mcp_catalog import catalog
+
+    body = "\n".join(f"  memcpy(dst_{i}, src, n);" for i in range(2000))
+    _stub_decomp_bodies(monkeypatch, {"huge_fn": body})
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        out = run_tool(ctx, "search_code", {"query": "memcpy", "functions": ["huge_fn"]})
+        assert "max_chars" in out                       # the marker advertises it...
+
+    # ...so it must exist on BOTH advertised surfaces and on the callable.
+    spec = {sp.name: sp for sp in AT._STATIC_SPECS}["search_code"]
+    assert "max_chars" in spec.input_schema["properties"]
+    entry = {x["name"]: x for x in catalog()}["re_search_code"]
+    assert "max_chars" in entry["schema"]["properties"]
+    import inspect
+    assert "max_chars" in inspect.signature(mcp_tools.search_code).parameters
+
+
+def test_max_chars_raises_the_inline_cap_in_both_modes(hg_home, monkeypatch):
+    """A param advertised on the tool must WORK in whichever mode the agent used — otherwise a
+    scan caller gets it silently ignored, the quiet version of the same defect."""
+    body = "\n".join(f"  memcpy(dst_{i}, src, n);" for i in range(2000))
+    _stub_decomp_bodies(monkeypatch, {"huge_fn": body})
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        small = run_tool(ctx, "search_code", {"query": "memcpy", "functions": ["huge_fn"]})
+        ctx.cache.clear()
+        big = run_tool(ctx, "search_code",
+                       {"query": "memcpy", "functions": ["huge_fn"], "max_chars": 20000})
+        assert len(big) > len(small)                    # grep mode honours it
+
+    hits = [{"addr": hex(0x400000 + i), "in_function": f"fn_{i}"} for i in range(400)]
+    _wire_probe(monkeypatch, {"tool": "xrefs_probe", "mode": "search", "kind": "bytes",
+                              "pattern": "90", "hits": hits, "total": 400})
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        small = run_tool(ctx, "search_code", {"bytes_pattern": "90", "limit": 400})
+        ctx.cache.clear()
+        big = run_tool(ctx, "search_code",
+                       {"bytes_pattern": "90", "limit": 400, "max_chars": 20000})
+        assert len(big) > len(small)                    # scan mode honours it too
+        assert "max_chars" in small                     # ...and its marker is the actionable one
+
+
 def test_grep_records_one_observation_and_no_graph(hg_home, monkeypatch):
     _stub_decomp_bodies(monkeypatch, {"f": "void f(){ memcpy(a,b,c); }"})
     with session_scope() as s:
@@ -551,6 +601,28 @@ def test_decompiled_bodies_does_not_scan_the_whole_store_for_a_cold_name(hg_home
         got = O.decompiled_bodies(s, t.id, names=["warm_fn", "never_decompiled"])
         assert set(got) == {"warm_fn"}                 # correct answer...
         assert len(reads) == 1                         # ...for ONE blob read, not all 26
+
+
+def test_decompiled_bodies_still_reads_a_row_with_no_name_hint(hg_home):
+    """The pre-filter's strict-superset guarantee: a row whose columns carry NO usable name hint
+    must still be opened, because an empty candidate set means "can't tell", never "doesn't match".
+
+    Every producer today writes the focus name into node_refs, so this guards a future one that
+    doesn't — exactly the case where tightening `if cands and …` into `if not (cands & …)` would
+    start silently losing bodies while the rest of the suite stayed green."""
+    from hexgraph.engine import observations as O
+
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        O.record_observation(
+            s, project_id=p.id, target_id=t.id, source="agent",
+            tool="decompile_at", args={"address": "0x401000"},   # no `function` arg...
+            result_kind="decompilation",
+            payload={"focus": {"name": "hintless_fn", "pseudocode": "void hintless_fn(){ x(); }"}},
+            summary="decompiled 0x401000", content_hash=O.content_hash_for(t),
+            node_refs=[])                                        # ...and no node_refs either
+        got = O.decompiled_bodies(s, t.id, names=["hintless_fn"])
+        assert got == {"hintless_fn": "void hintless_fn(){ x(); }"}
 
 
 def test_decompiled_bodies_skips_empty_bodies(hg_home):

@@ -312,7 +312,8 @@ _STATIC_SPECS = [
                  "functions": {"type": "array", "description": "bound the decompile-on-demand grep to these functions (with `query`). EACH one not already decompiled costs a full decompile — name only real candidates"},
                  "query": {"type": "string", "description": "substring to grep in the decompiled bodies of `functions`"},
                  "offset": {"type": "integer", "description": "page start: into the HITS for a scan, into the FUNCTIONS list for a grep"},
-                 "limit": {"type": "integer", "description": "page size: hits for a scan (default 100, max 500); functions to decompile for a grep (default and max 50)"}}}),
+                 "limit": {"type": "integer", "description": "page size: hits for a scan (default 100, max 500); functions to decompile for a grep (default and max 50)"},
+                 "max_chars": {"type": "integer", "description": _MAX_CHARS_DESC}}}),
     ToolSpec("check_decompiler", "Verify the decompiler decompile_function/disassemble use ACTUALLY "
              "works (not just the configured name): radare2 needs the sandbox image up; Ghidra needs "
              "WITH_GHIDRA=1 (headless) or a reachable bridge. Run it if a decompile fails so you don't "
@@ -2802,10 +2803,11 @@ def _search_code_grep(ctx: ToolContext, args: dict, *, query: str, functions) ->
     elif remaining > 0:
         lines.append(f"…[{remaining} more of your {total} function(s) — re-call with {resume}]")
     # A grep over a full page can match many lines across many functions, so this result really
-    # does overflow the inline cap. Truncate with the ACTIONABLE marker (which names obs_get and
-    # the full size) rather than the bare one: every hit is in the Observation, so a cut tail must
-    # never silently hide a call site the agent was searching for.
-    return _clip_body("\n".join(lines), limit=_MAX,
+    # does overflow the inline cap. Truncate with the ACTIONABLE marker (which names obs_get, the
+    # full size, and max_chars) rather than the bare one: every hit is in the Observation, so a cut
+    # tail must never silently hide a call site the agent was searching for. `max_chars` is a real
+    # advertised param on this tool — the marker must never name a recovery path that doesn't exist.
+    return _clip_body("\n".join(lines), limit=_effective_limit(args.get("max_chars")),
                       obs_id=obs.id if obs is not None else None)
 
 
@@ -2878,13 +2880,14 @@ def _search_code_scan(ctx: ToolContext, args: dict, *, bytes_pat, immediate) -> 
     next_offset = offset + len(page)
     more = next_offset < total
 
-    _record_obs(ctx, tool="search_code",
-                args={k: v for k, v in (("bytes_pattern", bytes_pat), ("immediate", immediate),
-                                        ("offset", offset), ("limit", limit)) if v is not None and v != 0},
-                result_kind="search_code",
-                payload={"mode": "scan", "bytes_pattern": bytes_pat, "immediate": immediate,
-                         "hits": page, "total": total, "offset": offset, "limit": limit},
-                summary=f"scan {subj}: {total} hit(s); page {offset}-{next_offset}")
+    obs, _cached = _record_obs(
+        ctx, tool="search_code",
+        args={k: v for k, v in (("bytes_pattern", bytes_pat), ("immediate", immediate),
+                                ("offset", offset), ("limit", limit)) if v is not None and v != 0},
+        result_kind="search_code",
+        payload={"mode": "scan", "bytes_pattern": bytes_pat, "immediate": immediate,
+                 "hits": page, "total": total, "offset": offset, "limit": limit},
+        summary=f"scan {subj}: {total} hit(s); page {offset}-{next_offset}")
 
     header = f"search_code scan for {subj} ({total} hit(s), showing {offset}-{next_offset}):"
     body = "\n".join(
@@ -2894,7 +2897,12 @@ def _search_code_scan(ctx: ToolContext, args: dict, *, bytes_pat, immediate) -> 
     if more:
         tail = (f"\n…[{total - next_offset} more — re-call with offset={next_offset}"
                 + (f", limit={limit}" if limit != _SEARCH_PAGE else "") + "]")
-    return _clip(f"{header}\n{body}{tail}")
+    # Both modes of this tool honour max_chars and clip with the SAME actionable marker — a param
+    # advertised on the tool must work whichever mode the agent used, or a scan caller gets it
+    # silently ignored (the quiet half of the failure the grep's marker had loudly).
+    return _clip_body(f"{header}\n{body}{tail}",
+                      limit=_effective_limit(args.get("max_chars")),
+                      obs_id=obs.id if obs is not None else None)
 
 
 def _fuzz(ctx: ToolContext, args: dict) -> str:
