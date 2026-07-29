@@ -716,6 +716,43 @@ def test_grep_does_NOT_nudge_for_a_warm_or_small_sweep(hg_home, monkeypatch):
             ctx, "search_code", {"query": "memcpy", "functions": few})
 
 
+def test_nudge_counts_only_the_COLD_functions_and_survives_a_clip(hg_home, monkeypatch):
+    """Two gaps the first pass left.
+
+    The printed count must be the COLD subset, not the whole sweep — every earlier test used an
+    all-cold or all-warm set, so `{cold_total}` -> `{total}` passed all of them. Warm bodies cost
+    nothing, so quoting the total would overstate what a bridge saves.
+
+    And the nudge must survive truncation. It is worth most on a big cold sweep, which is exactly
+    the result that overflows the inline cap, so it rides in the reserved tail with the paging hint
+    rather than in the clippable body."""
+    from hexgraph.engine import observations as O
+
+    monkeypatch.setattr("hexgraph.engine.re.bridge.bridge_endpoint", lambda t: None)
+    monkeypatch.setattr(AT, "_bridge_is_offerable", lambda: True)
+    warm_names = [f"warm_{i}" for i in range(4)]
+    cold_names = [f"cold_{i}" for i in range(AT._BRIDGE_NUDGE_MIN_COLD)]
+    # long bodies so the rendered result overflows the inline cap
+    body = "\n".join(f"  memcpy(dst_{i}, src, n);" for i in range(400))
+    _stub_decomp_bodies(monkeypatch, {n: body for n in warm_names + cold_names})
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        for n in warm_names:
+            O.record_observation(
+                s, project_id=p.id, target_id=t.id, source="agent",
+                tool="decompile_function", args={"function": n}, result_kind="decompilation",
+                payload={"focus": {"name": n, "pseudocode": body}},
+                summary=f"decompiled {n}", content_hash=O.content_hash_for(t), node_refs=[n])
+        out = run_tool(ctx, "search_code",
+                       {"query": "memcpy", "functions": warm_names + cold_names})
+
+    assert "truncated" in out.lower()                    # it really did overflow...
+    assert "re_bridge_start" in out                      # ...and the nudge survived the clip
+    n_cold = AT._BRIDGE_NUDGE_MIN_COLD
+    assert f"[{n_cold} of these need a real decompile" in out   # the COLD count...
+    assert f"[{n_cold + len(warm_names)} of these" not in out   # ...not the whole sweep
+
+
 def test_grep_records_one_observation_and_no_graph(hg_home, monkeypatch):
     _stub_decomp_bodies(monkeypatch, {"f": "void f(){ memcpy(a,b,c); }"})
     with session_scope() as s:

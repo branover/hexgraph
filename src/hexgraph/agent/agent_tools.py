@@ -2769,8 +2769,13 @@ def _search_code_grep(ctx: ToolContext, args: dict, *, query: str, functions) ->
     # read; only `_bridge_live` can touch Docker, and just when a bridge entry is recorded (with
     # none — the case we actually nudge in — `bridge_endpoint` returns immediately, no docker call).
     cold_total = sum(1 for n in names if not warm.get(normalize_symbol_name(n) or ""))
-    nudge_bridge = (cold_total >= _BRIDGE_NUDGE_MIN_COLD and _bridge_is_offerable()
-                    and not _bridge_live(ctx.target))
+    nudge_bridge = cold_total >= _BRIDGE_NUDGE_MIN_COLD and _bridge_is_offerable()
+    if nudge_bridge:
+        # `_bridge_live` is the only step here that can shell out to Docker, so release the write
+        # lock first like every other slow op on this path — cheap insurance, and this is the one
+        # branch where it can actually run.
+        release_write_lock(ctx.session)
+        nudge_bridge = not _bridge_live(ctx.target)
 
     q = query.lower()
     hits: list[dict] = []
@@ -2860,17 +2865,17 @@ def _search_code_grep(ctx: ToolContext, args: dict, *, query: str, functions) ->
         lines.append(f"(no line in the searched bodies contains {query!r})")
     if misses:
         lines.append(f"not decompiled: {', '.join(misses)}")
-    if nudge_bridge:
-        # Keep this in agreement with re_bridge_start's own description (mcp_catalog) and the VR
-        # skill: the SAME measured figures WITH the target they came from, and the same two
-        # exceptions. A shorter summary that drops the exceptions is not a summary, it's a trap —
-        # re_script and a cold re_analyze/re_reanalyze each open the project themselves.
-        lines.append(
-            f"[{cold_total} of these need a real decompile. Ghidra is re-opening the project per "
-            f"call; re_bridge_start(target) keeps it resident — measured on a ~940MB image at "
-            f"~20s/call vs ~9s/call, with a ~6s one-off boot. Every Ghidra op then routes to the "
-            f"resident project, EXCEPT re_script and a COLD re_analyze/re_reanalyze, which open it "
-            f"themselves and need re_bridge_stop first. re_bridge_stop when you're done.]")
+    # Keep this in agreement with re_bridge_start's own description (mcp_catalog) and the VR
+    # skill: the SAME measured figures WITH the target they came from, and the same two
+    # exceptions. A shorter summary that drops the exceptions is not a summary, it's a trap —
+    # re_script and a cold re_analyze/re_reanalyze each open the project themselves.
+    nudge = (
+        f"[{cold_total} of these need a real decompile. Ghidra is re-opening the project per "
+        f"call; re_bridge_start(target) keeps it resident — measured on a ~940MB image at "
+        f"~20s/call vs ~9s/call, with a ~6s one-off boot. Every Ghidra op then routes to the "
+        f"resident project, EXCEPT re_script and a COLD re_analyze/re_reanalyze, which open it "
+        f"themselves and need re_bridge_stop first. re_bridge_stop when you're done.]"
+    ) if nudge_bridge else ""
     if stopped:
         hint = (f"…[stopped after {_SEARCH_GREP_BUDGET_S}s — a decompile costs tens of "
                 f"seconds and this call had {remaining} function(s) left. Re-call with "
@@ -2880,6 +2885,11 @@ def _search_code_grep(ctx: ToolContext, args: dict, *, query: str, functions) ->
         hint = f"…[{remaining} more of your {total} function(s) — re-call with {resume}]"
     else:
         hint = ""
+    # The nudge rides in the RESERVED tail with the paging hint, not in the clippable body. It is
+    # worth most on a big COLD sweep — which is precisely the result most likely to overflow the
+    # inline cap, so leaving it in the body would drop it exactly when it applies. Same reasoning
+    # that put the paging hint here.
+    hint = "\n".join(x for x in (nudge, hint) if x)
     # A grep over a full page can match many lines across many functions, so this result really
     # does overflow the inline cap. Truncate with the ACTIONABLE marker (which names obs_get, the
     # full size, and max_chars) rather than the bare one: every hit is in the Observation, so a cut
