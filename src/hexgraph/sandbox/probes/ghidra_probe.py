@@ -99,7 +99,7 @@ def _load_user_script():
 _RE_ANALYZE_LEAD = (
     "No warm Ghidra analysis for this target yet. Run re_analyze(target) FIRST — it builds the warm "
     "project ONCE with a generous budget (detached; re-call re_analyze to poll until state='analyzed'), "
-    "then re-run this tool and it'll be instant. This tool is warm-only and never runs a cold analysis "
+    "then re-run this tool: it reuses that warm project instead of re-analysing, which is seconds per call on a large binary rather than a whole-binary pass. This tool is warm-only and never runs a cold analysis "
     "itself — re_analyze is the only place a full analysis pass happens.")
 
 

@@ -5,7 +5,8 @@
 long-lived (`docker run -d`) container. It opens the target's WARM Ghidra slot ONCE via pyghidra
 (no re-analysis) and keeps it resident behind a plain line-delimited JSON RPC server
 (`pyghidra_lib.serve_bridge`) — so repeated re_decompile for the target skip the per-call project
-open (~15s on a 6GB project) that the headless path pays every time.
+open that the headless path pays every time (measured ~2.3x on a 938MB image: ~20s/call
+headless vs ~9s/call resident).
 
 Replaces the Jython `analyzeHeadless -postScript ghidra_bridge_serve.py` + jfx_bridge harness: the
 server is now HexGraph's OWN stdlib-socket RPC calling the SAME in-process cores as `ghidra_probe`,

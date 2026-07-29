@@ -266,13 +266,22 @@ def reveal_dir(session: Session, project_id: str, firmware_target_id: str, prefi
                 to_enrich.append(c.id)
             revealed_ids.append(c.id)
     session.flush()
-    # One bridge holds one target's project, but reveal_dir enriches a whole set in ONE detached
-    # run; if any of them is bridged that run can't do its job and can't say so, so refuse the
-    # batch with the reason rather than reporting a queued task that will silently enrich nothing.
-    blocked = next((r for r in (enrichment_blocked_reason(session.get(Target, tid))
-                                for tid in to_enrich) if r), None) if to_enrich else None
-    enrichment_queued = (0 if blocked else
-                         _ensure_batch_ghidra_enrichment(session, project, fw, to_enrich))
+    # Release the write lock BEFORE the per-target bridge check: the reveal loop above wrote
+    # `visible` + recon nodes for every child, so the flush holds SQLite's single writer lock,
+    # and `enrichment_blocked_reason` can `docker inspect` (10s timeout) once per target. Holding
+    # the lock across that is the #283/#293-297 bug class — see `release_write_lock`.
+    from hexgraph.db.session import release_write_lock
+    release_write_lock(session)
+
+    # A bridge is PER-TARGET, so partition rather than refuse the batch. The detached batch worker
+    # already skips a target whose enrichment fails and carries on with the rest, so refusing all
+    # of them because one is bridged would ENRICH FEWER targets than doing nothing about it —
+    # and the common shape is exactly that: a bridge up on the one big binary you're working,
+    # then reveal_dir around it. Enrich the rest, and name the ones held back.
+    blocked_ids = [tid for tid in to_enrich
+                   if enrichment_blocked_reason(session.get(Target, tid))]
+    runnable = [tid for tid in to_enrich if tid not in set(blocked_ids)]
+    enrichment_queued = _ensure_batch_ghidra_enrichment(session, project, fw, runnable)
     out = {
         "firmware_target_id": firmware_target_id,
         "prefix": prefix,
@@ -280,6 +289,10 @@ def reveal_dir(session: Session, project_id: str, firmware_target_id: str, prefi
         "target_ids": revealed_ids,
         "enrichment_queued": enrichment_queued,
     }
-    if blocked:
-        out["enrichment_detail"] = blocked
+    if blocked_ids:
+        out["enrichment_blocked"] = blocked_ids
+        out["enrichment_detail"] = (
+            f"{len(blocked_ids)} of {len(to_enrich)} target(s) were NOT queued for enrichment: a "
+            f"live Ghidra bridge holds their project — run re_bridge_stop on them, then reveal "
+            f"again to enrich those (the rest were queued normally)")
     return out

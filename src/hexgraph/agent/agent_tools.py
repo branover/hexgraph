@@ -2035,7 +2035,7 @@ def _solve_constraint(ctx: ToolContext, args: dict) -> str:
 _GHIDRA_XREF_LEAD = (
     "No warm Ghidra analysis available for this target (Ghidra is the active decompiler backend). Run "
     "re_analyze(target) FIRST — it builds the warm project ONCE (detached; poll until state='analyzed'), "
-    "then re-run this and it'll be instant. If a Ghidra bridge is running but unhealthy, re_bridge_stop "
+    "then re-run this: it answers from the warm reference index, seconds per call rather than a whole-binary pass. If a Ghidra bridge is running but unhealthy, re_bridge_stop "
     "and retry (the target reverts to the warm headless project). This tool is warm-only and never runs "
     "a cold analysis itself.")
 

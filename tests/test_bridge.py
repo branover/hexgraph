@@ -280,6 +280,49 @@ def test_reveal_surfaces_the_bridge_refusal_to_the_caller(hg_home, monkeypatch):
     assert not queued                                 # the detached task was never spawned
 
 
+def test_reveal_dir_partitions_rather_than_refusing_the_whole_batch(hg_home, monkeypatch):
+    """A bridge is PER-TARGET, so one bridged binary must not cost the rest their enrichment.
+
+    The detached batch worker already skips a target whose enrichment fails and carries on, so
+    refusing the whole batch would enrich FEWER targets than leaving it alone — and the common
+    shape is precisely that: a bridge up on the one big binary you're working, then reveal_dir
+    around it. Enrich the runnable ones, name the held-back ones."""
+    from hexgraph.db.session import session_scope
+    from hexgraph.engine.targets import reveal as R
+    from hexgraph.engine.targets.ingest import create_project, ingest_file
+
+    from conftest import fixture_path
+
+    with session_scope() as s:
+        p = create_project(s, name="partition")
+        fw = ingest_file(s, p, fixture_path("vuln_httpd"), name="fw")
+        kids = []
+        for n in ("a_bin", "b_bin", "c_bin"):
+            k = ingest_file(s, p, fixture_path("vuln_httpd"), name=n)
+            k.parent_id, k.visible = fw.id, False
+            k.metadata_json = {**(k.metadata_json or {}), "kind": "executable"}
+            kids.append(k)
+        s.flush()
+        bridged = kids[1].id
+
+        monkeypatch.setattr(B, "bridge_endpoint",
+                            lambda t: ("172.17.0.9", 4768) if t.id == bridged else None)
+        monkeypatch.setattr(R, "_needs_ghidra_enrichment", lambda t: True)
+        monkeypatch.setattr(R, "_materialize_recon_only",
+                            lambda *a, **k: {"kind": "executable"})
+        batched: list[list[str]] = []
+        monkeypatch.setattr(R, "_ensure_batch_ghidra_enrichment",
+                            lambda sess, proj, f, ids: batched.append(list(ids)) or len(ids))
+
+        out = R.reveal_dir(s, p.id, fw.id, "", enrich=True)
+
+    assert batched and bridged not in batched[0]      # the bridged one was held back...
+    assert len(batched[0]) == 2                       # ...and the other two still went
+    assert out["enrichment_queued"] == 2
+    assert out["enrichment_blocked"] == [bridged]     # named, not silently dropped
+    assert "re_bridge_stop" in out["enrichment_detail"]
+
+
 def test_bridge_start_doc_does_not_advertise_a_capability_tradeoff(env):
     """The advertised description is what an agent reads before deciding to start a bridge. It used
     to say re_xrefs falls back to radare2 and emulation/rename are unavailable — true once, but the

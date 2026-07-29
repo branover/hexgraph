@@ -846,7 +846,8 @@ def analyze(target_id: str) -> dict:
     warm analysis ONCE with a generous budget. Idempotent + single-flight: re-call to POLL until
     state='analyzed'; a second call while it's running attaches, never starts a duplicate. Returns
     {state, detail, container?} — state is analyzed|running|started|failed|none|unavailable. Once
-    analyzed, the per-call RE tools (re_decompile_*/re_xrefs/…) reuse it instantly. Backend-aware: a
+    analyzed, the per-call RE tools (re_decompile_*/re_xrefs/…) reuse it — seconds per call on a
+    large binary, not a fresh whole-binary pass. Backend-aware: a
     warm Ghidra project or a warm radare2 project, whichever decompiler is active."""
     from hexgraph.engine.re.analysis import start_analysis
 
