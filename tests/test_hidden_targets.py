@@ -162,6 +162,34 @@ def test_set_visible_detaches_ghidra_enrichment(hg_home, monkeypatch):
         assert len(spawned) == 1
 
 
+def test_set_visible_enriches_an_already_visible_target(hg_home, monkeypatch):
+    """`enrich=True` is gated on the CALLER asking, NOT on the visibility TRANSITION.
+
+    Reveal and "run a long Ghidra analysis" are separate decisions, so a target revealed earlier
+    (or revealed by the bulk `reveal_dir`, which never enriches visible children) must still be
+    enrichable by name. Gating on `not was_visible` made the second call a silent no-op and left an
+    undocumented hide-then-reveal dance as the only way through — see
+    test_ghidra_enrichment_self_heals_after_lost_task, which still exercises that older path."""
+    monkeypatch.setattr("hexgraph.engine.re.ghidra.enrich_enabled", lambda: True)
+    spawned = []
+    monkeypatch.setattr("hexgraph.engine.worker.spawn_detached_task",
+                        lambda task_id: spawned.append(task_id) or 1)
+    with session_scope() as s:
+        p = create_project(s, name="reveal-then-enrich")
+        child = _executable_child(s, p)
+        cid, pid = child.id, p.id
+
+    with session_scope() as s:
+        first = set_visible(s, pid, cid, True)              # plain reveal, no enrichment
+        assert first["visible"] is True and first["enrichment_queued"] is False
+        assert len(spawned) == 0
+
+        # Now ask for enrichment on the ALREADY-visible target. No hide step.
+        second = set_visible(s, pid, cid, True, enrich=True)
+        assert second["enrichment_queued"] is True
+        assert len(spawned) == 1
+
+
 def test_set_visible_does_not_enrich_by_default(hg_home, monkeypatch):
     """Real incident: revealing auto-enriched every executable, even though the operator
     never asked for it — a directory of a dozen+ binaries silently queued a dozen+ background

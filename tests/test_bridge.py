@@ -194,8 +194,8 @@ def test_taint_asks_the_seam_so_a_live_bridge_serves_it(env, monkeypatch):
     implementation, so it would open the warm slot HEADLESS behind a live bridge's resident
     project — which fails outright (LockException at the project open), not merely contends.
     Every other PER-CALL Ghidra op asks the seam; now this one does too at both layers.
-    (`enrich_target` still doesn't — it needs an inventory the bridge can't serve yet, so it
-    refuses with an actionable lead instead; see test_enrich_target_refuses_behind_a_bridge.)"""
+    (`enrich_target` asks it as well — see
+    test_enrich_target_asks_the_seam_and_uses_the_bridge_when_one_is_live.)"""
     from hexgraph.engine.re import taint as T
     from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler
     from hexgraph.sandbox.decompiler import GhidraDecompiler
@@ -231,11 +231,15 @@ def test_managed_decompile_passes_through_the_whole_inventory():
     enrichment, the one consumer that reads the whole inventory, out of a bridged target."""
     from hexgraph.engine.re import ghidra_bridge as GB
 
+    # The REAL wire shapes: `decompile_core` emits calls as [caller, callee] PAIRS
+    # (pyghidra_lib.py `edges.append([f.getName(), callee.getName()])`), not {"from","to"} dicts —
+    # a dict here would be silently dropped downstream by ghidra._call_graph_records, so the fake
+    # has to match the server or this pins nothing.
     server_payload = {
         "functions": ["main", "parse"], "functions_total": 2,
         "focus": {"name": "main", "pseudocode": "int main(){}"},
-        "calls": [{"from": "main", "to": "parse"}],
-        "structs": [{"name": "hdr", "size": 8}],
+        "calls": [["main", "parse"]],
+        "structs": [{"name": "hdr", "size": 8, "builtin": False, "fields": []}],
     }
     ops = GB._ManagedOps.__new__(GB._ManagedOps)
     ops._rpc = lambda req: server_payload            # noqa: SLF001 — exercising the client contract
@@ -247,12 +251,37 @@ def test_managed_decompile_passes_through_the_whole_inventory():
     assert out["functions_total"] == 2
 
 
+def test_managed_decompile_propagates_a_server_error_instead_of_an_empty_program():
+    """A bridge-side failure must NOT read as "this binary has no functions".
+
+    `bridge_dispatch` returns {"error": ...} for any exception inside `decompile_core`, and the
+    whole-program inventory is the expensive JVM-heavy call. Dropping that key was survivable while
+    the bridge was decompile-only, but enrichment's ONLY guard is `if "error" in data` — so a
+    swallowed error would record 0 functions / 0 calls / 0 structs as authoritative substrate facts
+    and return ok=True, after which the worker marks the target `ghidra_enriched` and
+    `reveal._needs_ghidra_enrichment` never retries it again. Not even re_bridge_stop recovers."""
+    from hexgraph.engine.re import ghidra_bridge as GB
+
+    ops = GB._ManagedOps.__new__(GB._ManagedOps)
+    ops._rpc = lambda req: {"error": "bridge op decompile failed: boom", "tb": "..."}  # noqa: SLF001
+
+    out = ops.decompile(program=None, function=None)
+    assert out["error"] == "bridge op decompile failed: boom"   # surfaced, not swallowed
+    assert out["focus"] is None
+    # ...which is what lets enrich_target's `if "error" in data` guard fire at all.
+    assert "error" in out
+
+
 def test_enrich_target_asks_the_seam_and_uses_the_bridge_when_one_is_live(env, monkeypatch):
     """Enrichment is no longer the one Ghidra op that can't run against a bridged target.
 
     It used to name `GhidraDecompiler()` directly, so with a bridge holding the project its open
-    failed outright (LockException). Now it asks `ghidra_op_backend` like every other op, and the
-    payload contract is identical either way because both sides run the same core."""
+    failed outright (LockException). Now it asks `ghidra_op_backend` like every other op.
+
+    Asserts BOTH halves: which backend is asked, AND that a real bridge payload is actually
+    CONSUMABLE — the payload here carries the shapes `pyghidra_lib.decompile_core` really emits
+    (function NAMES, calls as [caller, callee] PAIRS, struct dicts), so a shape drift shows up as
+    an empty call_graph record rather than passing silently."""
     from hexgraph.engine.re import ghidra as G
     from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler
     from hexgraph.sandbox.decompiler import GhidraDecompiler
@@ -260,23 +289,61 @@ def test_enrich_target_asks_the_seam_and_uses_the_bridge_when_one_is_live(env, m
     s, p, t = env
     monkeypatch.setattr("hexgraph.engine.re.ghidra_bridge.connect_managed",
                         lambda host, port: types.SimpleNamespace(host=host, port=port))
-    # This test is about WHICH backend is asked, not the recording that follows; the env fixture's
-    # session is a stub, so keep enrich_target's Observation writes out of it.
-    monkeypatch.setattr("hexgraph.engine.observations.record_observation",
-                        lambda *a, **k: (types.SimpleNamespace(id="obs"), False))
+    # The env fixture's session is a stub, so capture the Observation writes instead of doing them.
+    recorded: list[dict] = []
+    monkeypatch.setattr(
+        "hexgraph.engine.observations.record_observation",
+        lambda *a, **k: (recorded.append(k), (types.SimpleNamespace(id="obs"), False))[1])
     seen = []
-    payload = {"functions": ["main"], "calls": [{"from": "main", "to": "parse"}],
-               "structs": [{"name": "hdr"}]}
+    payload = {"functions": ["main"], "calls": [["main", "parse"]],
+               "structs": [{"name": "hdr", "size": 8, "builtin": False, "fields": []}]}
     for cls in (GhidraDecompiler, GhidraBridgeDecompiler):
         monkeypatch.setattr(cls, "decompile",
                             lambda self, *a, **k: (seen.append(type(self)), payload)[1])
 
-    G.enrich_target(s, p, t)
+    out = G.enrich_target(s, p, t)
     assert seen == [GhidraDecompiler]                    # no bridge -> headless, as before
 
+    recorded.clear()
     B.start_bridge(s, p, t, runner=_FakeExec())
-    G.enrich_target(s, p, t)
+    out = G.enrich_target(s, p, t)
     assert seen == [GhidraDecompiler, GhidraBridgeDecompiler]   # live bridge -> served by it
+
+    # ...and the bridge's payload really enriches: counted, and reshaped into call-graph records.
+    assert out == {"ok": True, "recorded": True, "functions": 1, "calls": 1, "structs": 1}
+    by_kind = {k["result_kind"]: k["payload"] for k in recorded}
+    assert by_kind["function_list"] == {"functions": [{"name": "main"}]}
+    assert by_kind["call_graph"] == {"functions": [{"name": "main", "callees": ["parse"]}]}
+    assert by_kind["structs"] == {"structs": payload["structs"]}
+
+
+def test_enrich_target_refuses_when_the_bridge_returns_an_error(env, monkeypatch):
+    """A bridge fault must leave the target RETRYABLE, not marked enriched with nothing recorded.
+
+    `enrich_target` returning ok=True is what makes engine.worker stamp `ghidra_enriched` on the
+    target, and reveal._needs_ghidra_enrichment then skips it forever. So an errored bridge has to
+    come back ok=False with the detail — the same contract the headless path has always had."""
+    from hexgraph.engine.re import ghidra as G
+    from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler
+
+    s, p, t = env
+    monkeypatch.setattr("hexgraph.engine.re.ghidra_bridge.connect_managed",
+                        lambda host, port: types.SimpleNamespace(host=host, port=port))
+    recorded: list[dict] = []
+    monkeypatch.setattr(
+        "hexgraph.engine.observations.record_observation",
+        lambda *a, **k: (recorded.append(k), (types.SimpleNamespace(id="obs"), False))[1])
+    # What _ManagedOps.decompile returns when bridge_dispatch reports a server-side failure.
+    monkeypatch.setattr(GhidraBridgeDecompiler, "decompile",
+                        lambda self, *a, **k: {"functions": [], "functions_total": None,
+                                               "focus": None, "calls": [], "structs": [],
+                                               "tool": "ghidra_bridge",
+                                               "error": "bridge op decompile failed: boom"})
+
+    B.start_bridge(s, p, t, runner=_FakeExec())
+    out = G.enrich_target(s, p, t)
+    assert out["ok"] is False and "boom" in out["detail"]
+    assert not recorded          # no empty "0 functions" facts written to the substrate
 
 
 def test_bridge_start_doc_does_not_advertise_a_capability_tradeoff(env):
