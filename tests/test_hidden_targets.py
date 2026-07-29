@@ -319,6 +319,36 @@ def test_ghidra_enrich_task_dispatches_to_enrich_target(hg_home, monkeypatch):
         assert s.get(Target, cid).metadata_json.get("ghidra_enriched") is True
 
 
+def test_ghidra_enrich_task_leaves_a_soft_failure_retryable(hg_home, monkeypatch):
+    """The other half of "only on success", which nothing pinned.
+
+    `ghidra_enriched` is a PERMANENT gate — `reveal._needs_ghidra_enrichment` never re-queues a
+    target carrying it — so stamping it on an `ok=False` return would burn the target for good.
+    That branch became reachable in normal use once enrichment started routing through the Ghidra
+    seam: a live bridge returning an error surfaces as `ok=False` rather than an exception, and the
+    `except: continue` path the batch test exercises never touches this check."""
+    def _fake_enrich(session, project, target):
+        return {"ok": False, "detail": "a live Ghidra bridge returned an error"}
+
+    monkeypatch.setattr("hexgraph.engine.re.ghidra.enrich_target", _fake_enrich)
+    from hexgraph.engine.tasks import create_task
+    from hexgraph.engine.worker import run_task_sync
+
+    with session_scope() as s:
+        p = create_project(s, name="dispatch-enrich-soft-fail")
+        child = _executable_child(s, p)
+        task = create_task(s, project=p, target_id=child.id, type="ghidra_enrich")
+        task_id, cid = task.id, child.id
+
+    assert run_task_sync(task_id) == "succeeded"     # a soft failure isn't a task crash...
+    with session_scope() as s:
+        meta = s.get(Target, cid).metadata_json or {}
+        assert meta.get("ghidra_enriched") is not True   # ...but it must NOT burn the target
+        from hexgraph.engine.targets.reveal import _needs_ghidra_enrichment
+        monkeypatch.setattr("hexgraph.engine.re.ghidra.enrich_enabled", lambda: True)
+        assert _needs_ghidra_enrichment(s.get(Target, cid)) is True   # a later reveal retries
+
+
 def test_ghidra_enrich_batch_task_processes_all_targets_sequentially(hg_home, monkeypatch):
     """The `ghidra_enrich_batch` task type — what reveal_dir's detached spawn runs — must
     enrich every target in params_json.target_ids, marking each enriched independently, and
