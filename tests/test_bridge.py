@@ -521,9 +521,12 @@ def test_container_not_running_resolves_every_unknown_to_None(monkeypatch):
         monkeypatch.setattr(B.subprocess, "run",
                             lambda *a, **k: _sp.CompletedProcess(a[0], rc, out, err))
 
+    # The three real shapes, captured from Docker 29.6.1 rather than reconstructed:
+    #   running -> rc=0 stdout="true\n"   exited -> rc=0 stdout="false\n"
+    #   missing -> rc=1 stderr="error: no such object: <name>"
     _docker(out="true\n");  assert B._container_not_running("c") is False   # running
     _docker(out="false\n"); assert B._container_not_running("c") is True    # exited — dead JVM
-    _docker(rc=1, err="Error: No such object: c")
+    _docker(rc=1, err="error: no such object: c")
     assert B._container_not_running("c") is True                            # positively absent
     # everything below is "we did not get an answer" -> None -> caller assumes it IS running
     _docker(rc=1, err="permission denied while trying to connect to the Docker daemon")
