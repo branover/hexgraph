@@ -225,7 +225,9 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
   project). Poll `re_bridge_status` (it may take a moment to open a huge project); stop it with `re_bridge_stop`.
   It needs a saved Ghidra analysis first (`re_analyze`) and **`features.network`** (the container is reached on
   a loopback/private address, audited). While a bridge is live it *owns* the project, so every Ghidra op routes
-  to it rather than a conflicting headless open. Also on the CLI: `hexgraph ghidra-bridge start|stop|status <target>`.
+  to it rather than a conflicting headless open. Two things still want their own open and so need the
+  bridge stopped first: a cold re-analysis (`re_reanalyze`), and `re_script`, which runs your script
+  against the warm project in its own container rather than over the bridge. Also on the CLI: `hexgraph ghidra-bridge start|stop|status <target>`.
 - **`re_script` is the escape hatch over the warm analysis DB (gated, off by default).** The curated `re_*`
   verbs answer the common questions; the full Ghidra analysis holds more than any fixed verb exposes.
   `re_script(target, script=…)` runs an agent-supplied **Python 3** script in the sandbox against the same warm

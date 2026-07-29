@@ -184,12 +184,15 @@ def test_ghidra_op_backend_routes_to_live_bridge(env, monkeypatch):
 
 
 def test_taint_asks_the_seam_so_a_live_bridge_serves_it(env, monkeypatch):
-    """The grounded taint pass must ASK `ghidra_op_backend`, not construct `GhidraDecompiler()`.
+    """`GhidraTaintAnalyzer`'s OWN backend default must ask `ghidra_op_backend`, not name
+    `GhidraDecompiler()`.
 
-    It was the one Ghidra op that named its implementation instead of the seam, so with a bridge up
-    it opened the warm slot HEADLESS behind the resident project — the exact project-lock conflict
-    every other op routes via ghidra_op_backend to avoid. The bridge has served `taint` since the
-    PyGhidra re-platform (pyghidra_lib.bridge_dispatch); nothing was calling it."""
+    Defence in depth, NOT a live bug: the production path already routed correctly, because
+    `_target_taint_analyzer` injects `ghidra_op_backend(target)` and `analyze_taint` is the only
+    caller. What was wrong is that the class's own fallback — reachable by constructing
+    `GhidraTaintAnalyzer()` directly, as a future caller or a test easily might — named the
+    implementation, so it would open the warm slot HEADLESS behind a live bridge's resident
+    project. Every other Ghidra op asks the seam; now this one does too at both layers."""
     from hexgraph.engine.re import taint as T
     from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler
     from hexgraph.sandbox.decompiler import GhidraDecompiler

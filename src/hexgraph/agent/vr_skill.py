@@ -182,8 +182,10 @@ each call returns in a fraction of a second instead of paying a fresh container 
 every time (tens of seconds each on a big binary; it is the difference between a ten-minute sweep and
 a ten-second one). It costs you NO capability — every Ghidra op for that target routes to the
 resident project, not just `re_decompile_*` but `re_xrefs`/`re_function_xrefs`/`re_data_xrefs`, the
-taint pass, `re_recover_constant` and rename. The one exception is a COLD re-analysis
-(`re_reanalyze`), which needs `re_bridge_stop` first and a restart after. `re_bridge_stop` when done
+taint pass, `re_recover_constant` and rename. Two things need the bridge stopped first
+(`re_bridge_stop`, restart after): a COLD re-analysis (`re_reanalyze`), which is a fresh import the
+resident project can't serve, and `re_script`, which opens the warm project in its own container
+instead of over the bridge and so contends for the project the bridge holds. `re_bridge_stop` when done
 (needs features.network). The spine of it: get the authoritative facts (`re_binutils_facts`,
 `re_list_strings` — GREP the FULL string table, not a sample) → map the sinks and who reaches
 them (`re_xrefs` with no symbol) → read the
