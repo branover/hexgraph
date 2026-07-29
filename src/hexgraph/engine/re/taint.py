@@ -78,10 +78,16 @@ class GhidraTaintAnalyzer(TaintAnalyzer):
             # default is reachable only by constructing GhidraTaintAnalyzer() directly. It should
             # still be correct for whoever does that next. With no bridge up it resolves to the
             # same headless backend as before.
-            from hexgraph.sandbox.decompiler import ghidra_op_backend
+            from hexgraph.sandbox.decompiler import run_ghidra_op
 
-            deco = ghidra_op_backend(target)
-        run_taint = getattr(deco, "run_taint", None)
+            # Resolve per call rather than pinning a backend object: run_ghidra_op also degrades a
+            # DEAD bridge to headless, which a pre-resolved instance cannot do.
+            def _run(a, **kw):
+                return run_ghidra_op(target, "run_taint", a, **kw)
+
+            run_taint = _run
+        else:
+            run_taint = getattr(deco, "run_taint", None)
         if run_taint is None:
             return {"available": False, "flows": [], "analyzed": 0,
                     "error": "active decompiler has no taint backend"}

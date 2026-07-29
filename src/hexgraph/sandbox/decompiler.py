@@ -522,3 +522,30 @@ def ghidra_op_backend(target=None) -> Decompiler:
         except Exception:  # noqa: BLE001 — routing is an optimization, never load-bearing
             pass
     return GhidraDecompiler()
+
+
+def run_ghidra_op(target, op: str, *args, **kwargs):
+    """Run a Ghidra op through the seam, degrading a DEAD managed bridge to the headless slot.
+
+    The whole point is one distinction, and getting it backwards corrupts a project:
+
+    * A bridge that **RAISES** is unreachable — its container is gone, or the socket is dead. It
+      holds nothing, so re-running the op headless is safe, and better than failing an op whose
+      warm slot is right there. That is the degradation.
+    * A bridge that **RETURNS an error** is alive and still OWNS the project. A headless open
+      behind it would collide on the project lock (`LockException`), so the error PROPAGATES to
+      the caller untouched — never retried.
+
+    Only a managed bridge degrades; a headless primary has nothing to fall back to, so its
+    exception re-raises. Returns whatever the backend returned, unexamined: callers own their own
+    result contracts (`_ghidra_xrefs` treats an error dict as "give up", `enrich_target` checks
+    `"error" in data`), and this helper deliberately does not second-guess them."""
+    backend = ghidra_op_backend(target)
+    try:
+        return getattr(backend, op)(*args, **kwargs)
+    except Exception:
+        from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler
+
+        if not isinstance(backend, GhidraBridgeDecompiler):
+            raise  # headless primary — nothing to degrade to
+    return getattr(GhidraDecompiler(), op)(*args, **kwargs)

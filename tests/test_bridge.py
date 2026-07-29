@@ -346,6 +346,63 @@ def test_enrich_target_refuses_when_the_bridge_returns_an_error(env, monkeypatch
     assert not recorded          # no empty "0 functions" facts written to the substrate
 
 
+def test_run_ghidra_op_retries_headless_when_a_bridge_is_UNREACHABLE(env, monkeypatch):
+    """A bridge that RAISES holds nothing, so headless is safe — and better than failing an op
+    whose warm slot is sitting right there."""
+    from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler
+    from hexgraph.sandbox.decompiler import GhidraDecompiler, run_ghidra_op
+
+    s, p, t = env
+    monkeypatch.setattr("hexgraph.engine.re.ghidra_bridge.connect_managed",
+                        lambda host, port: types.SimpleNamespace(host=host, port=port))
+    B.start_bridge(s, p, t, runner=_FakeExec())
+    calls = []
+
+    def _dead(self, *a, **k):
+        calls.append("bridge"); raise ConnectionRefusedError("container gone")
+
+    monkeypatch.setattr(GhidraBridgeDecompiler, "run_taint", _dead)
+    monkeypatch.setattr(GhidraDecompiler, "run_taint",
+                        lambda self, *a, **k: calls.append("headless") or {"taint": {"flows": []}})
+
+    out = run_ghidra_op(t, "run_taint", "/artifact")
+    assert calls == ["bridge", "headless"]          # tried the bridge, degraded to headless
+    assert out == {"taint": {"flows": []}}
+
+
+def test_run_ghidra_op_does_NOT_retry_when_a_live_bridge_returns_an_error(env, monkeypatch):
+    """The other half, and the one that matters: a bridge that RETURNS an error is ALIVE and still
+    owns the project. A headless open behind it collides on the project lock (LockException), so
+    the error must propagate untouched — retrying here would corrupt, not recover."""
+    from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler
+    from hexgraph.sandbox.decompiler import GhidraDecompiler, run_ghidra_op
+
+    s, p, t = env
+    monkeypatch.setattr("hexgraph.engine.re.ghidra_bridge.connect_managed",
+                        lambda host, port: types.SimpleNamespace(host=host, port=port))
+    B.start_bridge(s, p, t, runner=_FakeExec())
+    headless = []
+    monkeypatch.setattr(GhidraBridgeDecompiler, "run_taint",
+                        lambda self, *a, **k: {"error": "decompile_core blew up"})
+    monkeypatch.setattr(GhidraDecompiler, "run_taint",
+                        lambda self, *a, **k: headless.append(1) or {"taint": {}})
+
+    out = run_ghidra_op(t, "run_taint", "/artifact")
+    assert out == {"error": "decompile_core blew up"}   # propagated verbatim
+    assert not headless                                  # never ran behind the live bridge
+
+
+def test_run_ghidra_op_reraises_when_headless_itself_fails(env, monkeypatch):
+    """A headless primary has nothing to degrade to, so its exception is the caller's to handle."""
+    from hexgraph.sandbox.decompiler import GhidraDecompiler, run_ghidra_op
+
+    s, p, t = env  # no bridge started -> headless primary
+    monkeypatch.setattr(GhidraDecompiler, "run_taint",
+                        lambda self, *a, **k: (_ for _ in ()).throw(RuntimeError("docker down")))
+    with pytest.raises(RuntimeError, match="docker down"):
+        run_ghidra_op(t, "run_taint", "/artifact")
+
+
 def test_bridge_start_doc_does_not_advertise_a_capability_tradeoff(env):
     """The advertised description is what an agent reads before deciding to start a bridge. It used
     to say re_xrefs falls back to radare2 and emulation/rename are unavailable — true once, but the

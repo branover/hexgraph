@@ -2116,32 +2116,19 @@ def _ghidra_xrefs(ctx: ToolContext, mode: str, subject: str | None) -> dict | No
 
     if not docker_available():
         return None
-    from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler
-    from hexgraph.sandbox.decompiler import GhidraDecompiler, ghidra_op_backend
+    from hexgraph.sandbox.decompiler import run_ghidra_op
 
-    primary = ghidra_op_backend(ctx.target)
-    raised = False
+    # `run_ghidra_op` owns the dead-bridge degradation: a bridge that RAISES is unreachable and
+    # retries headless, while a bridge that RETURNS an error is alive and still holds the project
+    # lock, so that error comes back here untouched. Everything below is this tool's own contract.
     try:
-        out = primary.xrefs(ctx.target.path, mode=mode, subject=subject or None, project=ctx.project)
-    except Exception:  # noqa: BLE001 — the backend was UNREACHABLE (e.g. a dead managed bridge)
-        out, raised = None, True
-    if not raised:
-        # The backend ANSWERED (a dict — possibly not_found, or an error). Trust it and do NOT run a
-        # headless op behind it: a LIVE bridge that returned an error still holds the project lock a
-        # headless pass would conflict on. A good dict is the result; anything else ⇒ give up (None).
-        return out if isinstance(out, dict) and not out.get("error") else None
-    # primary RAISED ⇒ it was unreachable. Degrade a dead managed BRIDGE to the headless warm slot
-    # (headless can't conflict with a bridge that isn't answering); a headless primary has nothing to
-    # degrade to.
-    if isinstance(primary, GhidraBridgeDecompiler):
-        try:
-            out = GhidraDecompiler().xrefs(
-                ctx.target.path, mode=mode, subject=subject or None, project=ctx.project)
-        except Exception:  # noqa: BLE001
-            return None
-        if isinstance(out, dict) and not out.get("error"):
-            return out
-    return None
+        out = run_ghidra_op(ctx.target, "xrefs", ctx.target.path,
+                            mode=mode, subject=subject or None, project=ctx.project)
+    except Exception:  # noqa: BLE001 — unreachable, and headless couldn't serve it either
+        return None
+    # A good dict is the result — including a not_found one, which the caller TRUSTS and stops on.
+    # An error dict (or anything else) ⇒ give up, so a Ghidra-backed caller surfaces its own lead.
+    return out if isinstance(out, dict) and not out.get("error") else None
 
 
 def _scripting_enabled() -> bool:
