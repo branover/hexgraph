@@ -174,11 +174,23 @@ Observation. Work cheap-to-expensive and check `obs_list(target_id)` before any 
 radare2): the whole-program tools (`re_decompile_*`, `re_list_functions`, the `re_xrefs` family,
 `re_call_graph`) require a saved analysis and will tell you to run `re_analyze(target)` on a miss — a
 DETACHED, single-flight whole-binary analysis with a generous budget that a per-call timeout can't cut short. Kick it off,
-poll it (re-call `re_analyze` until state=`analyzed`), and then those per-call tools are instant.
+poll it (re-call `re_analyze` until state=`analyzed`), and then those per-call tools are fast — seconds
+each on a large binary (~20s/call on a ~940MB image), not instant, but no longer a whole-binary pass.
 (`re_disassemble` and `re_binutils_facts`/`re_list_strings` need no analysis — use them freely while
-it warms.) On a LARGE Ghidra target you'll decompile many functions of, `re_bridge_start(target)`
-keeps the analyzed project RESIDENT so each `re_decompile_*` returns in a fraction of a second
-instead of re-opening the project every call; `re_bridge_stop` when done (needs features.network). The spine of it: get the authoritative facts (`re_binutils_facts`,
+it warms.) Then, on a LARGE target you expect to work through — more than a handful of decompiles — start a
+resident bridge: `re_bridge_start(target)` keeps the analyzed project open behind an RPC server, so
+each call skips the fresh container + JVM + project open it would
+otherwise pay. Measured on a ~940MB image that is about 20s/call headless against 9s/call resident —
+roughly half, not instant, and the boot costs ~6s once. Worth it for a sweep of many functions; not
+worth it for one or two. It costs you NO capability — every Ghidra op for that target routes to the
+resident project, not just `re_decompile_*` but `re_xrefs`/`re_function_xrefs`/`re_data_xrefs`, the
+taint pass, `re_recover_constant` and rename. Three things need the bridge stopped first
+(`re_bridge_stop`, restart after), because each opens the project itself and a second open fails
+outright: a COLD re-analysis (`re_reanalyze`); `re_script`, which runs your script against the warm
+project in its own container; and recon enrichment (`target_set_visible`/`target_reveal_dir` with
+`enrich=true`), which needs an inventory the bridge can't serve yet and refuses with a lead while a
+bridge is up. `re_bridge_stop` when done
+(needs features.network). The spine of it: get the authoritative facts (`re_binutils_facts`,
 `re_list_strings` — GREP the FULL string table, not a sample) → map the sinks and who reaches
 them (`re_xrefs` with no symbol) → read the
 suspect functions (`re_decompile_function`) → trace untrusted input to a dangerous sink,

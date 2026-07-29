@@ -183,6 +183,203 @@ def test_ghidra_op_backend_routes_to_live_bridge(env, monkeypatch):
     assert isinstance(ghidra_op_backend(), GhidraDecompiler)    # no target -> headless
 
 
+def test_taint_asks_the_seam_so_a_live_bridge_serves_it(env, monkeypatch):
+    """`GhidraTaintAnalyzer`'s OWN backend default must ask `ghidra_op_backend`, not name
+    `GhidraDecompiler()`.
+
+    Defence in depth, NOT a live bug: the production path already routed correctly, because
+    `_target_taint_analyzer` injects `ghidra_op_backend(target)` and `analyze_taint` is the only
+    caller. What was wrong is that the class's own fallback — reachable by constructing
+    `GhidraTaintAnalyzer()` directly, as a future caller or a test easily might — named the
+    implementation, so it would open the warm slot HEADLESS behind a live bridge's resident
+    project — which fails outright (LockException at the project open), not merely contends.
+    Every other PER-CALL Ghidra op asks the seam; now this one does too at both layers.
+    (`enrich_target` still doesn't — it needs an inventory the bridge can't serve yet, so it
+    refuses with an actionable lead instead; see test_enrich_target_refuses_behind_a_bridge.)"""
+    from hexgraph.engine.re import taint as T
+    from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler
+    from hexgraph.sandbox.decompiler import GhidraDecompiler
+
+    s, p, t = env
+    monkeypatch.setattr("hexgraph.engine.re.ghidra_bridge.connect_managed",
+                        lambda host, port: types.SimpleNamespace(host=host, port=port))
+    seen = []
+
+    def _spy(self, artifact, *, project=None):
+        seen.append(type(self))
+        return {"taint": {"flows": [], "analyzed": 0}}
+
+    monkeypatch.setattr(GhidraDecompiler, "run_taint", _spy)
+    monkeypatch.setattr(GhidraBridgeDecompiler, "run_taint", _spy)
+
+    # No bridge: the seam resolves to headless, exactly as before this fix.
+    T.GhidraTaintAnalyzer().analyze("/artifact", project=p, target=t)
+    assert seen == [GhidraDecompiler]
+
+    # Live bridge: taint must route THERE, not open a second headless view of the same project.
+    B.start_bridge(s, p, t, runner=_FakeExec())
+    T.GhidraTaintAnalyzer().analyze("/artifact", project=p, target=t)
+    assert seen == [GhidraDecompiler, GhidraBridgeDecompiler]
+
+
+def test_enrich_target_refuses_behind_a_bridge_with_an_actionable_lead(env, monkeypatch):
+    """The THIRD bridge exception. A live bridge holds the target's Ghidra project for its whole
+    life, and a second open of it raises LockException at the PROJECT open — read-only doesn't
+    help and there's no stale lock to steal. Enrichment can't route to the bridge like the
+    per-call ops do (it needs functions+calls+structs; the bridge's decompile op serves only
+    truncated names), so until the bridge serves that inventory it must refuse with a lead the
+    caller can act on rather than dying in an opaque Java traceback."""
+    from hexgraph.engine.re import ghidra as G
+    from hexgraph.sandbox.decompiler import GhidraDecompiler
+
+    s, p, t = env
+    monkeypatch.setattr("hexgraph.engine.re.ghidra_bridge.connect_managed",
+                        lambda host, port: types.SimpleNamespace(host=host, port=port))
+    called = []
+    monkeypatch.setattr(GhidraDecompiler, "decompile",
+                        lambda self, *a, **k: called.append(1) or {"functions": []})
+
+    B.start_bridge(s, p, t, runner=_FakeExec())
+    out = G.enrich_target(s, p, t)
+    assert out["ok"] is False
+    assert "re_bridge_stop" in out["detail"]        # names the action, not just the failure
+    assert not called                               # never attempted the conflicting open
+
+
+def test_reveal_surfaces_the_bridge_refusal_to_the_caller(hg_home, monkeypatch):
+    """The refusal has to reach the AGENT, not just happen.
+
+    `enrich_target`'s guard runs inside a DETACHED task, and a detached task can't report: `Task`
+    has no result column, `mark_succeeded` writes only status + finished_at, and the worker reads
+    `ok` and drops `detail`. So a guard that only fires there leaves the agent seeing
+    enrichment_queued=True and a succeeded task with nothing enriched — byte-identical to the
+    silent failure it replaced. The queue point must refuse synchronously and say why."""
+    from hexgraph.db.session import session_scope
+    from hexgraph.engine.targets import reveal as R
+    from hexgraph.engine.targets.ingest import create_project, ingest_file
+
+    from conftest import fixture_path
+
+    # Stub the BRIDGE, not the reason function, so the real wording is what gets asserted.
+    monkeypatch.setattr(B, "bridge_endpoint", lambda t: ("172.17.0.9", 4768))
+    queued = []
+    monkeypatch.setattr(R, "_ensure_ghidra_enrichment",
+                        lambda *a, **k: queued.append(1) or True)
+    monkeypatch.setattr(R, "_needs_ghidra_enrichment", lambda t: True)
+
+    with session_scope() as s:
+        p = create_project(s, name="revealblock")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        t.visible = False
+        s.flush()
+        out = R.set_visible(s, p.id, t.id, True, enrich=True)
+
+    assert out["enrichment_queued"] is False          # nothing queued that would silently no-op
+    assert "enrichment_detail" in out                 # ...and the caller is TOLD why
+    assert "re_bridge_stop" in out["enrichment_detail"]
+    assert not queued                                 # the detached task was never spawned
+
+
+def test_reveal_dir_partitions_rather_than_refusing_the_whole_batch(hg_home, monkeypatch):
+    """A bridge is PER-TARGET, so one bridged binary must not cost the rest their enrichment.
+
+    The detached batch worker already skips a target whose enrichment fails and carries on, so
+    refusing the whole batch would enrich FEWER targets than leaving it alone — and the common
+    shape is precisely that: a bridge up on the one big binary you're working, then reveal_dir
+    around it. Enrich the runnable ones, name the held-back ones."""
+    from hexgraph.db.session import session_scope
+    from hexgraph.engine.targets import reveal as R
+    from hexgraph.engine.targets.ingest import create_project, ingest_file
+
+    from conftest import fixture_path
+
+    with session_scope() as s:
+        p = create_project(s, name="partition")
+        fw = ingest_file(s, p, fixture_path("vuln_httpd"), name="fw")
+        kids = []
+        for n in ("a_bin", "b_bin", "c_bin"):
+            k = ingest_file(s, p, fixture_path("vuln_httpd"), name=n)
+            k.parent_id, k.visible = fw.id, False
+            k.metadata_json = {**(k.metadata_json or {}), "kind": "executable"}
+            kids.append(k)
+        s.flush()
+        bridged = kids[1].id
+
+        monkeypatch.setattr(B, "bridge_endpoint",
+                            lambda t: ("172.17.0.9", 4768) if t.id == bridged else None)
+        monkeypatch.setattr(R, "_needs_ghidra_enrichment", lambda t: True)
+        monkeypatch.setattr(R, "_materialize_recon_only",
+                            lambda *a, **k: {"kind": "executable"})
+        batched: list[list[str]] = []
+        monkeypatch.setattr(R, "_ensure_batch_ghidra_enrichment",
+                            lambda sess, proj, f, ids: batched.append(list(ids)) or len(ids))
+
+        out = R.reveal_dir(s, p.id, fw.id, "", enrich=True)
+
+    assert batched and bridged not in batched[0]      # the bridged one was held back...
+    assert len(batched[0]) == 2                       # ...and the other two still went
+    assert out["enrichment_queued"] == 2
+    assert out["enrichment_blocked"] == [bridged]     # named, not silently dropped
+    assert "re_bridge_stop" in out["enrichment_detail"]
+
+
+def test_the_advertised_recovery_actually_works_after_stopping_the_bridge(hg_home, monkeypatch):
+    """Follow the instruction we hand out, and check it WORKS.
+
+    The refusal tells the agent to stop the bridge and enrich again. Gating enrichment on the
+    visibility TRANSITION made that impossible: the target is already visible by then, so the
+    second call was a silent no-op and only an undocumented hide-then-reveal dance worked. A
+    recovery path an agent cannot follow is the same defect as a refusal it never sees — assert
+    the round trip, not just the refusal."""
+    from hexgraph.db.session import session_scope
+    from hexgraph.engine.targets import reveal as R
+    from hexgraph.engine.targets.ingest import create_project, ingest_file
+
+    from conftest import fixture_path
+
+    bridged = {"up": True}
+    monkeypatch.setattr(B, "bridge_endpoint",
+                        lambda t: ("172.17.0.9", 4768) if bridged["up"] else None)
+    monkeypatch.setattr(R, "_needs_ghidra_enrichment", lambda t: True)
+    monkeypatch.setattr(R, "_materialize_recon_only", lambda *a, **k: {"kind": "executable"})
+    queued = []
+    monkeypatch.setattr(R, "_ensure_ghidra_enrichment",
+                        lambda *a, **k: queued.append(1) or True)
+
+    with session_scope() as s:
+        p = create_project(s, name="recover")
+        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
+        t.visible = False
+        s.flush()
+
+        first = R.set_visible(s, p.id, t.id, True, enrich=True)
+        assert first["enrichment_queued"] is False and "re_bridge_stop" in first["enrichment_detail"]
+        assert not queued
+
+        # Do exactly what the detail says: stop the bridge, then enrich again. No hide step.
+        bridged["up"] = False
+        second = R.set_visible(s, p.id, t.id, True, enrich=True)
+
+    assert second["enrichment_queued"] is True       # the advertised recovery actually recovers
+    assert "enrichment_detail" not in second
+    assert len(queued) == 1
+
+
+def test_bridge_start_doc_does_not_advertise_a_capability_tradeoff(env):
+    """The advertised description is what an agent reads before deciding to start a bridge. It used
+    to say re_xrefs falls back to radare2 and emulation/rename are unavailable — true once, but the
+    'later release' it promised had already shipped, so the text was deterring agents from the fast
+    path with a cost that no longer exists. Pin the corrected claim."""
+    from hexgraph.agent.mcp_catalog import catalog
+
+    doc = {x["name"]: x for x in catalog()}["re_bridge_start"]["description"]
+    assert "falls back to radare2" not in doc
+    assert "later release" not in doc
+    assert "re_xrefs" in doc                    # ...it names the ops the bridge DOES serve
+    assert "taint" in doc
+    assert "re_reanalyze" in doc                # ...and the one genuine exception (cold re-import)
+
+
 def test_endpoint_none_when_bridge_dead(env, monkeypatch):
     s, p, t = env
     B.start_bridge(s, p, t, runner=_FakeExec())            # records endpoint

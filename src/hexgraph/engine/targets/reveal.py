@@ -89,6 +89,27 @@ def _materialize_on_reveal(session: Session, project: Project, target: Target, *
         return False
 
 
+def enrichment_blocked_reason(target: Target) -> str | None:
+    """Why Ghidra enrichment CANNOT run for `target` right now, or None to proceed.
+
+    Today the one reason is a live managed Ghidra bridge: it holds the target's project open for
+    its whole life, and enrichment needs its own open (it reads the full function/call/struct
+    inventory a bridge doesn't serve), so a second open fails outright with a `LockException`.
+
+    This is checked at the QUEUE point, synchronously, because a detached task cannot tell the
+    agent anything. `Task` has no result column, `mark_succeeded` records only status +
+    finished_at, and the worker reads `enrich_target`'s `ok` and drops its `detail` — so a run
+    that refuses inside the worker is reported to the agent as a SUCCESS with nothing enriched.
+    Refusing here is what turns that silent no-op into an answer the agent can act on."""
+    from hexgraph.engine.re.bridge import bridge_endpoint
+
+    if bridge_endpoint(target):
+        return ("a live Ghidra bridge holds this target's project — run re_bridge_stop first, "
+                "then reveal again to enrich (a bridge cannot serve the full "
+                "function/call/struct inventory enrichment needs)")
+    return None
+
+
 def _ensure_ghidra_enrichment(session: Session, project: Project, target: Target) -> bool:
     """Kick off `target`'s optional Ghidra enrichment (`engine.re.ghidra.enrich_target`) in a
     DETACHED background OS process if it isn't already in flight — same pattern as
@@ -176,13 +197,29 @@ def set_visible(session: Session, project_id: str, target_id: str, visible: bool
     t.visible = visible
     materialized = False
     enrichment_queued = False
-    if visible and not was_visible:
+    # Enrichment is gated on the CALLER asking for it, not on the visibility TRANSITION. Gating it
+    # on `not was_visible` made "run re_bridge_stop, then reveal again to enrich" — the recovery
+    # this very function hands out — impossible to follow: a second reveal of an already-visible
+    # target was a silent no-op, and the only thing that worked was an undocumented hide-then-
+    # reveal dance. `enrich=True` is already an explicit per-call opt-in on ONE target, so honoring
+    # it on an already-visible target is what the caller asked for, not a surprise. (reveal_dir
+    # deliberately does NOT reconsider visible children — with prefix="" that's the dozen-analyses
+    # stampede its own docstring records; it points at THIS verb instead.)
+    wants_enrich = bool(visible and enrich)
+    blocked = enrichment_blocked_reason(t) if wants_enrich else None
+    if visible and (not was_visible or wants_enrich):
         project = session.get(Project, project_id)
-        enrichment_queued = _materialize_on_reveal(session, project, t, enrich=enrich)
+        # Don't queue enrichment we KNOW will no-op; the detached task can't report back, so the
+        # agent would see enrichment_queued=True and a succeeded task with nothing enriched.
+        enrichment_queued = _materialize_on_reveal(
+            session, project, t, enrich=wants_enrich and blocked is None)
         materialized = True
     session.flush()
-    return {"target_id": t.id, "name": t.name, "visible": t.visible, "materialized": materialized,
-            "enrichment_queued": enrichment_queued}
+    out = {"target_id": t.id, "name": t.name, "visible": t.visible, "materialized": materialized,
+           "enrichment_queued": enrichment_queued}
+    if blocked:
+        out["enrichment_detail"] = blocked
+    return out
 
 
 def reveal_dir(session: Session, project_id: str, firmware_target_id: str, prefix: str, *,
@@ -238,11 +275,35 @@ def reveal_dir(session: Session, project_id: str, firmware_target_id: str, prefi
                 to_enrich.append(c.id)
             revealed_ids.append(c.id)
     session.flush()
-    enrichment_queued = _ensure_batch_ghidra_enrichment(session, project, fw, to_enrich)
-    return {
+    # Release the write lock BEFORE the per-target bridge check: the reveal loop above wrote
+    # `visible` + recon nodes for every child, so the flush holds SQLite's single writer lock,
+    # and `enrichment_blocked_reason` can `docker inspect` (10s timeout) once per target. Holding
+    # the lock across that is the #283/#293-297 bug class — see `release_write_lock`.
+    from hexgraph.db.session import release_write_lock
+    release_write_lock(session)
+
+    # A bridge is PER-TARGET, so partition rather than refuse the batch. The detached batch worker
+    # already skips a target whose enrichment fails and carries on with the rest, so refusing all
+    # of them because one is bridged would ENRICH FEWER targets than doing nothing about it —
+    # and the common shape is exactly that: a bridge up on the one big binary you're working,
+    # then reveal_dir around it. Enrich the rest, and name the ones held back.
+    blocked_ids = [tid for tid in to_enrich
+                   if enrichment_blocked_reason(session.get(Target, tid))]
+    runnable = [tid for tid in to_enrich if tid not in set(blocked_ids)]
+    enrichment_queued = _ensure_batch_ghidra_enrichment(session, project, fw, runnable)
+    out = {
         "firmware_target_id": firmware_target_id,
         "prefix": prefix,
         "revealed": len(revealed_ids),
         "target_ids": revealed_ids,
         "enrichment_queued": enrichment_queued,
     }
+    if blocked_ids:
+        out["enrichment_blocked"] = blocked_ids
+        out["enrichment_detail"] = (
+            f"{len(blocked_ids)} of {len(to_enrich)} target(s) were NOT queued for enrichment: a "
+            f"live Ghidra bridge holds their project. Run re_bridge_stop on each, then enrich it "
+            f"with target_set_visible(target_id, visible=true, enrich=true) — re-running "
+            f"target_reveal_dir will NOT pick them up, because it only acts on children that are "
+            f"still hidden. The ids are in enrichment_blocked; the rest were queued normally.")
+    return out

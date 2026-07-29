@@ -3,7 +3,8 @@
 A bridge is a LONG-LIVED sandbox container running a resident PyGhidra process with the target's
 WARM slot opened once (`ghidra_bridge_probe.py` -> `pyghidra_lib.open_target` + `serve_bridge`), kept
 resident behind a small line-delimited JSON RPC server. While it's up, decompiles for that target
-reuse the resident project instead of re-opening it per call (~15s on a 6GB project). Decompiler
+reuse the resident project instead of re-opening it per call — measured ~2.3x on a 938MB image
+(~20s/call headless vs ~9s/call resident, with a ~6s one-off boot). Decompiler
 routing (`sandbox/decompiler.get_decompiler`) prefers a live bridge for the target.
 
 Design mirrors `re_analyze` (engine.re.analysis): single-flight by a deterministic container name,

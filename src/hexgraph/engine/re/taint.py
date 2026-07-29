@@ -32,10 +32,14 @@ class TaintAnalyzer(ABC):
     available: bool = True
 
     @abstractmethod
-    def analyze(self, artifact: str, *, project: Any = None) -> dict:
+    def analyze(self, artifact: str, *, project: Any = None, target: Any = None) -> dict:
         """Return ``{available, flows, analyzed, error}``. Each flow is
         ``{function, function_addr, source:{kind,detail},
-            sink:{func,category,call_addr,arg_index}, sanitized:[...]}``."""
+            sink:{func,category,call_addr,arg_index}, sanitized:[...]}``.
+
+        `target` is what lets an implementation ASK THE SEAM for its backend — a live managed
+        Ghidra bridge is per-target, so without it the only reachable backend is the headless one
+        (see `GhidraTaintAnalyzer.analyze`). Optional so a backend that doesn't care can ignore it."""
         ...
 
 
@@ -46,13 +50,14 @@ class NullTaintAnalyzer(TaintAnalyzer):
     name = "none"
     available = False
 
-    def analyze(self, artifact: str, *, project: Any = None) -> dict:
+    def analyze(self, artifact: str, *, project: Any = None, target: Any = None) -> dict:
         return {"available": False, "flows": [], "analyzed": 0, "error": None}
 
 
 class GhidraTaintAnalyzer(TaintAnalyzer):
-    """Ghidra `HighFunction` P-Code taint, run headless in the sandbox over the persistent
-    project (via `GhidraDecompiler.run_taint`)."""
+    """Ghidra `HighFunction` P-Code taint over the target's persistent project — served by the
+    target's LIVE managed bridge when one is up, else run headless in the sandbox
+    (`ghidra_op_backend`, the same seam the xref / emulate / rename ops ask)."""
 
     name = "ghidra"
     available = True
@@ -60,12 +65,22 @@ class GhidraTaintAnalyzer(TaintAnalyzer):
     def __init__(self, decompiler: Any = None) -> None:
         self._decompiler = decompiler
 
-    def analyze(self, artifact: str, *, project: Any = None) -> dict:
+    def analyze(self, artifact: str, *, project: Any = None, target: Any = None) -> dict:
         deco = self._decompiler
         if deco is None:
-            from hexgraph.sandbox.decompiler import GhidraDecompiler
+            # ASK THE SEAM, don't name the implementation. A live managed bridge OWNS the target's
+            # Ghidra project and serves `taint` itself (pyghidra_lib.bridge_dispatch); naming
+            # GhidraDecompiler() here would open that same project a second time, which FAILS
+            # (LockException at the project open).
+            #
+            # Defence in depth, not a live-bug fix: production reaches this class through
+            # `_target_taint_analyzer`, which already injects ghidra_op_backend(target), so this
+            # default is reachable only by constructing GhidraTaintAnalyzer() directly. It should
+            # still be correct for whoever does that next. With no bridge up it resolves to the
+            # same headless backend as before.
+            from hexgraph.sandbox.decompiler import ghidra_op_backend
 
-            deco = GhidraDecompiler()
+            deco = ghidra_op_backend(target)
         run_taint = getattr(deco, "run_taint", None)
         if run_taint is None:
             return {"available": False, "flows": [], "analyzed": 0,
@@ -148,7 +163,7 @@ def analyze_taint(session: Session, project: Any, target: Any, *,
             return {"available": False, "flows": [], "analyzed": 0, "promoted": promoted,
                     "observation_id": None, "cached": False, "error": _lead}
 
-    result = analyzer.analyze(path, project=project)
+    result = analyzer.analyze(path, project=project, target=target)
     flows = result.get("flows") or []
     status = "error" if result.get("error") else "ok"
 
