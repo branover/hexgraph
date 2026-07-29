@@ -70,11 +70,18 @@ def _container_ip(name: str) -> str | None:
         return None
 
 
-def _container_absent(name: str) -> bool | None:
-    """Tri-state, and the distinction is the whole point: True when docker POSITIVELY reports no
-    such container, False when it reports one, and None when the inspect ITSELF failed — daemon
-    unreachable, timeout, anything that leaves us unable to tell. Callers that must not guess wrong
-    treat None as "assume it's there"."""
+def _container_not_running(name: str) -> bool | None:
+    """Tri-state, and the polarity is the whole risk, so read the name literally: True when docker
+    positively tells us the container is NOT running (absent, or present but exited), False when it
+    reports one running, and None when the inspect could not answer at all — daemon unreachable,
+    timeout, an unrecognised error, an unparseable reply.
+
+    NOT "absent": an exited container still exists, and this returns True for it. That is
+    deliberate — its JVM is dead, so it holds no project — but the distinction matters enough that
+    the earlier name (`_container_absent`) was simply wrong about its own behaviour.
+
+    Every unknown resolves to None, including a zero-exit reply we cannot parse. A caller that must
+    not guess wrong reads None as "assume it IS running"."""
     try:
         out = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", name],
                              capture_output=True, text=True, timeout=10)
@@ -85,7 +92,12 @@ def _container_absent(name: str) -> bool | None:
         # Docker says this plainly for a container that isn't there; anything else is a failure
         # to answer, not an answer.
         return True if ("no such object" in err or "no such container" in err) else None
-    return (out.stdout or "").strip().lower() != "true"
+    state = (out.stdout or "").strip().lower()
+    if state == "true":
+        return False        # running
+    if state == "false":
+        return True         # exists but exited — dead JVM, holds nothing
+    return None             # zero exit, unrecognised body ⇒ we did NOT get an answer
 
 
 def bridge_confirmed_gone(target) -> bool:
@@ -108,7 +120,7 @@ def bridge_confirmed_gone(target) -> bool:
         name = meta.get("container")
         if not name:
             return False  # can't name it, can't check it ⇒ assume it's alive
-        return _container_absent(name) is True  # None (couldn't tell) ⇒ assume alive
+        return _container_not_running(name) is True  # None (couldn't tell) ⇒ assume alive
     except Exception:  # noqa: BLE001 — an unanswerable probe must never read as "safe to proceed"
         return False
 

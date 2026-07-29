@@ -231,3 +231,18 @@ def test_ghidra_taint_finds_libc_input_command_injection(hg_home):
         # this is the flow the prior parameter-only model could not see.
         assert (f.get("source") or {}).get("kind") == "libc_input", f
         assert (f.get("source") or {}).get("detail") == "fgets", f
+
+
+def test_injected_backend_without_run_taint_reports_unavailable(hg_home):
+    """The guard scoped to the injected branch — which nothing pinned, so reverting the scoping
+    left every test green.
+
+    It exists only for an INJECTED backend: the seam path binds a module-local function, so it can
+    never be None there. `get_decompiler()` can hand back an R2Decompiler with no `run_taint`, which
+    is exactly the object a caller might inject by mistake."""
+    class _NoTaint:
+        pass
+
+    out = T.GhidraTaintAnalyzer(decompiler=_NoTaint()).analyze("/artifact")
+    assert out["available"] is False
+    assert "no taint backend" in (out["error"] or "")

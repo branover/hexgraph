@@ -391,7 +391,7 @@ def test_run_ghidra_op_does_NOT_retry_when_a_raising_bridge_is_STILL_SERVING(env
     monkeypatch.setattr("hexgraph.engine.re.ghidra_bridge.connect_managed",
                         lambda host, port: types.SimpleNamespace(host=host, port=port))
     B.start_bridge(s, p, t, runner=_FakeExec())
-    monkeypatch.setattr(B, "_container_absent", lambda name: False)  # still there — busy, not gone
+    monkeypatch.setattr(B, "_container_not_running", lambda name: False)  # still there — busy, not gone
     headless = []
     monkeypatch.setattr(GhidraBridgeDecompiler, "rename_function",
                         lambda self, *a, **k: (_ for _ in ()).throw(
@@ -494,21 +494,45 @@ def test_uncertain_liveness_does_NOT_degrade(env, monkeypatch):
                         lambda self, *a, **k: headless.append(1) or {})
 
     # docker can't answer -> "couldn't tell" -> must NOT degrade
-    monkeypatch.setattr(B, "_container_absent", lambda name: None)
-    with pytest.raises(Exception):
+    monkeypatch.setattr(B, "_container_not_running", lambda name: None)
+    with pytest.raises(B_UNAVAILABLE):     # the ORIGINAL error, not merely "something raised"
         run_ghidra_op(t, "run_taint", "/artifact")
     assert not headless
 
-    # docker says the container is still there -> definitely must NOT degrade
-    monkeypatch.setattr(B, "_container_absent", lambda name: False)
-    with pytest.raises(Exception):
+    # docker says the container is still running -> definitely must NOT degrade
+    monkeypatch.setattr(B, "_container_not_running", lambda name: False)
+    with pytest.raises(B_UNAVAILABLE):
         run_ghidra_op(t, "run_taint", "/artifact")
     assert not headless
 
     # only a POSITIVE "no such container" degrades
-    monkeypatch.setattr(B, "_container_absent", lambda name: True)
+    monkeypatch.setattr(B, "_container_not_running", lambda name: True)
     run_ghidra_op(t, "run_taint", "/artifact")
     assert headless == [1]
+
+
+def test_container_not_running_resolves_every_unknown_to_None(monkeypatch):
+    """The PARSING, which the contract tests stub past. Polarity is this function's whole risk, so
+    pin each docker shape — and especially that a zero-exit reply we can't read is `None`
+    (couldn't tell) rather than True, since True is the answer that lets a headless op run."""
+    import subprocess as _sp
+
+    def _docker(rc=0, out="", err=""):
+        monkeypatch.setattr(B.subprocess, "run",
+                            lambda *a, **k: _sp.CompletedProcess(a[0], rc, out, err))
+
+    _docker(out="true\n");  assert B._container_not_running("c") is False   # running
+    _docker(out="false\n"); assert B._container_not_running("c") is True    # exited — dead JVM
+    _docker(rc=1, err="Error: No such object: c")
+    assert B._container_not_running("c") is True                            # positively absent
+    # everything below is "we did not get an answer" -> None -> caller assumes it IS running
+    _docker(rc=1, err="permission denied while trying to connect to the Docker daemon")
+    assert B._container_not_running("c") is None
+    _docker(rc=0, out="")                     ; assert B._container_not_running("c") is None
+    _docker(rc=0, out="<no value>")            ; assert B._container_not_running("c") is None
+    monkeypatch.setattr(B.subprocess, "run",
+                        lambda *a, **k: (_ for _ in ()).throw(_sp.TimeoutExpired("docker", 10)))
+    assert B._container_not_running("c") is None
 
 
 def test_run_ghidra_op_raises_a_bad_op_name_without_touching_headless(env, monkeypatch):
