@@ -487,6 +487,18 @@ def _effective_limit(max_chars) -> int:
         return _MAX
 
 
+def _clip_with_hint(body: str, *, hint: str, limit: int, obs_id: str | None) -> str:
+    """Clip `body` to `limit` but ALWAYS keep `hint` — the paging/resume line — attached.
+
+    Appending the hint and then clipping the whole string drops the hint exactly when the result
+    is big, which is exactly when the agent most needs to know more pages exist. Both surviving
+    recovery paths (a larger max_chars, obs_get) return only the CURRENT page, so losing the line
+    leaves the agent with no signal that there IS a next page. Reserving room for the hint costs a
+    little body text and keeps the paging contract intact at any size."""
+    tail = f"\n{hint}" if hint else ""
+    return _clip_body(body, limit=max(_MAX_FLOOR, limit - len(tail)), obs_id=obs_id) + tail
+
+
 def _clip_body(s: str, *, limit: int, obs_id: str | None) -> str:
     """Truncate a body-returning tool's text to `limit` chars, but instead of the bare
     `…[truncated]` marker emit an ACTIONABLE one that names BOTH recovery paths and the sizes:
@@ -2796,19 +2808,22 @@ def _search_code_grep(ctx: ToolContext, args: dict, *, query: str, functions) ->
     if misses:
         lines.append(f"not decompiled: {', '.join(misses)}")
     if stopped:
-        lines.append(f"…[stopped after {_SEARCH_GREP_BUDGET_S}s — a decompile costs tens of "
-                     f"seconds and this call had {remaining} function(s) left. Re-call with "
-                     f"{resume} to continue; the {examined} already searched come "
-                     f"back free from the Observation store.]")
+        hint = (f"…[stopped after {_SEARCH_GREP_BUDGET_S}s — a decompile costs tens of "
+                f"seconds and this call had {remaining} function(s) left. Re-call with "
+                f"{resume} to continue; the {examined} already searched come "
+                f"back free from the Observation store.]")
     elif remaining > 0:
-        lines.append(f"…[{remaining} more of your {total} function(s) — re-call with {resume}]")
+        hint = f"…[{remaining} more of your {total} function(s) — re-call with {resume}]"
+    else:
+        hint = ""
     # A grep over a full page can match many lines across many functions, so this result really
     # does overflow the inline cap. Truncate with the ACTIONABLE marker (which names obs_get, the
     # full size, and max_chars) rather than the bare one: every hit is in the Observation, so a cut
     # tail must never silently hide a call site the agent was searching for. `max_chars` is a real
     # advertised param on this tool — the marker must never name a recovery path that doesn't exist.
-    return _clip_body("\n".join(lines), limit=_effective_limit(args.get("max_chars")),
-                      obs_id=obs.id if obs is not None else None)
+    return _clip_with_hint("\n".join(lines), hint=hint,
+                           limit=_effective_limit(args.get("max_chars")),
+                           obs_id=obs.id if obs is not None else None)
 
 
 def _ghidra_search(ctx: ToolContext, *, bytes_pat, immediate) -> dict | None:
@@ -2893,16 +2908,17 @@ def _search_code_scan(ctx: ToolContext, args: dict, *, bytes_pat, immediate) -> 
     body = "\n".join(
         f"- {h['addr']}" + (f"  in {h['in_function']}" if h.get("in_function") else "  (no function)")
         for h in page) or "(none)"
-    tail = ""
+    hint = ""
     if more:
-        tail = (f"\n…[{total - next_offset} more — re-call with offset={next_offset}"
+        hint = (f"…[{total - next_offset} more — re-call with offset={next_offset}"
                 + (f", limit={limit}" if limit != _SEARCH_PAGE else "") + "]")
     # Both modes of this tool honour max_chars and clip with the SAME actionable marker — a param
     # advertised on the tool must work whichever mode the agent used, or a scan caller gets it
-    # silently ignored (the quiet half of the failure the grep's marker had loudly).
-    return _clip_body(f"{header}\n{body}{tail}",
-                      limit=_effective_limit(args.get("max_chars")),
-                      obs_id=obs.id if obs is not None else None)
+    # silently ignored (the quiet half of the failure the grep's marker had loudly) — and both keep
+    # the paging hint attached through a clip (see _clip_with_hint).
+    return _clip_with_hint(f"{header}\n{body}", hint=hint,
+                           limit=_effective_limit(args.get("max_chars")),
+                           obs_id=obs.id if obs is not None else None)
 
 
 def _fuzz(ctx: ToolContext, args: dict) -> str:

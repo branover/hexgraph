@@ -525,6 +525,36 @@ def test_max_chars_raises_the_inline_cap_in_both_modes(hg_home, monkeypatch):
         assert "max_chars" in small                     # ...and its marker is the actionable one
 
 
+def test_truncation_keeps_the_paging_hint_in_both_modes(hg_home, monkeypatch):
+    """Clipping must never eat the resume line. Appending the hint and then clipping the whole
+    string drops it exactly when the result is big — precisely when the agent most needs to know
+    more pages exist. Both surviving recovery paths (a bigger max_chars, obs_get) return only the
+    CURRENT page, so losing the line leaves no signal that there IS a next one."""
+    # Grep: page 2 of 10 functions, each body long enough to overflow the inline cap.
+    names = [f"fn_{i:02d}" for i in range(10)]
+    body = "\n".join(f"  memcpy(dst_{i}, src, n);" for i in range(400))
+    _stub_decomp_bodies(monkeypatch, {n: body for n in names})
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        out = run_tool(ctx, "search_code",
+                       {"query": "memcpy", "functions": names, "limit": 2})
+        assert "truncated" in out.lower()               # it really did overflow...
+        assert "8 more" in out and "offset=2" in out    # ...and the resume line survived
+        assert "limit=2" in out                         # including the non-default page size
+
+    # Scan: a full 500-hit page, likewise past the cap.
+    hits = [{"addr": hex(0x400000 + i), "in_function": f"some_longish_function_name_{i}"}
+            for i in range(600)]
+    _wire_probe(monkeypatch, {"tool": "xrefs_probe", "mode": "search", "kind": "bytes",
+                              "pattern": "90", "hits": hits, "total": 600})
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        out = run_tool(ctx, "search_code", {"bytes_pattern": "90", "limit": 500})
+        assert "truncated" in out.lower()
+        assert "100 more" in out and "offset=500" in out
+        assert "limit=500" in out
+
+
 def test_grep_records_one_observation_and_no_graph(hg_home, monkeypatch):
     _stub_decomp_bodies(monkeypatch, {"f": "void f(){ memcpy(a,b,c); }"})
     with session_scope() as s:
