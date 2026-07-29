@@ -13,6 +13,7 @@ import types
 import pytest
 
 from hexgraph.engine.re import bridge as B
+from hexgraph.engine.re.ghidra_bridge import BridgeUnavailable as B_UNAVAILABLE
 
 
 class _Slot:
@@ -379,15 +380,18 @@ def test_run_ghidra_op_does_NOT_retry_when_a_raising_bridge_is_STILL_SERVING(env
     reports `BridgeUnavailable("... unreachable: timed out")` — from a bridge that is very much
     alive and still owns the project. Degrading there would run a headless op (for `rename`, a
     WRITE) on the project it holds, which is the exact collision this helper exists to prevent. So
-    liveness is OBSERVED after the failure (`bridge_endpoint`), never inferred from the exception.
+    liveness is OBSERVED after the failure, never inferred from the exception — and observed as
+    POSITIVE evidence of death (docker no longer has the container) rather than "the port didn't
+    answer within a second", which under exactly this load is the reading most likely to be wrong.
     """
     from hexgraph.engine.re.ghidra_bridge import BridgeUnavailable, GhidraBridgeDecompiler
     from hexgraph.sandbox.decompiler import GhidraDecompiler, run_ghidra_op
 
-    s, p, t = env  # env's _serving is True -> the bridge is still accepting connections
+    s, p, t = env
     monkeypatch.setattr("hexgraph.engine.re.ghidra_bridge.connect_managed",
                         lambda host, port: types.SimpleNamespace(host=host, port=port))
     B.start_bridge(s, p, t, runner=_FakeExec())
+    monkeypatch.setattr(B, "_container_absent", lambda name: False)  # still there — busy, not gone
     headless = []
     monkeypatch.setattr(GhidraBridgeDecompiler, "rename_function",
                         lambda self, *a, **k: (_ for _ in ()).throw(
@@ -466,6 +470,66 @@ def test_production_taint_path_degrades_a_gone_bridge(env, monkeypatch):
     out = T._target_taint_analyzer(t).analyze("/artifact", project=p, target=t)
     assert calls == ["bridge", "headless"]   # the SELECTED analyzer degraded, not just the helper
     assert out["available"] and out["analyzed"] == 7 and out["error"] is None
+
+
+def test_uncertain_liveness_does_NOT_degrade(env, monkeypatch):
+    """The guard asks for POSITIVE evidence of death, because uncertainty here is dangerous.
+
+    The failure that reaches the degrade path is typically a timeout from a bridge under LOAD —
+    exactly when a short connect probe misses and a `docker inspect` is slowest. A guard that read
+    "couldn't tell" as "gone" would therefore be weakest precisely when it matters, and its failure
+    mode is a second writer on a live Ghidra project."""
+    from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler
+    from hexgraph.sandbox.decompiler import GhidraDecompiler, run_ghidra_op
+
+    s, p, t = env
+    monkeypatch.setattr("hexgraph.engine.re.ghidra_bridge.connect_managed",
+                        lambda host, port: types.SimpleNamespace(host=host, port=port))
+    B.start_bridge(s, p, t, runner=_FakeExec())
+    monkeypatch.setattr(GhidraBridgeDecompiler, "run_taint",
+                        lambda self, *a, **k: (_ for _ in ()).throw(
+                            B_UNAVAILABLE("unreachable: timed out")))
+    headless = []
+    monkeypatch.setattr(GhidraDecompiler, "run_taint",
+                        lambda self, *a, **k: headless.append(1) or {})
+
+    # docker can't answer -> "couldn't tell" -> must NOT degrade
+    monkeypatch.setattr(B, "_container_absent", lambda name: None)
+    with pytest.raises(Exception):
+        run_ghidra_op(t, "run_taint", "/artifact")
+    assert not headless
+
+    # docker says the container is still there -> definitely must NOT degrade
+    monkeypatch.setattr(B, "_container_absent", lambda name: False)
+    with pytest.raises(Exception):
+        run_ghidra_op(t, "run_taint", "/artifact")
+    assert not headless
+
+    # only a POSITIVE "no such container" degrades
+    monkeypatch.setattr(B, "_container_absent", lambda name: True)
+    run_ghidra_op(t, "run_taint", "/artifact")
+    assert headless == [1]
+
+
+def test_run_ghidra_op_raises_a_bad_op_name_without_touching_headless(env, monkeypatch):
+    """A bad `op` is a programming error, not a dead bridge. Resolving it inside the try made the
+    two indistinguishable: it degraded, constructed a headless backend, and raised the same
+    AttributeError there with the real cause buried. The exception type is identical either way,
+    so assert headless is never CONSTRUCTED."""
+    import hexgraph.sandbox.decompiler as D
+
+    s, p, t = env
+    monkeypatch.setattr("hexgraph.engine.re.ghidra_bridge.connect_managed",
+                        lambda host, port: types.SimpleNamespace(host=host, port=port))
+    B.start_bridge(s, p, t, runner=_FakeExec())
+    built = []
+    real = D.GhidraDecompiler
+    monkeypatch.setattr(D, "GhidraDecompiler",
+                        lambda *a, **k: built.append(1) or real(*a, **k))
+
+    with pytest.raises(AttributeError):
+        D.run_ghidra_op(t, "no_such_op", "/artifact")
+    assert not built                                  # never fell through to the headless path
 
 
 def test_bridge_start_doc_does_not_advertise_a_capability_tradeoff(env):

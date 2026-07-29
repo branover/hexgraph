@@ -70,6 +70,49 @@ def _container_ip(name: str) -> str | None:
         return None
 
 
+def _container_absent(name: str) -> bool | None:
+    """Tri-state, and the distinction is the whole point: True when docker POSITIVELY reports no
+    such container, False when it reports one, and None when the inspect ITSELF failed — daemon
+    unreachable, timeout, anything that leaves us unable to tell. Callers that must not guess wrong
+    treat None as "assume it's there"."""
+    try:
+        out = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", name],
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        err = (out.stderr or "").lower()
+        # Docker says this plainly for a container that isn't there; anything else is a failure
+        # to answer, not an answer.
+        return True if ("no such object" in err or "no such container" in err) else None
+    return (out.stdout or "").strip().lower() != "true"
+
+
+def bridge_confirmed_gone(target) -> bool:
+    """True ONLY on positive evidence that `target`'s bridge is gone; False on ANY uncertainty.
+
+    `bridge_endpoint` answers "can I route there?" and collapses gone-vs-couldn't-tell into None.
+    That is right for routing — either way you don't route — and wrong for the one caller that must
+    decide whether running a headless op is SAFE, because a live bridge still owns the project and
+    a second open collides.
+
+    The asymmetry is what makes this a separate function. The failure that sends a caller here is
+    typically a TIMEOUT from a bridge under load, which is precisely when a one-second connect
+    probe is most likely to miss and a `docker inspect` is slowest — so a guard that reads
+    uncertainty as death is weakest exactly where it matters. Getting it wrong costs one failed op
+    in the safe direction, or a second writer on a live Ghidra project in the other."""
+    try:
+        meta = bridge_meta(target)
+        if not meta:
+            return True  # nothing registered — bridge_stop clears this, and nothing holds the slot
+        name = meta.get("container")
+        if not name:
+            return False  # can't name it, can't check it ⇒ assume it's alive
+        return _container_absent(name) is True  # None (couldn't tell) ⇒ assume alive
+    except Exception:  # noqa: BLE001 — an unanswerable probe must never read as "safe to proceed"
+        return False
+
+
 def _serving(ip: str, port: int, timeout: float = 2.0) -> bool:
     """True if the bridge port accepts a TCP connection (a cheap liveness check; the decompile RPC
     itself fails gracefully to headless if the server isn't actually ready)."""

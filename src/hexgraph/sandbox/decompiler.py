@@ -556,13 +556,18 @@ def run_ghidra_op(target, op: str, *args, **kwargs):
     try:
         return bound(*args, **kwargs)
     except Exception as exc:
-        from hexgraph.engine.re.bridge import bridge_endpoint
+        from hexgraph.engine.re.bridge import bridge_confirmed_gone
         from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler
 
         if not isinstance(backend, GhidraBridgeDecompiler):
             raise  # headless primary — nothing to degrade to
-        if bridge_endpoint(target):
-            raise  # STILL SERVING ⇒ alive, still owns the project, and a headless op would collide
+        if not bridge_confirmed_gone(target):
+            # Alive, or we couldn't tell. Either way it may still own the project, so a headless op
+            # would collide — re-raise. Note this asks for POSITIVE evidence of death rather than
+            # reusing `bridge_endpoint`, which reads "couldn't tell" as None: the failure that
+            # brought us here is usually a timeout from a LOADED bridge, exactly when a short
+            # connect probe misses, so uncertainty has to mean "assume alive".
+            raise
         log.debug("ghidra bridge is gone; degrading %s to headless (%s: %s)",
                   op, type(exc).__name__, exc)
     return getattr(GhidraDecompiler(), op)(*args, **kwargs)

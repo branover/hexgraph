@@ -87,8 +87,9 @@ class GhidraTaintAnalyzer(TaintAnalyzer):
             run_taint = _run
         else:
             # An INJECTED backend is used verbatim (tests, and any caller pinning one). Only this
-            # branch can lack the method — the seam path above always resolves a Ghidra backend,
-            # both of which implement run_taint — so the guard below belongs to it alone.
+            # branch can lack the method: the path above resolves through `ghidra_op_backend`
+            # SPECIFICALLY — whose two possible backends both implement run_taint — not through its
+            # neighbour `get_decompiler`, which can hand back an R2Decompiler that doesn't.
             run_taint = getattr(deco, "run_taint", None)
             if run_taint is None:
                 return {"available": False, "flows": [], "analyzed": 0,
