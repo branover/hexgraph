@@ -184,12 +184,10 @@ otherwise pay. Measured on a ~940MB image that is about 20s/call headless agains
 roughly half, not instant, and the boot costs ~6s once. Worth it for a sweep of many functions; not
 worth it for one or two. It costs you NO capability — every Ghidra op for that target routes to the
 resident project, not just `re_decompile_*` but `re_xrefs`/`re_function_xrefs`/`re_data_xrefs`, the
-taint pass, `re_recover_constant` and rename. Three things need the bridge stopped first
+taint pass, `re_recover_constant` and rename. Two things need the bridge stopped first
 (`re_bridge_stop`, restart after), because each opens the project itself and a second open fails
-outright: a COLD re-analysis (`re_reanalyze`); `re_script`, which runs your script against the warm
-project in its own container; and recon enrichment (`target_set_visible`/`target_reveal_dir` with
-`enrich=true`), which needs an inventory the bridge can't serve yet and refuses with a lead while a
-bridge is up. `re_bridge_stop` when done
+outright: a COLD re-analysis (`re_reanalyze`), and `re_script`, which runs your script against the
+warm project in its own container. Recon enrichment used to be a third — it isn't any more. `re_bridge_stop` when done
 (needs features.network). The spine of it: get the authoritative facts (`re_binutils_facts`,
 `re_list_strings` — GREP the FULL string table, not a sample) → map the sinks and who reaches
 them (`re_xrefs` with no symbol) → read the

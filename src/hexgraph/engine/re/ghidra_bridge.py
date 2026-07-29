@@ -198,6 +198,16 @@ class _ManagedOps:
         return None
 
     def decompile(self, program: str | None, function: str | None) -> dict:
+        """The FULL whole-program inventory plus an optional focus — the same payload the headless
+        probe returns, because it is the same core (`pyghidra_lib.decompile_core`, reached through
+        `bridge_dispatch`'s `decompile` op).
+
+        `calls` and `structs` are passed through rather than dropped. The server has always sent
+        them; discarding them here silently made the bridge a decompile-only backend, which is why
+        recon enrichment — the one consumer that reads the whole inventory — could not be served by
+        a live bridge at all. `functions` is re-clipped to the same 20000 cap the core already
+        applies, which is a no-op today and stays as a belt-and-braces bound on a payload that
+        arrives over a socket."""
         req: dict = {"op": "decompile"}
         if function:
             req["focus"] = function
@@ -206,6 +216,7 @@ class _ManagedOps:
         focus = None if resp.get("error") else resp.get("focus")
         return {"functions": (resp.get("functions") or [])[:_MAX_FUNCTION_NAMES],
                 "functions_total": resp.get("functions_total"), "focus": focus,
+                "calls": resp.get("calls") or [], "structs": resp.get("structs") or [],
                 "tool": "ghidra_bridge"}
 
     # The remaining Ghidra ops, each a single RPC to the resident program (the server runs the

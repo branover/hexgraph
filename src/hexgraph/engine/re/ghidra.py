@@ -141,28 +141,18 @@ def enrich_target(session, project, target) -> dict:
     Returns a summary of what was recorded; raises only on a hard sandbox failure
     (caller guards)."""
     from hexgraph.engine import observations as O
-    from hexgraph.engine.re.bridge import bridge_endpoint
-    from hexgraph.sandbox.decompiler import GhidraDecompiler
+    from hexgraph.sandbox.decompiler import ghidra_op_backend
 
-    # A live managed bridge HOLDS this target's Ghidra project open for its whole life, and a
-    # second open of the same project fails hard — `LockException` at the PROJECT open, before
-    # any read-only program open, so `-readOnly` does not help and there is no stale lock to
-    # steal (the lock records the holding container's hostname).
+    # ASK THE SEAM, like every other Ghidra op. A live managed bridge HOLDS this target's project
+    # for its whole life and a second open of it fails hard (LockException at the PROJECT open —
+    # `-readOnly` doesn't help, and the lock records the holder's container hostname), so naming
+    # GhidraDecompiler() here made enrichment the one op that couldn't run against a bridged
+    # target. It can now: the bridge serves the same whole-program inventory from the same core
+    # (`pyghidra_lib.decompile_core`), so the payload contract below is identical either way.
     #
-    # Unlike the per-call ops, enrichment can't just ask `ghidra_op_backend`: it needs the FULL
-    # inventory (functions + calls + structs), and the bridge's decompile op serves only
-    # truncated function names. Until the bridge can serve that inventory, refuse with the
-    # actionable lead rather than dying inside a Java traceback that tells the caller nothing.
-    if bridge_endpoint(target):
-        return {"ok": False,
-                "detail": "a live Ghidra bridge holds this target's project — run re_bridge_stop "
-                          "first, then re-run enrichment (a bridge cannot serve the full "
-                          "function/call/struct inventory enrichment needs)"}
-
-    # Route through the decompiler seam (passing `project`) so the full-inventory analysis
-    # PERSISTS to the project's Ghidra-project cache and is reused by later decompiles — same
-    # JSON contract (functions/calls/structs), analyze-once.
-    data = GhidraDecompiler().decompile(target.path, project=project)
+    # Passing `project` keeps the headless path persisting its analysis to the Ghidra-project
+    # cache for later decompiles; the bridge ignores it, because a live bridge IS the warm project.
+    data = ghidra_op_backend(target).decompile(target.path, project=project)
     if "error" in data:
         return {"ok": False, "detail": data["error"]}
 

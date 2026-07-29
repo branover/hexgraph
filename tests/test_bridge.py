@@ -222,147 +222,61 @@ def test_taint_asks_the_seam_so_a_live_bridge_serves_it(env, monkeypatch):
     assert seen == [GhidraDecompiler, GhidraBridgeDecompiler]
 
 
-def test_enrich_target_refuses_behind_a_bridge_with_an_actionable_lead(env, monkeypatch):
-    """The THIRD bridge exception. A live bridge holds the target's Ghidra project for its whole
-    life, and a second open of it raises LockException at the PROJECT open — read-only doesn't
-    help and there's no stale lock to steal. Enrichment can't route to the bridge like the
-    per-call ops do (it needs functions+calls+structs; the bridge's decompile op serves only
-    truncated names), so until the bridge serves that inventory it must refuse with a lead the
-    caller can act on rather than dying in an opaque Java traceback."""
+def test_managed_decompile_passes_through_the_whole_inventory():
+    """The defect this PR exists to fix: the bridge client DISCARDED `calls` and `structs`.
+
+    The server has always sent them — `bridge_dispatch`'s `decompile` op returns
+    `pyghidra_lib.decompile_core`'s result, the same core the headless probe uses — so dropping
+    them client-side silently made the bridge a decompile-only backend and locked recon
+    enrichment, the one consumer that reads the whole inventory, out of a bridged target."""
+    from hexgraph.engine.re import ghidra_bridge as GB
+
+    server_payload = {
+        "functions": ["main", "parse"], "functions_total": 2,
+        "focus": {"name": "main", "pseudocode": "int main(){}"},
+        "calls": [{"from": "main", "to": "parse"}],
+        "structs": [{"name": "hdr", "size": 8}],
+    }
+    ops = GB._ManagedOps.__new__(GB._ManagedOps)
+    ops._rpc = lambda req: server_payload            # noqa: SLF001 — exercising the client contract
+
+    out = ops.decompile(program=None, function=None)
+    assert out["calls"] == server_payload["calls"]       # ...no longer dropped
+    assert out["structs"] == server_payload["structs"]
+    assert out["functions"] == ["main", "parse"]
+    assert out["functions_total"] == 2
+
+
+def test_enrich_target_asks_the_seam_and_uses_the_bridge_when_one_is_live(env, monkeypatch):
+    """Enrichment is no longer the one Ghidra op that can't run against a bridged target.
+
+    It used to name `GhidraDecompiler()` directly, so with a bridge holding the project its open
+    failed outright (LockException). Now it asks `ghidra_op_backend` like every other op, and the
+    payload contract is identical either way because both sides run the same core."""
     from hexgraph.engine.re import ghidra as G
+    from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler
     from hexgraph.sandbox.decompiler import GhidraDecompiler
 
     s, p, t = env
     monkeypatch.setattr("hexgraph.engine.re.ghidra_bridge.connect_managed",
                         lambda host, port: types.SimpleNamespace(host=host, port=port))
-    called = []
-    monkeypatch.setattr(GhidraDecompiler, "decompile",
-                        lambda self, *a, **k: called.append(1) or {"functions": []})
+    # This test is about WHICH backend is asked, not the recording that follows; the env fixture's
+    # session is a stub, so keep enrich_target's Observation writes out of it.
+    monkeypatch.setattr("hexgraph.engine.observations.record_observation",
+                        lambda *a, **k: (types.SimpleNamespace(id="obs"), False))
+    seen = []
+    payload = {"functions": ["main"], "calls": [{"from": "main", "to": "parse"}],
+               "structs": [{"name": "hdr"}]}
+    for cls in (GhidraDecompiler, GhidraBridgeDecompiler):
+        monkeypatch.setattr(cls, "decompile",
+                            lambda self, *a, **k: (seen.append(type(self)), payload)[1])
+
+    G.enrich_target(s, p, t)
+    assert seen == [GhidraDecompiler]                    # no bridge -> headless, as before
 
     B.start_bridge(s, p, t, runner=_FakeExec())
-    out = G.enrich_target(s, p, t)
-    assert out["ok"] is False
-    assert "re_bridge_stop" in out["detail"]        # names the action, not just the failure
-    assert not called                               # never attempted the conflicting open
-
-
-def test_reveal_surfaces_the_bridge_refusal_to_the_caller(hg_home, monkeypatch):
-    """The refusal has to reach the AGENT, not just happen.
-
-    `enrich_target`'s guard runs inside a DETACHED task, and a detached task can't report: `Task`
-    has no result column, `mark_succeeded` writes only status + finished_at, and the worker reads
-    `ok` and drops `detail`. So a guard that only fires there leaves the agent seeing
-    enrichment_queued=True and a succeeded task with nothing enriched — byte-identical to the
-    silent failure it replaced. The queue point must refuse synchronously and say why."""
-    from hexgraph.db.session import session_scope
-    from hexgraph.engine.targets import reveal as R
-    from hexgraph.engine.targets.ingest import create_project, ingest_file
-
-    from conftest import fixture_path
-
-    # Stub the BRIDGE, not the reason function, so the real wording is what gets asserted.
-    monkeypatch.setattr(B, "bridge_endpoint", lambda t: ("172.17.0.9", 4768))
-    queued = []
-    monkeypatch.setattr(R, "_ensure_ghidra_enrichment",
-                        lambda *a, **k: queued.append(1) or True)
-    monkeypatch.setattr(R, "_needs_ghidra_enrichment", lambda t: True)
-
-    with session_scope() as s:
-        p = create_project(s, name="revealblock")
-        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
-        t.visible = False
-        s.flush()
-        out = R.set_visible(s, p.id, t.id, True, enrich=True)
-
-    assert out["enrichment_queued"] is False          # nothing queued that would silently no-op
-    assert "enrichment_detail" in out                 # ...and the caller is TOLD why
-    assert "re_bridge_stop" in out["enrichment_detail"]
-    assert not queued                                 # the detached task was never spawned
-
-
-def test_reveal_dir_partitions_rather_than_refusing_the_whole_batch(hg_home, monkeypatch):
-    """A bridge is PER-TARGET, so one bridged binary must not cost the rest their enrichment.
-
-    The detached batch worker already skips a target whose enrichment fails and carries on, so
-    refusing the whole batch would enrich FEWER targets than leaving it alone — and the common
-    shape is precisely that: a bridge up on the one big binary you're working, then reveal_dir
-    around it. Enrich the runnable ones, name the held-back ones."""
-    from hexgraph.db.session import session_scope
-    from hexgraph.engine.targets import reveal as R
-    from hexgraph.engine.targets.ingest import create_project, ingest_file
-
-    from conftest import fixture_path
-
-    with session_scope() as s:
-        p = create_project(s, name="partition")
-        fw = ingest_file(s, p, fixture_path("vuln_httpd"), name="fw")
-        kids = []
-        for n in ("a_bin", "b_bin", "c_bin"):
-            k = ingest_file(s, p, fixture_path("vuln_httpd"), name=n)
-            k.parent_id, k.visible = fw.id, False
-            k.metadata_json = {**(k.metadata_json or {}), "kind": "executable"}
-            kids.append(k)
-        s.flush()
-        bridged = kids[1].id
-
-        monkeypatch.setattr(B, "bridge_endpoint",
-                            lambda t: ("172.17.0.9", 4768) if t.id == bridged else None)
-        monkeypatch.setattr(R, "_needs_ghidra_enrichment", lambda t: True)
-        monkeypatch.setattr(R, "_materialize_recon_only",
-                            lambda *a, **k: {"kind": "executable"})
-        batched: list[list[str]] = []
-        monkeypatch.setattr(R, "_ensure_batch_ghidra_enrichment",
-                            lambda sess, proj, f, ids: batched.append(list(ids)) or len(ids))
-
-        out = R.reveal_dir(s, p.id, fw.id, "", enrich=True)
-
-    assert batched and bridged not in batched[0]      # the bridged one was held back...
-    assert len(batched[0]) == 2                       # ...and the other two still went
-    assert out["enrichment_queued"] == 2
-    assert out["enrichment_blocked"] == [bridged]     # named, not silently dropped
-    assert "re_bridge_stop" in out["enrichment_detail"]
-
-
-def test_the_advertised_recovery_actually_works_after_stopping_the_bridge(hg_home, monkeypatch):
-    """Follow the instruction we hand out, and check it WORKS.
-
-    The refusal tells the agent to stop the bridge and enrich again. Gating enrichment on the
-    visibility TRANSITION made that impossible: the target is already visible by then, so the
-    second call was a silent no-op and only an undocumented hide-then-reveal dance worked. A
-    recovery path an agent cannot follow is the same defect as a refusal it never sees — assert
-    the round trip, not just the refusal."""
-    from hexgraph.db.session import session_scope
-    from hexgraph.engine.targets import reveal as R
-    from hexgraph.engine.targets.ingest import create_project, ingest_file
-
-    from conftest import fixture_path
-
-    bridged = {"up": True}
-    monkeypatch.setattr(B, "bridge_endpoint",
-                        lambda t: ("172.17.0.9", 4768) if bridged["up"] else None)
-    monkeypatch.setattr(R, "_needs_ghidra_enrichment", lambda t: True)
-    monkeypatch.setattr(R, "_materialize_recon_only", lambda *a, **k: {"kind": "executable"})
-    queued = []
-    monkeypatch.setattr(R, "_ensure_ghidra_enrichment",
-                        lambda *a, **k: queued.append(1) or True)
-
-    with session_scope() as s:
-        p = create_project(s, name="recover")
-        t = ingest_file(s, p, fixture_path("vuln_httpd"), name="httpd")
-        t.visible = False
-        s.flush()
-
-        first = R.set_visible(s, p.id, t.id, True, enrich=True)
-        assert first["enrichment_queued"] is False and "re_bridge_stop" in first["enrichment_detail"]
-        assert not queued
-
-        # Do exactly what the detail says: stop the bridge, then enrich again. No hide step.
-        bridged["up"] = False
-        second = R.set_visible(s, p.id, t.id, True, enrich=True)
-
-    assert second["enrichment_queued"] is True       # the advertised recovery actually recovers
-    assert "enrichment_detail" not in second
-    assert len(queued) == 1
+    G.enrich_target(s, p, t)
+    assert seen == [GhidraDecompiler, GhidraBridgeDecompiler]   # live bridge -> served by it
 
 
 def test_bridge_start_doc_does_not_advertise_a_capability_tradeoff(env):
