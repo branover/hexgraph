@@ -176,9 +176,15 @@ radare2): the whole-program tools (`re_decompile_*`, `re_list_functions`, the `r
 DETACHED, single-flight whole-binary analysis with a generous budget that a per-call timeout can't cut short. Kick it off,
 poll it (re-call `re_analyze` until state=`analyzed`), and then those per-call tools are instant.
 (`re_disassemble` and `re_binutils_facts`/`re_list_strings` need no analysis — use them freely while
-it warms.) On a LARGE Ghidra target you'll decompile many functions of, `re_bridge_start(target)`
-keeps the analyzed project RESIDENT so each `re_decompile_*` returns in a fraction of a second
-instead of re-opening the project every call; `re_bridge_stop` when done (needs features.network). The spine of it: get the authoritative facts (`re_binutils_facts`,
+it warms.) Then, on a LARGE target you expect to work through — more than a handful of decompiles — start a
+resident bridge: `re_bridge_start(target)` keeps the analyzed project open behind an RPC server, so
+each call returns in a fraction of a second instead of paying a fresh container + JVM + project open
+every time (tens of seconds each on a big binary; it is the difference between a ten-minute sweep and
+a ten-second one). It costs you NO capability — every Ghidra op for that target routes to the
+resident project, not just `re_decompile_*` but `re_xrefs`/`re_function_xrefs`/`re_data_xrefs`, the
+taint pass, `re_recover_constant` and rename. The one exception is a COLD re-analysis
+(`re_reanalyze`), which needs `re_bridge_stop` first and a restart after. `re_bridge_stop` when done
+(needs features.network). The spine of it: get the authoritative facts (`re_binutils_facts`,
 `re_list_strings` — GREP the FULL string table, not a sample) → map the sinks and who reaches
 them (`re_xrefs` with no symbol) → read the
 suspect functions (`re_decompile_function`) → trace untrusted input to a dangerous sink,
