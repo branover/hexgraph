@@ -187,7 +187,8 @@ resident project, not just `re_decompile_*` but `re_xrefs`/`re_function_xrefs`/`
 taint pass, `re_recover_constant` and rename. Two things need the bridge stopped first
 (`re_bridge_stop`, restart after), because each opens the project itself and a second open fails
 outright: a COLD re-analysis (`re_reanalyze`), and `re_script`, which runs your script against the
-warm project in its own container. Recon enrichment used to be a third — it isn't any more. `re_bridge_stop` when done
+warm project in its own container. Recon enrichment runs fine against a bridged
+target: the bridge serves the whole-program inventory it needs. `re_bridge_stop` when done
 (needs features.network). The spine of it: get the authoritative facts (`re_binutils_facts`,
 `re_list_strings` — GREP the FULL string table, not a sample) → map the sinks and who reaches
 them (`re_xrefs` with no symbol) → read the

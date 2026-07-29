@@ -230,8 +230,8 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
   to it rather than a conflicting headless open. Two things still want their own open and so need the
   bridge stopped first, since a second open of the project fails outright: a cold re-analysis
   (`re_reanalyze`), and `re_script`, which runs your script against the warm project in its own
-  container. Recon enrichment used to be a third, until the bridge learned to serve the whole-program
-  inventory it needs. Also on the CLI: `hexgraph ghidra-bridge start|stop|status <target>`.
+  container. Recon enrichment is not one of them: the bridge serves the whole-program inventory it
+  needs, so revealing with `enrich=true` works against a bridged target. Also on the CLI: `hexgraph ghidra-bridge start|stop|status <target>`.
 - **`re_script` is the escape hatch over the warm analysis DB (gated, off by default).** The curated `re_*`
   verbs answer the common questions; the full Ghidra analysis holds more than any fixed verb exposes.
   `re_script(target, script=…)` runs an agent-supplied **Python 3** script in the sandbox against the same warm
