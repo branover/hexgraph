@@ -555,6 +555,34 @@ def test_truncation_keeps_the_paging_hint_in_both_modes(hg_home, monkeypatch):
         assert "limit=500" in out
 
 
+def test_advertised_max_chars_actually_returns_the_untruncated_result(hg_home, monkeypatch):
+    """The marker's `max_chars≥N` must be a number that WORKS — follow it once and the result is
+    whole. Asserting only that the hint survives a clip is not enough: reserving room for the hint
+    makes the advertised N a fixed point unless the clip is told about the reservation (raising
+    max_chars raises the reservation by the same amount, so the re-call truncates again and prints
+    the identical N — an agent following the instruction loops forever)."""
+    import re as _re
+
+    names = [f"fn_{i:02d}" for i in range(10)]
+    body = "\n".join(f"  memcpy(dst_{i}, src, n);" for i in range(400))
+    _stub_decomp_bodies(monkeypatch, {n: body for n in names})
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        first = run_tool(ctx, "search_code",
+                         {"query": "memcpy", "functions": names, "limit": 2})
+        assert "truncated" in first.lower()
+        m = _re.search(r"max_chars≥(\d+)", first)
+        assert m, f"no max_chars knob advertised in: {first[-200:]}"
+
+        ctx.cache.clear()
+        second = run_tool(ctx, "search_code",
+                          {"query": "memcpy", "functions": names, "limit": 2,
+                           "max_chars": int(m.group(1))})
+        # ONE follow-up of the advertised size returns the whole thing — hint still attached.
+        assert "truncated" not in second.lower()
+        assert "8 more" in second and "offset=2" in second
+
+
 def test_grep_records_one_observation_and_no_graph(hg_home, monkeypatch):
     _stub_decomp_bodies(monkeypatch, {"f": "void f(){ memcpy(a,b,c); }"})
     with session_scope() as s:

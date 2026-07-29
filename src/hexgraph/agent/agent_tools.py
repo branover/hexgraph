@@ -496,25 +496,38 @@ def _clip_with_hint(body: str, *, hint: str, limit: int, obs_id: str | None) -> 
     leaves the agent with no signal that there IS a next page. Reserving room for the hint costs a
     little body text and keeps the paging contract intact at any size."""
     tail = f"\n{hint}" if hint else ""
-    return _clip_body(body, limit=max(_MAX_FLOOR, limit - len(tail)), obs_id=obs_id) + tail
+    # `reserve` is what keeps the advertised max_chars honest: the clip must be told that the
+    # caller appends `tail` afterwards, or the number it prints is a FIXED POINT (see _clip_body).
+    return _clip_body(body, limit=max(_MAX_FLOOR, limit - len(tail)),
+                      obs_id=obs_id, reserve=len(tail)) + tail
 
 
-def _clip_body(s: str, *, limit: int, obs_id: str | None) -> str:
+def _clip_body(s: str, *, limit: int, obs_id: str | None, reserve: int = 0) -> str:
     """Truncate a body-returning tool's text to `limit` chars, but instead of the bare
     `…[truncated]` marker emit an ACTIONABLE one that names BOTH recovery paths and the sizes:
     re-call with a larger max_chars, or get_observation(<id>) for the full body. The full body
-    is always in the Observation, so a head-truncation can never silently hide a tail sink."""
+    is always in the Observation, so a head-truncation can never silently hide a tail sink.
+
+    `reserve` is the number of chars the CALLER appends after this returns — a paging hint held
+    outside the clip (`_clip_with_hint`). It changes nothing about what gets truncated, only the
+    max_chars figure advertised, which has to cover the caller's WHOLE final string. Without it
+    that figure is a fixed point: the caller derives its clip limit by subtracting the hint, so
+    re-calling with the advertised N leaves N - len(hint) for the body, truncates again, and
+    prints the identical N — an agent following the instruction would loop forever."""
     s = s or ""
     if len(s) <= limit:
         return s
     full = len(s)
+    # What the agent must actually pass to get the whole final string back: this body PLUS
+    # whatever the caller appends to it.
+    need = full + reserve
     # Name BOTH tool forms — the in-process agent loop has `get_observation`, the MCP surface
     # advertises `obs_get`; both return the full body uncapped. Suggest a larger max_chars only
     # when it can actually reach the full size (it clamps at _MAX_CEILING); past that, the
     # observation tool is the only way to the full body.
     obs = f"get_observation/obs_get('{obs_id}')" if obs_id else None
-    if full <= _MAX_CEILING:
-        knob = f"re-call with max_chars\u2265{full}"
+    if need <= _MAX_CEILING:
+        knob = f"re-call with max_chars\u2265{need}"
         tail = f"{knob}, or {obs} for the full body" if obs else f"{knob} for the full body"
     else:
         tail = f"{obs} for the full body" if obs else "the full body is in the Observation store"
