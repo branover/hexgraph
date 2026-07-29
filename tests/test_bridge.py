@@ -536,6 +536,15 @@ def test_container_not_running_resolves_every_unknown_to_None(monkeypatch):
     monkeypatch.setattr(B.subprocess, "run",
                         lambda *a, **k: (_ for _ in ()).throw(_sp.TimeoutExpired("docker", 10)))
     assert B._container_not_running("c") is None
+    # OSError is what a MISSING docker binary raises — a different except arm from TimeoutExpired.
+    monkeypatch.setattr(B.subprocess, "run",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("No such file: docker")))
+    assert B._container_not_running("c") is None
+    # docker's other absent-object phrasing, and the normalization the parse leans on
+    _docker(rc=1, err="Error: No such container: c")
+    assert B._container_not_running("c") is True
+    _docker(out=" TRUE \r\n");  assert B._container_not_running("c") is False
+    _docker(out="FALSE\r\n");   assert B._container_not_running("c") is True
 
 
 def test_run_ghidra_op_raises_a_bad_op_name_without_touching_headless(env, monkeypatch):

@@ -234,15 +234,23 @@ def test_ghidra_taint_finds_libc_input_command_injection(hg_home):
 
 
 def test_injected_backend_without_run_taint_reports_unavailable(hg_home):
-    """The guard scoped to the injected branch — which nothing pinned, so reverting the scoping
-    left every test green.
+    """The injected-backend guard's contract, which nothing pinned before.
 
-    It exists only for an INJECTED backend: the seam path binds a module-local function, so it can
-    never be None there. `get_decompiler()` can hand back an R2Decompiler with no `run_taint`, which
-    is exactly the object a caller might inject by mistake."""
-    class _NoTaint:
-        pass
+    Precisely what this does and doesn't cover: it pins that the guard EXISTS and fires for a
+    backend lacking `run_taint`. It does NOT pin the guard's SCOPING to the injected branch —
+    scoped and unscoped are behaviourally identical, because the seam path binds a module-local
+    closure that can never be None, so the guard is unreachable there either way. (An earlier
+    claim that this test closed the scoping gap was wrong: the mutation used to "prove" it deleted
+    the guard outright rather than moving it, which is a different and easier thing to detect.)
 
-    out = T.GhidraTaintAnalyzer(decompiler=_NoTaint()).analyze("/artifact")
+    `R2Decompiler` is the realistic mistake — `get_decompiler()` returns it by default and it has
+    no `run_taint`, so a caller reaching for the wrong seam injects exactly this shape."""
+    from hexgraph.sandbox.decompiler import R2Decompiler
+
+    # Anchor the stand-in to the real class: if R2Decompiler ever grows run_taint (or a
+    # __getattr__), this test is measuring something that can no longer happen.
+    assert not hasattr(R2Decompiler, "run_taint")
+
+    out = T.GhidraTaintAnalyzer(decompiler=R2Decompiler()).analyze("/artifact")
     assert out["available"] is False
     assert "no taint backend" in (out["error"] or "")
