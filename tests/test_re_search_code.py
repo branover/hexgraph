@@ -373,10 +373,41 @@ def test_grep_releases_the_write_lock_before_each_decompile(hg_home, monkeypatch
     monkeypatch.setattr(AT, "_decomp", _fake)
     monkeypatch.setattr("hexgraph.db.session.release_write_lock",
                         lambda sess: order.append("release"))
+    # Two functions is deliberately BELOW _BRIDGE_NUDGE_MIN_COLD, so the nudge branch (which has a
+    # release of its own) can't run and this stays a clean per-decompile assertion. Pinned, so the
+    # exact sequence below doesn't silently depend on that constant staying above 2.
+    assert len(["a_fn", "b_fn"]) < AT._BRIDGE_NUDGE_MIN_COLD
     with session_scope() as s:
         ctx, p, t = _ctx(s)
         run_tool(ctx, "search_code", {"query": "log", "functions": ["a_fn", "b_fn"]})
     assert order == ["release", "decompile:a_fn", "release", "decompile:b_fn"]
+
+
+def test_grep_releases_the_write_lock_before_the_bridge_probe(hg_home, monkeypatch):
+    """The nudge branch's own release, which nothing pinned — removing it broke no test.
+
+    `_bridge_live` shells out to `docker inspect` when a bridge entry exists, and this runs inside
+    the tool's session_scope, so it is a slow op like the decompiles below it. Every other slow op
+    on this path releases first (and test_db_lock_contention pins eleven such sites individually);
+    this one was the odd one out."""
+    order = []
+    monkeypatch.setattr(AT, "_bridge_is_offerable", lambda: True)
+    monkeypatch.setattr(AT, "_bridge_live",
+                        lambda t: order.append("bridge_probe") or False)
+    monkeypatch.setattr(AT, "_decomp",
+                        lambda ctx, function, **kw: order.append(f"decompile:{function}") or
+                        {"focus": {"name": function, "pseudocode": "void f(){ log(); }"}})
+    monkeypatch.setattr("hexgraph.db.session.release_write_lock",
+                        lambda sess: order.append("release"))
+
+    names = [f"fn_{i}" for i in range(AT._BRIDGE_NUDGE_MIN_COLD)]
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        run_tool(ctx, "search_code", {"query": "log", "functions": names})
+
+    assert order[:2] == ["release", "bridge_probe"]     # released BEFORE the docker call
+    assert order[2] == "release"                        # ...and the per-decompile ones still fire
+    assert order[3] == "decompile:fn_0"
 
 
 def test_grep_stops_on_the_wall_clock_budget_and_reports_the_resume_offset(hg_home, monkeypatch):
