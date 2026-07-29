@@ -241,6 +241,74 @@ def test_grep_pages_over_the_functions_list(hg_home, monkeypatch):
         assert "fn_00" in out and "fn_03" in out
         assert "fn_04" not in out                      # the next page was not touched
         assert "6 more" in out and "offset=4" in out
+        # The hint must echo a NON-DEFAULT limit: an agent following it literally would otherwise
+        # get the default 50 back — up to 50 decompiles where it deliberately asked for 4.
+        assert "limit=4" in out
+
+
+def test_grep_resume_hint_omits_a_default_limit(hg_home, monkeypatch):
+    """...but a DEFAULT limit isn't echoed — noise in the hint the agent doesn't need."""
+    names = [f"fn_{i:03d}" for i in range(AT._SEARCH_FUNCS_MAX + 5)]
+    _stub_decomp_bodies(monkeypatch, {n: f"void {n}(){{}}" for n in names})
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        out = run_tool(ctx, "search_code", {"query": "void", "functions": names})
+        assert f"offset={AT._SEARCH_FUNCS_MAX}" in out
+        assert "limit=" not in out
+
+
+def test_grep_offset_past_the_end_is_not_reported_as_a_negative(hg_home, monkeypatch):
+    """An out-of-range page searched NOTHING. Reporting that as a clean 'no line contains X' would
+    let an agent paging blindly (offset += limit until it runs out) read the boundary page as an
+    authoritative negative on its whole candidate set."""
+    calls = _stub_decomp_bodies(monkeypatch, {"fn_a": "void fn_a(){ memcpy(a,b,c); }"})
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        out = run_tool(ctx, "search_code",
+                       {"query": "memcpy", "functions": ["fn_a", "fn_b"], "offset": 9})
+        assert calls == []                             # nothing decompiled
+        assert "past the end" in out and "NOT a negative result" in out
+        assert "no line in the searched bodies" not in out   # never the negative phrasing
+
+
+def test_grep_counter_advances_for_warm_hits_and_miss_paths(hg_home, monkeypatch):
+    """The resume contract rests on `searched` counting EVERY name examined — warm hits and the
+    two miss paths (decompiler error, no body) included, not just successful decompiles.
+
+    Two regressions this pins: counting only decompiles would make every resume re-do warm work;
+    not counting a miss would make a page whose FIRST function persistently errors report an
+    unchanged offset, so an agent following the hint loops forever on the same page."""
+    from hexgraph.engine import observations as O
+
+    clock = {"t": 1000.0}
+    monkeypatch.setattr("time.monotonic", lambda: clock["t"])
+    monkeypatch.setattr(AT, "_SEARCH_GREP_BUDGET_S", 300)
+
+    def _fake(ctx, function, **kw):
+        clock["t"] += 200.0            # each decompile burns 200s of the 300s budget
+        if function == "ghost_fn":
+            return {"functions": [], "focus": None}    # examined, but yields no body
+        return {"focus": {"name": function, "pseudocode": f"void {function}(){{ memcpy(a,b,c); }}"}}
+
+    monkeypatch.setattr(AT, "_decomp", _fake)
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        O.record_observation(
+            s, project_id=p.id, target_id=t.id, source="agent",
+            tool="decompile_function", args={"function": "warm_fn"},
+            result_kind="decompilation",
+            payload={"focus": {"name": "warm_fn", "pseudocode": "void warm_fn(){ memcpy(x,y,z); }"}},
+            summary="decompiled warm_fn", content_hash=O.content_hash_for(t))
+
+        # warm_fn (free) -> ghost_fn (examined, no body, 200s) -> c1 (200s) -> budget spent.
+        out = run_tool(ctx, "search_code",
+                       {"query": "memcpy",
+                        "functions": ["warm_fn", "ghost_fn", "c1", "c2", "c3"]})
+        assert "stopped after" in out
+        # 3 examined: the warm hit AND the no-body miss both advanced the counter.
+        assert "offset=3" in out
+        assert "over 3 of 5" in out
+        assert "ghost_fn" in out                       # the miss is reported, not silently dropped
 
 
 def test_grep_reuses_recorded_bodies_instead_of_re_decompiling(hg_home, monkeypatch):
@@ -390,6 +458,23 @@ def test_grep_reports_undecompilable_functions(hg_home, monkeypatch):
         assert "not decompiled" in out and "ghost_fn" in out
 
 
+def test_grep_truncation_names_the_observation_holding_every_hit(hg_home, monkeypatch):
+    """A grep over a full page can match far more than the inline cap. Truncation must be
+    RECOVERABLE, never silent: the marker names obs_get + the full size, because every hit is in
+    the Observation and a cut tail must not hide a call site the agent was searching for."""
+    # One function whose body matches on thousands of lines — comfortably past the inline cap.
+    body = "\n".join(f"  memcpy(dst_{i}, src, n);" for i in range(2000))
+    _stub_decomp_bodies(monkeypatch, {"huge_fn": body})
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        out = run_tool(ctx, "search_code", {"query": "memcpy", "functions": ["huge_fn"]})
+        assert len(out) <= AT._MAX + 400              # clipped to the inline cap (+ the marker)
+        assert "truncated" in out.lower()
+        obs = s.query(Observation).filter(Observation.target_id == t.id,
+                                          Observation.result_kind == "search_code").one()
+        assert obs.id in out                          # the marker points at the full payload
+
+
 def test_grep_records_one_observation_and_no_graph(hg_home, monkeypatch):
     _stub_decomp_bodies(monkeypatch, {"f": "void f(){ memcpy(a,b,c); }"})
     with session_scope() as s:
@@ -426,6 +511,46 @@ def test_decompiled_bodies_normalizes_names_and_takes_the_newest(hg_home):
 
         got = O.decompiled_bodies(s, t.id, names=["parse_request", "never_decompiled"])
         assert got == {"parse_request": "NEW BODY"}    # normalized key, newest wins, scoped to ask
+
+
+def test_decompiled_bodies_does_not_scan_the_whole_store_for_a_cold_name(hg_home, monkeypatch):
+    """The pre-filter that makes this helper cheap in the case it actually runs in.
+
+    Resolving every name lets the loop exit early, but a MIXED warm/cold candidate set — the grep's
+    normal input — never resolves everything. Without gating the CAS read on the row's stored
+    `node_refs`/args, one never-decompiled name makes the helper read and JSON-parse every
+    decompilation blob on the target, and a paged walk re-pays that per page over a store it is
+    itself growing. Pin the read count, not just the answer."""
+    from hexgraph.engine import cas as _cas
+    from hexgraph.engine import observations as O
+
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        for i in range(25):
+            O.record_observation(
+                s, project_id=p.id, target_id=t.id, source="agent",
+                tool="decompile_function", args={"function": f"other_{i}"},
+                result_kind="decompilation",
+                payload={"focus": {"name": f"other_{i}", "pseudocode": f"void other_{i}(){{}}"}},
+                summary=f"decompiled other_{i}", content_hash=O.content_hash_for(t),
+                node_refs=[f"other_{i}"])
+        O.record_observation(
+            s, project_id=p.id, target_id=t.id, source="agent",
+            tool="decompile_function", args={"function": "warm_fn"},
+            result_kind="decompilation",
+            payload={"focus": {"name": "warm_fn", "pseudocode": "void warm_fn(){ memcpy(x,y,z); }"}},
+            summary="decompiled warm_fn", content_hash=O.content_hash_for(t),
+            node_refs=["warm_fn"])
+
+        reads = []
+        real = _cas.get_text
+        monkeypatch.setattr(_cas, "get_text",
+                            lambda proj, ref: (reads.append(ref), real(proj, ref))[1])
+
+        # One warm name + one that was never decompiled: the early exit CANNOT fire.
+        got = O.decompiled_bodies(s, t.id, names=["warm_fn", "never_decompiled"])
+        assert set(got) == {"warm_fn"}                 # correct answer...
+        assert len(reads) == 1                         # ...for ONE blob read, not all 26
 
 
 def test_decompiled_bodies_skips_empty_bodies(hg_home):

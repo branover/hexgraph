@@ -2695,6 +2695,14 @@ def _search_code_grep(ctx: ToolContext, args: dict, *, query: str, functions) ->
     limit = _bound_page(args.get("limit"), _SEARCH_FUNCS_MAX, 1, _SEARCH_FUNCS_MAX)
     names = all_names[offset:offset + limit]
 
+    # An out-of-range page searched NOTHING, which is not the same as finding nothing. Say so
+    # before doing any work, or an agent paging blindly (offset += limit until it "runs out")
+    # reads the boundary page's clean no-hits line as an authoritative negative on its candidates.
+    if not names:
+        return (f"search_code grep {query!r}: offset={offset} is past the end of your "
+                f"{total}-function list — NOTHING was searched, so this is NOT a negative result. "
+                f"Valid offsets are 0..{max(0, total - 1)}.")
+
     # Every body already in the Observation store, in ONE pass — these cost nothing.
     warm = O.decompiled_bodies(ctx.session, ctx.target.id, names=names)
 
@@ -2714,8 +2722,11 @@ def _search_code_grep(ctx: ToolContext, args: dict, *, query: str, functions) ->
             reused += 1
             searched += 1
         else:
-            # The budget gates only work we haven't STARTED; a warm hit is free, so a spent
-            # budget never blocks one.
+            # The budget gates only work we haven't STARTED — a warm hit above never consults it.
+            # We BREAK rather than continue so `searched` stays a contiguous prefix and the resume
+            # offset is exact; a `continue` would let `next_offset` permanently skip cold functions
+            # that were never examined. The cost is that warm names after the stop are skipped too,
+            # which is fine — they're deferred to the resume, where they come back free.
             if time.monotonic() >= deadline:
                 stopped = True
                 break
@@ -2749,21 +2760,29 @@ def _search_code_grep(ctx: ToolContext, args: dict, *, query: str, functions) ->
     # reuse forever") assumes a given (tool, args) yields the same result every time — true of a
     # decompile, but NOT of a wall-clock-bounded grep, which examines however many functions it
     # got through. Only `ok` rows dedup, so marking a partial keeps it from shadowing a later
-    # complete run of the SAME args with a stale, short payload. `list_observations` doesn't
-    # filter on status, so the partial stays discoverable either way.
-    _record_obs(ctx, tool="search_code",
-                args={k: v for k, v in (("query", query), ("functions", names),
-                                        ("offset", offset), ("limit", limit)) if v},
-                result_kind="search_code",
-                payload={"mode": "grep", "query": query, "functions": names,
-                         "decompiled": decompiled, "reused": reused, "hits": hits,
-                         "misses": misses, "total": total, "offset": offset,
-                         "examined": examined, "budget_stopped": stopped},
-                status="partial" if stopped else "ok",
-                summary=f"grep {query!r} over {examined} function(s): {len(hits)} matched "
-                        f"(decompiled {decompiled}, reused {reused})"
-                        + (" — PARTIAL, budget stopped" if stopped else ""))
+    # complete run of the SAME args with a stale, short payload. It stays readable via
+    # list_observations / search_observations / get_observation, none of which filter on status;
+    # only `observation_index`'s roll-up hides it, which is the right call — a budget-stopped grep
+    # is not an authoritative "this has been analyzed" entry for the context bundle.
+    obs, _cached = _record_obs(
+        ctx, tool="search_code",
+        args={k: v for k, v in (("query", query), ("functions", names),
+                                ("offset", offset), ("limit", limit)) if v},
+        result_kind="search_code",
+        payload={"mode": "grep", "query": query, "functions": names,
+                 "decompiled": decompiled, "reused": reused, "hits": hits,
+                 "misses": misses, "total": total, "offset": offset,
+                 "examined": examined, "budget_stopped": stopped},
+        status="partial" if stopped else "ok",
+        summary=f"grep {query!r} over {examined} function(s): {len(hits)} matched "
+                f"(decompiled {decompiled}, reused {reused})"
+                + (" — PARTIAL, budget stopped" if stopped else ""))
 
+    # Echo a non-default limit in the resume hint. Without it an agent that deliberately bounded
+    # its page (limit=4) and follows this instruction literally gets the default 50 back — up to
+    # 50 decompiles where it asked for 4, which is the "looks hung" failure this whole path exists
+    # to remove, reintroduced by our own instruction.
+    resume = f"offset={next_offset}" + (f", limit={limit}" if limit != _SEARCH_FUNCS_MAX else "")
     header = (f"search_code grep {query!r} over {examined} of {total} named function(s) "
               f"(decompiled {decompiled}, reused {reused} already-decompiled):")
     lines = [header]
@@ -2778,12 +2797,16 @@ def _search_code_grep(ctx: ToolContext, args: dict, *, query: str, functions) ->
     if stopped:
         lines.append(f"…[stopped after {_SEARCH_GREP_BUDGET_S}s — a decompile costs tens of "
                      f"seconds and this call had {remaining} function(s) left. Re-call with "
-                     f"offset={next_offset} to continue; the {examined} already searched come "
+                     f"{resume} to continue; the {examined} already searched come "
                      f"back free from the Observation store.]")
     elif remaining > 0:
-        lines.append(f"…[{remaining} more of your {total} function(s) — re-call with "
-                     f"offset={next_offset}]")
-    return _clip("\n".join(lines))
+        lines.append(f"…[{remaining} more of your {total} function(s) — re-call with {resume}]")
+    # A grep over a full page can match many lines across many functions, so this result really
+    # does overflow the inline cap. Truncate with the ACTIONABLE marker (which names obs_get and
+    # the full size) rather than the bare one: every hit is in the Observation, so a cut tail must
+    # never silently hide a call site the agent was searching for.
+    return _clip_body("\n".join(lines), limit=_MAX,
+                      obs_id=obs.id if obs is not None else None)
 
 
 def _ghidra_search(ctx: ToolContext, *, bytes_pat, immediate) -> dict | None:

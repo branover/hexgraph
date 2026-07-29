@@ -381,6 +381,24 @@ def decompiled_bodies(
     for r in rows:
         if not r.result_cas:
             continue
+        unresolved = wanted - set(out)
+        if not unresolved:
+            break  # every requested name resolved — no reason to read another CAS blob
+        # Cheap pre-filter BEFORE touching CAS. A focused decompile records the function it was
+        # about in `node_refs` (and often in args), so a row for a function we didn't ask for —
+        # or one we've already resolved — is rejected on an in-memory column read.
+        #
+        # This matters most in exactly the case the grep exists for. The early exit above only
+        # fires once EVERY requested name resolves, which a mixed warm/cold candidate set never
+        # does; without this pre-filter a single never-decompiled name makes the helper read and
+        # JSON-parse every decompilation blob on the target, and a paged walk re-pays that per
+        # page over a store it is itself growing. With it the reads are ~len(unresolved).
+        #
+        # A row carrying no usable name hint still falls through to CAS (empty `cands` means
+        # "can't tell", never "doesn't match"), so a body is never missed for want of a hint.
+        cands = _decompilation_subjects(r)
+        if cands and not (cands & unresolved):
+            continue
         raw = cas.get_text(project, r.result_cas)
         if not raw:
             continue
@@ -391,6 +409,7 @@ def decompiled_bodies(
         focus = payload.get("focus") if isinstance(payload, dict) else None
         if not isinstance(focus, dict):
             continue
+        # Authoritative name is the focus's own, never the hint (the hint only gates the read).
         key = normalize_symbol_name(focus.get("name") or "")
         # Newest wins: rows are newest-first, so never overwrite an already-resolved name.
         if not key or key not in wanted or key in out:
@@ -399,9 +418,29 @@ def decompiled_bodies(
         if not body:
             continue
         out[key] = body
-        if len(out) == len(wanted):
-            break  # every requested name resolved — no reason to read more CAS blobs
     return out
+
+
+def _decompilation_subjects(row: Observation) -> set[str]:
+    """The NORMALIZED function name(s) a `decompilation` Observation could be about, read from its
+    stored columns — or an empty set when the row carries no usable hint.
+
+    `node_refs` is the authoritative back-ref (`[focus_name]` for a focused decompile); a
+    name-addressed call also carries the name in `args_json["function"]`. Both are plain columns,
+    so this is an in-memory check whose only job is to reject an irrelevant row WITHOUT a CAS read.
+
+    Returning EMPTY for a hintless row is deliberate and load-bearing: the caller treats empty as
+    "can't tell, read it", which keeps the pre-filter a strict superset and makes a missed body
+    impossible. It never decides that a row DOES match — the focus name in the payload does."""
+    from hexgraph.engine.graph.nodes import normalize_symbol_name
+
+    raw: list[Any] = []
+    if isinstance(row.node_refs, list):
+        raw.extend(row.node_refs)
+    if isinstance(row.args_json, dict):
+        raw.append(row.args_json.get("function"))
+    return {k for k in (normalize_symbol_name(v) for v in raw if isinstance(v, str) and v.strip())
+            if k}
 
 
 def observation_index(session: Session, target_id: str) -> dict[str, Any]:
