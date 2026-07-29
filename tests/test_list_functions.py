@@ -182,3 +182,67 @@ def test_analysis_gate_precedes_work_on_ghidra_miss(hg_home, monkeypatch):
 def test_list_functions_is_analysis_gated():
     """The engine name stays in the gated set (unchanged from the old branch)."""
     assert "list_functions" in AT._ANALYSIS_GATED_TOOLS
+
+
+# ======================================================================================
+# Truncation markers: one implementation, and each names only recovery paths that EXIST
+# ======================================================================================
+
+def _huge_strings(n=400, width=200):
+    return [f"S{i:03d}_" + "x" * width for i in range(n)]
+
+
+def test_paginated_listers_name_the_observation_id_not_a_max_chars_they_lack(hg_home, monkeypatch):
+    """The three paginated listers hand-rolled their own clip budget. Consolidating them onto
+    `_clip_with_hint` must NOT hand them `_clip_body`'s default marker, because that advertises
+    `max_chars` — a param re_list_strings / re_list_functions / re_symbol do not accept, so
+    following it is a hard TypeError over MCP (the #299 finding-9 defect, three more times).
+
+    Their real recovery is the Observation, so the marker must carry its ID — today it says a bare
+    "obs_get" with no id, leaving the agent to go and find it."""
+    import hexgraph.agent.agent_tools as AT
+    from hexgraph.agent.mcp_catalog import catalog
+    from hexgraph.db.models import Observation
+
+    props = {x["name"]: (x["schema"].get("properties") or {}) for x in catalog()}
+    for name in ("re_list_strings", "re_list_functions", "re_symbol"):
+        assert "max_chars" not in props[name], f"{name} grew max_chars — revisit this test"
+
+    monkeypatch.setattr(AT, "_scan_artifact_strings",
+                        lambda path, pat: (_huge_strings(), False))
+    with session_scope() as s:
+        ctx = _ctx(s)
+        t = ctx.target
+        # a page that leaves a remainder, so the paging tail exists to be preserved
+        out = run_tool(ctx, "list_strings", {"limit": 200})
+        assert "truncated" in out.lower()
+        assert "max_chars" not in out          # never advertise what the tool can't take
+        obs = s.query(Observation).filter(Observation.target_id == t.id,
+                                          Observation.result_kind == "strings").all()
+        assert obs and obs[0].id in out        # the ID, so the agent can act without a lookup
+        assert "200 more" in out and "offset=200" in out   # paging hint survived the clip
+
+
+def test_decompile_keeps_its_promotable_callees_note_through_a_clip(hg_home, monkeypatch):
+    """Finding 12 from the #298 review. `note` — the not-yet-promoted callees an agent may want to
+    decompile next — was concatenated LAST, after the pseudocode, so a long function clipped it away
+    first. It's the actionable half of the result: the pseudocode is what you read, the note is what
+    you do next."""
+    import hexgraph.agent.agent_tools as AT
+
+    body = "\n".join(f"  int v{i} = compute_{i}();" for i in range(2000))
+    monkeypatch.setattr(AT, "_decomp", lambda ctx, function, **kw: {
+        "focus": {"name": function, "pseudocode": body,
+                  "callees": [{"name": "helper_a"}, {"name": "helper_b"}]},
+        "promotable_callees": ["helper_a", "helper_b"],
+        "observation_id": "obs-123",
+    })
+    monkeypatch.setattr("hexgraph.engine.re.analysis.analysis_state",
+                        lambda project, target: {"state": "analyzed", "detail": "(warm)"})
+    with session_scope() as s:
+        out = run_tool(_ctx(s), "decompile_function", {"function": "big_fn"})
+    assert "truncated" in out.lower()
+    # Assert the NOTE's own text, not the callee names — those also appear in the header's
+    # "(callees: …)" list, so matching on them passes whether or not the note survived.
+    assert "callees not yet in the graph" in out
+    assert out.index("callees not yet in the graph") > out.index("truncated")  # after the clip
