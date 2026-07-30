@@ -82,10 +82,12 @@ def _dispatch(session: Session, project: Project, target: Target, task: Task) ->
         names = list(params.get("functions") or [])
         ctx = ToolContext(session=session, project=project, target=target)
         # limit=len(names) opts out of the multi-page detach (an explicit page is respected) and
-        # covers the whole set in one pass; the budget is lifted for the same reason.
+        # covers the whole set in one pass; the budget is lifted for the same reason. `_detached`
+        # travels in `internal` because run_tool STRIPS `_`-prefixed keys out of the caller-
+        # supplied args — a model in the agent loop must not be able to lift those two bounds.
         run_tool(ctx, "search_code",
-                 {"query": params.get("query"), "functions": names,
-                  "offset": 0, "_detached": True})
+                 {"query": params.get("query"), "functions": names, "offset": 0},
+                 internal={"_detached": True})
         return
 
     if task.type == "recon_children_batch":

@@ -923,9 +923,21 @@ def _analysis_gate(ctx: ToolContext) -> str | None:
     return analysis_lead(ctx.project, ctx.target)
 
 
-def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
-    """Execute a tool call and return its result as text (errors as text too)."""
-    args = args or {}
+def run_tool(ctx: ToolContext, name: str, args: dict, *, internal: dict | None = None) -> str:
+    """Execute a tool call and return its result as text (errors as text too).
+
+    `args` is UNTRUSTED: the in-process agent loop hands us the model's raw tool_use input
+    verbatim (`engine.llm_tasks`), and that model's context is full of target-derived tool
+    output. So `_`-prefixed keys — the convention for a flag HexGraph sets for itself, never
+    advertises, and would not accept from a client — are STRIPPED here; an in-process caller
+    that genuinely needs one passes it in `internal`. The flag that motivated this is
+    `search_code`'s `_detached` (it lifts BOTH the page cap and the wall-clock budget, which
+    only the detached worker may do); the strip generalizes so the next such flag is safe by
+    default. Over MCP these were already unreachable (`mcp_server` dispatches `fn(**arguments)`
+    against an explicit keyword signature), so this closes the in-process path to match."""
+    args = {k: v for k, v in (args or {}).items() if not str(k).startswith("_")}
+    if internal:
+        args.update(internal)
     meta = ctx.target.metadata_json or {}
     try:
         # Analysis gate: the whole-program tools require a saved analysis for the active persistent
@@ -2741,9 +2753,42 @@ def _bridge_is_offerable() -> bool:
 
 
 def _grep_task_args(query: str, names: list[str]) -> dict:
-    """The identity of a detached grep — what makes a re-call ATTACH rather than launch a second
-    sweep of the same set. Kept as one authority so the launch and the poll can't disagree."""
+    """The params a detached grep runs from — the caller's own query and function ORDER, since
+    that's the order the sweep works through and the resume offsets are relative to."""
     return {"query": query, "functions": list(names)}
+
+
+def _grep_identity(params: dict) -> tuple:
+    """The IDENTITY of a grep sweep — what makes a re-call attach to (or collect) the sweep
+    already covering it, rather than launch a second one. Deliberately NOT the raw params:
+    identity is the lowercased query plus the SORTED SET of names.
+
+    Order and case must not matter. An agent that regenerates a 200-name candidate list gets the
+    same set in a different order, and the grep itself is case-insensitive (`q = query.lower()`),
+    so both spell the SAME sweep. Treating them as distinct launched a second concurrent sweep of
+    the same functions — and two concurrent sweeps of one target contend on its decompiler
+    project's advisory lock (`re.ghidra_project.DEFAULT_LOCK_TIMEOUT`), where the loser falls back
+    to a throwaway UNCACHED project: a cold whole-binary analysis per function.
+
+    Reads out of a params/args dict rather than taking (query, names) so the SAME authority
+    matches a Task's `params_json` and an Observation's `args_json` — the launch, the poll and the
+    collect can't disagree."""
+    return (str(params.get("query") or "").lower(),
+            tuple(sorted({str(f) for f in (params.get("functions") or [])})))
+
+
+def _finished_grep_obs(ctx: ToolContext, params: dict):
+    """The `search_code` Observation a COMPLETED detached sweep of `params` recorded, or None.
+    Matched on `_grep_identity` (not on the recorded args verbatim) so the collect survives the
+    same order/case variation the attach does."""
+    from hexgraph.db.models import Observation
+
+    ident = _grep_identity(params)
+    rows = (ctx.session.query(Observation)
+            .filter(Observation.target_id == ctx.target.id, Observation.tool == "search_code",
+                    Observation.result_kind == "search_code", Observation.status == "ok")
+            .order_by(Observation.created_at.desc()).all())
+    return next((r for r in rows if _grep_identity(r.args_json or {}) == ident), None)
 
 
 def _detached_grep(ctx: ToolContext, query: str, names: list[str]) -> str:
@@ -2756,24 +2801,52 @@ def _detached_grep(ctx: ToolContext, query: str, names: list[str]) -> str:
     the "looks hung" failure the budget exists to prevent. A detached process is the only shape that
     escapes both. Same kick-off-and-poll idiom as `re_analyze`.
 
-    SINGLE-FLIGHT: a queued/running task with the same (query, functions) is attached, never
-    duplicated. On completion the worker records the ordinary `search_code` Observation, so the
-    result is collected the same way any other analysis is."""
+    SINGLE-FLIGHT, and the re-call is the POLL — so it answers for every state of a prior sweep of
+    the same set (`_grep_identity`), never just the in-flight one:
+      queued/running — attach and report progress;
+      succeeded      — report DONE and hand back the recorded `search_code` Observation. A
+                       re-call must never quietly start a second sweep of a set already swept:
+                       the caller is polling, and told to poll by re-calling;
+      failed         — say so and retry, the way `analysis.start_analysis` reaps and retries a
+                       failed analysis container."""
     from hexgraph.db.models import Task, TaskStatus
     from hexgraph.db.session import release_write_lock
     from hexgraph.engine.tasks import create_task
     from hexgraph.engine.worker import spawn_detached_task
 
     args = _grep_task_args(query, names)
-    existing = next(
-        (t for t in ctx.session.query(Task)
-         .filter(Task.target_id == ctx.target.id, Task.type == "search_code_grep",
-                 Task.status.in_((TaskStatus.queued, TaskStatus.running))).all()
-         if (t.params_json or {}) == args), None)
+    ident = _grep_identity(args)
+    prior = [t for t in ctx.session.query(Task)
+             .filter(Task.target_id == ctx.target.id, Task.type == "search_code_grep")
+             .order_by(Task.created_at.desc()).all()
+             if _grep_identity(t.params_json or {}) == ident]
+    existing = next((t for t in prior
+                     if t.status in (TaskStatus.queued, TaskStatus.running)), None)
     if existing is not None:
         return (f"detached grep {existing.id} is {existing.status.value} over "
                 f"{len(names)} function(s) — re-call this exact search to poll it. Results land as "
                 f"a search_code Observation (obs_list(target, kind='search_code')) as it finishes.")
+
+    # A COMPLETED sweep is the answer, not a reason to sweep again. Prefer a succeeded run over a
+    # newer failed one: the succeeded one has a recorded result, and re-running it would only
+    # re-derive the same thing (the bodies are warm now, so paging it is cheap if that's wanted).
+    done = next((t for t in prior if t.status == TaskStatus.succeeded), None)
+    if done is not None:
+        obs = _finished_grep_obs(ctx, args)
+        where = (f" Its result is Observation {obs.id} — {obs.summary}. Read the matching lines "
+                 f"with obs_get({obs.id})." if obs is not None else
+                 " It recorded NO search_code Observation, so nothing was collectable — re-call "
+                 "with `limit` to grep a page synchronously and see why (an unresolved name / no "
+                 "saved analysis / Docker down all report themselves there).")
+        return (f"detached grep {done.id} over {len(names)} function(s) has FINISHED.{where} "
+                f"Re-calling this exact search returns this same completed result rather than "
+                f"re-sweeping the set; pass `limit` to page it synchronously instead.")
+
+    # A prior sweep that FAILED gets retried below — but say so, or the retry looks like a first
+    # attempt and a systematically-failing sweep is invisible.
+    failed = next((t for t in prior if t.status == TaskStatus.failed), None)
+    retry = (f"a previous detached grep of this set ({failed.id}) FAILED, retrying it. "
+             if failed is not None else "")
 
     task = create_task(ctx.session, project=ctx.project, target_id=ctx.target.id,
                        type="search_code_grep", params=args)
@@ -2787,7 +2860,7 @@ def _detached_grep(ctx: ToolContext, query: str, names: list[str]) -> str:
         ctx.session.commit()
         return (f"could not start a detached grep ({exc}); re-call with `limit` to grep one page "
                 f"at a time instead (up to {_SEARCH_FUNCS_MAX} functions per call).")
-    return (f"{len(names)} functions is more than one call can grep — a page is "
+    return (f"{retry}{len(names)} functions is more than one call can grep — a page is "
             f"{_SEARCH_FUNCS_MAX} and the wall-clock budget is {_SEARCH_GREP_BUDGET_S}s, so this "
             f"would have been several partial calls. Running it DETACHED as task {task.id} over the "
             f"whole set. Re-call this exact search to poll it; results land as a search_code "
