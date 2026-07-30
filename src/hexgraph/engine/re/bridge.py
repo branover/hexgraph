@@ -227,9 +227,11 @@ def _clear_bridge(session, target) -> None:
 
 
 def _finalize(session, project, target, name, *, runner) -> dict:
-    """Poll the container: if it's running AND serving, record the metadata + audit egress and
-    return `running`; if it exited, `failed`; if running-but-not-yet-serving, `starting`; if gone,
-    `none`. The single source of truth shared by start_bridge (after launch) and bridge_status."""
+    """Poll the container: if it's running AND serving, record the metadata and return `running`; if
+    it exited, `failed`; if running-but-not-yet-serving, record it `starting` (it already holds the
+    project lock); if gone, `none`. Whenever the container has an address, the egress gate + audit run
+    FIRST, so no entry is ever recorded — and therefore routable — before the policy has approved its
+    destination. The single source of truth shared by start_bridge (after launch) and bridge_status."""
     ex = runner
     poll = ex.poll_detached(name) or {}
     if not poll.get("exists"):
@@ -242,6 +244,31 @@ def _finalize(session, project, target, name, *, runner) -> dict:
                           "Ghidra slot may be missing (run re_analyze) or the image lacks the "
                           "bridge (rebuild with WITH_GHIDRA=1)", "container": name}
     ip = _container_ip(name)
+    # Gate on features.network (the dest IP is RFC1918-private) + audit BEFORE recording ANY entry,
+    # `starting` included. A recorded entry is a ROUTABLE endpoint — `bridge_route` hands its address
+    # straight to `connect_managed` — so gating only the `running` transition would spend the whole
+    # startup window (_START_WAIT_S and beyond) connecting to an address the policy may be about to
+    # REFUSE, with no EgressEvent for any of it. Refusing at the first poll instead of at first serve
+    # is also the better failure: the container is torn down before anything dials it.
+    if ip:
+        from hexgraph.engine.audit import record_egress
+        from hexgraph.policy import PolicyViolation, assert_allows_egress, local_tcp_scope
+
+        dest = f"{ip}:{BRIDGE_PORT}"
+        try:
+            scope = local_tcp_scope(ip, BRIDGE_PORT)
+            assert_allows_egress(dest, scope)
+        except PolicyViolation as exc:
+            record_egress(session, project_id=project.id, dest=dest, allowed=False,
+                          tool="ghidra_bridge", target_id=target.id, detail=str(exc), durable=True)
+            try:
+                ex.stop_detached(name, remove=True)
+            except Exception:  # noqa: BLE001
+                pass
+            _clear_bridge(session, target)
+            return {"state": "denied", "detail": str(exc), "container": name}
+        record_egress(session, project_id=project.id, dest=dest, allowed=True,
+                      tool="ghidra_bridge", target_id=target.id, detail=scope.rationale)
     if not (ip and _serving(ip, BRIDGE_PORT)):
         # RECORD it as `starting`, even though it isn't serving yet. The container is running, and
         # `open_target` takes the Ghidra project lock BEFORE it binds the socket — so for up to
@@ -253,25 +280,6 @@ def _finalize(session, project, target, name, *, runner) -> dict:
         return {"state": "starting",
                 "detail": "bridge container is up; still opening the project — call bridge_status "
                           "to poll", "container": name, "ip": ip, "port": BRIDGE_PORT}
-    # Serving. Gate on features.network (the dest IP is RFC1918-private) + audit, then record.
-    from hexgraph.engine.audit import record_egress
-    from hexgraph.policy import PolicyViolation, assert_allows_egress, local_tcp_scope
-
-    dest = f"{ip}:{BRIDGE_PORT}"
-    try:
-        scope = local_tcp_scope(ip, BRIDGE_PORT)
-        assert_allows_egress(dest, scope)
-    except PolicyViolation as exc:
-        record_egress(session, project_id=project.id, dest=dest, allowed=False,
-                      tool="ghidra_bridge", target_id=target.id, detail=str(exc), durable=True)
-        try:
-            ex.stop_detached(name, remove=True)
-        except Exception:  # noqa: BLE001
-            pass
-        _clear_bridge(session, target)
-        return {"state": "denied", "detail": str(exc), "container": name}
-    record_egress(session, project_id=project.id, dest=dest, allowed=True,
-                  tool="ghidra_bridge", target_id=target.id, detail=scope.rationale)
     _record_bridge(session, target, container=name, ip=ip, port=BRIDGE_PORT)
     return {"state": "running",
             "detail": "bridge ready — Ghidra ops for this target now reuse the resident project",

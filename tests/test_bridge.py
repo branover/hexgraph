@@ -748,3 +748,55 @@ def test_routing_prefers_the_RECORDED_ip_over_a_GARBAGE_docker_token(monkeypatch
     assert B.bridge_route(_T()) == ("172.17.0.5", B.BRIDGE_PORT)
     _docker("true 172.18.0.2172.19.0.2\n")        # concatenated pair -> same
     assert B.bridge_route(_T()) == ("172.17.0.5", B.BRIDGE_PORT)
+
+
+def test_a_starting_entry_is_egress_GATED_and_audited_before_it_is_routable(env, monkeypatch):
+    """The gate has to run before the entry exists, not before it says `running`.
+
+    Recording a `starting` bridge (so routing knows the project lock is held) makes its address a
+    ROUTING DESTINATION — `bridge_route` hands it straight to `connect_managed`. So if the per-dest
+    egress gate only ran on the `running` transition, the whole startup window would connect to an
+    address the policy is about to REFUSE, and none of it would reach `EgressEvent`. Gating only the
+    serving path also refuses too late to matter: the container is already being dialled."""
+    from hexgraph.policy import PolicyViolation
+
+    s, p, t = env
+    monkeypatch.setattr(B, "_serving", lambda ip, port, timeout=2.0: False)   # still opening
+    monkeypatch.setattr(B, "_container_ip", lambda name: "203.0.113.7")       # NOT private
+    audited = []
+    monkeypatch.setattr("hexgraph.engine.audit.record_egress",
+                        lambda session, **kw: audited.append(kw))
+    monkeypatch.setattr("hexgraph.policy.assert_allows_egress",
+                        lambda dest, scope: (_ for _ in ()).throw(
+                            PolicyViolation(f"egress refused: {dest} is not loopback/private")))
+    fake = _FakeExec()
+    res = B.start_bridge(s, p, t, runner=fake)
+
+    assert res["state"] == "denied" and "egress refused" in res["detail"]
+    assert B.bridge_meta(t) is None      # never recorded -> never a routing destination
+    assert B.bridge_route(t) is None     # ...so nothing dials the refused address
+    assert fake.stopped                  # ...and the container is torn down, not left running
+    assert [a["allowed"] for a in audited] == [False]   # the denial IS audited
+
+
+def test_a_recorded_starting_entry_is_cleared_when_its_container_exits(env, monkeypatch):
+    """The safety companion to recording a `starting` bridge: the entry must not outlive the
+    container. A project open that FAILS exits the probe (`ghidra_bridge_probe` returns 3/4), so the
+    container goes away — and both layers have to notice, or the target routes at a dead bridge
+    forever. `_finalize` clears the entry, and `bridge_route` independently refuses on the positive
+    evidence, so neither depends on the other having run."""
+    s, p, t = env
+    monkeypatch.setattr(B, "_serving", lambda ip, port, timeout=2.0: False)
+    B.start_bridge(s, p, t, runner=_FakeExec())
+    assert (B.bridge_meta(t) or {})["status"] == "starting"      # recorded while opening
+
+    # the open failed -> the probe exited -> the container is present but no longer running
+    dead = _FakeExec(poll={"exists": True, "running": False, "exit_code": 4})
+    res = B.bridge_status(s, p, t, runner=dead)
+    assert res["state"] == "failed"
+    assert B.bridge_meta(t) is None                              # reaped, not left dangling
+
+    # and routing refuses on its own evidence even before anyone polls
+    B.start_bridge(s, p, t, runner=_FakeExec())
+    monkeypatch.setattr(B, "_container_state", lambda name: (True, None))
+    assert B.bridge_route(t) is None
