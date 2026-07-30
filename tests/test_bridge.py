@@ -13,6 +13,8 @@ import types
 import pytest
 
 from hexgraph.engine.re import bridge as B
+
+_REAL_STATE = B._container_state
 from hexgraph.engine.re.ghidra_bridge import BridgeUnavailable as B_UNAVAILABLE
 
 
@@ -147,11 +149,23 @@ def test_start_reaps_exited_then_relaunches(env):
     assert fake.stopped and fake.started  # reaped the exited container, launched fresh
 
 
-def test_start_starting_when_not_yet_serving(env, monkeypatch):
+def test_start_starting_records_the_entry_but_is_not_yet_an_endpoint(env, monkeypatch):
+    """A container that is up but not yet serving is RECORDED as `starting`, and is deliberately
+    NOT an endpoint.
+
+    Both halves matter, and they are the two different questions this module keeps separate.
+    `open_target` takes the Ghidra project lock BEFORE it binds the socket, so a starting bridge
+    already OWNS the project — routing must see it (`bridge_route`) or a concurrent op goes headless
+    into that lock. But it can't answer an RPC yet, so anything asking "is it live right now?"
+    (`bridge_endpoint`, and the search_code nudge's `_bridge_live`) must still say no."""
     s, p, t = env
     monkeypatch.setattr(B, "_serving", lambda ip, port, timeout=2.0: False)  # port not up yet
     res = B.start_bridge(s, p, t, runner=_FakeExec())
-    assert res["state"] == "starting" and B.bridge_meta(t) is None  # not recorded until serving
+    assert res["state"] == "starting"
+    meta = B.bridge_meta(t)
+    assert meta and meta["status"] == "starting"       # recorded, so routing knows the lock is held
+    assert B.bridge_route(t)                           # ...and routes there rather than headless
+    assert B.bridge_endpoint(t) is None                # ...but it is not answering yet
 
 
 # --- routing + guard -----------------------------------------------------------
@@ -667,16 +681,21 @@ def test_routing_costs_one_docker_inspect_not_two(env, monkeypatch):
     monkeypatch.setattr("hexgraph.engine.re.ghidra_bridge.connect_managed",
                         lambda host, port: types.SimpleNamespace(host=host, port=port))
     B.start_bridge(s, p, t, runner=_FakeExec())
-    # exercise the REAL probe — the fixture stubs it away by default
-    monkeypatch.undo()
-    monkeypatch.setattr("hexgraph.engine.re.ghidra_bridge.connect_managed",
-                        lambda host, port: types.SimpleNamespace(host=host, port=port))
+    # Exercise the REAL probe by restoring just THIS function — `monkeypatch.undo()` would drop the
+    # whole offline-isolation harness (docker_available, the slot, policy, the executor) and let the
+    # test touch the host.
+    monkeypatch.setattr(B, "_container_state", B._container_state.__wrapped__
+                        if hasattr(B._container_state, "__wrapped__") else _REAL_STATE)
     inspects = []
     monkeypatch.setattr(B.subprocess, "run",
                         lambda *a, **k: inspects.append(a[0]) or
                         types.SimpleNamespace(returncode=0, stdout="true 172.17.0.9\n", stderr=""))
     ghidra_op_backend(t)
     assert len(inspects) == 1, inspects
+    # ...and that the ONE call really asks both questions — a single inspect that fetched only the
+    # state (leaving a second call for the ip) would satisfy a bare count.
+    fmt = inspects[0][inspects[0].index("-f") + 1]
+    assert "{{.State.Running}}" in fmt and ".IPAddress" in fmt
 
 
 def test_container_state_parses_the_real_two_field_replies(monkeypatch):

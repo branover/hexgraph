@@ -10,7 +10,9 @@ routing (`sandbox/decompiler.get_decompiler`) prefers a live bridge for the targ
 Design mirrors `re_analyze` (engine.re.analysis): single-flight by a deterministic container name,
 detached via `start_detached`, status by polling. The per-target registry is a `bridge` entry on
 `target.metadata_json` ({container, ip, port, status}) — no migration; routing reads it (the target
-is already in scope) and confirms liveness, self-healing a dead entry to the headless fallback.
+is already in scope). An entry is recorded as soon as the container is up, `starting` included,
+because the project lock is taken before the socket binds; routing falls back to headless only on
+positive evidence the container is gone (`bridge_route`), never on an unanswered probe.
 
 Networking: the bridge container runs with `allow_network=True` (`--network bridge`) and the host
 connects to its private bridge IP directly (the simplest routing — no docker-proxy `-p` publish).
@@ -241,6 +243,13 @@ def _finalize(session, project, target, name, *, runner) -> dict:
                           "bridge (rebuild with WITH_GHIDRA=1)", "container": name}
     ip = _container_ip(name)
     if not (ip and _serving(ip, BRIDGE_PORT)):
+        # RECORD it as `starting`, even though it isn't serving yet. The container is running, and
+        # `open_target` takes the Ghidra project lock BEFORE it binds the socket — so for up to
+        # _START_WAIT_S this bridge OWNS the project while answering nothing. Without an entry,
+        # `bridge_route` sees no bridge, sends the op headless, and it fails on that very lock.
+        # `bridge_endpoint` still requires serving, so the two questions stay separate: "might it
+        # own the project?" (route) vs "can it answer right now?" (the nudge's `_bridge_live`).
+        _record_bridge(session, target, container=name, ip=ip, port=BRIDGE_PORT, status="starting")
         return {"state": "starting",
                 "detail": "bridge container is up; still opening the project — call bridge_status "
                           "to poll", "container": name, "ip": ip, "port": BRIDGE_PORT}
@@ -335,7 +344,11 @@ def start_bridge(session, project, target, *, runner=None) -> dict:
 
 
 def stop_bridge(session, project, target, *, runner=None) -> dict:
-    """Stop the target's bridge (if any) and revert its ops to the headless path."""
+    """Stop the target's bridge (if any) and revert its ops to the headless path.
+
+    Clearing the registry entry is what makes routing fall back: `bridge_route` reads the entry
+    first, so a stopped bridge stops being a routing destination immediately rather than waiting for
+    a probe to notice."""
     from hexgraph.sandbox.executor import get_executor
 
     ex = runner or get_executor()

@@ -473,10 +473,13 @@ def _resolve_name(explicit: str | None) -> str:
 
 
 def get_decompiler(name: str | None = None, *, target=None) -> Decompiler:
-    """Pick the decompiler. When `target` has a LIVE persistent Ghidra bridge (started via
-    re_bridge_start) and no explicit `name` override is given, route to it: decompiles reuse the
-    resident project instead of re-opening it per call. Best-effort — a dead/unreachable bridge
-    falls through to the normal seam (headless), so routing never breaks decompilation."""
+    """Pick the decompiler. When `target` has a Ghidra bridge that MIGHT still own its project
+    (`bridge_route`) and no explicit `name` override is given, route to it: decompiles reuse the
+    resident project instead of re-opening it per call. Only a bridge docker POSITIVELY reports gone
+    falls through to headless — an unanswered probe does NOT, because a bridge can be alive and
+    unable to answer (starting, or busy behind its listen backlog) while still holding the project
+    lock a headless open would hit. An unreachable-but-not-gone bridge therefore fails the op rather
+    than silently colliding; `run_ghidra_op` degrades it on the same positive-evidence standard."""
     if name is None and target is not None:
         try:
             from hexgraph.engine.re.bridge import bridge_route
@@ -513,9 +516,10 @@ def ghidra_op_backend(target=None) -> Decompiler:
     live MANAGED bridge if one is up for the target — reusing the resident project, no per-call open
     and no conflict on Ghidra's project lock — else headless `GhidraDecompiler`. These ops are
     Ghidra-specific (radare2 has no equivalent), so call sites use THIS rather than `get_decompiler`
-    (which defaults to radare2). Best-effort: a dead/unreachable bridge falls through to headless, so
-    routing never breaks the op. While a bridge OWNS the target's slot, a headless op on it would
-    conflict on the project lock — routing here is what lets the bridge serve every op instead."""
+    (which defaults to radare2). Only a POSITIVELY-gone bridge falls through to headless: while a
+    bridge owns the target's slot a headless op would conflict on the project lock, and an
+    unanswered probe is not evidence it has stopped owning it. Routing here is what lets the bridge
+    serve every op instead; `run_ghidra_op` handles a bridge that dies mid-flight."""
     if target is not None:
         try:
             from hexgraph.engine.re.bridge import bridge_route
