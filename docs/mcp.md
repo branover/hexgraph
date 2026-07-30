@@ -197,7 +197,9 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
   Bodies already recorded in the Observation store are reused for free, which is what makes a second pass
   over the same functions nearly instant. The grep pages over the function list and stops once it has spent
   its wall-clock budget, returning what it found plus the offset to resume from rather than running for
-  hours in silence. Reach for it after the cheap searches, and remember that "who calls this function" is a
+  hours in silence. Name more than one page of functions and it detaches instead, grepping the whole
+  set in a background process you poll — raising the budget rather than detaching would just push a
+  single call past your client's own timeout, which is the failure the budget exists to prevent. Reach for it after the cheap searches, and remember that "who calls this function" is a
   question `re_xrefs` answers from the reference index in seconds.
 - **Analysis is explicit — `re_analyze` first, then the per-call verbs.** The whole-program tools
   (`re_decompile_function`/`re_decompile_at`, `re_list_functions`, and the xref family

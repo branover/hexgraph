@@ -923,9 +923,21 @@ def _analysis_gate(ctx: ToolContext) -> str | None:
     return analysis_lead(ctx.project, ctx.target)
 
 
-def run_tool(ctx: ToolContext, name: str, args: dict) -> str:
-    """Execute a tool call and return its result as text (errors as text too)."""
-    args = args or {}
+def run_tool(ctx: ToolContext, name: str, args: dict, *, internal: dict | None = None) -> str:
+    """Execute a tool call and return its result as text (errors as text too).
+
+    `args` is UNTRUSTED: the in-process agent loop hands us the model's raw tool_use input
+    verbatim (`engine.llm_tasks`), and that model's context is full of target-derived tool
+    output. So `_`-prefixed keys — the convention for a flag HexGraph sets for itself, never
+    advertises, and would not accept from a client — are STRIPPED here; an in-process caller
+    that genuinely needs one passes it in `internal`. The flag that motivated this is
+    `search_code`'s `_detached` (it lifts BOTH the page cap and the wall-clock budget, which
+    only the detached worker may do); the strip generalizes so the next such flag is safe by
+    default. Over MCP these were already unreachable (`mcp_server` dispatches `fn(**arguments)`
+    against an explicit keyword signature), so this closes the in-process path to match."""
+    args = {k: v for k, v in (args or {}).items() if not str(k).startswith("_")}
+    if internal:
+        args.update(internal)
     meta = ctx.target.metadata_json or {}
     try:
         # Analysis gate: the whole-program tools require a saved analysis for the active persistent
@@ -2740,6 +2752,203 @@ def _bridge_is_offerable() -> bool:
         return False
 
 
+# A detached grep's plausible ceiling per WARM function, for deciding a `running` row is STRANDED.
+# Six times the ~20s measured on a large target, so a genuinely slow sweep is never declared dead.
+# The COLD first call is budgeted separately (see `_detached_grep_stranded`) — nothing on this path
+# gates on a saved analysis, so a sweep's first decompile can pay a whole-binary analysis, and that
+# one operation dwarfs every per-function figure here.
+_GREP_STALE_PER_FN_S = 120
+_GREP_STALE_FLOOR_S = 600
+
+
+def _detached_grep_budget(names) -> float:
+    """The longest a detached grep over `names` could plausibly still be working — the staleness
+    bound, as ONE authority so the check and the test can't disagree about it. See
+    `_detached_grep_stranded` for why the cold whole-binary analysis budget is added rather than
+    assumed away."""
+    from hexgraph.engine.re.analysis import _analysis_timeout
+
+    return _analysis_timeout() + max(_GREP_STALE_FLOOR_S,
+                                     len(names or []) * _GREP_STALE_PER_FN_S)
+
+
+def _detached_grep_stranded(task) -> bool:
+    """Whether a `running` grep row has outlived any plausible run, i.e. its process is gone.
+
+    A task row only reaches a finished state by its OWN process writing it, so a SIGKILL or a host
+    restart strands it as `running` forever and every later poll attaches to a corpse — the poll
+    stops being terminal, which is the F1 defect one level deeper.
+
+    Deliberately a work-derived TIME bound rather than a process probe: unlike `analysis_state`,
+    which polls a named CONTAINER, this job is a plain subprocess with no recorded pid, and probing a
+    remembered pid would be wrong the moment the OS reuses it. The bound scales with the sweep
+    (`_GREP_STALE_PER_FN_S` per function, floored) so a legitimately long grep is never declared
+    dead. Anything unknown counts as ALIVE, so a bad clock or a missing timestamp can't duplicate a
+    running sweep. NOTE: the same strand exists for the other detached jobs (reveal, filesystem) —
+    a shared reaper belongs with them, not here.
+
+    The per-function figures are WARM ones, so they alone are not the bound. Nothing on this path
+    gates on a saved analysis (`search_code` isn't in `_ANALYSIS_GATED_TOOLS`, and `_decomp` has no
+    gate), so a sweep's FIRST decompile can pay a full whole-binary analysis — for which the project
+    itself allows `analysis._analysis_timeout()`, 6h by default. A bound below that declares a
+    perfectly healthy cold sweep dead and spawns a duplicate against the live process: two processes
+    over one set, contending on the slot lock whose loser falls back to an UNCACHED throwaway
+    project. That is the very damage `_grep_identity` exists to prevent, arriving by another route,
+    so the cold budget is ADDED rather than assumed away. Erring generous is cheap here — a truly
+    dead sweep still collects (its per-function Observations are durable) and `limit` still pages
+    synchronously — while erring tight duplicates a multi-hour sweep."""
+    import datetime as _dt
+
+    try:
+        started = getattr(task, "started_at", None) or getattr(task, "created_at", None)
+        if started is None:
+            return False
+        budget = _detached_grep_budget((task.params_json or {}).get("functions") or [])
+        now = _dt.datetime.now(_dt.timezone.utc)
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=_dt.timezone.utc)
+        return (now - started).total_seconds() > budget
+    except Exception:  # noqa: BLE001 — unknown ⇒ assume alive, never duplicate on a bad probe
+        return False
+
+
+def _grep_task_args(query: str, names: list[str]) -> dict:
+    """The params a detached grep runs from — the caller's own query and function ORDER, since
+    that's the order the sweep works through and the resume offsets are relative to."""
+    return {"query": query, "functions": list(names)}
+
+
+def _grep_identity(params: dict) -> tuple:
+    """The IDENTITY of a grep sweep — what makes a re-call attach to (or collect) the sweep
+    already covering it, rather than launch a second one. Deliberately NOT the raw params:
+    identity is the lowercased query plus the SORTED SET of names.
+
+    Order and case must not matter. An agent that regenerates a 200-name candidate list gets the
+    same set in a different order, and the grep itself is case-insensitive (`q = query.lower()`),
+    so both spell the SAME sweep. Treating them as distinct launched a second concurrent sweep of
+    the same functions — and two concurrent sweeps of one target contend on its decompiler
+    project's advisory lock (`re.ghidra_project.DEFAULT_LOCK_TIMEOUT`), where the loser falls back
+    to a throwaway UNCACHED project: a cold whole-binary analysis per function.
+
+    Reads out of a params/args dict rather than taking (query, names) so the SAME authority
+    matches a Task's `params_json` and an Observation's `args_json` — the launch, the poll and the
+    collect can't disagree."""
+    return (str(params.get("query") or "").lower(),
+            tuple(sorted({str(f) for f in (params.get("functions") or [])})))
+
+
+def _finished_grep_obs(ctx: ToolContext, params: dict):
+    """The `search_code` Observation a COMPLETED detached sweep of `params` recorded, or None.
+    Matched on `_grep_identity` (not on the recorded args verbatim) so the collect survives the
+    same order/case variation the attach does."""
+    from hexgraph.db.models import Observation
+
+    ident = _grep_identity(params)
+    rows = (ctx.session.query(Observation)
+            .filter(Observation.target_id == ctx.target.id, Observation.tool == "search_code",
+                    Observation.result_kind == "search_code", Observation.status == "ok")
+            .order_by(Observation.created_at.desc()).all())
+    return next((r for r in rows if _grep_identity(r.args_json or {}) == ident), None)
+
+
+def _detached_grep(ctx: ToolContext, query: str, names: list[str]) -> str:
+    """Run a MULTI-PAGE grep as a detached job and return its handle, rather than making the caller
+    stitch a dozen partial pages together.
+
+    Why detach rather than just raise the budget: measured on a large target, one call greps ~15
+    cold functions inside `_SEARCH_GREP_BUDGET_S`, so a 200-function candidate set is 7-14 round
+    trips. Raising the budget instead would push a single call past the MCP client's own timeout —
+    the "looks hung" failure the budget exists to prevent. A detached process is the only shape that
+    escapes both. Same kick-off-and-poll idiom as `re_analyze`.
+
+    SINGLE-FLIGHT, and the re-call is the POLL — so it answers for every state of a prior sweep of
+    the same set (`_grep_identity`), never just the in-flight one:
+      queued/running — attach and report progress;
+      succeeded      — report DONE and hand back the recorded `search_code` Observation. A
+                       re-call must never quietly start a second sweep of a set already swept:
+                       the caller is polling, and told to poll by re-calling;
+      failed         — say so and retry, the way `analysis.start_analysis` reaps and retries a
+                       failed analysis container."""
+    from hexgraph.db.models import Task, TaskStatus
+    from hexgraph.db.session import release_write_lock
+    from hexgraph.engine.tasks import create_task
+    from hexgraph.engine.worker import spawn_detached_task
+
+    args = _grep_task_args(query, names)
+    ident = _grep_identity(args)
+    prior = [t for t in ctx.session.query(Task)
+             .filter(Task.target_id == ctx.target.id, Task.type == "search_code_grep")
+             .order_by(Task.created_at.desc()).all()
+             if _grep_identity(t.params_json or {}) == ident]
+    existing = next((t for t in prior
+                     if t.status in (TaskStatus.queued, TaskStatus.running)), None)
+    if existing is not None and _detached_grep_stranded(existing):
+        # N4: the row says running, but the OS process may be gone (SIGKILL, host reboot) and nothing
+        # updates it — analysis_state probes for exactly this reason. A dead row must not block the
+        # search forever, so mark it and fall through to a fresh sweep.
+        from hexgraph.engine.tasks import mark_failed
+
+        mark_failed(existing, "detached grep process is gone (killed or host restarted)")
+        ctx.session.commit()
+        existing = None
+    if existing is not None:
+        return (f"detached grep {existing.id} is {existing.status.value} over "
+                f"{len(names)} function(s) — re-call this exact search to poll it. Results land as "
+                f"a search_code Observation (obs_list(target, kind='search_code')) as it finishes.")
+
+    # A COMPLETED sweep is the answer, not a reason to sweep again. Prefer a succeeded run over a
+    # newer failed one: the succeeded one has a recorded result, and re-running it would only
+    # re-derive the same thing (the bodies are warm now, so paging it is cheap if that's wanted).
+    done = next((t for t in prior if t.status == TaskStatus.succeeded), None)
+    if done is not None:
+        obs = _finished_grep_obs(ctx, args)
+        where = (f" Its result is Observation {obs.id} — {obs.summary}. Read the matching lines "
+                 f"with obs_get({obs.id})." if obs is not None else
+                 " It recorded NO search_code Observation, so nothing was collectable — re-call "
+                 "with `limit` to grep a page synchronously and see why (an unresolved name / no "
+                 "saved analysis / Docker down all report themselves there).")
+        return (f"detached grep {done.id} over {len(names)} function(s) has FINISHED.{where} "
+                f"Re-calling this exact search returns this same completed result rather than "
+                f"re-sweeping the set; pass `limit` to page it synchronously instead.")
+
+    # Only a LAUNCH needs the sandbox — a detached sweep with no Docker spawns a process that can
+    # only fail, and the failure is a task row the caller then polls. So refuse here, BELOW the
+    # attach/collect above: reading back a sweep that already ran needs no Docker at all, and
+    # gating the whole function on it made a finished sweep's recorded result unreachable the
+    # moment Docker went away, which is the non-terminal poll all over again.
+    from hexgraph.sandbox.runner import docker_available
+
+    if not docker_available():
+        return ("decompilation unavailable (Docker/sandbox not running), so a detached grep would "
+                "have nothing to run — start the sandbox, or name one page of functions to grep "
+                "with `limit` once it is up.")
+
+    # A prior sweep that FAILED gets retried below — but say so, or the retry looks like a first
+    # attempt and a systematically-failing sweep is invisible.
+    failed = next((t for t in prior if t.status == TaskStatus.failed), None)
+    retry = (f"a previous detached grep of this set ({failed.id}) FAILED, retrying it. "
+             if failed is not None else "")
+
+    task = create_task(ctx.session, project=ctx.project, target_id=ctx.target.id,
+                       type="search_code_grep", params=args)
+    release_write_lock(ctx.session)
+    try:
+        spawn_detached_task(task.id)
+    except Exception as exc:  # noqa: BLE001 — a failed spawn must not look like a running sweep
+        from hexgraph.engine.tasks import mark_failed
+
+        mark_failed(task, f"failed to spawn detached grep: {exc}")
+        ctx.session.commit()
+        return (f"could not start a detached grep ({exc}); re-call with `limit` to grep one page "
+                f"at a time instead (up to {_SEARCH_FUNCS_MAX} functions per call).")
+    return (f"{retry}{len(names)} functions is more than one call can grep — a page is "
+            f"{_SEARCH_FUNCS_MAX} and the wall-clock budget is {_SEARCH_GREP_BUDGET_S}s, so this "
+            f"would have been several partial calls. Running it DETACHED as task {task.id} over the "
+            f"whole set. Re-call this exact search to poll it; results land as a search_code "
+            f"Observation (obs_list(target, kind='search_code')). Pass `limit` if you would rather "
+            f"grep one page synchronously.")
+
+
 def _search_code_grep(ctx: ToolContext, args: dict, *, query: str, functions) -> str:
     """The decompile-on-demand grep: grep the pseudo-C of ONLY the caller-named `functions` for
     `query`. BOUNDED by `functions` so the cost stays the caller's to control — an empty/missing
@@ -2777,11 +2986,22 @@ def _search_code_grep(ctx: ToolContext, args: dict, *, query: str, functions) ->
                 "then pass them here; to search ALREADY-decompiled bodies with no new decompile use "
                 "re_search_decompiled, and to find CALLERS of a symbol use re_xrefs.")
 
+    # A sweep bigger than ONE page becomes a detached job: paging it synchronously is several
+    # partial calls, and raising the budget instead would pass the MCP client's own timeout. An
+    # explicit offset/limit means the caller is driving the pagination deliberately, so respect it.
+    detached = bool(args.get("_detached"))   # internal: set by the worker arm, never advertised
+    if (not detached and len(all_names) > _SEARCH_FUNCS_MAX
+            and args.get("offset") is None and args.get("limit") is None):
+        return _detached_grep(ctx, query, all_names)
+
     # Page over the FUNCTIONS list. Unlike the scan mode's page (over cheap, already-computed
     # hits) each item here can cost a decompile, so the page cap is _SEARCH_FUNCS_MAX.
     total = len(all_names)
     offset = _bound_page(args.get("offset"), 0, 0, max(0, total))
-    limit = _bound_page(args.get("limit"), _SEARCH_FUNCS_MAX, 1, _SEARCH_FUNCS_MAX)
+    # The page cap and the budget below both exist to keep a SYNCHRONOUS call inside the MCP
+    # client's timeout. The detached job has no client waiting on it, so it takes the whole set.
+    page_max = len(all_names) if detached else _SEARCH_FUNCS_MAX
+    limit = _bound_page(args.get("limit"), page_max, 1, page_max)
     names = all_names[offset:offset + limit]
 
     # An out-of-range page searched NOTHING, which is not the same as finding nothing. Say so
@@ -2813,7 +3033,7 @@ def _search_code_grep(ctx: ToolContext, args: dict, *, query: str, functions) ->
     decompiled = 0
     reused = 0
     misses: list[str] = []
-    deadline = time.monotonic() + _SEARCH_GREP_BUDGET_S
+    deadline = (float("inf") if detached else time.monotonic() + _SEARCH_GREP_BUDGET_S)
     searched = 0   # names actually examined, so the resume offset is exact
     stopped = False
 
