@@ -246,3 +246,37 @@ def test_decompile_keeps_its_promotable_callees_note_through_a_clip(hg_home, mon
     # "(callees: …)" list, so matching on them passes whether or not the note survived.
     assert "callees not yet in the graph" in out
     assert out.index("callees not yet in the graph") > out.index("truncated")  # after the clip
+
+
+def test_decompile_note_is_bounded_so_a_high_fanout_function_cannot_defeat_the_cap():
+    """Reserving the note put it OUTSIDE the clip, so it MUST be bounded or it defeats `_MAX`
+    outright. `promotable_callees` is one entry per callee not yet a graph node — on a fresh
+    target that is EVERY callee — and the upstream callee list is uncapped
+    (`pyghidra_lib` takes `getCalledFunctions` whole, unlike its xrefs path's `[:MAX_REFS]`).
+    Unbounded, a high-fan-out dispatcher returned tens of KB from a 6000-char-capped tool and
+    starved the pseudocode to `_MAX_FLOOR` — measured 40348 chars at 2000 callees, with ZERO
+    pseudocode, where the note-in-body version stayed at ~6100."""
+    import hexgraph.agent.agent_tools as AT
+
+    def decomp(n):
+        callees = [f"vendor_helper_{i:04d}" for i in range(n)]
+        return {"focus": {"name": "cgi_dispatch", "address": "0x401000",
+                          "pseudocode": "\n".join(f"  int v{i} = f{i}();" for i in range(3000)),
+                          "callees": [{"name": c} for c in callees]},
+                "promotable_callees": callees, "observation_id": "obs-123"}
+
+    # The cap holds at ANY fan-out (the marker itself is the only overshoot, as everywhere else).
+    for n in (0, 40, 300, 2000, 20000):
+        text = AT._format_decomp(decomp(n), "cgi_dispatch")
+        assert len(text) < AT._MAX + 400, f"{n} callees → {len(text)} chars, cap is {AT._MAX}"
+
+    # ...and the note still lands, now naming the true remainder rather than every name.
+    big = AT._format_decomp(decomp(2000), "cgi_dispatch")
+    assert "callees not yet in the graph" in big
+    assert f"+{2000 - AT._PROMO_NOTE_MAX} more" in big     # the count, not 2000 names
+    assert "vendor_helper_0039" in big                     # a listed one
+    assert "vendor_helper_1999" not in big.split("callees not yet in the graph")[1]
+
+    # The reserved note must not starve the pseudocode: a 150-callee function still reads.
+    mid = AT._format_decomp(decomp(150), "cgi_dispatch")
+    assert mid.count("int v") > 50, "the note ate the pseudocode it is supposed to complement"

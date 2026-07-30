@@ -46,6 +46,14 @@ _HEX_ADDR = re.compile(r"^0x[0-9a-fA-F]+$")
 _MAX_FLOOR = 200
 _MAX_CEILING = 100_000
 
+# How many not-yet-promoted callee names `_format_decomp`'s note lists. The note rides in the
+# RESERVED tail — OUTSIDE the clip — so it MUST be bounded or it defeats _MAX outright: the
+# decompiler's callee list is uncapped upstream, and `promotable_callees` is every callee not yet
+# a graph node (on a fresh target, ALL of them), so a high-fan-out dispatcher would return tens of
+# KB from a "6000-char-capped" tool AND starve the pseudocode to _MAX_FLOOR. Same bound as the
+# miss-path inventory sample below; the focus's FULL callee list stays in the Observation.
+_PROMO_NOTE_MAX = 40
+
 # Shared param description for the body-returning tools (decompile/disassemble/search). Public
 # (re-exported as MAX_CHARS_DESC) so the MCP catalog schemas source the SAME copy — one authority,
 # no drift between the in-process agent-loop specs and the advertised MCP schemas.
@@ -598,8 +606,14 @@ def _format_decomp(out: dict, label: str, *, limit: int = _MAX) -> str:
     if promo:
         # New callees were NOT added to the graph (no fan-out). Surface them for
         # deliberate promotion — decompile_function one of these to promote it.
+        # BOUNDED (_PROMO_NOTE_MAX): this note is reserved OUTSIDE the clip, so an unbounded list
+        # would blow _MAX by an unbounded amount and starve the pseudocode to _MAX_FLOOR. Name a
+        # workable handful plus the true remainder; the full callee list is in the Observation.
+        shown = promo[:_PROMO_NOTE_MAX]
+        rest = (f" (+{len(promo) - len(shown)} more — full callee list in the Observation)"
+                if len(promo) > len(shown) else "")
         note = ("\n// callees not yet in the graph (promote any by decompiling it): "
-                + ", ".join(promo))
+                + ", ".join(shown) + rest)
     # F16: if Ghidra didn't define this function the focus came from radare2 (r2dec) — flag it
     # BEFORE the body (so a truncation can't hide it). r2dec is heuristic and can mis-resolve
     # PLT/args or fabricate a call; never read fallback pseudocode as Ghidra-quality.
