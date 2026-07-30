@@ -2752,6 +2752,42 @@ def _bridge_is_offerable() -> bool:
         return False
 
 
+# A detached grep's plausible ceiling per function, for deciding a `running` row is STRANDED. Six
+# times the ~20s measured on a large target, so a genuinely slow sweep is never declared dead.
+_GREP_STALE_PER_FN_S = 120
+_GREP_STALE_FLOOR_S = 600
+
+
+def _detached_grep_stranded(task) -> bool:
+    """Whether a `running` grep row has outlived any plausible run, i.e. its process is gone.
+
+    A task row only reaches a finished state by its OWN process writing it, so a SIGKILL or a host
+    restart strands it as `running` forever and every later poll attaches to a corpse — the poll
+    stops being terminal, which is the F1 defect one level deeper.
+
+    Deliberately a work-derived TIME bound rather than a process probe: unlike `analysis_state`,
+    which polls a named CONTAINER, this job is a plain subprocess with no recorded pid, and probing a
+    remembered pid would be wrong the moment the OS reuses it. The bound scales with the sweep
+    (`_GREP_STALE_PER_FN_S` per function, floored) so a legitimately long grep is never declared
+    dead. Anything unknown counts as ALIVE, so a bad clock or a missing timestamp can't duplicate a
+    running sweep. NOTE: the same strand exists for the other detached jobs (reveal, filesystem) —
+    a shared reaper belongs with them, not here."""
+    import datetime as _dt
+
+    try:
+        started = getattr(task, "started_at", None) or getattr(task, "created_at", None)
+        if started is None:
+            return False
+        names = (task.params_json or {}).get("functions") or []
+        budget = max(_GREP_STALE_FLOOR_S, len(names) * _GREP_STALE_PER_FN_S)
+        now = _dt.datetime.now(_dt.timezone.utc)
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=_dt.timezone.utc)
+        return (now - started).total_seconds() > budget
+    except Exception:  # noqa: BLE001 — unknown ⇒ assume alive, never duplicate on a bad probe
+        return False
+
+
 def _grep_task_args(query: str, names: list[str]) -> dict:
     """The params a detached grep runs from — the caller's own query and function ORDER, since
     that's the order the sweep works through and the resume offsets are relative to."""
@@ -2814,6 +2850,14 @@ def _detached_grep(ctx: ToolContext, query: str, names: list[str]) -> str:
     from hexgraph.engine.tasks import create_task
     from hexgraph.engine.worker import spawn_detached_task
 
+    from hexgraph.sandbox.runner import docker_available
+
+    if not docker_available():
+        # N6: a detached sweep with no sandbox spawns a process that can only fail, and the failure
+        # is a task row the caller then polls. Refuse synchronously instead.
+        return ("decompilation unavailable (Docker/sandbox not running), so a detached grep would "
+                "have nothing to run — start the sandbox, or name one page of functions to grep "
+                "with `limit` once it is up.")
     args = _grep_task_args(query, names)
     ident = _grep_identity(args)
     prior = [t for t in ctx.session.query(Task)
@@ -2822,6 +2866,15 @@ def _detached_grep(ctx: ToolContext, query: str, names: list[str]) -> str:
              if _grep_identity(t.params_json or {}) == ident]
     existing = next((t for t in prior
                      if t.status in (TaskStatus.queued, TaskStatus.running)), None)
+    if existing is not None and _detached_grep_stranded(existing):
+        # N4: the row says running, but the OS process may be gone (SIGKILL, host reboot) and nothing
+        # updates it — analysis_state probes for exactly this reason. A dead row must not block the
+        # search forever, so mark it and fall through to a fresh sweep.
+        from hexgraph.engine.tasks import mark_failed
+
+        mark_failed(existing, "detached grep process is gone (killed or host restarted)")
+        ctx.session.commit()
+        existing = None
     if existing is not None:
         return (f"detached grep {existing.id} is {existing.status.value} over "
                 f"{len(names)} function(s) — re-call this exact search to poll it. Results land as "

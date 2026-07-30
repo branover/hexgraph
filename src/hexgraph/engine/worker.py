@@ -9,6 +9,7 @@ a queue, offloading the blocking sandbox call to a thread.
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from sqlalchemy.orm import Session
 
@@ -20,6 +21,8 @@ from hexgraph.engine.llm_tasks import LLM_TASK_TYPES, execute_llm_task
 from hexgraph.engine.re.recon import execute_recon
 from hexgraph.engine.tasks import mark_failed, mark_running, mark_succeeded
 from hexgraph.sandbox.executor import get_executor
+
+_log = logging.getLogger(__name__)
 
 
 def _dispatch(session: Session, project: Project, target: Target, task: Task) -> None:
@@ -85,9 +88,15 @@ def _dispatch(session: Session, project: Project, target: Target, task: Task) ->
         # covers the whole set in one pass; the budget is lifted for the same reason. `_detached`
         # travels in `internal` because run_tool STRIPS `_`-prefixed keys out of the caller-
         # supplied args — a model in the agent loop must not be able to lift those two bounds.
-        run_tool(ctx, "search_code",
-                 {"query": params.get("query"), "functions": names, "offset": 0},
-                 internal={"_detached": True})
+        out = run_tool(ctx, "search_code",
+                       {"query": params.get("query"), "functions": names, "offset": 0},
+                       internal={"_detached": True})
+        # run_tool reports failures AS TEXT, so discarding it left an all-misses or
+        # sandbox-unavailable sweep indistinguishable from a clean one: `succeeded`, nothing to read
+        # anywhere. The grep records its own search_code Observation for the RESULT; this is for the
+        # diagnosis when there wasn't one.
+        _log.info("detached grep over %d function(s) on target=%s: %s",
+                  len(names), target.id, (out or "")[:400].replace("\n", " | "))
         return
 
     if task.type == "recon_children_batch":

@@ -230,8 +230,11 @@ def test_grep_bounds_candidate_count(hg_home, monkeypatch):
     with session_scope() as s:
         ctx, p, t = _ctx(s)
         out = run_tool(ctx, "search_code",
-                       {"query": "void", "functions": names, "limit": AT._SEARCH_FUNCS_MAX})
-        assert len(calls) == AT._SEARCH_FUNCS_MAX      # clamped to the ceiling
+                       {"query": "void", "functions": names, "limit": 999})
+        # A limit ABOVE the cap, so this pins the CLAMP. Asking for exactly _SEARCH_FUNCS_MAX made
+        # the assertion true by construction rather than by clamping — it passed even with the cap
+        # removed entirely.
+        assert len(calls) == AT._SEARCH_FUNCS_MAX
         assert "25 more" in out and f"offset={AT._SEARCH_FUNCS_MAX}" in out
 
 
@@ -1161,8 +1164,6 @@ def test_the_detached_worker_greps_the_WHOLE_set_with_no_page_cap_or_budget(hg_h
         return {"focus": {"name": function, "pseudocode": f"void {function}(){{ memcpy(a,b,c); }}"}}
 
     monkeypatch.setattr(AT, "_decomp", _fake)
-    monkeypatch.setattr("hexgraph.engine.re.analysis.analysis_state",
-                        lambda project, target: {"state": "analyzed", "detail": "(warm)"})
     with session_scope() as s:
         ctx, p, t = _ctx(s)
         task = create_task(s, project=p, target_id=t.id, type="search_code_grep",
