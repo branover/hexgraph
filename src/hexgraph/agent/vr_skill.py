@@ -319,7 +319,8 @@ scoped to the target's exact bytes. The two rules that make this cheap:
   is defined yet. That scan is cheap (a warm memory scan). Its other mode, the decompile-on-demand
   grep (`query` + `functions`), is the expensive one: every function you name that hasn't been
   decompiled yet costs a full decompile, tens of seconds each, so naming thirty of them is a
-  ten-minute call. Reach for it only once the cheap searches are exhausted — `re_search_decompiled`
+  ten-minute call. Name more than fifty and it runs detached over the whole set and hands you a task
+  to poll, rather than making you stitch together a dozen partial pages. Reach for it only once the cheap searches are exhausted — `re_search_decompiled`
   greps bodies you already have for nothing, and `re_xrefs` answers "who calls this" from the
   indexed call graph in seconds. Bodies already in the Observation store are reused free, so the
   grep is cheap over functions you have decompiled already.

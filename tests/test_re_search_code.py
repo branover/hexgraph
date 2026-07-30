@@ -220,12 +220,17 @@ def test_grep_also_refuses_empty_list(hg_home, monkeypatch):
 def test_grep_bounds_candidate_count(hg_home, monkeypatch):
     """Even a LARGE `functions` list is bounded — at most _SEARCH_FUNCS_MAX are decompiled per
     call. The overflow is PAGED, not dropped: the result names the remainder and the offset to
-    resume from (the no-silent-caps discipline)."""
+    resume from (the no-silent-caps discipline).
+
+    Driven with an explicit `limit`, because an over-a-page set with NO page named now detaches
+    instead (test_a_multi_page_sweep_detaches_…). This still pins the synchronous paging contract,
+    which is what the caller gets whenever it drives the pagination itself."""
     names = [f"fn_{i:03d}" for i in range(AT._SEARCH_FUNCS_MAX + 25)]
     calls = _stub_decomp_bodies(monkeypatch, {n: f"void {n}(){{}}" for n in names})
     with session_scope() as s:
         ctx, p, t = _ctx(s)
-        out = run_tool(ctx, "search_code", {"query": "void", "functions": names})
+        out = run_tool(ctx, "search_code",
+                       {"query": "void", "functions": names, "limit": AT._SEARCH_FUNCS_MAX})
         assert len(calls) == AT._SEARCH_FUNCS_MAX      # clamped to the ceiling
         assert "25 more" in out and f"offset={AT._SEARCH_FUNCS_MAX}" in out
 
@@ -249,12 +254,16 @@ def test_grep_pages_over_the_functions_list(hg_home, monkeypatch):
 
 
 def test_grep_resume_hint_omits_a_default_limit(hg_home, monkeypatch):
-    """...but a DEFAULT limit isn't echoed — noise in the hint the agent doesn't need."""
+    """...but a DEFAULT limit isn't echoed — noise in the hint the agent doesn't need.
+
+    `limit` is passed explicitly AND equals the default, which is the case being pinned: an
+    over-a-page set with no page named detaches instead of paging."""
     names = [f"fn_{i:03d}" for i in range(AT._SEARCH_FUNCS_MAX + 5)]
     _stub_decomp_bodies(monkeypatch, {n: f"void {n}(){{}}" for n in names})
     with session_scope() as s:
         ctx, p, t = _ctx(s)
-        out = run_tool(ctx, "search_code", {"query": "void", "functions": names})
+        out = run_tool(ctx, "search_code",
+                       {"query": "void", "functions": names, "limit": AT._SEARCH_FUNCS_MAX})
         assert f"offset={AT._SEARCH_FUNCS_MAX}" in out
         assert "limit=" not in out
 
@@ -993,3 +1002,115 @@ def test_warm_r2_flags_cold_vs_warm(tmp_path):
         assert any("dir.projects=" in f for f in flags)
     finally:
         X._PROJECT_MOUNT = orig
+
+
+# ======================================================================================
+# A sweep too big for one call runs DETACHED and is polled, instead of many partial calls
+# ======================================================================================
+
+def test_a_multi_page_sweep_detaches_instead_of_forcing_many_partial_calls(hg_home, monkeypatch):
+    """Measured: at ~20s/function headless and a 300s budget, one call greps ~15 functions. So a
+    200-function candidate set is 7-14 round trips today, each returning a partial result the agent
+    has to stitch. The MCP client timeout is what rules out simply raising the budget — only a
+    detached job escapes it.
+
+    So a sweep larger than one PAGE runs detached over the whole set and is polled, the same
+    kick-off-and-poll shape re_analyze uses. A single page keeps the immediate-results behaviour,
+    because a search wants answers now."""
+    import hexgraph.agent.agent_tools as AT
+    from hexgraph.db.models import Task
+
+    spawned = []
+    monkeypatch.setattr("hexgraph.engine.worker.spawn_detached_task",
+                        lambda tid: spawned.append(tid) or 4242)
+    _stub_decomp_bodies(monkeypatch, {})
+    names = [f"fn_{i:03d}" for i in range(AT._SEARCH_FUNCS_MAX + 1)]
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        out = run_tool(ctx, "search_code", {"query": "memcpy", "functions": names})
+        assert spawned, "a multi-page sweep should have detached"
+        task = s.get(Task, spawned[0])
+        assert task.type == "search_code_grep"
+        assert task.params_json["functions"] == names      # the WHOLE set, not one page
+        assert task.params_json["query"] == "memcpy"
+    assert "detached" in out.lower() and task.id in out    # names the handle...
+    assert "re-call" in out.lower()                        # ...and how to collect it
+
+
+def test_a_single_page_sweep_still_answers_immediately(hg_home, monkeypatch):
+    """The default stays a synchronous search: a page-or-less returns hits now, not a handle."""
+    import hexgraph.agent.agent_tools as AT
+
+    spawned = []
+    monkeypatch.setattr("hexgraph.engine.worker.spawn_detached_task",
+                        lambda tid: spawned.append(tid) or 1)
+    names = [f"fn_{i:02d}" for i in range(5)]
+    _stub_decomp_bodies(monkeypatch, {n: f"void {n}(){{ memcpy(a,b,c); }}" for n in names})
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        out = run_tool(ctx, "search_code", {"query": "memcpy", "functions": names})
+    assert not spawned
+    assert "fn_00" in out and "detached" not in out.lower()
+
+
+def test_polling_a_running_detached_sweep_reports_progress_not_a_duplicate(hg_home, monkeypatch):
+    """Re-calling with the same args must ATTACH, never launch a second sweep of the same set —
+    the single-flight rule re_analyze follows."""
+    import hexgraph.agent.agent_tools as AT
+    from hexgraph.db.models import Task, TaskStatus
+
+    spawned = []
+    monkeypatch.setattr("hexgraph.engine.worker.spawn_detached_task",
+                        lambda tid: spawned.append(tid) or 1)
+    _stub_decomp_bodies(monkeypatch, {})
+    names = [f"fn_{i:03d}" for i in range(AT._SEARCH_FUNCS_MAX + 1)]
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        run_tool(ctx, "search_code", {"query": "memcpy", "functions": names})
+        assert len(spawned) == 1
+        s.get(Task, spawned[0]).status = TaskStatus.running
+        s.flush()
+        again = run_tool(ctx, "search_code", {"query": "memcpy", "functions": names})
+    assert len(spawned) == 1, "polling launched a duplicate sweep"
+    assert "running" in again.lower()
+
+
+def test_the_detached_worker_greps_the_WHOLE_set_with_no_page_cap_or_budget(hg_home, monkeypatch):
+    """The half that matters: detaching is pointless if the job itself still stops at one page or
+    at the wall-clock budget. Both bounds exist to keep a SYNCHRONOUS call inside the MCP client's
+    timeout; nothing is waiting on this one."""
+    import hexgraph.agent.agent_tools as AT
+    from hexgraph.db.models import Observation, Task
+    from hexgraph.engine.tasks import create_task
+    from hexgraph.engine.worker import run_task_sync
+
+    n = AT._SEARCH_FUNCS_MAX * 2 + 7            # comfortably several pages
+    names = [f"fn_{i:03d}" for i in range(n)]
+    # every decompile "takes" 100s of a 300s budget — a synchronous call would stop after 3
+    clock = {"t": 1000.0}
+    monkeypatch.setattr("time.monotonic", lambda: clock["t"])
+    seen = []
+
+    def _fake(ctx, function, **kw):
+        seen.append(function); clock["t"] += 100.0
+        return {"focus": {"name": function, "pseudocode": f"void {function}(){{ memcpy(a,b,c); }}"}}
+
+    monkeypatch.setattr(AT, "_decomp", _fake)
+    monkeypatch.setattr("hexgraph.engine.re.analysis.analysis_state",
+                        lambda project, target: {"state": "analyzed", "detail": "(warm)"})
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        task = create_task(s, project=p, target_id=t.id, type="search_code_grep",
+                           params=AT._grep_task_args("memcpy", names))
+        tid, target_id = task.id, t.id
+
+    assert run_task_sync(tid) == "succeeded"
+    assert seen == names, f"greped {len(seen)} of {n} — a bound is still biting"
+    with session_scope() as s:
+        obs = s.query(Observation).filter(Observation.target_id == target_id,
+                                          Observation.result_kind == "search_code").all()
+        assert obs, "the detached run recorded no collectable result"
+        from hexgraph.engine.observations import get_observation
+        payload = (get_observation(s, obs[0].id) or {}).get("payload") or {}
+        assert payload.get("examined") == n            # the whole set, recorded
+        assert payload.get("budget_stopped") is False   # ...and no budget stop

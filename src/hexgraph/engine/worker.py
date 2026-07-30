@@ -70,6 +70,24 @@ def _dispatch(session: Session, project: Project, target: Target, task: Task) ->
         analyze_target(session, project, target, get_executor())
         build_links_against(session, project)
         return
+    if task.type == "search_code_grep":
+        # The detached half of re_search_code's decompile-on-demand grep (agent_tools._detached_grep):
+        # ONE process greps the WHOLE candidate set sequentially, with NO wall-clock budget — the
+        # budget exists to keep a SYNCHRONOUS call inside the MCP client's timeout, and nothing here
+        # is waiting on us. Reuse still applies per function, and the tool's own `_search_code_grep`
+        # does the work so the synchronous and detached paths can't drift apart.
+        from hexgraph.agent.agent_tools import ToolContext, run_tool
+
+        params = task.params_json or {}
+        names = list(params.get("functions") or [])
+        ctx = ToolContext(session=session, project=project, target=target)
+        # limit=len(names) opts out of the multi-page detach (an explicit page is respected) and
+        # covers the whole set in one pass; the budget is lifted for the same reason.
+        run_tool(ctx, "search_code",
+                 {"query": params.get("query"), "functions": names,
+                  "offset": 0, "_detached": True})
+        return
+
     if task.type == "recon_children_batch":
         # analyze_target's large-firmware path (engine.pipeline.CHILD_RECON_DETACH_THRESHOLD):
         # ONE detached process recons every child SEQUENTIALLY — same "one process for the

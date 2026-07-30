@@ -2740,6 +2740,61 @@ def _bridge_is_offerable() -> bool:
         return False
 
 
+def _grep_task_args(query: str, names: list[str]) -> dict:
+    """The identity of a detached grep — what makes a re-call ATTACH rather than launch a second
+    sweep of the same set. Kept as one authority so the launch and the poll can't disagree."""
+    return {"query": query, "functions": list(names)}
+
+
+def _detached_grep(ctx: ToolContext, query: str, names: list[str]) -> str:
+    """Run a MULTI-PAGE grep as a detached job and return its handle, rather than making the caller
+    stitch a dozen partial pages together.
+
+    Why detach rather than just raise the budget: measured on a large target, one call greps ~15
+    cold functions inside `_SEARCH_GREP_BUDGET_S`, so a 200-function candidate set is 7-14 round
+    trips. Raising the budget instead would push a single call past the MCP client's own timeout —
+    the "looks hung" failure the budget exists to prevent. A detached process is the only shape that
+    escapes both. Same kick-off-and-poll idiom as `re_analyze`.
+
+    SINGLE-FLIGHT: a queued/running task with the same (query, functions) is attached, never
+    duplicated. On completion the worker records the ordinary `search_code` Observation, so the
+    result is collected the same way any other analysis is."""
+    from hexgraph.db.models import Task, TaskStatus
+    from hexgraph.db.session import release_write_lock
+    from hexgraph.engine.tasks import create_task
+    from hexgraph.engine.worker import spawn_detached_task
+
+    args = _grep_task_args(query, names)
+    existing = next(
+        (t for t in ctx.session.query(Task)
+         .filter(Task.target_id == ctx.target.id, Task.type == "search_code_grep",
+                 Task.status.in_((TaskStatus.queued, TaskStatus.running))).all()
+         if (t.params_json or {}) == args), None)
+    if existing is not None:
+        return (f"detached grep {existing.id} is {existing.status.value} over "
+                f"{len(names)} function(s) — re-call this exact search to poll it. Results land as "
+                f"a search_code Observation (obs_list(target, kind='search_code')) as it finishes.")
+
+    task = create_task(ctx.session, project=ctx.project, target_id=ctx.target.id,
+                       type="search_code_grep", params=args)
+    release_write_lock(ctx.session)
+    try:
+        spawn_detached_task(task.id)
+    except Exception as exc:  # noqa: BLE001 — a failed spawn must not look like a running sweep
+        from hexgraph.engine.tasks import mark_failed
+
+        mark_failed(task, f"failed to spawn detached grep: {exc}")
+        ctx.session.commit()
+        return (f"could not start a detached grep ({exc}); re-call with `limit` to grep one page "
+                f"at a time instead (up to {_SEARCH_FUNCS_MAX} functions per call).")
+    return (f"{len(names)} functions is more than one call can grep — a page is "
+            f"{_SEARCH_FUNCS_MAX} and the wall-clock budget is {_SEARCH_GREP_BUDGET_S}s, so this "
+            f"would have been several partial calls. Running it DETACHED as task {task.id} over the "
+            f"whole set. Re-call this exact search to poll it; results land as a search_code "
+            f"Observation (obs_list(target, kind='search_code')). Pass `limit` if you would rather "
+            f"grep one page synchronously.")
+
+
 def _search_code_grep(ctx: ToolContext, args: dict, *, query: str, functions) -> str:
     """The decompile-on-demand grep: grep the pseudo-C of ONLY the caller-named `functions` for
     `query`. BOUNDED by `functions` so the cost stays the caller's to control — an empty/missing
@@ -2777,11 +2832,22 @@ def _search_code_grep(ctx: ToolContext, args: dict, *, query: str, functions) ->
                 "then pass them here; to search ALREADY-decompiled bodies with no new decompile use "
                 "re_search_decompiled, and to find CALLERS of a symbol use re_xrefs.")
 
+    # A sweep bigger than ONE page becomes a detached job: paging it synchronously is several
+    # partial calls, and raising the budget instead would pass the MCP client's own timeout. An
+    # explicit offset/limit means the caller is driving the pagination deliberately, so respect it.
+    detached = bool(args.get("_detached"))   # internal: set by the worker arm, never advertised
+    if (not detached and len(all_names) > _SEARCH_FUNCS_MAX
+            and args.get("offset") is None and args.get("limit") is None):
+        return _detached_grep(ctx, query, all_names)
+
     # Page over the FUNCTIONS list. Unlike the scan mode's page (over cheap, already-computed
     # hits) each item here can cost a decompile, so the page cap is _SEARCH_FUNCS_MAX.
     total = len(all_names)
     offset = _bound_page(args.get("offset"), 0, 0, max(0, total))
-    limit = _bound_page(args.get("limit"), _SEARCH_FUNCS_MAX, 1, _SEARCH_FUNCS_MAX)
+    # The page cap and the budget below both exist to keep a SYNCHRONOUS call inside the MCP
+    # client's timeout. The detached job has no client waiting on it, so it takes the whole set.
+    page_max = len(all_names) if detached else _SEARCH_FUNCS_MAX
+    limit = _bound_page(args.get("limit"), page_max, 1, page_max)
     names = all_names[offset:offset + limit]
 
     # An out-of-range page searched NOTHING, which is not the same as finding nothing. Say so
@@ -2813,7 +2879,7 @@ def _search_code_grep(ctx: ToolContext, args: dict, *, query: str, functions) ->
     decompiled = 0
     reused = 0
     misses: list[str] = []
-    deadline = time.monotonic() + _SEARCH_GREP_BUDGET_S
+    deadline = (float("inf") if detached else time.monotonic() + _SEARCH_GREP_BUDGET_S)
     searched = 0   # names actually examined, so the resume offset is exact
     stopped = False
 
