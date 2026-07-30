@@ -1210,3 +1210,131 @@ def test_a_model_supplied_detached_flag_cannot_lift_the_bounds(hg_home, monkeypa
     # stops the run early. Un-stripped, this ran all 100 with no deadline at all.
     assert len(seen) <= AT._SEARCH_FUNCS_MAX, "a model-supplied _detached lifted the page cap"
     assert len(seen) < AT._SEARCH_FUNCS_MAX, "a model-supplied _detached lifted the budget"
+
+
+# --- a STRANDED sweep, and the sandbox the launch needs (but the poll does not) -----------
+
+def test_a_stranded_running_sweep_is_reclaimed_rather_than_blocking_forever(hg_home, monkeypatch):
+    """A task row only reaches a finished state by its OWN process writing it, so a SIGKILL or a
+    host restart strands it `running` forever and every later poll attaches to a corpse. A row that
+    has outlived any plausible run is marked failed and the search relaunches."""
+    import datetime as dt
+
+    import hexgraph.agent.agent_tools as AT
+    from hexgraph.db.models import Task, TaskStatus
+
+    spawned = []
+    monkeypatch.setattr("hexgraph.engine.worker.spawn_detached_task",
+                        lambda tid: spawned.append(tid) or 1)
+    monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
+    _stub_decomp_bodies(monkeypatch, {})
+    names = [f"fn_{i:03d}" for i in range(AT._SEARCH_FUNCS_MAX + 1)]
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        run_tool(ctx, "search_code", {"query": "memcpy", "functions": names})
+        assert len(spawned) == 1
+        dead = s.get(Task, spawned[0])
+        dead.status = TaskStatus.running
+        # older than ANY plausible run of 51 functions, cold analysis included
+        dead.started_at = (dt.datetime.now(dt.timezone.utc)
+                           - dt.timedelta(seconds=AT._detached_grep_budget(names) + 60))
+        s.flush()
+        out = run_tool(ctx, "search_code", {"query": "memcpy", "functions": names})
+        assert s.get(Task, spawned[0]).status == TaskStatus.failed   # the corpse is buried...
+    assert len(spawned) == 2, "a stranded sweep still blocked the search"   # ...and re-swept
+    assert "failed" in out.lower() and "retry" in out.lower()               # ...and said so
+
+
+def test_a_healthy_slow_sweep_is_never_declared_stranded(hg_home, monkeypatch):
+    """The dangerous direction. Declaring a LIVE sweep dead spawns a duplicate against it — two
+    processes over one set, contending on the slot lock whose loser falls back to an UNCACHED
+    throwaway project, i.e. exactly the damage `_grep_identity` exists to prevent. Nothing on this
+    path gates on a saved analysis, so the first decompile can pay a whole-binary analysis; the
+    bound must therefore clear what the project itself allows for that ONE operation."""
+    import datetime as dt
+
+    import hexgraph.agent.agent_tools as AT
+    from hexgraph.db.models import Task, TaskStatus
+    from hexgraph.engine.re.analysis import _analysis_timeout
+
+    spawned = []
+    monkeypatch.setattr("hexgraph.engine.worker.spawn_detached_task",
+                        lambda tid: spawned.append(tid) or 1)
+    monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: True)
+    _stub_decomp_bodies(monkeypatch, {})
+    names = [f"fn_{i:03d}" for i in range(AT._SEARCH_FUNCS_MAX + 1)]
+    # the smallest sweep that detaches is the tightest bound, so test THAT one
+    assert AT._detached_grep_budget(names) >= _analysis_timeout(), (
+        "the staleness bound is under the project's own budget for one cold whole-binary "
+        "analysis, which this path does not gate")
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        run_tool(ctx, "search_code", {"query": "memcpy", "functions": names})
+        live = s.get(Task, spawned[0])
+        live.status = TaskStatus.running
+        # mid-cold-analysis: past every per-function figure, inside the real budget
+        live.started_at = (dt.datetime.now(dt.timezone.utc)
+                           - dt.timedelta(seconds=_analysis_timeout() - 60))
+        s.flush()
+        out = run_tool(ctx, "search_code", {"query": "memcpy", "functions": names})
+        assert s.get(Task, spawned[0]).status == TaskStatus.running
+    assert len(spawned) == 1, "a live cold sweep was declared dead and duplicated"
+    assert "running" in out.lower()
+
+
+def test_a_missing_timestamp_counts_as_alive(hg_home, monkeypatch):
+    """Unknown must mean ALIVE: a bad clock or an absent timestamp duplicating a running sweep is
+    strictly worse than a stranded row waiting a while longer."""
+    import hexgraph.agent.agent_tools as AT
+
+    assert AT._detached_grep_stranded(types.SimpleNamespace(
+        started_at=None, created_at=None, params_json={"functions": ["a"]})) is False
+    assert AT._detached_grep_stranded(types.SimpleNamespace(
+        started_at="not a datetime", created_at=None, params_json={"functions": ["a"]})) is False
+
+
+def test_a_detached_launch_refuses_without_the_sandbox(hg_home, monkeypatch):
+    """A detached sweep with no Docker spawns a process that can only fail, and the failure is a
+    task row the caller then polls. Refuse synchronously instead."""
+    import hexgraph.agent.agent_tools as AT
+
+    spawned = []
+    monkeypatch.setattr("hexgraph.engine.worker.spawn_detached_task",
+                        lambda tid: spawned.append(tid) or 1)
+    monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: False)
+    _stub_decomp_bodies(monkeypatch, {})
+    names = [f"fn_{i:03d}" for i in range(AT._SEARCH_FUNCS_MAX + 1)]
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        out = run_tool(ctx, "search_code", {"query": "memcpy", "functions": names})
+    assert not spawned
+    assert "unavailable" in out.lower() and "docker" in out.lower()
+
+
+def test_a_finished_sweep_is_still_collectable_with_the_sandbox_down(hg_home, monkeypatch):
+    """...but only a LAUNCH needs Docker. Reading back a sweep that already ran needs none, so
+    gating the whole path on it made a finished sweep's recorded result unreachable the moment
+    Docker went away — the non-terminal poll all over again."""
+    import hexgraph.agent.agent_tools as AT
+    from hexgraph.db.models import Project, Target, Task
+    from hexgraph.engine.worker import run_task_sync
+
+    docker = {"up": True}
+    monkeypatch.setattr("hexgraph.sandbox.runner.docker_available", lambda: docker["up"])
+    spawned = []
+    monkeypatch.setattr("hexgraph.engine.worker.spawn_detached_task",
+                        lambda tid: spawned.append(tid) or 1)
+    names = [f"fn_{i:03d}" for i in range(AT._SEARCH_FUNCS_MAX + 1)]
+    _stub_decomp_bodies(monkeypatch, {n: f"void {n}(){{ memcpy(a,b,c); }}" for n in names})
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        run_tool(ctx, "search_code", {"query": "memcpy", "functions": names})
+    assert run_task_sync(spawned[0]) == "succeeded"
+    docker["up"] = False                    # the researcher stops Docker afterwards
+    with session_scope() as s:
+        task = s.get(Task, spawned[0])
+        ctx = ToolContext(session=s, project=s.get(Project, task.project_id),
+                          target=s.get(Target, task.target_id))
+        out = run_tool(ctx, "search_code", {"query": "memcpy", "functions": names})
+    assert "finished" in out.lower(), "a completed sweep stopped being collectable with Docker down"
+    assert "matched" in out

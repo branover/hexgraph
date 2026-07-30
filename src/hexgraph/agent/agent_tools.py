@@ -2752,10 +2752,24 @@ def _bridge_is_offerable() -> bool:
         return False
 
 
-# A detached grep's plausible ceiling per function, for deciding a `running` row is STRANDED. Six
-# times the ~20s measured on a large target, so a genuinely slow sweep is never declared dead.
+# A detached grep's plausible ceiling per WARM function, for deciding a `running` row is STRANDED.
+# Six times the ~20s measured on a large target, so a genuinely slow sweep is never declared dead.
+# The COLD first call is budgeted separately (see `_detached_grep_stranded`) — nothing on this path
+# gates on a saved analysis, so a sweep's first decompile can pay a whole-binary analysis, and that
+# one operation dwarfs every per-function figure here.
 _GREP_STALE_PER_FN_S = 120
 _GREP_STALE_FLOOR_S = 600
+
+
+def _detached_grep_budget(names) -> float:
+    """The longest a detached grep over `names` could plausibly still be working — the staleness
+    bound, as ONE authority so the check and the test can't disagree about it. See
+    `_detached_grep_stranded` for why the cold whole-binary analysis budget is added rather than
+    assumed away."""
+    from hexgraph.engine.re.analysis import _analysis_timeout
+
+    return _analysis_timeout() + max(_GREP_STALE_FLOOR_S,
+                                     len(names or []) * _GREP_STALE_PER_FN_S)
 
 
 def _detached_grep_stranded(task) -> bool:
@@ -2771,15 +2785,25 @@ def _detached_grep_stranded(task) -> bool:
     (`_GREP_STALE_PER_FN_S` per function, floored) so a legitimately long grep is never declared
     dead. Anything unknown counts as ALIVE, so a bad clock or a missing timestamp can't duplicate a
     running sweep. NOTE: the same strand exists for the other detached jobs (reveal, filesystem) —
-    a shared reaper belongs with them, not here."""
+    a shared reaper belongs with them, not here.
+
+    The per-function figures are WARM ones, so they alone are not the bound. Nothing on this path
+    gates on a saved analysis (`search_code` isn't in `_ANALYSIS_GATED_TOOLS`, and `_decomp` has no
+    gate), so a sweep's FIRST decompile can pay a full whole-binary analysis — for which the project
+    itself allows `analysis._analysis_timeout()`, 6h by default. A bound below that declares a
+    perfectly healthy cold sweep dead and spawns a duplicate against the live process: two processes
+    over one set, contending on the slot lock whose loser falls back to an UNCACHED throwaway
+    project. That is the very damage `_grep_identity` exists to prevent, arriving by another route,
+    so the cold budget is ADDED rather than assumed away. Erring generous is cheap here — a truly
+    dead sweep still collects (its per-function Observations are durable) and `limit` still pages
+    synchronously — while erring tight duplicates a multi-hour sweep."""
     import datetime as _dt
 
     try:
         started = getattr(task, "started_at", None) or getattr(task, "created_at", None)
         if started is None:
             return False
-        names = (task.params_json or {}).get("functions") or []
-        budget = max(_GREP_STALE_FLOOR_S, len(names) * _GREP_STALE_PER_FN_S)
+        budget = _detached_grep_budget((task.params_json or {}).get("functions") or [])
         now = _dt.datetime.now(_dt.timezone.utc)
         if started.tzinfo is None:
             started = started.replace(tzinfo=_dt.timezone.utc)
@@ -2850,14 +2874,6 @@ def _detached_grep(ctx: ToolContext, query: str, names: list[str]) -> str:
     from hexgraph.engine.tasks import create_task
     from hexgraph.engine.worker import spawn_detached_task
 
-    from hexgraph.sandbox.runner import docker_available
-
-    if not docker_available():
-        # N6: a detached sweep with no sandbox spawns a process that can only fail, and the failure
-        # is a task row the caller then polls. Refuse synchronously instead.
-        return ("decompilation unavailable (Docker/sandbox not running), so a detached grep would "
-                "have nothing to run — start the sandbox, or name one page of functions to grep "
-                "with `limit` once it is up.")
     args = _grep_task_args(query, names)
     ident = _grep_identity(args)
     prior = [t for t in ctx.session.query(Task)
@@ -2894,6 +2910,18 @@ def _detached_grep(ctx: ToolContext, query: str, names: list[str]) -> str:
         return (f"detached grep {done.id} over {len(names)} function(s) has FINISHED.{where} "
                 f"Re-calling this exact search returns this same completed result rather than "
                 f"re-sweeping the set; pass `limit` to page it synchronously instead.")
+
+    # Only a LAUNCH needs the sandbox — a detached sweep with no Docker spawns a process that can
+    # only fail, and the failure is a task row the caller then polls. So refuse here, BELOW the
+    # attach/collect above: reading back a sweep that already ran needs no Docker at all, and
+    # gating the whole function on it made a finished sweep's recorded result unreachable the
+    # moment Docker went away, which is the non-terminal poll all over again.
+    from hexgraph.sandbox.runner import docker_available
+
+    if not docker_available():
+        return ("decompilation unavailable (Docker/sandbox not running), so a detached grep would "
+                "have nothing to run — start the sandbox, or name one page of functions to grep "
+                "with `limit` once it is up.")
 
     # A prior sweep that FAILED gets retried below — but say so, or the retry looks like a first
     # attempt and a systematically-failing sweep is invisible.
