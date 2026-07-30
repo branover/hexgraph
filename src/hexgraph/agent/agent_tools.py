@@ -46,6 +46,14 @@ _HEX_ADDR = re.compile(r"^0x[0-9a-fA-F]+$")
 _MAX_FLOOR = 200
 _MAX_CEILING = 100_000
 
+# How many not-yet-promoted callee names `_format_decomp`'s note lists. The note rides in the
+# RESERVED tail — OUTSIDE the clip — so it MUST be bounded or it defeats _MAX outright: the
+# decompiler's callee list is uncapped upstream, and `promotable_callees` is every callee not yet
+# a graph node (on a fresh target, ALL of them), so a high-fan-out dispatcher would return tens of
+# KB from a "6000-char-capped" tool AND starve the pseudocode to _MAX_FLOOR. Same bound as the
+# miss-path inventory sample below; the focus's FULL callee list stays in the Observation.
+_PROMO_NOTE_MAX = 40
+
 # Shared param description for the body-returning tools (decompile/disassemble/search). Public
 # (re-exported as MAX_CHARS_DESC) so the MCP catalog schemas source the SAME copy — one authority,
 # no drift between the in-process agent-loop specs and the advertised MCP schemas.
@@ -493,7 +501,8 @@ def _effective_limit(max_chars) -> int:
         return _MAX
 
 
-def _clip_with_hint(body: str, *, hint: str, limit: int, obs_id: str | None) -> str:
+def _clip_with_hint(body: str, *, hint: str, limit: int, obs_id: str | None,
+                    offer_max_chars: bool = True) -> str:
     """Clip `body` to `limit` but ALWAYS keep `hint` — the paging/resume line — attached.
 
     Appending the hint and then clipping the whole string drops the hint exactly when the result
@@ -504,11 +513,12 @@ def _clip_with_hint(body: str, *, hint: str, limit: int, obs_id: str | None) -> 
     tail = f"\n{hint}" if hint else ""
     # `reserve` is what keeps the advertised max_chars honest: the clip must be told that the
     # caller appends `tail` afterwards, or the number it prints is a FIXED POINT (see _clip_body).
-    return _clip_body(body, limit=max(_MAX_FLOOR, limit - len(tail)),
-                      obs_id=obs_id, reserve=len(tail)) + tail
+    return _clip_body(body, limit=max(_MAX_FLOOR, limit - len(tail)), obs_id=obs_id,
+                      reserve=len(tail), offer_max_chars=offer_max_chars) + tail
 
 
-def _clip_body(s: str, *, limit: int, obs_id: str | None, reserve: int = 0) -> str:
+def _clip_body(s: str, *, limit: int, obs_id: str | None, reserve: int = 0,
+               offer_max_chars: bool = True) -> str:
     """Truncate a body-returning tool's text to `limit` chars, but instead of the bare
     `…[truncated]` marker emit an ACTIONABLE one that names BOTH recovery paths and the sizes:
     re-call with a larger max_chars, or get_observation(<id>) for the full body. The full body
@@ -532,6 +542,15 @@ def _clip_body(s: str, *, limit: int, obs_id: str | None, reserve: int = 0) -> s
     # when it can actually reach the full size (it clamps at _MAX_CEILING); past that, the
     # observation tool is the only way to the full body.
     obs = f"get_observation/obs_get('{obs_id}')" if obs_id else None
+    # `offer_max_chars=False` for a tool that has no such param — the paginated listers bound their
+    # output with offset/limit instead. Naming a knob the tool can't take is the #299 finding-9
+    # defect: a hard TypeError over MCP, and silently ignored on the agent-loop path.
+    if not offer_max_chars:
+        # No obs_id means recording FAILED, so don't promise the store has the page — say what the
+        # agent can actually do instead (narrow the page).
+        tail = (f"{obs} for the full page" if obs
+                else "re-call with a smaller limit (this page was not recorded)")
+        return s[:limit] + f"\n\u2026[truncated {limit}/{full} chars \u2014 {tail}]"
     if need <= _MAX_CEILING:
         knob = f"re-call with max_chars\u2265{need}"
         tail = f"{knob}, or {obs} for the full body" if obs else f"{knob} for the full body"
@@ -539,6 +558,17 @@ def _clip_body(s: str, *, limit: int, obs_id: str | None, reserve: int = 0) -> s
         tail = f"{obs} for the full body" if obs else "the full body is in the Observation store"
     return s[:limit] + f"\n\u2026[truncated {limit}/{full} chars — {tail}]"
 
+
+def _clip_page(prefix: str, body: str, tail: str, obs_id: str | None) -> str:
+    """Render one page of a paginated lister: an unclippable `prefix` (the header) and `tail` (the
+    "N more — re-call with offset=…" marker), with only `body` clipped between them.
+
+    The shared shape for `list_strings` / `list_functions` / `resolve_symbol`, which each hand-rolled
+    it. `offer_max_chars=False` because none of the three HAS a max_chars param — their bound is
+    offset/limit, which `tail` already names, and their full page is in the Observation."""
+    return prefix + _clip_with_hint(
+        body, hint=tail.lstrip("\n"), limit=max(_MAX_FLOOR, _MAX - len(prefix)),
+        obs_id=obs_id, offer_max_chars=False)
 
 def _callee_names(callees) -> list[str]:
     """Callee names from the decompiler's callee list (entries are bare names or dicts)."""
@@ -590,8 +620,14 @@ def _format_decomp(out: dict, label: str, *, limit: int = _MAX) -> str:
     if promo:
         # New callees were NOT added to the graph (no fan-out). Surface them for
         # deliberate promotion — decompile_function one of these to promote it.
+        # BOUNDED (_PROMO_NOTE_MAX): this note is reserved OUTSIDE the clip, so an unbounded list
+        # would blow _MAX by an unbounded amount and starve the pseudocode to _MAX_FLOOR. Name a
+        # workable handful plus the true remainder; the full callee list is in the Observation.
+        shown = promo[:_PROMO_NOTE_MAX]
+        rest = (f" (+{len(promo) - len(shown)} more — full callee list in the Observation)"
+                if len(promo) > len(shown) else "")
         note = ("\n// callees not yet in the graph (promote any by decompiling it): "
-                + ", ".join(promo))
+                + ", ".join(shown) + rest)
     # F16: if Ghidra didn't define this function the focus came from radare2 (r2dec) — flag it
     # BEFORE the body (so a truncation can't hide it). r2dec is heuristic and can mis-resolve
     # PLT/args or fabricate a call; never read fallback pseudocode as Ghidra-quality.
@@ -608,10 +644,13 @@ def _format_decomp(out: dict, label: str, *, limit: int = _MAX) -> str:
     if out.get("focus_node_id"):
         node_ref = (f"\n// graph node {out['focus_node_id']} — "
                     f"@-mention it as @[{name}](node:{out['focus_node_id']})")
-    return _clip_body(
+    # The note (callees NOT yet in the graph) is what you DO next, where the pseudocode is what you
+    # read — and it was concatenated last, so a long function clipped away the actionable half
+    # first. Reserve it like a paging hint.
+    return _clip_with_hint(
         f"// {name}{addr} (callees: {', '.join(_callee_names(focus.get('callees')))})"
-        f"{engine_warn}{node_ref}\n{focus.get('pseudocode', '')}{note}",
-        limit=limit, obs_id=out.get("observation_id"))
+        f"{engine_warn}{node_ref}\n{focus.get('pseudocode', '')}",
+        hint=note.lstrip("\n"), limit=limit, obs_id=out.get("observation_id"))
 
 
 def _record_obs(ctx: ToolContext, *, tool: str, args: dict | None, result_kind: str,
@@ -1247,7 +1286,7 @@ def _list_strings(ctx: ToolContext, args: dict) -> str:
         src_note = ""
     # The Observation records the page actually returned (keyed by pattern+offset+limit so a
     # different page is its own row), plus the total + source so a later reader sees the scope.
-    _record_obs(ctx, tool="list_strings",
+    _obs, _ = _record_obs(ctx, tool="list_strings",
                 args={k: v for k, v in (("pattern", pat), ("offset", offset),
                                         ("limit", limit)) if v},
                 result_kind="strings",
@@ -1267,10 +1306,8 @@ def _list_strings(ctx: ToolContext, args: dict) -> str:
     # body always says so, and the full page is in the Observation). A page-of-strings is bounded
     # by _STRINGS_PAGE_MAX but very long individual strings can still overflow _MAX.
     prefix = f"{header}:\n"
-    budget = _MAX - len(prefix) - len(tail)
-    if budget > 0 and len(body) > budget:
-        body = body[:budget] + "\n…[strings truncated — obs_get for the full page]"
-    return f"{prefix}{body}{tail}"
+    return _clip_page(prefix, body, tail, _obs.id if _obs is not None else None)
+
 
 
 def _bound_page(val, default, lo, hi) -> int:
@@ -1343,7 +1380,7 @@ def _list_functions(ctx: ToolContext, args: dict) -> str:
     # own row) under a DISTINCT kind from the raw `function_list` inventory _decomp wrote — else
     # search_symbols_project (which reads the newest `function_list` as a target's whole-program
     # name set) would see only this filtered page and under-report its function names.
-    _record_obs(ctx, tool="list_functions",
+    _obs, _ = _record_obs(ctx, tool="list_functions",
                 args={k: v for k, v in (("pattern", pat), ("offset", offset),
                                         ("limit", limit)) if v},
                 result_kind="function_list_page",
@@ -1363,10 +1400,7 @@ def _list_functions(ctx: ToolContext, args: dict) -> str:
         tail += (f"\n…[note: {grand_total} functions defined; {withheld} are beyond the returned "
                  f"inventory and not listed here — re_decompile_at reaches any function by address]")
     prefix = f"{header}:\n"
-    budget = _MAX - len(prefix) - len(tail)
-    if budget > 0 and len(body) > budget:
-        body = body[:budget] + "\n…[functions truncated — obs_get for the full page]"
-    return f"{prefix}{body}{tail}"
+    return _clip_page(prefix, body, tail, _obs.id if _obs is not None else None)
 
 
 # Coarse ELF symbol classification from the nm type-LETTER alone (design note: name/addr/
@@ -1450,7 +1484,7 @@ def _resolve_symbol(ctx: ToolContext, args: dict) -> str:
     kind_note = "" if kind == "all" else f" [{kind}]"
     cap_note = (f" [table CAPPED at {_NM_SYMBOL_CAP} nm symbols — a miss may be past the cap; "
                 "re_binutils_facts for the full probe]") if capped else ""
-    _record_obs(ctx, tool="resolve_symbol",
+    _obs, _ = _record_obs(ctx, tool="resolve_symbol",
                 args={k: v for k, v in (("pattern", pat), ("kind", kind if kind != "all" else None),
                                         ("offset", offset), ("limit", limit)) if v},
                 result_kind="symbol_resolve",
@@ -1472,10 +1506,7 @@ def _resolve_symbol(ctx: ToolContext, args: dict) -> str:
         tail = (f"\n…[{total - next_offset} more — re-call with offset={next_offset}"
                 + (f", limit={limit}" if limit != _SYMBOLS_PAGE else "") + "]")
     prefix = f"{header}:\n"
-    budget = _MAX - len(prefix) - len(tail)
-    if budget > 0 and len(body) > budget:
-        body = body[:budget] + "\n…[symbols truncated — obs_get for the full page]"
-    return f"{prefix}{body}{tail}"
+    return _clip_page(prefix, body, tail, _obs.id if _obs is not None else None)
 
 
 def _symbol_facts(ctx: ToolContext):
