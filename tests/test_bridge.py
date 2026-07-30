@@ -684,8 +684,7 @@ def test_routing_costs_one_docker_inspect_not_two(env, monkeypatch):
     # Exercise the REAL probe by restoring just THIS function — `monkeypatch.undo()` would drop the
     # whole offline-isolation harness (docker_available, the slot, policy, the executor) and let the
     # test touch the host.
-    monkeypatch.setattr(B, "_container_state", B._container_state.__wrapped__
-                        if hasattr(B._container_state, "__wrapped__") else _REAL_STATE)
+    monkeypatch.setattr(B, "_container_state", _REAL_STATE)
     inspects = []
     monkeypatch.setattr(B.subprocess, "run",
                         lambda *a, **k: inspects.append(a[0]) or

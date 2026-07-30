@@ -392,7 +392,11 @@ def bridge_status(session, project, target, *, runner=None) -> dict:
 
 
 def bridge_endpoint(target) -> tuple[str, int] | None:
-    """For decompiler routing: `(ip, port)` when the target has a LIVE bridge, else None. The common
+    """`(ip, port)` when the target has a bridge ANSWERING right now, else None.
+
+    NOT for routing any more — `bridge_route` owns that, and asks the different question "might this
+    bridge still own the project?". This is the liveness question, whose only caller is the
+    search_code nudge's `_bridge_live` ("would suggesting a bridge help?"). The common
     no-bridge case (no metadata entry) does NO docker call and returns immediately. When an entry
     exists, re-inspect the container BY NAME for its CURRENT ip — NOT the stored ip: a dead bridge's
     Docker ip can be recycled by another container, which a bare port check alone wouldn't catch. A

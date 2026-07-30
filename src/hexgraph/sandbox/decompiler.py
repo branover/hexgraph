@@ -479,7 +479,9 @@ def get_decompiler(name: str | None = None, *, target=None) -> Decompiler:
     falls through to headless — an unanswered probe does NOT, because a bridge can be alive and
     unable to answer (starting, or busy behind its listen backlog) while still holding the project
     lock a headless open would hit. An unreachable-but-not-gone bridge therefore fails the op rather
-    than silently colliding; `run_ghidra_op` degrades it on the same positive-evidence standard."""
+    than silently colliding. (Callers that go through `run_ghidra_op` get a dead bridge degraded to
+    headless on the same positive-evidence standard; callers of THIS function invoke `.decompile()`
+    directly, so an unreachable bridge surfaces to them as an error to handle.)"""
     if name is None and target is not None:
         try:
             from hexgraph.engine.re.bridge import bridge_route
