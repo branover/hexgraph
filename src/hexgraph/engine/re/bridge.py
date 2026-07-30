@@ -70,34 +70,74 @@ def _container_ip(name: str) -> str | None:
         return None
 
 
-def _container_not_running(name: str) -> bool | None:
-    """Tri-state, and the polarity is the whole risk, so read the name literally: True when docker
-    positively tells us the container is NOT running (absent, or present but exited), False when it
-    reports one running, and None when the inspect could not answer at all — daemon unreachable,
-    timeout, an unrecognised error, an unparseable reply.
+def _container_state(name: str) -> tuple[bool | None, str | None]:
+    """`(not_running, ip)` from ONE `docker inspect` — the single probe both routing and the degrade
+    path need, so neither pays for the other's question.
 
-    NOT "absent": an exited container still exists, and this returns True for it. That is
-    deliberate — its JVM is dead, so it holds no project — but the distinction matters enough that
-    the earlier name (`_container_absent`) was simply wrong about its own behaviour.
+    `not_running` is the same tri-state `_container_not_running` documents: True when docker says
+    the container isn't running (absent, or present but exited), False when it reports one running,
+    None when the inspect couldn't answer. `ip` is the container's CURRENT bridge address, re-read
+    rather than trusted from the registry — a dead bridge's Docker IP can be recycled.
 
-    Every unknown resolves to None, including a zero-exit reply we cannot parse. A caller that must
-    not guess wrong reads None as "assume it IS running"."""
+    One call rather than two matters because routing runs on EVERY Ghidra op, where the degrade path
+    runs only after a failure. The old routing paid an inspect for the IP and then a TCP connect for
+    liveness; this answers both at once."""
     try:
-        out = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", name],
-                             capture_output=True, text=True, timeout=10)
+        out = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}} "
+             "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", name],
+            capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
-        return None
+        return None, None
     if out.returncode != 0:
         err = (out.stderr or "").lower()
-        # Docker says this plainly for a container that isn't there; anything else is a failure
-        # to answer, not an answer.
-        return True if ("no such object" in err or "no such container" in err) else None
-    state = (out.stdout or "").strip().lower()
+        gone = True if ("no such object" in err or "no such container" in err) else None
+        return gone, None
+    parts = (out.stdout or "").strip().split()
+    state = parts[0].lower() if parts else ""
+    ip = parts[1] if len(parts) > 1 else None
     if state == "true":
-        return False        # running
+        return False, ip
     if state == "false":
-        return True         # exists but exited — dead JVM, holds nothing
-    return None             # zero exit, unrecognised body ⇒ we did NOT get an answer
+        return True, ip
+    return None, ip          # zero exit, unrecognised body ⇒ we did NOT get an answer
+
+
+def bridge_route(target) -> tuple[str, int] | None:
+    """`(ip, port)` to send a Ghidra op to when the bridge MIGHT still own `target`'s project, else
+    None to use headless.
+
+    Deliberately NOT `bridge_endpoint`, whose "is it answering right now?" is the wrong question for
+    routing. A bridge that is registered and not positively dead still HOLDS the Ghidra project — it
+    may be mid-startup, or busy inside a long op behind its listen backlog — and a headless open
+    behind it fails on the project lock. So route to it unless we have positive evidence it's gone.
+
+    Guessing wrong costs one failed RPC, which `sandbox.decompiler.run_ghidra_op` then resolves with
+    the same positive-evidence check before degrading. Guessing wrong the OTHER way costs a second
+    opener on a live project, which is the failure this whole line of work exists to prevent."""
+    try:
+        meta = bridge_meta(target)
+        if not meta:
+            return None                      # nothing registered — nothing holds the slot
+        not_running, ip = _container_state(meta.get("container") or "")
+        if not_running is True:
+            return None                      # positively gone ⇒ headless is safe
+        return ((ip or meta.get("ip")), int(meta.get("port") or BRIDGE_PORT)) \
+            if (ip or meta.get("ip")) else None
+    except Exception:  # noqa: BLE001 — routing must never break decompilation
+        return None
+
+
+def _container_not_running(name: str) -> bool | None:
+    """Tri-state liveness only, for callers that don't need the address. Delegates to
+    `_container_state` so there is ONE docker-reply parser: True when docker positively says the
+    container is not running (absent, or present but exited), False when it reports one running,
+    None when the inspect could not answer at all.
+
+    NOT "absent": an exited container still exists, and this returns True for it — its JVM is dead,
+    so it holds no project. Every unknown resolves to None, and a caller that must not guess wrong
+    reads None as "assume it IS running"."""
+    return _container_state(name)[0]
 
 
 def bridge_confirmed_gone(target) -> bool:
