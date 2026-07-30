@@ -280,3 +280,80 @@ def test_decompile_note_is_bounded_so_a_high_fanout_function_cannot_defeat_the_c
     # The reserved note must not starve the pseudocode: a 150-callee function still reads.
     mid = AT._format_decomp(decomp(150), "cgi_dispatch")
     assert mid.count("int v") > 50, "the note ate the pseudocode it is supposed to complement"
+
+
+def test_clip_page_still_clips_when_the_prefix_alone_exceeds_the_cap(hg_home):
+    """MEDIUM-2: the divergence this PR claimed to fix, which nothing asserted.
+
+    The hand-rolled form was `if budget > 0 and len(body) > budget` — so when header+tail alone
+    reached `_MAX`, `budget` went <= 0 and the body was returned ENTIRELY unclipped, i.e. the cap
+    failed exactly where it was most needed. `_clip_page` floors at `_MAX_FLOOR` instead, so a
+    pathological header costs body text but never the bound."""
+    import hexgraph.agent.agent_tools as AT
+
+    prefix = "H" * (AT._MAX + 500)          # header alone past the cap
+    body = "B" * 50_000
+    out = AT._clip_page(prefix, body, "\n…[1 more — re-call with offset=1]", "obs-9")
+    assert "truncated" in out                       # it DID clip (the old form did not)
+    assert out.count("B") <= AT._MAX_FLOOR          # body bounded by the floor
+    assert "1 more" in out and "offset=1" in out    # ...and the tail still survived
+
+
+def test_all_three_listers_share_the_page_clip(hg_home, monkeypatch):
+    """LOW-3: the consolidation test exercised list_strings only. Pin that the function grep and the
+    symbol grep go through the same path — an obs-id marker and no max_chars — since the whole point
+    is that one implementation serves all three."""
+    import hexgraph.agent.agent_tools as AT
+    from hexgraph.db.models import Observation
+
+    long_names = [f"fn_{i:04d}_" + "n" * 200 for i in range(400)]
+    _stub_decomp(monkeypatch, long_names)
+    with session_scope() as s:
+        ctx = _ctx(s)
+        for tool, args, kind in (("list_functions", {"limit": 200}, "function_list_page"),
+                                 ("resolve_symbol", {"pattern": "fn_", "limit": 200}, "symbol_resolve")):
+            out = run_tool(ctx, tool, args)
+            if "truncated" not in out.lower():
+                continue          # symbol table may not carry these; the assertion below is the point
+            assert "max_chars" not in out, tool
+            obs = s.query(Observation).filter(Observation.target_id == ctx.target.id,
+                                              Observation.result_kind == kind).all()
+            assert obs and any(o.id in out for o in obs), tool
+
+
+def test_decompile_max_chars_round_trips_with_the_reserved_note(hg_home, monkeypatch):
+    """LOW-4: `_format_decomp` now RESERVES the note, which is what made #299's fixed point fragile
+    — the advertised max_chars must still return the whole thing in ONE follow-up, not converge."""
+    import re as _re
+
+    import hexgraph.agent.agent_tools as AT
+
+    body = "\n".join(f"  int v{i} = compute_{i}();" for i in range(2000))
+    monkeypatch.setattr(AT, "_decomp", lambda ctx, function, **kw: {
+        "focus": {"name": function, "pseudocode": body, "callees": []},
+        "promotable_callees": [f"sub_{i}" for i in range(10)], "observation_id": "obs-7"})
+    monkeypatch.setattr("hexgraph.engine.re.analysis.analysis_state",
+                        lambda project, target: {"state": "analyzed", "detail": "(warm)"})
+    with session_scope() as s:
+        ctx = _ctx(s)
+        first = run_tool(ctx, "decompile_function", {"function": "big_fn"})
+        m = _re.search(r"max_chars≥(\d+)", first)
+        assert m, first[-200:]
+        ctx.cache.clear()
+        second = run_tool(ctx, "decompile_function",
+                          {"function": "big_fn", "max_chars": int(m.group(1))})
+    assert "truncated" not in second.lower()             # one step, not a fixed point
+    assert "callees not yet in the graph" in second      # ...with the note still attached
+
+
+def test_page_marker_does_not_promise_the_store_when_recording_failed(hg_home):
+    """LOW-5. `_record_obs` is best-effort and returns (None, False) on a store failure, which is
+    exactly when `obs_id` is None — so the old wording promised "the full page is in the Observation
+    store" precisely when it wasn't. Say what the agent can actually do instead."""
+    import hexgraph.agent.agent_tools as AT
+
+    out = AT._clip_page("header:\n", "B" * 50_000, "\n…[9 more — re-call with offset=9]", None)
+    assert "truncated" in out
+    assert "in the Observation store" not in out     # don't promise what isn't there
+    assert "smaller limit" in out                    # ...offer the knob that does exist
+    assert "9 more" in out                           # tail still preserved

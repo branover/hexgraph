@@ -546,7 +546,10 @@ def _clip_body(s: str, *, limit: int, obs_id: str | None, reserve: int = 0,
     # output with offset/limit instead. Naming a knob the tool can't take is the #299 finding-9
     # defect: a hard TypeError over MCP, and silently ignored on the agent-loop path.
     if not offer_max_chars:
-        tail = f"{obs} for the full page" if obs else "the full page is in the Observation store"
+        # No obs_id means recording FAILED, so don't promise the store has the page — say what the
+        # agent can actually do instead (narrow the page).
+        tail = (f"{obs} for the full page" if obs
+                else "re-call with a smaller limit (this page was not recorded)")
         return s[:limit] + f"\n\u2026[truncated {limit}/{full} chars \u2014 {tail}]"
     if need <= _MAX_CEILING:
         knob = f"re-call with max_chars\u2265{need}"
@@ -1296,9 +1299,19 @@ def _list_strings(ctx: ToolContext, args: dict) -> str:
     # eat them, and the marker names the Observation holding the full page. NOT max_chars —
     # these tools bound their output with offset/limit and have no such param.
     prefix = f"{header}:\n"
+    return _clip_page(prefix, body, tail, _obs.id if _obs is not None else None)
+
+
+def _clip_page(prefix: str, body: str, tail: str, obs_id: str | None) -> str:
+    """Render one page of a paginated lister: an unclippable `prefix` (the header) and `tail` (the
+    "N more — re-call with offset=…" marker), with only `body` clipped between them.
+
+    The shared shape for `list_strings` / `list_functions` / `resolve_symbol`, which each hand-rolled
+    it. `offer_max_chars=False` because none of the three HAS a max_chars param — their bound is
+    offset/limit, which `tail` already names, and their full page is in the Observation."""
     return prefix + _clip_with_hint(
         body, hint=tail.lstrip("\n"), limit=max(_MAX_FLOOR, _MAX - len(prefix)),
-        obs_id=_obs.id if _obs is not None else None, offer_max_chars=False)
+        obs_id=obs_id, offer_max_chars=False)
 
 
 def _bound_page(val, default, lo, hi) -> int:
@@ -1395,9 +1408,7 @@ def _list_functions(ctx: ToolContext, args: dict) -> str:
     # eat them, and the marker names the Observation holding the full page. NOT max_chars —
     # these tools bound their output with offset/limit and have no such param.
     prefix = f"{header}:\n"
-    return prefix + _clip_with_hint(
-        body, hint=tail.lstrip("\n"), limit=max(_MAX_FLOOR, _MAX - len(prefix)),
-        obs_id=_obs.id if _obs is not None else None, offer_max_chars=False)
+    return _clip_page(prefix, body, tail, _obs.id if _obs is not None else None)
 
 
 # Coarse ELF symbol classification from the nm type-LETTER alone (design note: name/addr/
@@ -1507,9 +1518,7 @@ def _resolve_symbol(ctx: ToolContext, args: dict) -> str:
     # eat them, and the marker names the Observation holding the full page. NOT max_chars —
     # these tools bound their output with offset/limit and have no such param.
     prefix = f"{header}:\n"
-    return prefix + _clip_with_hint(
-        body, hint=tail.lstrip("\n"), limit=max(_MAX_FLOOR, _MAX - len(prefix)),
-        obs_id=_obs.id if _obs is not None else None, offer_max_chars=False)
+    return _clip_page(prefix, body, tail, _obs.id if _obs is not None else None)
 
 
 def _symbol_facts(ctx: ToolContext):
