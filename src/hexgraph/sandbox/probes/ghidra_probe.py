@@ -168,6 +168,12 @@ def _parse(argv):
         m["search_bytes"] = _flag_value(rest, "--sbytes")
         m["search_imm"] = _flag_value(rest, "--simm")
         return m
+    if "--recover-data-refs" in rest:
+        # Recovery ONLY, over an already-warm slot: rebuild the code->data reference index without
+        # re-running the whole-program inventory `--analyze` would produce and a detached run would
+        # then discard. Checked before `--analyze` so the two can be passed together.
+        m["mode"] = "recover_data_refs"
+        return m
     if "--analyze" in rest:
         m["mode"] = "analyze"  # cold whole-binary analysis, no focus
         return m
@@ -204,6 +210,12 @@ def _run(m) -> dict:
     from ghidra.util.task import ConsoleTaskMonitor
 
     mode = m["mode"]
+    if mode == "recover_data_refs":
+        # Its own short path: no core runs, so the warm slot is opened once — by the recovery itself
+        # — and a detached recovery does not pay for a whole-program inventory it would discard.
+        return {"tool": "ghidra_probe", "mode": mode, "cached": True,
+                "fast_profile": L.fast_profile_applies(m["artifact"]),
+                "data_ref_recovery": _recover_data_refs(m["artifact"])}
     # THE analysis chokepoint: ONLY the `analyze` mode (re_analyze) may build a cold analysis. Every
     # other mode is WARM-ONLY — main() already refused a cold miss with the re_analyze lead, so on the
     # warm path open_target never analyzes. script + search additionally open the program READ-ONLY
@@ -229,7 +241,46 @@ def _run(m) -> dict:
             result = L.decompile_core(program, flat, monitor, focus=m["focus"], rename=m["rename"])
         result.setdefault("tool", "ghidra_probe")
         result["cached"] = cached
+
+    # Whether this target's analysis runs under the fast profile is part of its RESULT, not a detail
+    # an agent has to infer from empty xrefs: the profile disables the constant/scalar reference
+    # analyzers, so on a large target the code->data half of the xref index comes from the recovery
+    # stage below rather than from analysis. Reported on EVERY mode so `re_data_xrefs` returning
+    # nothing is legible instead of looking like "this string has no callers".
+    fast_profile = L.fast_profile_applies(m["artifact"])
+    result["fast_profile"] = fast_profile
+    if fast_profile and mode == "analyze":
+        result["data_ref_recovery"] = _recover_data_refs(m["artifact"])
     return result
+
+
+def _recover_data_refs(artifact) -> dict:
+    """Run code->data reference recovery as a SEPARATE STAGE, after `_run`'s cold analysis has been
+    saved and the warm marker committed.
+
+    Staged deliberately: the recovery pass is a full linear scan (~48 min on a 160M-instruction,
+    895 MB image) and analysis on a monolith already runs for hours, so folding it into the analysis
+    transaction would mean a kill during recovery discards the ENTIRE analysis. Reopening the warm
+    slot instead makes the two independently durable — being killed here costs the recovery only,
+    and the next `re_analyze` retries it because the marker flag was never set.
+
+    Skipped when the marker says a pass already completed, so re-running `re_analyze` on a warm
+    target does not re-pay the scan (the pass is idempotent, but idempotent is not free)."""
+    marker = L.read_marker()
+    if marker.get("data_refs_recovered"):
+        return {"skipped": "already recovered", "added": 0}
+    try:
+        # No Ghidra import here on purpose (this module keeps Ghidra lazy): recover_data_refs_core
+        # constructs its own ConsoleTaskMonitor when passed None, so the whole wrapper — including
+        # the skip and failure paths — stays stdlib-only and testable without a JVM.
+        with L.open_target(artifact, cold_analyze=False) as (program, _flat, _cached):
+            stats = L.recover_data_refs_core(program, None)
+    except Exception as exc:  # noqa: BLE001 - recovery must never fail the analysis that preceded it
+        return {"error": str(exc), "added": 0}
+    # Only a COMPLETE pass earns the marker; a truncated one must be retried, not skipped forever.
+    if not stats.get("truncated"):
+        L.update_marker(data_refs_recovered=True)
+    return stats
 
 
 def main() -> int:

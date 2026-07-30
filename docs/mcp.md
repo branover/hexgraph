@@ -211,6 +211,15 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
   `re_analyze` of the same target attaches to the running one, never a duplicate) and idempotent: re-call it to
   poll (`state` walks `none → running → analyzed`), and once `analyzed` every gated verb is fast — seconds
   per call rather than a whole-binary pass (on a ~940 MB image we measured about 20s per decompile).
+
+  On a target over 100 MB, analysis runs a **fast profile** that disables the analyzer passes which
+  otherwise run for days on a monolith. Every Ghidra result carries a `fast_profile` flag so you can see
+  when it applied. One of the passes it drops is the one that builds code-to-data references, so
+  `re_analyze` follows the analysis with a separate recovery pass that rebuilds them, and `re_data_xrefs`
+  on a string will show you the code that loads it as well as the pointers to it. The recovery is
+  reported as `data_ref_recovery` and it only runs once per target. It cannot recover every reference:
+  addresses a program computes across several instructions (common on MIPS and AArch64) still need the
+  full analysis, so on those architectures expect `re_data_xrefs` to be less complete than on x86-64.
   `re_recover_constant` (P-Code emulation) and the `static_analysis` taint pass gate the same way — they run
   the deeper analysis over the warm project, so on a cold target they return the `re_analyze` lead rather than
   analyzing themselves. `re_disassemble` (targeted) and `re_search_decompiled` (reads the store) need no

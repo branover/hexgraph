@@ -94,6 +94,34 @@ def _commit_marker() -> None:
         pass
 
 
+def read_marker() -> dict:
+    """The committed warm marker as a dict (empty when absent/unreadable)."""
+    try:
+        with open(os.path.join(PROJECT_MOUNT, META_NAME)) as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def update_marker(**fields) -> None:
+    """MERGE `fields` into the committed marker, atomically, preserving every key already there.
+
+    The marker is written by both the host (`engine.re.ghidra_project.write_meta`: content_hash /
+    ghidra_version / …) and `_commit_marker`, so a stage that records its own state must merge
+    rather than replace — clobbering `content_hash` would make the host re-analyze a warm slot."""
+    marker = os.path.join(PROJECT_MOUNT, META_NAME)
+    data = read_marker()
+    data.update(fields)
+    tmp = marker + ".tmp"
+    try:
+        with open(tmp, "w") as fh:
+            json.dump(data, fh)
+        os.replace(tmp, marker)
+    except OSError:
+        pass
+
+
 @contextlib.contextmanager
 def _read_only_program(project, prog_name):
     """Open the warm program IMMUTABLE via DomainFile.getReadOnlyDomainObject — the returned
@@ -193,7 +221,13 @@ def _slow_analyzer(name: str) -> bool:
     Constant Reference Analyzer"). Mirrors the Jython FAST_PROFILE_SCRIPT: drop the O(n^2)
     Call-Fixup Installer, the per-processor constant/scalar propagation, the decompile-EVERY-function
     passes, and the Non-Returning Functions analyzers (their ClearFlowAndRepair wedges on a monolith);
-    KEEP function/call-graph/reference discovery (HexGraph decompiles on demand)."""
+    KEEP function + call-graph discovery (HexGraph decompiles on demand).
+
+    NOT "keep reference discovery" — dropping the constant/scalar passes specifically empties the
+    code->DATA reference index (control flow is unaffected, which is why the call graph survives).
+    On a real 895 MB x86-64 image that is ~10M missing references: every `xrefs_core(mode="data")`
+    on a string returns its data->data pointers and NONE of the code that loads it. `recover_data_refs_core`
+    rebuilds the statically-resolvable majority of that index; see its comment for what it cannot."""
     if "." in name:
         return False
     if name in ("Call-Fixup Installer", "Decompiler Parameter ID", "Decompiler Switch Analysis",
@@ -250,6 +284,124 @@ def _analyze(program, artifact) -> None:
     mgr.startAnalysis(ConsoleTaskMonitor())  # synchronous; persistence is open_program's exit save
     with contextlib.suppress(Exception):
         GhidraProgramUtilities.markProgramAnalyzed(program)
+
+
+def fast_profile_applies(artifact) -> bool:
+    """Whether a COLD analysis of `artifact` runs (or ran) under the fast profile — the same
+    size predicate `_analyze` uses, exposed so callers can report the capability state instead of
+    leaving an agent to infer it from empty results. Stateless on purpose: it is derived from the
+    artifact, not from a flag set during the analysis that produced the warm slot."""
+    try:
+        return artifact is not None and os.path.getsize(artifact) >= _FAST_PROFILE_BYTES
+    except OSError:
+        return False
+
+
+# --- code->data reference recovery ---------------------------------------------------------------
+# The fast profile disables the per-processor "* Constant Reference Analyzer" / "* Scalar Operand
+# References" passes because their cost on a monolith is unbounded (the parallel pass is capped at
+# `Max Threads`, but whatever falls OUTSIDE a recognized function body is then walked SINGLE-THREADED
+# — see ConstantPropagationAnalyzer.added, "now slog through the rest single threaded"). Disabling
+# them also empties the code->DATA reference index, so `xrefs_core(mode="data")` on a string returns
+# only the data->data pointers and none of the CODE that loads it — the string->callers pivot dies.
+#
+# Most of that index does not need constant propagation to rebuild. On x86-64 a RIP-relative operand
+# is resolved by SLEIGH at DISASSEMBLY time (`LEA RDI,[0x102004]` decodes to pcode
+# `COPY (const,0x102004,8)`), so the final address is already sitting in the instruction as a Scalar
+# operand. One linear pass over the listing recovers those references with no propagation at all.
+#
+# Measured on a real 6.1 MB x86-64 library (841k instructions): 21,686 references proposed, ALL of
+# which full analysis also produces — precision 1.000, zero false positives — closing 63% of the gap
+# the fast profile opens, for 13.5s against the 88s of extra analysis time full analysis costs there.
+# It is a PARTIAL recovery by construction: the remaining ~37% are addresses computed across several
+# instructions (MIPS lui/addiu, AArch64 adrp/add), which genuinely require propagation.
+_DATA_REF_BUDGET_S = float(os.environ.get("HEXGRAPH_DATA_REF_BUDGET_S", "3600"))
+# References committed per transaction — see the chunking comment in recover_data_refs_core.
+# Floored at 1: it is a modulus, so a 0 from the environment would be a ZeroDivisionError mid-pass.
+_DATA_REF_TX_CHUNK = max(1, int(os.environ.get("HEXGRAPH_DATA_REF_TX_CHUNK", "250000")))
+
+
+def recover_data_refs_core(program, monitor=None, *, budget_s=None, save=True) -> dict:
+    """Rebuild the statically-resolvable half of the code->DATA reference index in ONE linear pass.
+
+    For every instruction operand that decodes to a Scalar which lands in mapped, NON-executable
+    memory and has no reference from that instruction yet, add a DATA memory reference. Executable
+    targets are skipped: control flow is already indexed by the passes the fast profile keeps, and
+    they are not what a string/global xref query is asking for.
+
+    `budget_s` bounds the pass (default `HEXGRAPH_DATA_REF_BUDGET_S`, 1h) so a pathological image
+    stops with a partial-but-saved result rather than running unbounded. `save` persists via the
+    mid-life `program.save()` the warm path requires — `pyghidra.program_context` releases the
+    consumer WITHOUT saving, so an unsaved write is silently discarded on reopen (the same reason
+    `_apply_rename` saves explicitly). Idempotent: a second pass adds 0.
+    """
+    from ghidra.program.model.scalar import Scalar
+    from ghidra.program.model.symbol import RefType, SourceType
+    from ghidra.util.task import ConsoleTaskMonitor
+
+    budget = _DATA_REF_BUDGET_S if budget_s is None else float(budget_s)
+    listing, mem = program.getListing(), program.getMemory()
+    space = program.getAddressFactory().getDefaultAddressSpace()
+    refmgr = program.getReferenceManager()
+
+    t0 = time.time()
+    scanned = added = chunks = 0
+    truncated = False
+    txid = program.startTransaction("hexgraph recover data refs")
+    try:
+        it = listing.getInstructions(True)
+        while it.hasNext():
+            insn = it.next()
+            scanned += 1
+            # Check the clock rarely — time.time() per instruction is a measurable share of the pass.
+            if (scanned & 0xFFFF) == 0 and (time.time() - t0) > budget:
+                truncated = True
+                break
+            existing = None                      # refs-from, fetched at most once per instruction
+            for opnd in range(insn.getNumOperands()):
+                for obj in (insn.getOpObjects(opnd) or []):
+                    if not isinstance(obj, Scalar):
+                        continue
+                    try:
+                        dest = space.getAddress(obj.getUnsignedValue())
+                    except Exception:  # noqa: BLE001 - a scalar that is not a valid address
+                        continue
+                    block = mem.getBlock(dest)
+                    if block is None or block.isExecute():
+                        continue
+                    if existing is None:
+                        existing = [r.getToAddress() for r in insn.getReferencesFrom()]
+                    if dest in existing:
+                        continue
+                    refmgr.addMemoryReference(insn.getAddress(), dest, RefType.DATA,
+                                              SourceType.ANALYSIS, opnd)
+                    existing.append(dest)
+                    added += 1
+                    # Commit in CHUNKS. A monolith yields ~10M references; holding them all in one
+                    # open transaction grows Ghidra's undo/redo buffer until the commit itself is
+                    # the thing that dies — the same "ran for hours, then got killed while writing"
+                    # failure this pass exists to avoid. Each chunk bounds that buffer; the pass is
+                    # idempotent, so a kill between chunks costs only the uncommitted tail.
+                    if added % _DATA_REF_TX_CHUNK == 0:
+                        program.endTransaction(txid, True)
+                        chunks += 1
+                        txid = program.startTransaction("hexgraph recover data refs")
+    finally:
+        program.endTransaction(txid, True)
+        chunks += 1
+
+    saved, save_error = False, None
+    if save and added:
+        try:
+            program.save("hexgraph recover data refs", monitor or ConsoleTaskMonitor())
+            saved = True
+        except Exception as exc:  # noqa: BLE001 - report it; never raise out of a best-effort stage
+            save_error = str(exc)
+    out = {"scanned": scanned, "added": added, "seconds": round(time.time() - t0, 1),
+           "truncated": truncated, "saved": saved, "tx_chunks": chunks}
+    if save_error:
+        out["save_error"] = save_error
+    return out
 
 
 def _clear_partial(proj_dir: str) -> None:

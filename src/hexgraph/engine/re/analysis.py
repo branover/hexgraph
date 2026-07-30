@@ -27,6 +27,7 @@ collide. The warm marker the probe commits as its last step is the completion si
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import tempfile
@@ -216,20 +217,62 @@ def analysis_lead(project, target, *, runner=None) -> str | None:
             f"it's warm-only and never runs a cold analysis itself. [{st.get('detail', '')}]")
 
 
+def _needs_data_ref_recovery(project, target, *, runner=None) -> bool:
+    """True when this target has a WARM analysis that was built under the fast profile but whose
+    code->data reference index was never rebuilt.
+
+    A slot analyzed under the fast profile is missing every code->data reference the disabled
+    constant/scalar analyzers would have produced (~10M of them on a real 895 MB x86-64 image), so
+    `re_data_xrefs` on a string shows the pointers to it and none of the code that loads it. The
+    probe rebuilds that index as a post-analysis stage, but `start_analysis` short-circuits on a warm
+    slot and would never invoke the probe again — leaving every ALREADY-analyzed target permanently
+    blind. This is the check that lets `re_analyze` reach them: warm + fast-profile-sized + no
+    `data_refs_recovered` marker ⇒ run the probe once more (it skips analysis on the warm path and
+    performs recovery only).
+
+    Conservative on purpose: an unreadable marker returns False rather than speculatively launching
+    a scan measured at ~48 min on a 160M-instruction image."""
+    from hexgraph.sandbox.probes import pyghidra_lib as L
+
+    # GHIDRA ONLY. The fast profile is a Ghidra analyzer configuration, and `--recover-data-refs` is
+    # a Ghidra-probe flag — radare2's `aaa` builds its own xrefs and its probe would reject the flag.
+    if _active_backend() != "ghidra":
+        return False
+    ctx = _slot_ctx(project, target, runner=runner)
+    if ctx is None:
+        return False
+    slot, artifact, _name, _probe = ctx
+    if not L.fast_profile_applies(artifact):
+        return False
+    try:
+        meta = json.loads(slot.meta_path.read_text())
+    except (OSError, ValueError):
+        return False
+    return isinstance(meta, dict) and not meta.get("data_refs_recovered")
+
+
 def start_analysis(project, target, *, runner=None) -> dict:
     """Start OR attach to a detached whole-binary analysis for the ACTIVE backend. Idempotent and
     single-flight: already-warm ⇒ no-op ``analyzed``; already-running ⇒ ``running`` (attach);
     otherwise launch the detached analysis and return ``started``. A failed prior container is reaped
-    and retried. Poll by calling this (or `analysis_state`) again until state is ``analyzed``."""
+    and retried. Poll by calling this (or `analysis_state`) again until state is ``analyzed``.
+
+    ONE exception to "already-warm ⇒ no-op": a warm slot built under the fast profile whose
+    code->data reference index was never rebuilt (`_needs_data_ref_recovery`) launches a detached
+    RECOVERY-ONLY run — the probe skips analysis on the warm path and only rebuilds that index. This
+    is what reaches targets analyzed before the recovery stage existed; without it they would stay
+    blind forever, since this function would never invoke the probe on them again. The warm analysis
+    is untouched and stays usable throughout (`analysis_state` keeps reporting ``analyzed``)."""
     from hexgraph.sandbox.executor import get_executor
 
     ex = runner or get_executor()
     state = analysis_state(project, target, runner=ex)
-    if state["state"] == "analyzed":
+    if state["state"] == "analyzed" and not _needs_data_ref_recovery(project, target, runner=ex):
         # Completed — reap the exit-0 detached container if it's still lingering, so a done
         # analysis doesn't leave a stopped container behind per binary (best-effort housekeeping).
         _reap_if_present(ex, state.get("container"))
         return state
+    recovery_only = state["state"] == "analyzed"
     if state["state"] in ("running", "unavailable"):
         return state  # in-flight / not applicable — nothing to start
 
@@ -266,7 +309,10 @@ def start_analysis(project, target, *, runner=None) -> dict:
             # `--analyze`: full cold analysis + COMMIT the warm slot, no focus (start_detached
             # appends a /out positional the probe would otherwise treat as a focus — BOTH the Ghidra
             # and r2 probes force focus off under --analyze).
-            extra_args=["--analyze"],
+            # `--recover-data-refs` on the recovery-only path: the slot is already warm, so this run
+            # rebuilds the code->data index WITHOUT redoing the whole-program inventory (which a
+            # detached run discards anyway). Ghidra-only — `_needs_data_ref_recovery` gates on it.
+            extra_args=["--recover-data-refs"] if recovery_only else ["--analyze"],
             # The analysis budget: Ghidra reads it as -analysisTimeoutPerFile; r2 ignores it.
             extra_env={"HEXGRAPH_PROBE_TIMEOUT_S": str(_analysis_timeout())},
         )
@@ -278,6 +324,15 @@ def start_analysis(project, target, *, runner=None) -> dict:
             return {"state": "running", "detail": "a whole-binary analysis is already in progress "
                                                   "(attached)", "container": name}
         return {"state": "failed", "detail": f"could not start analysis: {exc}", "container": name}
+    if recovery_only:
+        # The slot is ALREADY warm — this run skips analysis entirely and only rebuilds the
+        # code->data reference index the fast profile left out. Say so, so a poll isn't read as
+        # "my warm analysis was thrown away and is being rebuilt".
+        return {"state": "started",
+                "detail": "warm analysis is ready and stays usable; a detached pass is rebuilding "
+                          "the code->data reference index the fast profile left out (re_data_xrefs "
+                          "will show the code that loads a string once it finishes)",
+                "container": name}
     return {"state": "started",
             "detail": "detached whole-binary analysis started with a generous budget; call "
                       "re_analyze again to poll until state is 'analyzed'", "container": name}
