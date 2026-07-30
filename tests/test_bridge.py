@@ -13,6 +13,8 @@ import types
 import pytest
 
 from hexgraph.engine.re import bridge as B
+
+_REAL_STATE = B._container_state
 from hexgraph.engine.re.ghidra_bridge import BridgeUnavailable as B_UNAVAILABLE
 
 
@@ -73,6 +75,9 @@ def env(monkeypatch):
     monkeypatch.setattr(B, "_ghidra_slot",
                         lambda project, target, *, runner: (_Slot(), "/artifact", "abc123def4567890"))
     monkeypatch.setattr(B, "_container_ip", lambda name: "172.17.0.9")
+    # Routing asks `_container_state` (one inspect: liveness + current ip); the degrade path's
+    # `_container_not_running` delegates to it, so this one stub covers both.
+    monkeypatch.setattr(B, "_container_state", lambda name: (False, "172.17.0.9"))
     monkeypatch.setattr(B, "_serving", lambda ip, port, timeout=2.0: True)
     monkeypatch.setattr("hexgraph.policy.current_policy",
                         lambda: types.SimpleNamespace(allow_network=True))
@@ -144,11 +149,23 @@ def test_start_reaps_exited_then_relaunches(env):
     assert fake.stopped and fake.started  # reaped the exited container, launched fresh
 
 
-def test_start_starting_when_not_yet_serving(env, monkeypatch):
+def test_start_starting_records_the_entry_but_is_not_yet_an_endpoint(env, monkeypatch):
+    """A container that is up but not yet serving is RECORDED as `starting`, and is deliberately
+    NOT an endpoint.
+
+    Both halves matter, and they are the two different questions this module keeps separate.
+    `open_target` takes the Ghidra project lock BEFORE it binds the socket, so a starting bridge
+    already OWNS the project — routing must see it (`bridge_route`) or a concurrent op goes headless
+    into that lock. But it can't answer an RPC yet, so anything asking "is it live right now?"
+    (`bridge_endpoint`, and the search_code nudge's `_bridge_live`) must still say no."""
     s, p, t = env
     monkeypatch.setattr(B, "_serving", lambda ip, port, timeout=2.0: False)  # port not up yet
     res = B.start_bridge(s, p, t, runner=_FakeExec())
-    assert res["state"] == "starting" and B.bridge_meta(t) is None  # not recorded until serving
+    assert res["state"] == "starting"
+    meta = B.bridge_meta(t)
+    assert meta and meta["status"] == "starting"       # recorded, so routing knows the lock is held
+    assert B.bridge_route(t)                           # ...and routes there rather than headless
+    assert B.bridge_endpoint(t) is None                # ...but it is not answering yet
 
 
 # --- routing + guard -----------------------------------------------------------
@@ -356,6 +373,16 @@ def test_run_ghidra_op_retries_headless_when_a_bridge_is_GONE(env, monkeypatch):
     monkeypatch.setattr("hexgraph.engine.re.ghidra_bridge.connect_managed",
                         lambda host, port: types.SimpleNamespace(host=host, port=port))
     B.start_bridge(s, p, t, runner=_FakeExec())
+    # Alive when routing picks it, GONE by the time the post-failure probe runs — a bridge that
+    # dies mid-flight, which is the only way the degrade path is reachable now that routing sends a
+    # confirmed-gone bridge straight to headless.
+    _probe = {"n": 0}
+
+    def _state(name):
+        _probe["n"] += 1
+        return (False, "172.17.0.9") if _probe["n"] == 1 else (True, None)
+
+    monkeypatch.setattr(B, "_container_state", _state)
     calls, gone = [], []
     # A gone container yields no ip, so bridge_endpoint stops reporting an endpoint (bridge.py).
     monkeypatch.setattr(B, "_container_ip", lambda name: None if gone else "172.17.0.9")
@@ -391,7 +418,7 @@ def test_run_ghidra_op_does_NOT_retry_when_a_raising_bridge_is_STILL_SERVING(env
     monkeypatch.setattr("hexgraph.engine.re.ghidra_bridge.connect_managed",
                         lambda host, port: types.SimpleNamespace(host=host, port=port))
     B.start_bridge(s, p, t, runner=_FakeExec())
-    monkeypatch.setattr(B, "_container_not_running", lambda name: False)  # still there — busy, not gone
+    monkeypatch.setattr(B, "_container_state", lambda name: (False, "172.17.0.9"))  # still there — busy, not gone
     headless = []
     monkeypatch.setattr(GhidraBridgeDecompiler, "rename_function",
                         lambda self, *a, **k: (_ for _ in ()).throw(
@@ -456,6 +483,16 @@ def test_production_taint_path_degrades_a_gone_bridge(env, monkeypatch):
                         lambda host, port: types.SimpleNamespace(host=host, port=port))
     monkeypatch.setattr(T, "get_taint_analyzer", lambda: T.GhidraTaintAnalyzer())
     B.start_bridge(s, p, t, runner=_FakeExec())
+    # Alive when routing picks it, GONE by the time the post-failure probe runs — a bridge that
+    # dies mid-flight, which is the only way the degrade path is reachable now that routing sends a
+    # confirmed-gone bridge straight to headless.
+    _probe = {"n": 0}
+
+    def _state(name):
+        _probe["n"] += 1
+        return (False, "172.17.0.9") if _probe["n"] == 1 else (True, None)
+
+    monkeypatch.setattr(B, "_container_state", _state)
     calls, gone = [], []
     monkeypatch.setattr(B, "_container_ip", lambda name: None if gone else "172.17.0.9")
 
@@ -494,19 +531,19 @@ def test_uncertain_liveness_does_NOT_degrade(env, monkeypatch):
                         lambda self, *a, **k: headless.append(1) or {})
 
     # docker can't answer -> "couldn't tell" -> must NOT degrade
-    monkeypatch.setattr(B, "_container_not_running", lambda name: None)
+    monkeypatch.setattr(B, "_container_state", lambda name: (None, "172.17.0.9"))
     with pytest.raises(B_UNAVAILABLE):     # the ORIGINAL error, not merely "something raised"
         run_ghidra_op(t, "run_taint", "/artifact")
     assert not headless
 
     # docker says the container is still running -> definitely must NOT degrade
-    monkeypatch.setattr(B, "_container_not_running", lambda name: False)
+    monkeypatch.setattr(B, "_container_state", lambda name: (False, "172.17.0.9"))
     with pytest.raises(B_UNAVAILABLE):
         run_ghidra_op(t, "run_taint", "/artifact")
     assert not headless
 
     # only a POSITIVE "no such container" degrades
-    monkeypatch.setattr(B, "_container_not_running", lambda name: True)
+    monkeypatch.setattr(B, "_container_state", lambda name: (True, None))
     run_ghidra_op(t, "run_taint", "/artifact")
     assert headless == [1]
 
@@ -521,8 +558,11 @@ def test_container_not_running_resolves_every_unknown_to_None(monkeypatch):
         monkeypatch.setattr(B.subprocess, "run",
                             lambda *a, **k: _sp.CompletedProcess(a[0], rc, out, err))
 
-    # The three real shapes, captured from Docker 29.6.1 rather than reconstructed:
-    #   running -> rc=0 stdout="true\n"   exited -> rc=0 stdout="false\n"
+    # This covers the STATE half, which is all `_container_not_running` reads ([0]) — so the shapes
+    # here deliberately omit the ip field the combined inspect also returns. The real two-field
+    # replies (and the truthy NON-address tokens two of them carry) are pinned in
+    # test_container_state_parses_the_real_two_field_replies.
+    #   running -> rc=0 stdout="true …"   exited -> rc=0 stdout="false …"
     #   missing -> rc=1 stderr="error: no such object: <name>"
     _docker(out="true\n");  assert B._container_not_running("c") is False   # running
     _docker(out="false\n"); assert B._container_not_running("c") is True    # exited — dead JVM
@@ -598,3 +638,164 @@ def test_stop_clears_registry(env):
     res = B.stop_bridge(s, p, t, runner=fake)
     assert res["state"] == "stopped" and fake.stopped
     assert B.bridge_meta(t) is None and B.bridge_endpoint(t) is None
+
+
+# --- routing resolves liveness uncertainty the same safe way the degrade path does -------
+
+def test_routing_prefers_the_bridge_when_liveness_is_UNCERTAIN(env, monkeypatch):
+    """Routing used to fall through to headless whenever `bridge_endpoint` returned None — which
+    collapses "gone" and "couldn't tell" exactly as the degrade path did before #301, except on
+    EVERY call rather than only after a failure.
+
+    A live bridge owns the project, so a headless op behind it collides. When we can't tell, route
+    to the bridge: a wrong guess costs one failed RPC, which `run_ghidra_op` then resolves with
+    positive evidence. The other way costs a second opener on a live project."""
+    from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler
+    from hexgraph.sandbox.decompiler import GhidraDecompiler, ghidra_op_backend
+
+    s, p, t = env
+    monkeypatch.setattr("hexgraph.engine.re.ghidra_bridge.connect_managed",
+                        lambda host, port: types.SimpleNamespace(host=host, port=port))
+    B.start_bridge(s, p, t, runner=_FakeExec())
+
+    # docker can't answer -> couldn't tell -> still route to the bridge
+    monkeypatch.setattr(B, "_container_state", lambda name: (None, "172.17.0.9"))
+    assert isinstance(ghidra_op_backend(t), GhidraBridgeDecompiler)
+
+    # container present, socket NOT answering (starting, or wedged) -> it still owns the project
+    monkeypatch.setattr(B, "_serving", lambda ip, port, timeout=1.0: False)
+    assert isinstance(ghidra_op_backend(t), GhidraBridgeDecompiler)
+
+    # only POSITIVE evidence of death routes headless
+    monkeypatch.setattr(B, "_container_state", lambda name: (True, None))
+    assert isinstance(ghidra_op_backend(t), GhidraDecompiler)
+
+
+def test_routing_costs_one_docker_inspect_not_two(env, monkeypatch):
+    """Routing runs on EVERY op, so it can't pay for its safety twice. Liveness and the container's
+    current IP come from ONE `docker inspect`; the old path did an inspect for the IP and then a TCP
+    connect to decide liveness."""
+    from hexgraph.sandbox.decompiler import ghidra_op_backend
+
+    s, p, t = env
+    monkeypatch.setattr("hexgraph.engine.re.ghidra_bridge.connect_managed",
+                        lambda host, port: types.SimpleNamespace(host=host, port=port))
+    B.start_bridge(s, p, t, runner=_FakeExec())
+    # Exercise the REAL probe by restoring just THIS function — `monkeypatch.undo()` would drop the
+    # whole offline-isolation harness (docker_available, the slot, policy, the executor) and let the
+    # test touch the host.
+    monkeypatch.setattr(B, "_container_state", _REAL_STATE)
+    inspects = []
+    monkeypatch.setattr(B.subprocess, "run",
+                        lambda *a, **k: inspects.append(a[0]) or
+                        types.SimpleNamespace(returncode=0, stdout="true 172.17.0.9\n", stderr=""))
+    ghidra_op_backend(t)
+    assert len(inspects) == 1, inspects
+    # ...and that the ONE call really asks both questions — a single inspect that fetched only the
+    # state (leaving a second call for the ip) would satisfy a bare count.
+    fmt = inspects[0][inspects[0].index("-f") + 1]
+    assert "{{.State.Running}}" in fmt and ".IPAddress" in fmt
+
+
+def test_container_state_parses_the_real_two_field_replies(monkeypatch):
+    """The combined reply, captured from Docker 29.6.1 — the shape the OLD single-field template
+    could not produce, so nothing pinned it until now.
+
+    The trap is that two real replies carry a TRUTHY non-address in the ip slot. An unvalidated
+    `parts[1]` therefore doesn't merely fail, it SHADOWS the fallback to the recorded ip (which is
+    the trustworthy one: `_finalize` writes it only after `_serving` accepted a connection). Both
+    must read as "no fresh address"."""
+    import subprocess as _sp
+
+    def _docker(out, rc=0, err=""):
+        monkeypatch.setattr(B.subprocess, "run",
+                            lambda *a, **k: _sp.CompletedProcess(a[0], rc, out, err))
+
+    _docker("true 172.17.0.5\n")                   # running, one network — the everyday reply
+    assert B._container_state("c") == (False, "172.17.0.5")
+    _docker("true invalid IP\n")                   # running, NO usable address: docker >=26 renders
+    assert B._container_state("c") == (False, None)  # the zero .IPAddress as the token `invalid`
+    _docker("true 172.18.0.2172.19.0.2\n")        # TWO networks: {{range}} has no separator
+    assert B._container_state("c") == (False, None)
+    _docker("true \n")                             # older docker's empty render
+    assert B._container_state("c") == (False, None)
+    _docker("false invalid IP\n")                  # exited — the STATE still decides, ip is moot
+    assert B._container_state("c") == (True, None)
+    _docker("", rc=1, err="error: no such object: c")
+    assert B._container_state("c") == (True, None)  # positively absent
+
+
+def test_routing_prefers_the_RECORDED_ip_over_a_GARBAGE_docker_token(monkeypatch):
+    """End to end through the REAL parse, because this is the failure a stubbed `_container_state`
+    can't show: a truthy non-address must neither become the destination nor shadow the recorded ip.
+
+    The fresh address still WINS when it is one — a dead bridge's Docker ip can be recycled, which is
+    why routing re-reads it at all. It only yields to the registry when docker gave us no address."""
+    import subprocess as _sp
+
+    class _T:
+        metadata_json = {"bridge": {"container": "c", "ip": "172.17.0.5",
+                                    "port": B.BRIDGE_PORT, "status": "running"}}
+
+    def _docker(out):
+        monkeypatch.setattr(B.subprocess, "run",
+                            lambda *a, **k: _sp.CompletedProcess(a[0], 0, out, ""))
+
+    _docker("true 172.17.0.9\n")                   # re-read address wins over the stale registry
+    assert B.bridge_route(_T()) == ("172.17.0.9", B.BRIDGE_PORT)
+    _docker("true invalid IP\n")                   # garbage -> fall back, do NOT route to 'invalid'
+    assert B.bridge_route(_T()) == ("172.17.0.5", B.BRIDGE_PORT)
+    _docker("true 172.18.0.2172.19.0.2\n")        # concatenated pair -> same
+    assert B.bridge_route(_T()) == ("172.17.0.5", B.BRIDGE_PORT)
+
+
+def test_a_starting_entry_is_egress_GATED_and_audited_before_it_is_routable(env, monkeypatch):
+    """The gate has to run before the entry exists, not before it says `running`.
+
+    Recording a `starting` bridge (so routing knows the project lock is held) makes its address a
+    ROUTING DESTINATION — `bridge_route` hands it straight to `connect_managed`. So if the per-dest
+    egress gate only ran on the `running` transition, the whole startup window would connect to an
+    address the policy is about to REFUSE, and none of it would reach `EgressEvent`. Gating only the
+    serving path also refuses too late to matter: the container is already being dialled."""
+    from hexgraph.policy import PolicyViolation
+
+    s, p, t = env
+    monkeypatch.setattr(B, "_serving", lambda ip, port, timeout=2.0: False)   # still opening
+    monkeypatch.setattr(B, "_container_ip", lambda name: "203.0.113.7")       # NOT private
+    audited = []
+    monkeypatch.setattr("hexgraph.engine.audit.record_egress",
+                        lambda session, **kw: audited.append(kw))
+    monkeypatch.setattr("hexgraph.policy.assert_allows_egress",
+                        lambda dest, scope: (_ for _ in ()).throw(
+                            PolicyViolation(f"egress refused: {dest} is not loopback/private")))
+    fake = _FakeExec()
+    res = B.start_bridge(s, p, t, runner=fake)
+
+    assert res["state"] == "denied" and "egress refused" in res["detail"]
+    assert B.bridge_meta(t) is None      # never recorded -> never a routing destination
+    assert B.bridge_route(t) is None     # ...so nothing dials the refused address
+    assert fake.stopped                  # ...and the container is torn down, not left running
+    assert [a["allowed"] for a in audited] == [False]   # the denial IS audited
+
+
+def test_a_recorded_starting_entry_is_cleared_when_its_container_exits(env, monkeypatch):
+    """The safety companion to recording a `starting` bridge: the entry must not outlive the
+    container. A project open that FAILS exits the probe (`ghidra_bridge_probe` returns 3/4), so the
+    container goes away — and both layers have to notice, or the target routes at a dead bridge
+    forever. `_finalize` clears the entry, and `bridge_route` independently refuses on the positive
+    evidence, so neither depends on the other having run."""
+    s, p, t = env
+    monkeypatch.setattr(B, "_serving", lambda ip, port, timeout=2.0: False)
+    B.start_bridge(s, p, t, runner=_FakeExec())
+    assert (B.bridge_meta(t) or {})["status"] == "starting"      # recorded while opening
+
+    # the open failed -> the probe exited -> the container is present but no longer running
+    dead = _FakeExec(poll={"exists": True, "running": False, "exit_code": 4})
+    res = B.bridge_status(s, p, t, runner=dead)
+    assert res["state"] == "failed"
+    assert B.bridge_meta(t) is None                              # reaped, not left dangling
+
+    # and routing refuses on its own evidence even before anyone polls
+    B.start_bridge(s, p, t, runner=_FakeExec())
+    monkeypatch.setattr(B, "_container_state", lambda name: (True, None))
+    assert B.bridge_route(t) is None

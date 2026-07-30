@@ -10,7 +10,9 @@ routing (`sandbox/decompiler.get_decompiler`) prefers a live bridge for the targ
 Design mirrors `re_analyze` (engine.re.analysis): single-flight by a deterministic container name,
 detached via `start_detached`, status by polling. The per-target registry is a `bridge` entry on
 `target.metadata_json` ({container, ip, port, status}) — no migration; routing reads it (the target
-is already in scope) and confirms liveness, self-healing a dead entry to the headless fallback.
+is already in scope). An entry is recorded as soon as the container is up, `starting` included,
+because the project lock is taken before the socket binds; routing falls back to headless only on
+positive evidence the container is gone (`bridge_route`), never on an unanswered probe.
 
 Networking: the bridge container runs with `allow_network=True` (`--network bridge`) and the host
 connects to its private bridge IP directly (the simplest routing — no docker-proxy `-p` publish).
@@ -19,6 +21,7 @@ Gated on `features.network` (the container IP is RFC1918-private) and audited to
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import subprocess
 import tempfile
@@ -70,34 +73,101 @@ def _container_ip(name: str) -> str | None:
         return None
 
 
-def _container_not_running(name: str) -> bool | None:
-    """Tri-state, and the polarity is the whole risk, so read the name literally: True when docker
-    positively tells us the container is NOT running (absent, or present but exited), False when it
-    reports one running, and None when the inspect could not answer at all — daemon unreachable,
-    timeout, an unrecognised error, an unparseable reply.
+def _parse_ip(token: str | None) -> str | None:
+    """A docker-rendered address token, or None when it is not actually an address.
 
-    NOT "absent": an exited container still exists, and this returns True for it. That is
-    deliberate — its JVM is dead, so it holds no project — but the distinction matters enough that
-    the earlier name (`_container_absent`) was simply wrong about its own behaviour.
+    Validating rather than trusting `parts[1]` is the whole point, because both non-address shapes
+    docker really produces are TRUTHY — so an unchecked token doesn't merely fail, it SHADOWS the
+    caller's fallback to the recorded address (`bridge_route`'s `ip or meta["ip"]`) and becomes the
+    destination instead. Captured from Docker 29.6.1:
 
-    Every unknown resolves to None, including a zero-exit reply we cannot parse. A caller that must
-    not guess wrong reads None as "assume it IS running"."""
+    * a running container with no usable address renders the empty `.IPAddress` as `invalid IP`
+      (docker >= 26 stringifies the zero value), which splits to the token `invalid`;
+    * `{{range .NetworkSettings.Networks}}` has no separator, so a container on TWO networks
+      concatenates both addresses into `172.18.0.2172.19.0.2`.
+
+    Neither is routable and neither can be split back apart reliably, so both read as "no fresh
+    address" and the recorded one wins — which is the safe direction, since `_finalize` only records
+    an ip after `_serving` accepted a connection on it."""
     try:
-        out = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", name],
-                             capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.SubprocessError):
+        ipaddress.ip_address(token or "")
+    except ValueError:
         return None
+    return token
+
+
+def _container_state(name: str) -> tuple[bool | None, str | None]:
+    """`(not_running, ip)` from ONE `docker inspect` — the single probe both routing and the degrade
+    path need, so neither pays for the other's question.
+
+    `not_running` is the same tri-state `_container_not_running` documents: True when docker says
+    the container isn't running (absent, or present but exited), False when it reports one running,
+    None when the inspect couldn't answer. `ip` is the container's CURRENT bridge address, re-read
+    rather than trusted from the registry — a dead bridge's Docker IP can be recycled — and VALIDATED
+    (`_parse_ip`), because docker's non-address renderings are truthy and would otherwise shadow the
+    caller's fallback to the recorded address rather than merely failing.
+
+    One call rather than two matters because routing runs on EVERY Ghidra op, where the degrade path
+    runs only after a failure. The old routing paid an inspect for the IP and then a TCP connect for
+    liveness; this answers both at once."""
+    try:
+        out = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}} "
+             "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", name],
+            capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None, None
     if out.returncode != 0:
         err = (out.stderr or "").lower()
-        # Docker says this plainly for a container that isn't there; anything else is a failure
-        # to answer, not an answer.
-        return True if ("no such object" in err or "no such container" in err) else None
-    state = (out.stdout or "").strip().lower()
+        gone = True if ("no such object" in err or "no such container" in err) else None
+        return gone, None
+    parts = (out.stdout or "").strip().split()
+    state = parts[0].lower() if parts else ""
+    # VALIDATED, not just present: docker's non-address renderings are truthy (see `_parse_ip`), so
+    # a bare `parts[1]` would shadow `bridge_route`'s fallback to the recorded address.
+    ip = _parse_ip(parts[1]) if len(parts) > 1 else None
     if state == "true":
-        return False        # running
+        return False, ip
     if state == "false":
-        return True         # exists but exited — dead JVM, holds nothing
-    return None             # zero exit, unrecognised body ⇒ we did NOT get an answer
+        return True, ip
+    return None, ip          # zero exit, unrecognised body ⇒ we did NOT get an answer
+
+
+def bridge_route(target) -> tuple[str, int] | None:
+    """`(ip, port)` to send a Ghidra op to when the bridge MIGHT still own `target`'s project, else
+    None to use headless.
+
+    Deliberately NOT `bridge_endpoint`, whose "is it answering right now?" is the wrong question for
+    routing. A bridge that is registered and not positively dead still HOLDS the Ghidra project — it
+    may be mid-startup, or busy inside a long op behind its listen backlog — and a headless open
+    behind it fails on the project lock. So route to it unless we have positive evidence it's gone.
+
+    Guessing wrong costs one failed RPC, which `sandbox.decompiler.run_ghidra_op` then resolves with
+    the same positive-evidence check before degrading. Guessing wrong the OTHER way costs a second
+    opener on a live project, which is the failure this whole line of work exists to prevent."""
+    try:
+        meta = bridge_meta(target)
+        if not meta:
+            return None                      # nothing registered — nothing holds the slot
+        not_running, ip = _container_state(meta.get("container") or "")
+        if not_running is True:
+            return None                      # positively gone ⇒ headless is safe
+        return ((ip or meta.get("ip")), int(meta.get("port") or BRIDGE_PORT)) \
+            if (ip or meta.get("ip")) else None
+    except Exception:  # noqa: BLE001 — routing must never break decompilation
+        return None
+
+
+def _container_not_running(name: str) -> bool | None:
+    """Tri-state liveness only, for callers that don't need the address. Delegates to
+    `_container_state` so there is ONE docker-reply parser: True when docker positively says the
+    container is not running (absent, or present but exited), False when it reports one running,
+    None when the inspect could not answer at all.
+
+    NOT "absent": an exited container still exists, and this returns True for it — its JVM is dead,
+    so it holds no project. Every unknown resolves to None, and a caller that must not guess wrong
+    reads None as "assume it IS running"."""
+    return _container_state(name)[0]
 
 
 def bridge_confirmed_gone(target) -> bool:
@@ -157,9 +227,11 @@ def _clear_bridge(session, target) -> None:
 
 
 def _finalize(session, project, target, name, *, runner) -> dict:
-    """Poll the container: if it's running AND serving, record the metadata + audit egress and
-    return `running`; if it exited, `failed`; if running-but-not-yet-serving, `starting`; if gone,
-    `none`. The single source of truth shared by start_bridge (after launch) and bridge_status."""
+    """Poll the container: if it's running AND serving, record the metadata and return `running`; if
+    it exited, `failed`; if running-but-not-yet-serving, record it `starting` (it already holds the
+    project lock); if gone, `none`. Whenever the container has an address, the egress gate + audit run
+    FIRST, so no entry is ever recorded — and therefore routable — before the policy has approved its
+    destination. The single source of truth shared by start_bridge (after launch) and bridge_status."""
     ex = runner
     poll = ex.poll_detached(name) or {}
     if not poll.get("exists"):
@@ -172,29 +244,42 @@ def _finalize(session, project, target, name, *, runner) -> dict:
                           "Ghidra slot may be missing (run re_analyze) or the image lacks the "
                           "bridge (rebuild with WITH_GHIDRA=1)", "container": name}
     ip = _container_ip(name)
+    # Gate on features.network (the dest IP is RFC1918-private) + audit BEFORE recording ANY entry,
+    # `starting` included. A recorded entry is a ROUTABLE endpoint — `bridge_route` hands its address
+    # straight to `connect_managed` — so gating only the `running` transition would spend the whole
+    # startup window (_START_WAIT_S and beyond) connecting to an address the policy may be about to
+    # REFUSE, with no EgressEvent for any of it. Refusing at the first poll instead of at first serve
+    # is also the better failure: the container is torn down before anything dials it.
+    if ip:
+        from hexgraph.engine.audit import record_egress
+        from hexgraph.policy import PolicyViolation, assert_allows_egress, local_tcp_scope
+
+        dest = f"{ip}:{BRIDGE_PORT}"
+        try:
+            scope = local_tcp_scope(ip, BRIDGE_PORT)
+            assert_allows_egress(dest, scope)
+        except PolicyViolation as exc:
+            record_egress(session, project_id=project.id, dest=dest, allowed=False,
+                          tool="ghidra_bridge", target_id=target.id, detail=str(exc), durable=True)
+            try:
+                ex.stop_detached(name, remove=True)
+            except Exception:  # noqa: BLE001
+                pass
+            _clear_bridge(session, target)
+            return {"state": "denied", "detail": str(exc), "container": name}
+        record_egress(session, project_id=project.id, dest=dest, allowed=True,
+                      tool="ghidra_bridge", target_id=target.id, detail=scope.rationale)
     if not (ip and _serving(ip, BRIDGE_PORT)):
+        # RECORD it as `starting`, even though it isn't serving yet. The container is running, and
+        # `open_target` takes the Ghidra project lock BEFORE it binds the socket — so for up to
+        # _START_WAIT_S this bridge OWNS the project while answering nothing. Without an entry,
+        # `bridge_route` sees no bridge, sends the op headless, and it fails on that very lock.
+        # `bridge_endpoint` still requires serving, so the two questions stay separate: "might it
+        # own the project?" (route) vs "can it answer right now?" (the nudge's `_bridge_live`).
+        _record_bridge(session, target, container=name, ip=ip, port=BRIDGE_PORT, status="starting")
         return {"state": "starting",
                 "detail": "bridge container is up; still opening the project — call bridge_status "
                           "to poll", "container": name, "ip": ip, "port": BRIDGE_PORT}
-    # Serving. Gate on features.network (the dest IP is RFC1918-private) + audit, then record.
-    from hexgraph.engine.audit import record_egress
-    from hexgraph.policy import PolicyViolation, assert_allows_egress, local_tcp_scope
-
-    dest = f"{ip}:{BRIDGE_PORT}"
-    try:
-        scope = local_tcp_scope(ip, BRIDGE_PORT)
-        assert_allows_egress(dest, scope)
-    except PolicyViolation as exc:
-        record_egress(session, project_id=project.id, dest=dest, allowed=False,
-                      tool="ghidra_bridge", target_id=target.id, detail=str(exc), durable=True)
-        try:
-            ex.stop_detached(name, remove=True)
-        except Exception:  # noqa: BLE001
-            pass
-        _clear_bridge(session, target)
-        return {"state": "denied", "detail": str(exc), "container": name}
-    record_egress(session, project_id=project.id, dest=dest, allowed=True,
-                  tool="ghidra_bridge", target_id=target.id, detail=scope.rationale)
     _record_bridge(session, target, container=name, ip=ip, port=BRIDGE_PORT)
     return {"state": "running",
             "detail": "bridge ready — Ghidra ops for this target now reuse the resident project",
@@ -267,7 +352,11 @@ def start_bridge(session, project, target, *, runner=None) -> dict:
 
 
 def stop_bridge(session, project, target, *, runner=None) -> dict:
-    """Stop the target's bridge (if any) and revert its ops to the headless path."""
+    """Stop the target's bridge (if any) and revert its ops to the headless path.
+
+    Clearing the registry entry is what makes routing fall back: `bridge_route` reads the entry
+    first, so a stopped bridge stops being a routing destination immediately rather than waiting for
+    a probe to notice."""
     from hexgraph.sandbox.executor import get_executor
 
     ex = runner or get_executor()
@@ -303,7 +392,11 @@ def bridge_status(session, project, target, *, runner=None) -> dict:
 
 
 def bridge_endpoint(target) -> tuple[str, int] | None:
-    """For decompiler routing: `(ip, port)` when the target has a LIVE bridge, else None. The common
+    """`(ip, port)` when the target has a bridge ANSWERING right now, else None.
+
+    NOT for routing any more — `bridge_route` owns that, and asks the different question "might this
+    bridge still own the project?". This is the liveness question, whose only caller is the
+    search_code nudge's `_bridge_live` ("would suggesting a bridge help?"). The common
     no-bridge case (no metadata entry) does NO docker call and returns immediately. When an entry
     exists, re-inspect the container BY NAME for its CURRENT ip — NOT the stored ip: a dead bridge's
     Docker ip can be recycled by another container, which a bare port check alone wouldn't catch. A

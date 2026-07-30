@@ -473,15 +473,26 @@ def _resolve_name(explicit: str | None) -> str:
 
 
 def get_decompiler(name: str | None = None, *, target=None) -> Decompiler:
-    """Pick the decompiler. When `target` has a LIVE persistent Ghidra bridge (started via
-    re_bridge_start) and no explicit `name` override is given, route to it: decompiles reuse the
-    resident project instead of re-opening it per call. Best-effort — a dead/unreachable bridge
-    falls through to the normal seam (headless), so routing never breaks decompilation."""
+    """Pick the decompiler. When `target` has a Ghidra bridge that MIGHT still own its project
+    (`bridge_route`) and no explicit `name` override is given, route to it: decompiles reuse the
+    resident project instead of re-opening it per call. Only a bridge docker POSITIVELY reports gone
+    falls through to headless — an unanswered probe does NOT, because a bridge can be alive and
+    unable to answer (starting, or busy behind its listen backlog) while still holding the project
+    lock a headless open would hit. An unreachable-but-not-gone bridge therefore fails the op rather
+    than silently colliding. (Callers that go through `run_ghidra_op` get a dead bridge degraded to
+    headless on the same positive-evidence standard; callers of THIS function invoke `.decompile()`
+    directly, so an unreachable bridge surfaces to them as an error to handle.)"""
     if name is None and target is not None:
         try:
-            from hexgraph.engine.re.bridge import bridge_endpoint
+            from hexgraph.engine.re.bridge import bridge_route
 
-            ep = bridge_endpoint(target)
+            # `bridge_route`, NOT `bridge_endpoint`: routing must ask "might this bridge still own
+            # the project?", not "is it answering this instant?". A registered bridge that isn't
+            # positively dead still holds the project — mid-startup, or busy behind its listen
+            # backlog — and a headless op behind it collides on the project lock. Falling through on
+            # a merely-unanswered probe was the same gone-vs-couldn't-tell conflation #301 fixed for
+            # the degrade path, except on EVERY call rather than only after a failure.
+            ep = bridge_route(target)
             if ep:
                 from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler, connect_managed
 
@@ -507,14 +518,21 @@ def ghidra_op_backend(target=None) -> Decompiler:
     live MANAGED bridge if one is up for the target — reusing the resident project, no per-call open
     and no conflict on Ghidra's project lock — else headless `GhidraDecompiler`. These ops are
     Ghidra-specific (radare2 has no equivalent), so call sites use THIS rather than `get_decompiler`
-    (which defaults to radare2). Best-effort: a dead/unreachable bridge falls through to headless, so
-    routing never breaks the op. While a bridge OWNS the target's slot, a headless op on it would
-    conflict on the project lock — routing here is what lets the bridge serve every op instead."""
+    (which defaults to radare2). Only a POSITIVELY-gone bridge falls through to headless: while a
+    bridge owns the target's slot a headless op would conflict on the project lock, and an
+    unanswered probe is not evidence it has stopped owning it. Routing here is what lets the bridge
+    serve every op instead; `run_ghidra_op` handles a bridge that dies mid-flight."""
     if target is not None:
         try:
-            from hexgraph.engine.re.bridge import bridge_endpoint
+            from hexgraph.engine.re.bridge import bridge_route
 
-            ep = bridge_endpoint(target)
+            # `bridge_route`, NOT `bridge_endpoint`: routing must ask "might this bridge still own
+            # the project?", not "is it answering this instant?". A registered bridge that isn't
+            # positively dead still holds the project — mid-startup, or busy behind its listen
+            # backlog — and a headless op behind it collides on the project lock. Falling through on
+            # a merely-unanswered probe was the same gone-vs-couldn't-tell conflation #301 fixed for
+            # the degrade path, except on EVERY call rather than only after a failure.
+            ep = bridge_route(target)
             if ep:
                 from hexgraph.engine.re.ghidra_bridge import GhidraBridgeDecompiler, connect_managed
 
@@ -539,7 +557,8 @@ def run_ghidra_op(target, op: str, *args, **kwargs):
       busy inside one op still ACCEPTS the next connection and the host read then trips
       `_ManagedOps`' timeout — `socket.timeout` is an `OSError`, which `_rpc` reports as
       `BridgeUnavailable("unreachable")` from a bridge that is very much alive. So liveness is
-      OBSERVED after the failure (`bridge_endpoint`, the same probe routing used), never inferred
+      OBSERVED after the failure (positive evidence of death, the same standard routing
+    now applies), never inferred
       from the exception. Erring toward "still alive" is the safe direction: the cost is one failed
       op, where the other way round is a second writer on a live project (`rename` is a WRITE).
 
