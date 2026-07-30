@@ -559,6 +559,17 @@ def _clip_body(s: str, *, limit: int, obs_id: str | None, reserve: int = 0,
     return s[:limit] + f"\n\u2026[truncated {limit}/{full} chars — {tail}]"
 
 
+def _clip_page(prefix: str, body: str, tail: str, obs_id: str | None) -> str:
+    """Render one page of a paginated lister: an unclippable `prefix` (the header) and `tail` (the
+    "N more — re-call with offset=…" marker), with only `body` clipped between them.
+
+    The shared shape for `list_strings` / `list_functions` / `resolve_symbol`, which each hand-rolled
+    it. `offer_max_chars=False` because none of the three HAS a max_chars param — their bound is
+    offset/limit, which `tail` already names, and their full page is in the Observation."""
+    return prefix + _clip_with_hint(
+        body, hint=tail.lstrip("\n"), limit=max(_MAX_FLOOR, _MAX - len(prefix)),
+        obs_id=obs_id, offer_max_chars=False)
+
 def _callee_names(callees) -> list[str]:
     """Callee names from the decompiler's callee list (entries are bare names or dicts)."""
     out = []
@@ -1294,24 +1305,9 @@ def _list_strings(ctx: ToolContext, args: dict) -> str:
     # the "N more / offset=…" marker can never be truncated away (the page is the bound; a clipped
     # body always says so, and the full page is in the Observation). A page-of-strings is bounded
     # by _STRINGS_PAGE_MAX but very long individual strings can still overflow _MAX.
-    # One clip implementation for every paginated lister (see `_clip_with_hint`): the
-    # header + the "N more / offset=" tail ride in the RESERVED tail so a clip can never
-    # eat them, and the marker names the Observation holding the full page. NOT max_chars —
-    # these tools bound their output with offset/limit and have no such param.
     prefix = f"{header}:\n"
     return _clip_page(prefix, body, tail, _obs.id if _obs is not None else None)
 
-
-def _clip_page(prefix: str, body: str, tail: str, obs_id: str | None) -> str:
-    """Render one page of a paginated lister: an unclippable `prefix` (the header) and `tail` (the
-    "N more — re-call with offset=…" marker), with only `body` clipped between them.
-
-    The shared shape for `list_strings` / `list_functions` / `resolve_symbol`, which each hand-rolled
-    it. `offer_max_chars=False` because none of the three HAS a max_chars param — their bound is
-    offset/limit, which `tail` already names, and their full page is in the Observation."""
-    return prefix + _clip_with_hint(
-        body, hint=tail.lstrip("\n"), limit=max(_MAX_FLOOR, _MAX - len(prefix)),
-        obs_id=obs_id, offer_max_chars=False)
 
 
 def _bound_page(val, default, lo, hi) -> int:
@@ -1403,10 +1399,6 @@ def _list_functions(ctx: ToolContext, args: dict) -> str:
         # read as the whole program: name the true total and how many are beyond the returned set.
         tail += (f"\n…[note: {grand_total} functions defined; {withheld} are beyond the returned "
                  f"inventory and not listed here — re_decompile_at reaches any function by address]")
-    # One clip implementation for every paginated lister (see `_clip_with_hint`): the
-    # header + the "N more / offset=" tail ride in the RESERVED tail so a clip can never
-    # eat them, and the marker names the Observation holding the full page. NOT max_chars —
-    # these tools bound their output with offset/limit and have no such param.
     prefix = f"{header}:\n"
     return _clip_page(prefix, body, tail, _obs.id if _obs is not None else None)
 
@@ -1513,10 +1505,6 @@ def _resolve_symbol(ctx: ToolContext, args: dict) -> str:
     if more:
         tail = (f"\n…[{total - next_offset} more — re-call with offset={next_offset}"
                 + (f", limit={limit}" if limit != _SYMBOLS_PAGE else "") + "]")
-    # One clip implementation for every paginated lister (see `_clip_with_hint`): the
-    # header + the "N more / offset=" tail ride in the RESERVED tail so a clip can never
-    # eat them, and the marker names the Observation holding the full page. NOT max_chars —
-    # these tools bound their output with offset/limit and have no such param.
     prefix = f"{header}:\n"
     return _clip_page(prefix, body, tail, _obs.id if _obs is not None else None)
 
