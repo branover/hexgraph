@@ -19,6 +19,7 @@ Gated on `features.network` (the container IP is RFC1918-private) and audited to
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import subprocess
 import tempfile
@@ -70,6 +71,29 @@ def _container_ip(name: str) -> str | None:
         return None
 
 
+def _parse_ip(token: str | None) -> str | None:
+    """A docker-rendered address token, or None when it is not actually an address.
+
+    Validating rather than trusting `parts[1]` is the whole point, because both non-address shapes
+    docker really produces are TRUTHY — so an unchecked token doesn't merely fail, it SHADOWS the
+    caller's fallback to the recorded address (`bridge_route`'s `ip or meta["ip"]`) and becomes the
+    destination instead. Captured from Docker 29.6.1:
+
+    * a running container with no usable address renders the empty `.IPAddress` as `invalid IP`
+      (docker >= 26 stringifies the zero value), which splits to the token `invalid`;
+    * `{{range .NetworkSettings.Networks}}` has no separator, so a container on TWO networks
+      concatenates both addresses into `172.18.0.2172.19.0.2`.
+
+    Neither is routable and neither can be split back apart reliably, so both read as "no fresh
+    address" and the recorded one wins — which is the safe direction, since `_finalize` only records
+    an ip after `_serving` accepted a connection on it."""
+    try:
+        ipaddress.ip_address(token or "")
+    except ValueError:
+        return None
+    return token
+
+
 def _container_state(name: str) -> tuple[bool | None, str | None]:
     """`(not_running, ip)` from ONE `docker inspect` — the single probe both routing and the degrade
     path need, so neither pays for the other's question.
@@ -77,7 +101,9 @@ def _container_state(name: str) -> tuple[bool | None, str | None]:
     `not_running` is the same tri-state `_container_not_running` documents: True when docker says
     the container isn't running (absent, or present but exited), False when it reports one running,
     None when the inspect couldn't answer. `ip` is the container's CURRENT bridge address, re-read
-    rather than trusted from the registry — a dead bridge's Docker IP can be recycled.
+    rather than trusted from the registry — a dead bridge's Docker IP can be recycled — and VALIDATED
+    (`_parse_ip`), because docker's non-address renderings are truthy and would otherwise shadow the
+    caller's fallback to the recorded address rather than merely failing.
 
     One call rather than two matters because routing runs on EVERY Ghidra op, where the degrade path
     runs only after a failure. The old routing paid an inspect for the IP and then a TCP connect for
@@ -95,7 +121,9 @@ def _container_state(name: str) -> tuple[bool | None, str | None]:
         return gone, None
     parts = (out.stdout or "").strip().split()
     state = parts[0].lower() if parts else ""
-    ip = parts[1] if len(parts) > 1 else None
+    # VALIDATED, not just present: docker's non-address renderings are truthy (see `_parse_ip`), so
+    # a bare `parts[1]` would shadow `bridge_route`'s fallback to the recorded address.
+    ip = _parse_ip(parts[1]) if len(parts) > 1 else None
     if state == "true":
         return False, ip
     if state == "false":

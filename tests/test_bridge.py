@@ -544,8 +544,11 @@ def test_container_not_running_resolves_every_unknown_to_None(monkeypatch):
         monkeypatch.setattr(B.subprocess, "run",
                             lambda *a, **k: _sp.CompletedProcess(a[0], rc, out, err))
 
-    # The three real shapes, captured from Docker 29.6.1 rather than reconstructed:
-    #   running -> rc=0 stdout="true\n"   exited -> rc=0 stdout="false\n"
+    # This covers the STATE half, which is all `_container_not_running` reads ([0]) — so the shapes
+    # here deliberately omit the ip field the combined inspect also returns. The real two-field
+    # replies (and the truthy NON-address tokens two of them carry) are pinned in
+    # test_container_state_parses_the_real_two_field_replies.
+    #   running -> rc=0 stdout="true …"   exited -> rc=0 stdout="false …"
     #   missing -> rc=1 stderr="error: no such object: <name>"
     _docker(out="true\n");  assert B._container_not_running("c") is False   # running
     _docker(out="false\n"); assert B._container_not_running("c") is True    # exited — dead JVM
@@ -674,3 +677,55 @@ def test_routing_costs_one_docker_inspect_not_two(env, monkeypatch):
                         types.SimpleNamespace(returncode=0, stdout="true 172.17.0.9\n", stderr=""))
     ghidra_op_backend(t)
     assert len(inspects) == 1, inspects
+
+
+def test_container_state_parses_the_real_two_field_replies(monkeypatch):
+    """The combined reply, captured from Docker 29.6.1 — the shape the OLD single-field template
+    could not produce, so nothing pinned it until now.
+
+    The trap is that two real replies carry a TRUTHY non-address in the ip slot. An unvalidated
+    `parts[1]` therefore doesn't merely fail, it SHADOWS the fallback to the recorded ip (which is
+    the trustworthy one: `_finalize` writes it only after `_serving` accepted a connection). Both
+    must read as "no fresh address"."""
+    import subprocess as _sp
+
+    def _docker(out, rc=0, err=""):
+        monkeypatch.setattr(B.subprocess, "run",
+                            lambda *a, **k: _sp.CompletedProcess(a[0], rc, out, err))
+
+    _docker("true 172.17.0.5\n")                   # running, one network — the everyday reply
+    assert B._container_state("c") == (False, "172.17.0.5")
+    _docker("true invalid IP\n")                   # running, NO usable address: docker >=26 renders
+    assert B._container_state("c") == (False, None)  # the zero .IPAddress as the token `invalid`
+    _docker("true 172.18.0.2172.19.0.2\n")        # TWO networks: {{range}} has no separator
+    assert B._container_state("c") == (False, None)
+    _docker("true \n")                             # older docker's empty render
+    assert B._container_state("c") == (False, None)
+    _docker("false invalid IP\n")                  # exited — the STATE still decides, ip is moot
+    assert B._container_state("c") == (True, None)
+    _docker("", rc=1, err="error: no such object: c")
+    assert B._container_state("c") == (True, None)  # positively absent
+
+
+def test_routing_prefers_the_RECORDED_ip_over_a_GARBAGE_docker_token(monkeypatch):
+    """End to end through the REAL parse, because this is the failure a stubbed `_container_state`
+    can't show: a truthy non-address must neither become the destination nor shadow the recorded ip.
+
+    The fresh address still WINS when it is one — a dead bridge's Docker ip can be recycled, which is
+    why routing re-reads it at all. It only yields to the registry when docker gave us no address."""
+    import subprocess as _sp
+
+    class _T:
+        metadata_json = {"bridge": {"container": "c", "ip": "172.17.0.5",
+                                    "port": B.BRIDGE_PORT, "status": "running"}}
+
+    def _docker(out):
+        monkeypatch.setattr(B.subprocess, "run",
+                            lambda *a, **k: _sp.CompletedProcess(a[0], 0, out, ""))
+
+    _docker("true 172.17.0.9\n")                   # re-read address wins over the stale registry
+    assert B.bridge_route(_T()) == ("172.17.0.9", B.BRIDGE_PORT)
+    _docker("true invalid IP\n")                   # garbage -> fall back, do NOT route to 'invalid'
+    assert B.bridge_route(_T()) == ("172.17.0.5", B.BRIDGE_PORT)
+    _docker("true 172.18.0.2172.19.0.2\n")        # concatenated pair -> same
+    assert B.bridge_route(_T()) == ("172.17.0.5", B.BRIDGE_PORT)
