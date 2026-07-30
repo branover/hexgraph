@@ -302,23 +302,35 @@ def test_clip_page_still_clips_when_the_prefix_alone_exceeds_the_cap(hg_home):
 def test_all_three_listers_share_the_page_clip(hg_home, monkeypatch):
     """LOW-3: the consolidation test exercised list_strings only. Pin that the function grep and the
     symbol grep go through the same path — an obs-id marker and no max_chars — since the whole point
-    is that one implementation serves all three."""
-    import hexgraph.agent.agent_tools as AT
+    is that one implementation serves all three.
+
+    Both arms must ACTUALLY truncate, so stub each lister's own source: `_decomp` feeds the function
+    inventory, `collect_binutils_facts` feeds the symbol table. Stubbing only the former left the
+    symbol arm returning "(none)" (the fixture has no `fn_*` symbols), so it skipped every assertion
+    and `_resolve_symbol` kept the zero coverage this test exists to remove — hence the explicit
+    truncation assertion per arm rather than a `continue`."""
+    import hexgraph.engine.re.binutils as B
     from hexgraph.db.models import Observation
 
     long_names = [f"fn_{i:04d}_" + "n" * 200 for i in range(400)]
     _stub_decomp(monkeypatch, long_names)
+    monkeypatch.setattr(B, "collect_binutils_facts",
+                        lambda session, project, target, *, source="agent", runner=None: {
+                            "facts": {"symbols": [{"name": n, "type": "T", "address": "0x1000"}
+                                                  for n in long_names]},
+                            "observation_id": None, "cached": False, "reuse_hint": ""})
     with session_scope() as s:
         ctx = _ctx(s)
         for tool, args, kind in (("list_functions", {"limit": 200}, "function_list_page"),
                                  ("resolve_symbol", {"pattern": "fn_", "limit": 200}, "symbol_resolve")):
             out = run_tool(ctx, tool, args)
-            if "truncated" not in out.lower():
-                continue          # symbol table may not carry these; the assertion below is the point
+            # No `continue`: an arm that stops truncating has stopped testing anything, and must say so.
+            assert "truncated" in out.lower(), f"{tool} did not truncate — this arm is vacuous: {out[:200]}"
             assert "max_chars" not in out, tool
             obs = s.query(Observation).filter(Observation.target_id == ctx.target.id,
                                               Observation.result_kind == kind).all()
             assert obs and any(o.id in out for o in obs), tool
+            assert "200 more" in out and "offset=200" in out, tool   # paging tail survived the clip
 
 
 def test_decompile_max_chars_round_trips_with_the_reserved_note(hg_home, monkeypatch):
