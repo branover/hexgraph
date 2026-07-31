@@ -873,3 +873,70 @@ def test_the_probe_stamps_the_fast_profile_state_on_every_mode(tmp_path, monkeyp
 
     assert out["fast_profile"] is True
     assert out["data_refs_recovered"] is True
+
+    # B4-1: and the UNRECOVERED direction, which is the dangerous one — hardcoding True here would
+    # make the payload half of the caveat's OR go silently dark on exactly the targets that need it.
+    (tmp_path / "meta.json").write_text(json.dumps({}))
+    out = G._run({"artifact": str(art), "mode": "xrefs", "xrefs_mode": "data",
+                  "xrefs_subject": "0x1000", "focus": None, "rename": None, "user_script": None,
+                  "search_bytes": None, "search_imm": None})
+    assert out["data_refs_recovered"] is False
+
+
+def test_a_wedged_container_is_actually_reaped_and_the_pass_relaunched(tmp_path, monkeypatch):
+    """A-4: folding the duplicate reap into an `elif` was right, but it removed a backstop.
+
+    Under the old double-`if`, deleting the reap in the `running` branch was silently covered by the
+    `exists` block below it (`poll_detached` sets `exists` whenever `running` is true). With the
+    `elif` this reap is the ONLY thing that clears a wedged container — and the failure it prevents
+    is terminal: `start_detached` hits "name already in use", which reads as `running`, and a wedged
+    pass never sets `data_refs_recovered`, so every later `re_analyze` reports `running` forever.
+    The predicate (`_recovery_heartbeat_stale`) and the guard are pinned; this pins the ACTION.
+    """
+    import time as _t
+    from hexgraph.engine.re import analysis as A
+
+    art = tmp_path / "big.bin"
+    art.write_bytes(b"\x00" * (L._FAST_PROFILE_BYTES + 1))
+    # running container + a heartbeat that went stale == wedged
+    (tmp_path / L.META_NAME).write_text(
+        json.dumps({"data_ref_recovery_running": _t.time() - L._DATA_REF_SLICE_S * 10}))
+
+    class _Slot:
+        root = tmp_path
+        meta_path = tmp_path / L.META_NAME
+        content_sha = "a" * 64
+
+        def exists(self):
+            return True
+
+        def prepare(self):
+            pass
+
+    class _Ex:
+        def __init__(self):
+            self.stopped, self.started = [], []
+
+        def poll_detached(self, name):
+            if name.startswith("hexgraph-ghidra-bridge-"):
+                return {"exists": False, "running": False}
+            return {"exists": True, "running": True}
+
+        def stop_detached(self, name, remove=False):
+            self.stopped.append(name)
+
+        def start_detached(self, probe, artifact, **k):
+            self.started.append(k.get("name"))
+
+    monkeypatch.setattr(A, "_active_backend", lambda: "ghidra")
+    monkeypatch.setattr(A, "_slot_ctx",
+                        lambda *a, **k: (_Slot(), str(art), "hexgraph-analyze-ghidra-wedged", "p"))
+    import hexgraph.sandbox.runner as R
+    monkeypatch.setattr(R, "docker_available", lambda: True)
+
+    ex = _Ex()
+    st = A.start_analysis(object(), object(), runner=ex)
+
+    assert ex.stopped == ["hexgraph-analyze-ghidra-wedged"], "the wedged container was not reaped"
+    assert ex.started, "nothing relaunched after reaping the wedge"
+    assert st["state"] == "started"
