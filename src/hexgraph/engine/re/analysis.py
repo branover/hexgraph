@@ -31,6 +31,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 
 log = logging.getLogger(__name__)
 
@@ -178,6 +179,15 @@ def analysis_state(project, target, *, runner=None) -> dict:
                 "detail": "this target has no byte artifact / data dir to analyze"}
     slot, _artifact, name, _probe = ctx
     if slot.exists():
+        if _recovery_running(slot):
+            # Still ANALYZED — the warm analysis is intact and this is not a re-analysis. But a
+            # recovery slice holds the project's single writer slot, so a per-call tool opening it
+            # right now would fail on a Ghidra lock. Say so here; `analysis_lead` turns it into a
+            # retry lead instead of letting the tool hit an opaque error.
+            return {"state": "analyzed", "recovery_running": True,
+                    "detail": "warm analysis is ready, but a pass is rebuilding this target's "
+                              "code->data reference index and currently holds the project",
+                    "container": name}
         return {"state": "analyzed", "detail": "warm analysis is ready", "container": name}
 
     from hexgraph.sandbox.executor import get_executor
@@ -207,6 +217,16 @@ def analysis_lead(project, target, *, runner=None) -> str | None:
     except Exception:  # noqa: BLE001 — a gate hiccup must never block a tool that could run
         return None
     state = st.get("state")
+    if state == "analyzed" and st.get("recovery_running"):
+        # The analysis is fine; the project is momentarily held by a recovery slice. Without this
+        # the tool proceeds and dies on a Ghidra LockException, which reads like a broken target
+        # rather than "wait a few minutes" — exactly the kind of opaque failure the recovery stage
+        # exists to remove.
+        return ("A pass is rebuilding this target's code->data reference index and currently holds "
+                "the Ghidra project, so per-call Ghidra tools are unavailable for a few minutes. It "
+                "runs in slices and releases the project between them — retry shortly. (The warm "
+                "analysis itself is intact; nothing is being re-analyzed.) "
+                f"[{st.get('detail', '')}]")
     if state in ("analyzed", "unavailable"):
         return None
     lead = {"none": "No saved analysis for this target yet.",
@@ -215,6 +235,52 @@ def analysis_lead(project, target, *, runner=None) -> str | None:
     return (f"{lead} Run re_analyze(target) first — it builds the warm analysis ONCE with a generous "
             "budget (detached; re-call re_analyze to poll until state='analyzed'), then retry this — "
             f"it's warm-only and never runs a cold analysis itself. [{st.get('detail', '')}]")
+
+
+def _read_slot_marker(slot) -> dict:
+    """The slot's committed marker as a dict (empty when absent/unreadable). Co-owned with the
+    probe, which records reference-recovery stage state in it."""
+    try:
+        meta = json.loads(slot.meta_path.read_text())
+    except (OSError, ValueError):
+        return {}
+    return meta if isinstance(meta, dict) else {}
+
+
+def _recovery_running(slot) -> bool:
+    """True when a reference-recovery slice is CURRENTLY holding this slot's Ghidra project.
+
+    Ghidra permits one writer per project, so while a slice runs, any per-call tool that opens the
+    same project fails with a lock error. The probe publishes `data_ref_recovery_running` (a
+    heartbeat timestamp, refreshed per slice) so the host can turn that into an actionable lead
+    rather than an opaque failure. A stale heartbeat — the container died without clearing it —
+    reads as NOT running, so a crash can't lock the target out permanently."""
+    ts = _read_slot_marker(slot).get("data_ref_recovery_running")
+    try:
+        ts = float(ts)
+    except (TypeError, ValueError):
+        return False
+    from hexgraph.sandbox.probes import pyghidra_lib as L
+
+    # Generous: a slice may legitimately run its whole budget between heartbeats.
+    return (time.time() - ts) < (L._DATA_REF_SLICE_S * 2)
+
+
+def _bridge_live(slot, *, runner) -> bool:
+    """True when a Ghidra BRIDGE container currently owns this slot's project.
+
+    A bridge holds the project open for the whole session, so launching a recovery slice against it
+    would just fail on the lock — and, worse, would do so repeatedly while an operator is actively
+    working that target. Recovery waits for the bridge to stop instead."""
+    try:
+        from hexgraph.engine.re import bridge as br
+        from hexgraph.sandbox.executor import get_executor
+
+        ex = runner or get_executor()
+        poll = ex.poll_detached(br.container_name(slot.content_sha)) or {}
+        return bool(poll.get("running"))
+    except Exception:  # noqa: BLE001 — if we cannot tell, do not block recovery on a guess
+        return False
 
 
 def _needs_data_ref_recovery(project, target, *, runner=None) -> bool:
@@ -244,11 +310,15 @@ def _needs_data_ref_recovery(project, target, *, runner=None) -> bool:
     slot, artifact, _name, _probe = ctx
     if not L.fast_profile_applies(artifact):
         return False
-    try:
-        meta = json.loads(slot.meta_path.read_text())
-    except (OSError, ValueError):
+    meta = _read_slot_marker(slot)
+    if not meta or meta.get("data_refs_recovered"):
         return False
-    return isinstance(meta, dict) and not meta.get("data_refs_recovered")
+    # Don't launch into a project someone else already owns: a live bridge holds it for the whole
+    # session (the slice would only fail on the lock, repeatedly, while that target is being worked),
+    # and a slice already in flight is the single-flight case.
+    if _recovery_running(slot) or _bridge_live(slot, runner=runner):
+        return False
+    return True
 
 
 def start_analysis(project, target, *, runner=None) -> dict:

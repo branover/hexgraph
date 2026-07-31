@@ -32,10 +32,12 @@ layout + marker are shared with the Jython-era cache, so slots analyzed before t
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import os
 import subprocess  # noqa: F401 — kept importable so tests can assert the native path never shells out
 import sys
+import time
 import traceback
 
 # The probe dir (this file's dir, /opt/hexgraph) is on sys.path[0]; pyghidra_lib sits beside it.
@@ -265,22 +267,57 @@ def _recover_data_refs(artifact) -> dict:
     and the next `re_analyze` retries it because the marker flag was never set.
 
     Skipped when the marker says a pass already completed, so re-running `re_analyze` on a warm
-    target does not re-pay the scan (the pass is idempotent, but idempotent is not free)."""
+    target does not re-pay the scan (the pass is idempotent, but idempotent is not free).
+
+    Runs as a LOOP OF SLICES, reopening the warm project each time. Ghidra allows one writer per
+    project, so a single ~48-minute pass would lock every per-call tool out of that target for the
+    duration; a slice holds the lock for its own budget and RELEASES it in between, so contention is
+    bounded and another opener gets a window. Each slice records `data_refs_recovered_through` so the
+    next resumes instead of restarting — a restart would re-truncate at the same address forever.
+    `data_ref_recovery_running` is published for the host, which turns it into an actionable lead
+    instead of letting a per-call tool hit an opaque Ghidra lock error."""
     marker = L.read_marker()
     if marker.get("data_refs_recovered"):
         return {"skipped": "already recovered", "added": 0}
+
+    started = time.time()
+    through = marker.get("data_refs_recovered_through")
+    total_added = total_scanned = slices = 0
+    last = {}
     try:
-        # No Ghidra import here on purpose (this module keeps Ghidra lazy): recover_data_refs_core
-        # constructs its own ConsoleTaskMonitor when passed None, so the whole wrapper — including
-        # the skip and failure paths — stays stdlib-only and testable without a JVM.
-        with L.open_target(artifact, cold_analyze=False) as (program, _flat, _cached):
-            stats = L.recover_data_refs_core(program, None)
+        while True:
+            L.update_marker(data_ref_recovery_running=time.time())
+            # No Ghidra import here on purpose (this module keeps Ghidra lazy):
+            # recover_data_refs_core constructs its own ConsoleTaskMonitor when passed None, so the
+            # whole wrapper — including the skip and failure paths — stays stdlib-only.
+            with L.open_target(artifact, cold_analyze=False) as (program, _flat, _cached):
+                last = L.recover_data_refs_core(program, None, start_after=through)
+            slices += 1
+            total_added += last.get("added") or 0
+            total_scanned += last.get("scanned") or 0
+            if not last.get("truncated"):
+                # Complete: clear the resume state so a later cold re-analysis starts clean.
+                L.update_marker(data_refs_recovered=True, data_refs_recovered_through=None,
+                                data_ref_recovery_running=None)
+                break
+            through = last.get("through")
+            if through is None:
+                # The slice stopped early but its writes did not persist — there is no safe resume
+                # point, so stop and let the next run redo this range rather than skipping it.
+                L.update_marker(data_ref_recovery_running=None)
+                break
+            L.update_marker(data_refs_recovered_through=through, data_ref_recovery_running=None)
+            if (time.time() - started) > L._DATA_REF_TOTAL_S:
+                break
     except Exception as exc:  # noqa: BLE001 - recovery must never fail the analysis that preceded it
-        return {"error": str(exc), "added": 0}
-    # Only a COMPLETE pass earns the marker; a truncated one must be retried, not skipped forever.
-    if not stats.get("truncated"):
-        L.update_marker(data_refs_recovered=True)
-    return stats
+        with contextlib.suppress(Exception):
+            L.update_marker(data_ref_recovery_running=None)
+        return {"error": str(exc), "added": total_added, "slices": slices}
+    return {"added": total_added, "scanned": total_scanned, "slices": slices,
+            "seconds": round(time.time() - started, 1),
+            "complete": not last.get("truncated", False),
+            "through": through if last.get("truncated") else None,
+            "saved": last.get("saved", False)}
 
 
 def main() -> int:

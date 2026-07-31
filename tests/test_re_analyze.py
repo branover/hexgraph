@@ -26,12 +26,19 @@ class _Target:
 
 
 class _FakeExec:
-    """Records detached launches/reaps; answers poll with a fixed state; can force a start error."""
+    """Records detached launches/reaps; answers poll with a fixed state; can force a start error.
 
-    def __init__(self, poll=None, start_error=None):
+    Poll is answered PER CONTAINER NAME, not globally: docker names are the single-flight key, and
+    several unrelated containers can exist for one target (the analyze/recovery container
+    `hexgraph-analyze-*` and a Ghidra bridge `hexgraph-ghidra-bridge-*`). A fake that answered the
+    same state for every name would let a test pass while the code polled entirely the wrong
+    container. `poll` applies to the analyze container; `bridge_poll` to the bridge."""
+
+    def __init__(self, poll=None, start_error=None, bridge_poll=None):
         self.started: list = []
         self.stopped: list = []
         self._poll = poll or {"exists": False, "running": False, "exit_code": None}
+        self._bridge_poll = bridge_poll or {"exists": False, "running": False, "exit_code": None}
         self.start_error = start_error
 
     def run_json_probe(self, probe, artifact, *, extra_args=None, **kw):
@@ -39,6 +46,8 @@ class _FakeExec:
         return {"present": True, "version": "12.1", "r2_version": "6.1.4"}
 
     def poll_detached(self, name):
+        if str(name).startswith("hexgraph-ghidra-bridge-"):
+            return dict(self._bridge_poll)
         return dict(self._poll)
 
     def start_detached(self, probe, artifact, *, name, outdir, project_mount=None,

@@ -102,19 +102,56 @@ def test_recovery_is_skipped_once_a_complete_pass_is_recorded(monkeypatch):
     assert out == {"skipped": "already recovered", "added": 0}
 
 
-def test_a_truncated_pass_does_not_earn_the_marker(monkeypatch):
-    """A budget-truncated pass left the index INCOMPLETE — the next re_analyze must retry it rather
-    than skip it forever."""
+def test_a_truncated_slice_records_a_resume_point_and_is_not_marked_complete(monkeypatch):
+    """A budget-truncated slice left the index INCOMPLETE — it must record where it got to and NOT
+    claim completion, so the next run resumes rather than skipping forever."""
     recorded = {}
     monkeypatch.setattr(G.L, "read_marker", lambda: {})
     monkeypatch.setattr(G.L, "update_marker", lambda **kw: recorded.update(kw))
     monkeypatch.setattr(G.L, "recover_data_refs_core",
-                        lambda *a, **k: {"scanned": 10, "added": 3, "truncated": True})
+                        lambda *a, **k: {"scanned": 10, "added": 3, "truncated": True,
+                                         "through": "0x41000"})
     monkeypatch.setattr(G.L, "open_target", _fake_open_target())
+    monkeypatch.setattr(G.L, "_DATA_REF_TOTAL_S", 0)     # one slice, then stop
 
     out = G._recover_data_refs("/artifact")
-    assert out["truncated"] is True
-    assert recorded == {}, "a truncated pass must not be marked complete"
+    assert out["complete"] is False
+    assert not recorded.get("data_refs_recovered"), "a truncated slice must not be marked complete"
+    assert recorded["data_refs_recovered_through"] == "0x41000"
+
+
+def test_a_later_slice_resumes_from_the_recorded_point(monkeypatch):
+    """Without this the scan restarts at instruction 0 every time and, on an image whose full pass
+    is close to the slice budget, re-truncates at the same address forever."""
+    seen = []
+
+    def _core(program, monitor, *, start_after=None, **k):
+        seen.append(start_after)
+        return {"scanned": 5, "added": 1, "truncated": False}
+
+    monkeypatch.setattr(G.L, "read_marker", lambda: {"data_refs_recovered_through": "0x41000"})
+    monkeypatch.setattr(G.L, "update_marker", lambda **kw: None)
+    monkeypatch.setattr(G.L, "recover_data_refs_core", _core)
+    monkeypatch.setattr(G.L, "open_target", _fake_open_target())
+
+    G._recover_data_refs("/artifact")
+    assert seen == ["0x41000"]
+
+
+def test_a_truncated_slice_whose_save_failed_does_not_advance(monkeypatch):
+    """`through` is None when the slice's writes never persisted. Advancing past that range would
+    skip it permanently, leaving a silent hole in the index."""
+    recorded = {}
+    monkeypatch.setattr(G.L, "read_marker", lambda: {})
+    monkeypatch.setattr(G.L, "update_marker", lambda **kw: recorded.update(kw))
+    monkeypatch.setattr(G.L, "recover_data_refs_core",
+                        lambda *a, **k: {"scanned": 10, "added": 3, "truncated": True,
+                                         "through": None})
+    monkeypatch.setattr(G.L, "open_target", _fake_open_target())
+
+    G._recover_data_refs("/artifact")
+    assert "data_refs_recovered_through" not in recorded
+    assert not recorded.get("data_refs_recovered")
 
 
 def test_a_complete_pass_earns_the_marker(monkeypatch):
@@ -127,7 +164,11 @@ def test_a_complete_pass_earns_the_marker(monkeypatch):
 
     out = G._recover_data_refs("/artifact")
     assert out["added"] == 3
-    assert recorded == {"data_refs_recovered": True}
+    assert out["complete"] is True
+    assert recorded["data_refs_recovered"] is True
+    # resume state is cleared so a later cold re-analysis starts from a clean slate
+    assert recorded["data_refs_recovered_through"] is None
+    assert recorded["data_ref_recovery_running"] is None
 
 
 def test_recovery_failure_never_propagates(monkeypatch):
@@ -269,3 +310,142 @@ def test_recovery_is_ghidra_only(tmp_path, monkeypatch):
 
     monkeypatch.setattr(A, "_active_backend", lambda: "radare2")
     assert A._needs_data_ref_recovery(object(), object()) is False
+
+
+# --- contention: recovery holds the project's single writer slot ---------------------------------
+# Ghidra permits one writer per project. While a slice runs, a per-call tool opening the same project
+# fails on a lock. These pin the signalling that turns that into an actionable lead.
+
+def test_recovery_in_progress_is_reported_but_still_analyzed(tmp_path, monkeypatch):
+    import time as _t
+    A = _slot_ctx_stub(tmp_path, _big(tmp_path), monkeypatch)
+
+    class _Slot:
+        root = tmp_path
+        meta_path = tmp_path / L.META_NAME
+        content_sha = "a" * 64
+
+        def exists(self):
+            return True
+
+    monkeypatch.setattr(A, "_slot_ctx", lambda *a, **k: (_Slot(), str(_big(tmp_path)), "c", "p"))
+    monkeypatch.setattr(A, "docker_available", lambda: True, raising=False)
+    monkeypatch.setattr(A, "_active_backend", lambda: "ghidra")
+    (tmp_path / L.META_NAME).write_text(json.dumps({"data_ref_recovery_running": _t.time()}))
+
+    st = A.analysis_state(object(), object(), runner=_FakeEx())
+    assert st["state"] == "analyzed", "the warm analysis is intact; this is not a re-analysis"
+    assert st["recovery_running"] is True
+
+    lead = A.analysis_lead(object(), object(), runner=_FakeEx())
+    assert lead is not None and "retry" in lead.lower()
+
+
+def test_a_stale_recovery_heartbeat_does_not_lock_the_target_out(tmp_path, monkeypatch):
+    """If the recovery container dies without clearing the flag, the target must not read as
+    permanently held."""
+    A = _slot_ctx_stub(tmp_path, _big(tmp_path), monkeypatch)
+
+    class _Slot:
+        meta_path = tmp_path / L.META_NAME
+        content_sha = "a" * 64
+
+    stale = __import__("time").time() - (L._DATA_REF_SLICE_S * 10)
+    (tmp_path / L.META_NAME).write_text(json.dumps({"data_ref_recovery_running": stale}))
+    assert A._recovery_running(_Slot()) is False
+
+
+def test_recovery_is_not_launched_into_a_live_bridge(tmp_path, monkeypatch):
+    """A bridge owns the project for its whole session — a slice would only fail on the lock, over
+    and over, while an operator is actively working that target."""
+    A = _slot_ctx_stub(tmp_path, _big(tmp_path), monkeypatch)
+    (tmp_path / L.META_NAME).write_text(json.dumps({"content_hash": "abc"}))
+
+    monkeypatch.setattr(A, "_bridge_live", lambda slot, runner=None: False)
+    assert A._needs_data_ref_recovery(object(), object()) is True
+
+    monkeypatch.setattr(A, "_bridge_live", lambda slot, runner=None: True)
+    assert A._needs_data_ref_recovery(object(), object()) is False
+
+
+def test_an_in_flight_slice_is_not_relaunched(tmp_path, monkeypatch):
+    import time as _t
+    A = _slot_ctx_stub(tmp_path, _big(tmp_path), monkeypatch)
+    monkeypatch.setattr(A, "_bridge_live", lambda slot, runner=None: False)
+    (tmp_path / L.META_NAME).write_text(json.dumps({"data_ref_recovery_running": _t.time()}))
+    assert A._needs_data_ref_recovery(object(), object()) is False
+
+
+# --- resumability: a truncated slice must converge, not restart -----------------------------------
+
+def test_env_overrides_survive_garbage(monkeypatch):
+    """These parse at module import and this module backs the whole Ghidra surface — one typo'd
+    value must not take decompile/xrefs/taint down with it."""
+    assert L._env_num("HEXGRAPH_NOPE_MISSING", "900", float, 1.0) == 900.0
+    monkeypatch.setenv("HEXGRAPH_NOPE_GARBAGE", "not-a-number")
+    assert L._env_num("HEXGRAPH_NOPE_GARBAGE", "900", float, 1.0) == 900.0
+    monkeypatch.setenv("HEXGRAPH_NOPE_TINY", "0")
+    assert L._env_num("HEXGRAPH_NOPE_TINY", "900", float, 1.0) == 1.0
+
+
+def test_commit_marker_preserves_recovery_state(tmp_path, monkeypatch):
+    """_commit_marker is the LIVE marker writer; replacing wholesale would discard a completed or
+    partially-completed pass and make the next run redo tens of minutes of work."""
+    monkeypatch.setattr(L, "PROJECT_MOUNT", str(tmp_path))
+    (tmp_path / L.META_NAME).write_text(json.dumps({"data_refs_recovered": True,
+                                                     "data_refs_recovered_through": "0x4000"}))
+    L._commit_marker()
+    data = json.loads((tmp_path / L.META_NAME).read_text())
+    assert data["data_refs_recovered"] is True
+    assert data["data_refs_recovered_through"] == "0x4000"
+    assert data["program_name"] == L.PROJECT_NAME
+
+
+class _FakeEx:
+    def poll_detached(self, name):
+        return {}
+
+    def stop_detached(self, name, remove=False):
+        return None
+
+
+def test_bridge_check_polls_the_bridge_container_not_the_analyze_one(tmp_path, monkeypatch):
+    """`_bridge_live` must ask about `hexgraph-ghidra-bridge-<sha>`. Polling the analyze container
+    instead would read a running RECOVERY as "a bridge owns this", and recovery would refuse to
+    continue its own work."""
+    from hexgraph.engine.re import analysis as A
+
+    polled = []
+
+    class _Ex:
+        def poll_detached(self, name):
+            polled.append(name)
+            return {"running": name.startswith("hexgraph-ghidra-bridge-")}
+
+    class _Slot:
+        content_sha = "b" * 64
+
+    assert A._bridge_live(_Slot(), runner=_Ex()) is True
+    assert polled and all(n.startswith("hexgraph-ghidra-bridge-") for n in polled), polled
+
+    class _Ex2:
+        def poll_detached(self, name):
+            return {"running": False}
+
+    assert A._bridge_live(_Slot(), runner=_Ex2()) is False
+
+
+def test_bridge_check_failure_does_not_block_recovery(monkeypatch):
+    """If liveness can't be determined, recovery proceeds — a guess must not permanently stall the
+    stage (the slice would just fail on the lock and retry, which is recoverable; never running is
+    not)."""
+    from hexgraph.engine.re import analysis as A
+
+    class _Ex:
+        def poll_detached(self, name):
+            raise RuntimeError("docker down")
+
+    class _Slot:
+        content_sha = "c" * 64
+
+    assert A._bridge_live(_Slot(), runner=_Ex()) is False

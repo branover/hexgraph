@@ -83,12 +83,19 @@ def _is_warm(proj_dir: str) -> bool:
 
 
 def _commit_marker() -> None:
-    """Commit the warm marker atomically — the LAST step of a successful cold analyze."""
+    """Commit the warm marker atomically — the LAST step of a successful cold analyze.
+
+    MERGES, like `update_marker`. A cold analyze normally runs after `_clear_partial` has removed
+    any old marker, so there is usually nothing to preserve — but this is also the live writer of a
+    file the recovery stage records its resume state in, and a replace here would silently discard a
+    completed or partially-completed pass and make the next run redo tens of minutes of work."""
     marker = os.path.join(PROJECT_MOUNT, META_NAME)
+    data = read_marker()
+    data.update({"program_name": PROJECT_NAME, "created_at": time.time()})
     tmp = marker + ".tmp"
     try:
         with open(tmp, "w") as fh:
-            json.dump({"program_name": PROJECT_NAME, "created_at": time.time()}, fh)
+            json.dump(data, fh)
         os.replace(tmp, marker)
     except OSError:
         pass
@@ -315,13 +322,38 @@ def fast_profile_applies(artifact) -> bool:
 # the fast profile opens, for 13.5s against the 88s of extra analysis time full analysis costs there.
 # It is a PARTIAL recovery by construction: the remaining ~37% are addresses computed across several
 # instructions (MIPS lui/addiu, AArch64 adrp/add), which genuinely require propagation.
-_DATA_REF_BUDGET_S = float(os.environ.get("HEXGRAPH_DATA_REF_BUDGET_S", "3600"))
+#
+# The pass runs in RESUMABLE SLICES rather than one long pass. Two reasons, both measured:
+#   * A full pass on a 160M-instruction image takes ~48 min against a 1h budget — 1.25x margin, and
+#     a restart-from-zero retry would truncate at the same address forever, never converging.
+#     Each slice records how far it got (`through`) so the next one starts there.
+#   * Ghidra allows ONE writer per project. A slice holds that lock only for its own budget and
+#     releases it between slices, so the per-call tools contend for minutes, not an hour.
+def _env_num(name, default, cast=float, minimum=None):
+    """Parse a numeric env override, falling back to `default` on anything unparseable.
+
+    These are read at MODULE IMPORT, and this module backs decompile/xrefs/taint/emulate/script — a
+    bare `float(os.environ[...])` would take the whole Ghidra surface down on one typo'd value
+    rather than just mis-configuring the pass it belongs to."""
+    try:
+        value = cast(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        value = cast(default)
+    return value if minimum is None else max(minimum, value)
+
+
+# Per-SLICE wall clock, not the whole job (see above). Sized so the write lock is held in bounded
+# windows; a monolith simply takes several slices.
+_DATA_REF_SLICE_S = _env_num("HEXGRAPH_DATA_REF_SLICE_S", "900", float, 1.0)
+# Total wall clock across all slices in one container run, so a runaway can't sit on the project.
+_DATA_REF_TOTAL_S = _env_num("HEXGRAPH_DATA_REF_TOTAL_S", "21600", float, 1.0)
 # References committed per transaction — see the chunking comment in recover_data_refs_core.
 # Floored at 1: it is a modulus, so a 0 from the environment would be a ZeroDivisionError mid-pass.
-_DATA_REF_TX_CHUNK = max(1, int(os.environ.get("HEXGRAPH_DATA_REF_TX_CHUNK", "250000")))
+_DATA_REF_TX_CHUNK = int(_env_num("HEXGRAPH_DATA_REF_TX_CHUNK", "250000", int, 1))
 
 
-def recover_data_refs_core(program, monitor=None, *, budget_s=None, save=True) -> dict:
+def recover_data_refs_core(program, monitor=None, *, budget_s=None, start_after=None,
+                           save=True) -> dict:
     """Rebuild the statically-resolvable half of the code->DATA reference index in ONE linear pass.
 
     For every instruction operand that decodes to a Scalar which lands in mapped, NON-executable
@@ -329,30 +361,55 @@ def recover_data_refs_core(program, monitor=None, *, budget_s=None, save=True) -
     targets are skipped: control flow is already indexed by the passes the fast profile keeps, and
     they are not what a string/global xref query is asking for.
 
-    `budget_s` bounds the pass (default `HEXGRAPH_DATA_REF_BUDGET_S`, 1h) so a pathological image
-    stops with a partial-but-saved result rather than running unbounded. `save` persists via the
-    mid-life `program.save()` the warm path requires — `pyghidra.program_context` releases the
-    consumer WITHOUT saving, so an unsaved write is silently discarded on reopen (the same reason
-    `_apply_rename` saves explicitly). Idempotent: a second pass adds 0.
+    `start_after` resumes: the scan begins at the instruction FOLLOWING that hex address, so a
+    budget-truncated slice is continued rather than restarted (a restart would re-truncate at the
+    same place and never converge). `budget_s` bounds this slice (default `_DATA_REF_SLICE_S`);
+    on truncation the result carries `through`, the last address scanned, for the next slice.
+
+    `save` persists via the mid-life `program.save()` the warm path requires —
+    `pyghidra.program_context` releases the consumer WITHOUT saving, so an unsaved write is silently
+    discarded on reopen (the same reason `_apply_rename` saves explicitly). Idempotent: a second
+    pass over the same range adds 0.
     """
     from ghidra.program.model.scalar import Scalar
     from ghidra.program.model.symbol import RefType, SourceType
     from ghidra.util.task import ConsoleTaskMonitor
 
-    budget = _DATA_REF_BUDGET_S if budget_s is None else float(budget_s)
+    budget = _DATA_REF_SLICE_S if budget_s is None else float(budget_s)
     listing, mem = program.getListing(), program.getMemory()
-    space = program.getAddressFactory().getDefaultAddressSpace()
+    factory = program.getAddressFactory()
+    # The space DATA lives in, which is not always the default one: on a Harvard-architecture or
+    # overlay program code and data occupy separate spaces, and resolving a data address in the
+    # default (code) space would silently produce addresses in the wrong space.
+    space = None
+    with contextlib.suppress(Exception):
+        space = factory.getDefaultDataSpace()
+    if space is None:
+        space = factory.getDefaultAddressSpace()
     refmgr = program.getReferenceManager()
+
+    start = None
+    if start_after:
+        with contextlib.suppress(Exception):
+            start = factory.getAddress(start_after)
 
     t0 = time.time()
     scanned = added = chunks = 0
     truncated = False
+    last_addr = None
     txid = program.startTransaction("hexgraph recover data refs")
     try:
-        it = listing.getInstructions(True)
+        # `getInstructions(addr, True)` is inclusive of `addr`; the caller passes the last address
+        # already DONE, so step past it rather than re-scanning it.
+        it = listing.getInstructions(start, True) if start is not None else listing.getInstructions(True)
+        if start is not None and it.hasNext():
+            first = it.next()
+            if first.getAddress() != start:
+                it = listing.getInstructions(first.getAddress(), True)
         while it.hasNext():
             insn = it.next()
             scanned += 1
+            last_addr = insn.getAddress()
             # Check the clock rarely — time.time() per instruction is a measurable share of the pass.
             if (scanned & 0xFFFF) == 0 and (time.time() - t0) > budget:
                 truncated = True
@@ -367,7 +424,10 @@ def recover_data_refs_core(program, monitor=None, *, budget_s=None, save=True) -
                     except Exception:  # noqa: BLE001 - a scalar that is not a valid address
                         continue
                     block = mem.getBlock(dest)
-                    if block is None or block.isExecute():
+                    # Uninitialized blocks (.bss and friends) hold no bytes, so a scalar landing
+                    # there is far more likely to be an ordinary constant than a pointer — and a
+                    # wrong SourceType.ANALYSIS reference persists into a durable project.
+                    if block is None or block.isExecute() or not block.isInitialized():
                         continue
                     if existing is None:
                         existing = [r.getToAddress() for r in insn.getReferencesFrom()]
@@ -377,11 +437,12 @@ def recover_data_refs_core(program, monitor=None, *, budget_s=None, save=True) -
                                               SourceType.ANALYSIS, opnd)
                     existing.append(dest)
                     added += 1
-                    # Commit in CHUNKS. A monolith yields ~10M references; holding them all in one
-                    # open transaction grows Ghidra's undo/redo buffer until the commit itself is
-                    # the thing that dies — the same "ran for hours, then got killed while writing"
-                    # failure this pass exists to avoid. Each chunk bounds that buffer; the pass is
-                    # idempotent, so a kill between chunks costs only the uncommitted tail.
+                    # Commit in CHUNKS to bound Ghidra's undo/redo buffer: a monolith yields ~10M
+                    # references, and holding them all in one open transaction grows that buffer
+                    # until the commit itself is what dies. NOTE this does NOT make the work durable
+                    # incrementally — nothing reaches the project DB until the single `program.save()`
+                    # below, so a kill mid-slice loses the whole slice. Durability across slices is
+                    # the `through` marker's job, not the chunking's.
                     if added % _DATA_REF_TX_CHUNK == 0:
                         program.endTransaction(txid, True)
                         chunks += 1
@@ -399,6 +460,12 @@ def recover_data_refs_core(program, monitor=None, *, budget_s=None, save=True) -
             save_error = str(exc)
     out = {"scanned": scanned, "added": added, "seconds": round(time.time() - t0, 1),
            "truncated": truncated, "saved": saved, "tx_chunks": chunks}
+    # `through` is only meaningful when the slice stopped early AND its writes actually persisted;
+    # advertising a resume point whose refs were never saved would skip that range on the next slice.
+    if truncated and last_addr is not None and (saved or not added):
+        out["through"] = last_addr.toString()
+    elif truncated:
+        out["through"] = None                    # save failed — the next slice must redo this range
     if save_error:
         out["save_error"] = save_error
     return out

@@ -217,9 +217,16 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
   when it applied. One of the passes it drops is the one that builds code-to-data references, so
   `re_analyze` follows the analysis with a separate recovery pass that rebuilds them, and `re_data_xrefs`
   on a string will show you the code that loads it as well as the pointers to it. The recovery is
-  reported as `data_ref_recovery` and it only runs once per target. It cannot recover every reference:
-  addresses a program computes across several instructions (common on MIPS and AArch64) still need the
-  full analysis, so on those architectures expect `re_data_xrefs` to be less complete than on x86-64.
+  reported as `data_ref_recovery`. It cannot recover every reference: addresses a program computes
+  across several instructions (common on MIPS and AArch64) still need the full analysis, so on those
+  architectures expect `re_data_xrefs` to be less complete than on x86-64.
+
+  The pass runs in slices and records how far it got, so a target that needs more than one slice picks
+  up where it left off rather than starting over, and it is skipped once a pass has completed. Ghidra
+  allows a single writer per project, so while a slice is running the other Ghidra tools on that target
+  are briefly unavailable; they tell you so and ask you to retry rather than failing with a lock error,
+  and the slice releases the project between rounds. Recovery also waits rather than competing if you
+  have a bridge running on the target.
   `re_recover_constant` (P-Code emulation) and the `static_analysis` taint pass gate the same way — they run
   the deeper analysis over the warm project, so on a cold target they return the `re_analyze` lead rather than
   analyzing themselves. `re_disassemble` (targeted) and `re_search_decompiled` (reads the store) need no
