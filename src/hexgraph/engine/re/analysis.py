@@ -262,7 +262,10 @@ def start_analysis(project, target, *, runner=None) -> dict:
     RECOVERY-ONLY run — the probe skips analysis on the warm path and only rebuilds that index. This
     is what reaches targets analyzed before the recovery stage existed; without it they would stay
     blind forever, since this function would never invoke the probe on them again. The warm analysis
-    is untouched and stays usable throughout (`analysis_state` keeps reporting ``analyzed``)."""
+    is untouched and stays usable throughout (`analysis_state` keeps reporting ``analyzed``). That
+    path is single-flight the same way: it attaches to an in-flight recovery and reaps a lingering
+    exited container first, so a failed or truncated pass is actually RETRIED rather than reading as
+    a permanent ``running`` on the deterministic name its analyze run still holds."""
     from hexgraph.sandbox.executor import get_executor
 
     ex = runner or get_executor()
@@ -287,6 +290,26 @@ def start_analysis(project, target, *, runner=None) -> dict:
             ex.stop_detached(name, remove=True)
         except Exception:  # noqa: BLE001 — best-effort reap; the start below re-checks
             pass
+
+    if recovery_only:
+        # The deterministic name is still held by the ANALYZE container that BUILT this warm slot:
+        # detached runs are deliberately not `--rm`, and the only reap is on the already-warm early
+        # return we just skipped. So decide explicitly instead of leaving it to docker: a pass that
+        # is genuinely in flight is attached to (single-flight), and a merely-lingering exited one is
+        # reaped so the recovery can take the name. Without this, `start_detached` below hits
+        # "name already in use", which the handler reads as `running` — and since a failed or
+        # truncated recovery never sets the marker, EVERY later re_analyze would repeat that and
+        # report `running` forever, so the retry this stage's staging depends on could never happen.
+        poll = ex.poll_detached(name) or {}
+        if poll.get("running"):
+            return {"state": "running",
+                    "detail": "a detached pass is already rebuilding the code->data reference index "
+                              "the fast profile left out", "container": name}
+        if poll.get("exists"):
+            try:
+                ex.stop_detached(name, remove=True)
+            except Exception:  # noqa: BLE001 — best-effort reap; the start below re-checks
+                pass
 
     slot.prepare()
     # `/out` is unused under --analyze (the project lives on the persistent mount); a SHARED throwaway
