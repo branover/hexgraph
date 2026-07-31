@@ -503,7 +503,7 @@ def start_analysis(project, target, *, runner=None) -> dict:
                             "heartbeat went stale", name)
             except Exception:  # noqa: BLE001 — best-effort; the start below re-checks
                 pass
-        if poll.get("exists"):
+        elif poll.get("exists"):
             try:
                 ex.stop_detached(name, remove=True)
             except Exception:  # noqa: BLE001 — best-effort reap; the start below re-checks

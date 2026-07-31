@@ -800,3 +800,76 @@ def test_recovery_env_reaches_start_detached(monkeypatch, tmp_path):
 
     assert ex.started, "no detached run was launched"
     assert ex.started[0]["extra_env"]["HEXGRAPH_DATA_REF_SLICE_GAP_S"] == "99"
+
+
+def test_pending_fails_closed_on_an_absent_or_corrupt_marker(tmp_path, monkeypatch):
+    """A-2 / B3-1 (both reviewers, independently): deleting the `bool(meta)` guard left the whole
+    tier green. Without it `not {}.get(...)` is True, so the caveat fires on a target we know
+    nothing about — and a caveat that fires when it shouldn't trains the reader to ignore it."""
+    from hexgraph.engine.re import analysis as A
+
+    art = tmp_path / "big.bin"
+    art.write_bytes(b"\x00" * (L._FAST_PROFILE_BYTES + 1))
+
+    class _Slot:
+        root = tmp_path
+        meta_path = tmp_path / L.META_NAME
+        content_sha = "a" * 64
+
+    monkeypatch.setattr(A, "_active_backend", lambda: "ghidra")
+    monkeypatch.setattr(A, "_slot_ctx", lambda *a, **k: (_Slot(), str(art), "c", "p"))
+    monkeypatch.setattr(A, "_bridge_live", lambda slot, runner=None: False)
+
+    # absent marker
+    assert A.data_ref_index_pending(object(), object()) is False
+    # corrupt marker
+    (tmp_path / L.META_NAME).write_text("{not json")
+    assert A.data_ref_index_pending(object(), object()) is False
+    # a real, unrecovered marker still reports pending
+    (tmp_path / L.META_NAME).write_text(json.dumps({"content_hash": "x"}))
+    assert A.data_ref_index_pending(object(), object()) is True
+
+
+def test_a_malformed_slice_gap_does_not_break_the_probe_at_import(monkeypatch):
+    """A-3: reverting `_env_num` to a bare `float()` left the tier green. That call runs at MODULE
+    IMPORT of ghidra_probe — the entry point for decompile/xrefs/taint/emulate/script/analyze — so
+    one typo'd env value would take the entire Ghidra surface down in-container."""
+    import importlib
+
+    monkeypatch.setenv("HEXGRAPH_DATA_REF_SLICE_GAP_S", "30s")
+    reloaded = importlib.reload(G)
+    try:
+        assert reloaded._SLICE_GAP_S == 45.0, "a malformed value must fall back, not propagate"
+    finally:
+        monkeypatch.delenv("HEXGRAPH_DATA_REF_SLICE_GAP_S", raising=False)
+        importlib.reload(G)
+
+
+def test_the_probe_stamps_the_fast_profile_state_on_every_mode(tmp_path, monkeypatch):
+    """B3-2: the payload half of the OR was mutation-green. Both production call sites pass `ctx`
+    so the host answer normally wins, but the payload is the only signal a caller gets when it
+    reads the probe output directly — it should not be silently droppable."""
+    art = tmp_path / "big.bin"
+    art.write_bytes(b"\x00" * (L._FAST_PROFILE_BYTES + 1))
+    (tmp_path / "meta.json").write_text(json.dumps({"data_refs_recovered": True}))
+
+    # `_run` imports ConsoleTaskMonitor at its top; stub the module so no JVM is needed.
+    import sys as _sys
+    import types as _types
+    task_mod = _types.ModuleType("ghidra.util.task")
+    task_mod.ConsoleTaskMonitor = lambda: object()
+    for name, mod in (("ghidra", _types.ModuleType("ghidra")),
+                      ("ghidra.util", _types.ModuleType("ghidra.util")),
+                      ("ghidra.util.task", task_mod)):
+        monkeypatch.setitem(_sys.modules, name, mod)
+
+    monkeypatch.setattr(G.L, "PROJECT_MOUNT", str(tmp_path))
+    monkeypatch.setattr(G.L, "open_target", _fake_open_target())
+    monkeypatch.setattr(G.L, "xrefs_core", lambda *a, **k: {"mode": "data", "data_refs": []})
+
+    out = G._run({"artifact": str(art), "mode": "xrefs", "xrefs_mode": "data",
+                  "xrefs_subject": "0x1000", "focus": None, "rename": None, "user_script": None,
+                  "search_bytes": None, "search_imm": None})
+
+    assert out["fast_profile"] is True
+    assert out["data_refs_recovered"] is True

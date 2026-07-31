@@ -262,3 +262,40 @@ def test_resume_starts_after_the_recorded_address():
     prog = FakeProgram(_insns(4))
     L.recover_data_refs_core(prog, object(), start_after="00002004")
     assert [a[0] for a in prog.added] == ["00002008", "0000200c"]
+
+
+# --- the resume-point guard, at its SOURCE ---------------------------------------------------------
+# The wrapper's "save failed -> don't advance" test feeds `{"through": None}` as an INPUT. That
+# asserts the wrapper honours the contract; it proves nothing about whether the core ever produces
+# None. Deleting `and (saved or not added)` from the core left the whole tier green — so the guard
+# against a permanent silent hole in the index was pinned by nothing.
+
+def test_a_truncated_slice_whose_save_failed_advertises_no_resume_point():
+    """If a truncated slice reported `through` despite its writes being discarded, the next slice
+    would resume PAST a range whose references were never written — a permanent, silent hole."""
+    prog = FakeProgram(_insns(70000), save_error="disk full")
+    out = L.recover_data_refs_core(prog, object(), budget_s=-1)
+
+    assert out["truncated"] is True
+    assert out["saved"] is False
+    assert out["through"] is None, "a slice that discarded its writes must not advertise a resume point"
+
+
+def test_a_truncated_slice_that_saved_does_advertise_one():
+    """The other direction: a guard that never advertised a resume point would make the pass
+    restart from zero forever and never converge."""
+    prog = FakeProgram(_insns(70000))
+    out = L.recover_data_refs_core(prog, object(), budget_s=-1)
+
+    assert out["truncated"] is True and out["saved"] is True
+    assert out["through"], "a slice whose writes landed must advertise where to resume"
+
+
+def test_a_truncated_slice_that_added_nothing_advertises_a_resume_point():
+    """Nothing to save is not a failed save: with no additions there is nothing to lose, so the
+    scan position is still trustworthy and the pass must be able to move forward."""
+    prog = FakeProgram(_insns(70000), exec_ranges=[(0x5000, 0x8000)])
+    out = L.recover_data_refs_core(prog, object(), budget_s=-1)
+
+    assert out["truncated"] is True and out["added"] == 0
+    assert out["through"], "an empty-but-valid slice must still advance"

@@ -222,7 +222,10 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
   still need the full analysis, so on those architectures expect `re_data_xrefs` to be considerably
   less complete than on x86-64, where the accuracy of the pass was measured. When the index has not
   been rebuilt yet, an empty `re_data_xrefs` result says so explicitly rather than letting you read
-  it as "nothing references this address".
+  it as "nothing references this address". The recovered code references are heuristic rather than
+  exact: measured against a full analysis of a 130 MB x86-64 image, about half a percent of them
+  were references the full analysis does not produce, so treat a lone surprising one as a lead to
+  confirm in the disassembly. Pointers between data are unaffected either way.
 
   The pass runs in slices and records how far it got, so a target that needs more than one slice picks
   up where it left off rather than starting over, and it is skipped once a pass has completed. Ghidra
