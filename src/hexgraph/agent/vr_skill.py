@@ -301,8 +301,13 @@ scoped to the target's exact bytes. The two rules that make this cheap:
 - **re_call_graph** / **re_function_xrefs** / **re_data_xrefs** — map structure without
   decompiling everything. `re_call_graph` is who-calls-whom across the program (or the
   neighbourhood around one function out to `depth`); `re_function_xrefs` is both directions for
-  one function (callers + callees); `re_data_xrefs` finds every reference to an address or
-  symbol (run it after a string/decompile surfaces an interesting datum).
+  one function (callers + callees); `re_data_xrefs` finds references to an address or
+  symbol (run it after a string/decompile surfaces an interesting datum). On a >100MB Ghidra
+  target the CODE->data half of that index is rebuilt by `re_analyze`'s recovery pass rather
+  than by analysis, so it is absent until that finishes and partial afterwards (it resolves
+  single-instruction addressing, so x86-64 fares far better than MIPS/AArch64) — an empty
+  result there says the index is not ready, NOT that nothing loads the address. The tool tells
+  you which case you are in.
 - **re_symbol** / **re_resolve** / **re_function_info** — fast navigation, NO decompile.
   **re_symbol** searches the symbol table by name/regex (imports, exports, defined), returning
   each hit's address, type, bind, and section — the name→address lookup to run before

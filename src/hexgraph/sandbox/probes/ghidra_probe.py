@@ -32,10 +32,12 @@ layout + marker are shared with the Jython-era cache, so slots analyzed before t
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import os
 import subprocess  # noqa: F401 — kept importable so tests can assert the native path never shells out
 import sys
+import time
 import traceback
 
 # The probe dir (this file's dir, /opt/hexgraph) is on sys.path[0]; pyghidra_lib sits beside it.
@@ -168,6 +170,12 @@ def _parse(argv):
         m["search_bytes"] = _flag_value(rest, "--sbytes")
         m["search_imm"] = _flag_value(rest, "--simm")
         return m
+    if "--recover-data-refs" in rest:
+        # Recovery ONLY, over an already-warm slot: rebuild the code->data reference index without
+        # re-running the whole-program inventory `--analyze` would produce and a detached run would
+        # then discard. Checked before `--analyze` so the two can be passed together.
+        m["mode"] = "recover_data_refs"
+        return m
     if "--analyze" in rest:
         m["mode"] = "analyze"  # cold whole-binary analysis, no focus
         return m
@@ -204,6 +212,12 @@ def _run(m) -> dict:
     from ghidra.util.task import ConsoleTaskMonitor
 
     mode = m["mode"]
+    if mode == "recover_data_refs":
+        # Its own short path: no core runs, so the warm slot is opened once — by the recovery itself
+        # — and a detached recovery does not pay for a whole-program inventory it would discard.
+        return {"tool": "ghidra_probe", "mode": mode, "cached": True,
+                "fast_profile": L.fast_profile_applies(m["artifact"]),
+                "data_ref_recovery": _recover_data_refs(m["artifact"])}
     # THE analysis chokepoint: ONLY the `analyze` mode (re_analyze) may build a cold analysis. Every
     # other mode is WARM-ONLY — main() already refused a cold miss with the re_analyze lead, so on the
     # warm path open_target never analyzes. script + search additionally open the program READ-ONLY
@@ -229,7 +243,114 @@ def _run(m) -> dict:
             result = L.decompile_core(program, flat, monitor, focus=m["focus"], rename=m["rename"])
         result.setdefault("tool", "ghidra_probe")
         result["cached"] = cached
+
+    # Whether this target's analysis runs under the fast profile is part of its RESULT, not a detail
+    # an agent has to infer from empty xrefs: the profile disables the constant/scalar reference
+    # analyzers, so on a large target the code->data half of the xref index comes from the recovery
+    # stage below rather than from analysis. Reported on EVERY mode so `re_data_xrefs` returning
+    # nothing is legible instead of looking like "this string has no callers".
+    fast_profile = L.fast_profile_applies(m["artifact"])
+    result["fast_profile"] = fast_profile
+    if fast_profile:
+        # Carried on EVERY mode, not just analyze: an empty `re_data_xrefs` on a fast-profiled target
+        # whose recovery has not finished is a TOOLING state, not a fact about the binary, and the
+        # caller has to be able to tell those apart — reading "nothing points at this address" when
+        # the index simply has not been rebuilt yet is precisely the wrong turn this stage exists to
+        # prevent.
+        result["data_refs_recovered"] = bool(L.read_marker().get("data_refs_recovered"))
+    if fast_profile and mode == "analyze":
+        result["data_ref_recovery"] = _recover_data_refs(m["artifact"])
     return result
+
+
+# Pause between recovery slices so a per-call tool waiting on this target can actually acquire the
+# Ghidra project. Sized against what a waiting caller has to do BEFORE it even attempts the project:
+# a container spawn plus a JVM boot, which is tens of seconds — a 5s window would be advertised and
+# then unwinnable. 45s is ~5% overhead against the 15-minute default slice, which is worth paying for
+# a gap that can actually be taken.
+_SLICE_GAP_S = L._env_num("HEXGRAPH_DATA_REF_SLICE_GAP_S", "45", float, 0.0)
+
+
+def _recover_data_refs(artifact) -> dict:
+    """Run code->data reference recovery as a SEPARATE STAGE, after `_run`'s cold analysis has been
+    saved and the warm marker committed.
+
+    Staged deliberately: the recovery pass is a full linear scan (~48 min on a 160M-instruction,
+    895 MB image) and analysis on a monolith already runs for hours, so folding it into the analysis
+    transaction would mean a kill during recovery discards the ENTIRE analysis. Reopening the warm
+    slot instead makes the two independently durable — being killed here costs the recovery only,
+    and the next `re_analyze` retries it because the marker flag was never set.
+
+    Skipped when the marker says a pass already completed, so re-running `re_analyze` on a warm
+    target does not re-pay the scan (the pass is idempotent, but idempotent is not free).
+
+    Runs as a LOOP OF SLICES, reopening the warm project each time. Ghidra allows one writer per
+    project, so a single ~48-minute pass would lock every per-call tool out of that target for the
+    duration; a slice holds the lock for its own budget and RELEASES it in between, so contention is
+    bounded and another opener gets a window. Each slice records `data_refs_recovered_through` so the
+    next resumes instead of restarting — a restart would re-truncate at the same address forever.
+    `data_ref_recovery_running` is published for the host, which turns it into an actionable lead
+    instead of letting a per-call tool hit an opaque Ghidra lock error."""
+    marker = L.read_marker()
+    if marker.get("data_refs_recovered"):
+        return {"skipped": "already recovered", "added": 0}
+
+    started = time.time()
+    through = marker.get("data_refs_recovered_through")
+    total_added = total_scanned = slices = 0
+    last = {}
+    try:
+        while True:
+            L.update_marker(data_ref_recovery_running=time.time())
+            # No Ghidra import here on purpose (this module keeps Ghidra lazy):
+            # recover_data_refs_core constructs its own ConsoleTaskMonitor when passed None, so the
+            # whole wrapper — including the skip and failure paths — stays stdlib-only.
+            with L.open_target(artifact, cold_analyze=False) as (program, _flat, _cached):
+                last = L.recover_data_refs_core(program, None, start_after=through)
+            slices += 1
+            total_added += last.get("added") or 0
+            total_scanned += last.get("scanned") or 0
+            if not last.get("truncated"):
+                # Scanned to the end — but "complete" is not the same as "persisted". The core only
+                # calls program.save() when it added something, and that save can RAISE (it is
+                # reported, never thrown, so the stage can't fail the analysis before it). Marking
+                # the target recovered on a save that failed is permanent and silent: every
+                # reference was discarded, yet nothing will ever rebuild them. Require that the
+                # writes actually landed, or that there were none to land.
+                persisted = last.get("saved") or not last.get("added")
+                if persisted:
+                    # Clear the resume state so a later cold re-analysis starts clean.
+                    L.update_marker(data_refs_recovered=True, data_refs_recovered_through=None,
+                                    data_ref_recovery_running=None)
+                else:
+                    L.update_marker(data_ref_recovery_running=None)
+                break
+            through = last.get("through")
+            if through is None:
+                # The slice stopped early but its writes did not persist — there is no safe resume
+                # point, so stop and let the next run redo this range rather than skipping it.
+                L.update_marker(data_ref_recovery_running=None)
+                break
+            # Record the resume point AND clear the heartbeat BEFORE yielding. Both orderings
+            # matter: while the heartbeat is set the host refuses every gated Ghidra tool on this
+            # target, so sleeping first would keep them locked out for the whole gap and make the
+            # yield useless to the callers it exists for; and a kill during the sleep must not cost
+            # the slice's resume point.
+            L.update_marker(data_refs_recovered_through=through, data_ref_recovery_running=None)
+            if (time.time() - started) > L._DATA_REF_TOTAL_S:
+                break
+            # Actually YIELD the project. Closing and immediately reopening releases the lock for
+            # microseconds, which is not a window anything can win.
+            time.sleep(_SLICE_GAP_S)
+    except Exception as exc:  # noqa: BLE001 - recovery must never fail the analysis that preceded it
+        with contextlib.suppress(Exception):
+            L.update_marker(data_ref_recovery_running=None)
+        return {"error": str(exc), "added": total_added, "slices": slices}
+    return {"added": total_added, "scanned": total_scanned, "slices": slices,
+            "seconds": round(time.time() - started, 1),
+            "complete": not last.get("truncated", False),
+            "through": through if last.get("truncated") else None,
+            "saved": last.get("saved", False)}
 
 
 def main() -> int:

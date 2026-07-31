@@ -26,12 +26,19 @@ class _Target:
 
 
 class _FakeExec:
-    """Records detached launches/reaps; answers poll with a fixed state; can force a start error."""
+    """Records detached launches/reaps; answers poll with a fixed state; can force a start error.
 
-    def __init__(self, poll=None, start_error=None):
+    Poll is answered PER CONTAINER NAME, not globally: docker names are the single-flight key, and
+    several unrelated containers can exist for one target (the analyze/recovery container
+    `hexgraph-analyze-*` and a Ghidra bridge `hexgraph-ghidra-bridge-*`). A fake that answered the
+    same state for every name would let a test pass while the code polled entirely the wrong
+    container. `poll` applies to the analyze container; `bridge_poll` to the bridge."""
+
+    def __init__(self, poll=None, start_error=None, bridge_poll=None):
         self.started: list = []
         self.stopped: list = []
         self._poll = poll or {"exists": False, "running": False, "exit_code": None}
+        self._bridge_poll = bridge_poll or {"exists": False, "running": False, "exit_code": None}
         self.start_error = start_error
 
     def run_json_probe(self, probe, artifact, *, extra_args=None, **kw):
@@ -39,6 +46,8 @@ class _FakeExec:
         return {"present": True, "version": "12.1", "r2_version": "6.1.4"}
 
     def poll_detached(self, name):
+        if str(name).startswith("hexgraph-ghidra-bridge-"):
+            return dict(self._bridge_poll)
         return dict(self._poll)
 
     def start_detached(self, probe, artifact, *, name, outdir, project_mount=None,
@@ -240,3 +249,78 @@ def test_backend_names_never_collide(env, monkeypatch):
     _set_backend(monkeypatch, "radare2")
     r = A.start_analysis(project, target, runner=_FakeExec())["container"]
     assert g != r and "ghidra" in g and "radare2" in r
+
+
+# --- the recovery-only relaunch (the ONE exception to "already-warm ⇒ no-op") ---
+# A warm slot built under the fast profile is missing its code->data reference index until the probe
+# rebuilds it, so start_analysis launches a RECOVERY-ONLY run over the warm slot. That run competes
+# for the same deterministic container name as the analyze run that built the slot — and detached
+# containers are deliberately not `--rm` — so the reap/attach decision has to be made explicitly
+# here. See tests/test_data_ref_recovery.py for the predicate and the probe-side marker contract.
+
+@pytest.fixture
+def warm_needing_recovery(env, monkeypatch):
+    """A warm Ghidra slot whose marker has no `data_refs_recovered`, on a fast-profile-sized
+    target (the threshold is lowered rather than writing 100 MB of zeroes to a tmpdir)."""
+    from hexgraph.sandbox.probes import pyghidra_lib as L
+
+    project, target, art = env
+    monkeypatch.setattr(L, "_FAST_PROFILE_BYTES", 1)
+    _make_warm(project, art)
+    assert A._needs_data_ref_recovery(project, target, runner=_FakeExec()) is True
+    return project, target
+
+
+def test_warm_fast_profile_slot_launches_recovery_only(warm_needing_recovery):
+    """It must rebuild the index WITHOUT redoing the whole-program analysis — `--analyze` here would
+    throw away an analysis measured in hours and re-do it for nothing."""
+    project, target = warm_needing_recovery
+    fake = _FakeExec()
+    st = A.start_analysis(project, target, runner=fake)
+    assert st["state"] == "started"
+    call = fake.started[0]
+    assert call["extra_args"] == ["--recover-data-refs"]
+    assert call["probe"] == "ghidra_probe.py"
+
+
+def test_recovery_reaps_the_lingering_analyze_container_then_launches(warm_needing_recovery):
+    """The analyze container that BUILT this slot still owns the deterministic name (detached runs
+    are not `--rm`, and the reap on the already-warm early return is skipped on this path). If it
+    isn't reaped, start_detached hits 'name already in use' and the caller reads that as `running`
+    — permanently, since a failed/truncated recovery never sets the marker, so the retry the staging
+    depends on could never happen."""
+    project, target = warm_needing_recovery
+    fake = _FakeExec(poll={"exists": True, "running": False, "exit_code": 0})
+    st = A.start_analysis(project, target, runner=fake)
+    assert st["state"] == "started"
+    assert fake.stopped and fake.started
+    assert fake.started[0]["extra_args"] == ["--recover-data-refs"]
+
+
+def test_recovery_attaches_to_an_in_flight_pass(warm_needing_recovery):
+    """Single-flight still holds: a pass genuinely in flight is attached to, never duplicated (and
+    never killed by the reap above)."""
+    project, target = warm_needing_recovery
+    fake = _FakeExec(poll={"exists": True, "running": True, "exit_code": None})
+    st = A.start_analysis(project, target, runner=fake)
+    assert st["state"] == "running"
+    assert fake.started == [] and fake.stopped == []
+
+
+def test_recovered_slot_is_a_noop_again(env, monkeypatch):
+    """Once the marker records a complete pass, the warm slot goes back to being a no-op that reaps
+    its lingering container — re-paying a ~48 min scan on every poll would be the worse bug."""
+    import json
+
+    from hexgraph.sandbox.probes import pyghidra_lib as L
+
+    project, target, art = env
+    monkeypatch.setattr(L, "_FAST_PROFILE_BYTES", 1)
+    slot = _make_warm(project, art)
+    meta = json.loads(slot.meta_path.read_text())
+    meta["data_refs_recovered"] = True
+    slot.meta_path.write_text(json.dumps(meta))
+    fake = _FakeExec(poll={"exists": True, "running": False, "exit_code": 0})
+    st = A.start_analysis(project, target, runner=fake)
+    assert st["state"] == "analyzed"
+    assert fake.started == [] and fake.stopped

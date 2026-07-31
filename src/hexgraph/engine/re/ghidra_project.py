@@ -196,13 +196,26 @@ class GhidraProject:
         """COMMIT the warm marker — the LAST step of a successful cold import+analyze, and the
         only thing `exists()` keys on. Written atomically (tmp + `os.replace`) so a crash never
         leaves a half-written marker that would falsely read as warm. Touches mtime, which is what
-        LRU eviction orders by."""
-        payload = json.dumps({
+        LRU eviction orders by.
+
+        MERGES over whatever is already in the marker rather than replacing it: the marker is
+        co-owned with the probe, which records per-stage state there (`data_refs_recovered` — see
+        `pyghidra_lib.update_marker`). Replacing it wholesale would silently un-record a completed
+        stage and make the next re_analyze re-run a scan measured in tens of minutes."""
+        existing = {}
+        try:
+            if self.meta_path.is_file():
+                loaded = json.loads(self.meta_path.read_text())
+                existing = loaded if isinstance(loaded, dict) else {}
+        except (OSError, ValueError):
+            existing = {}
+        existing.update({
             "content_hash": self.content_sha,
             "ghidra_version": self.ghidra_version,
             "program_name": self.program_name,
             "created_at": time.time(),
         })
+        payload = json.dumps(existing)
         tmp = self.meta_path.with_suffix(".json.tmp")
         tmp.write_text(payload)
         os.replace(tmp, self.meta_path)

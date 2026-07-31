@@ -1,8 +1,11 @@
 """Ghidra's analysis of a 100 MB+ monolith is bounded by a fast profile that disables the passes
 proven pathological on a huge binary (Call-Fixup Installer's O(n^2) AddressSet, the per-processor
 Constant Reference Analyzer, the decompile-every-function passes, and the Non-Returning Functions
-analyzers whose ClearFlowAndRepair wedges on a monolith) while KEEPING the call-graph/
-reference analyzers. Since the PyGhidra re-platform these are pure host-side helpers in `pyghidra_lib`
+analyzers whose ClearFlowAndRepair wedges on a monolith) while KEEPING function + call-graph
+discovery. It does NOT keep code->DATA reference discovery — that is exactly what the constant/scalar
+passes produce — so a large target's code->data xref index is rebuilt afterwards by the separate
+`recover_data_refs_core` stage (see test_data_ref_recovery.py).
+Since the PyGhidra re-platform these are pure host-side helpers in `pyghidra_lib`
 (`_slow_analyzer` + `_FAST_PROFILE_BYTES`), applied in-process by `_analyze` before AutoAnalysisManager
 runs. The analysis otherwise runs to completion — `re_analyze` runs it detached with a generous budget
 (the Jython `-analysisTimeoutPerFile` graceful-partial-save is not replicated: cancelling analysis
