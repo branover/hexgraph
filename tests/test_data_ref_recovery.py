@@ -5,9 +5,12 @@ statically-resolvable majority of it in one linear pass, exploiting the fact tha
 resolved a RIP-relative operand at DISASSEMBLY time (`LEA RDI,[0x102004]` -> pcode
 `COPY (const,0x102004,8)`), so no constant propagation is needed to know the target.
 
-Measured against full Ghidra analysis on a real 6.1 MB x86-64 library: 21,686 references proposed,
-all of which full analysis also produces (precision 1.000), closing 63% of the gap the fast profile
-opens. The remainder needs real propagation (MIPS lui/addiu, AArch64 adrp/add pairs).
+Measured IN-REGIME against full-analysis ground truth on a 130 MB x86-64 library (this stage only
+runs above the 100 MB threshold, so a small-binary number does not characterise it): 135,273
+references recovered at precision 0.9945 (742 that full analysis does not produce), closing 21% of
+the gap the fast profile opens. The remainder needs real propagation (MIPS lui/addiu, AArch64
+adrp/add pairs). An earlier 6.1 MB sample read 1.000 / 63% — both optimistic, which is why the
+in-regime figure is the one quoted.
 
 These are host-side tests of the wiring and the staging/marker contract — the Ghidra-dependent pass
 itself is exercised against a real binary in the sandbox (a JVM is not available in the offline

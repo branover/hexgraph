@@ -317,11 +317,16 @@ def fast_profile_applies(artifact) -> bool:
 # `COPY (const,0x102004,8)`), so the final address is already sitting in the instruction as a Scalar
 # operand. One linear pass over the listing recovers those references with no propagation at all.
 #
-# Measured on a real 6.1 MB x86-64 library (841k instructions): 21,686 references proposed, ALL of
-# which full analysis also produces — precision 1.000, zero false positives — closing 63% of the gap
-# the fast profile opens, for 13.5s against the 88s of extra analysis time full analysis costs there.
-# It is a PARTIAL recovery by construction: the remaining ~37% are addresses computed across several
-# instructions (MIPS lui/addiu, AArch64 adrp/add), which genuinely require propagation.
+# Measured IN-REGIME, against full-analysis ground truth on a 130 MB x86-64 library (this stage only
+# ever runs above the 100 MB threshold, so a small-binary number does not characterise it — an
+# earlier 6.1 MB sample read precision 1.000 / 63% of the gap and BOTH figures were optimistic):
+#     135,273 references recovered, 742 of which full analysis does not produce
+#     precision 0.9945 — a ~0.55% false-positive rate, written as SourceType.ANALYSIS
+#     closes 21% of the gap the fast profile opens
+# It is a PARTIAL recovery by construction: the rest are addresses computed across several
+# instructions (MIPS lui/addiu, AArch64 adrp/add), which genuinely require propagation. The
+# trade is deliberate — ~135k code->data references that otherwise do not exist at all, against a
+# sub-1% error rate in a graph whose whole purpose is finding candidate leads to verify.
 #
 # The pass runs in RESUMABLE SLICES rather than one long pass. Two reasons, both measured:
 #   * A full pass on a 160M-instruction image takes ~48 min against a 1h budget — 1.25x margin, and
@@ -424,11 +429,16 @@ def recover_data_refs_core(program, monitor=None, *, budget_s=None, start_after=
                     except Exception:  # noqa: BLE001 - a scalar that is not a valid address
                         continue
                     block = mem.getBlock(dest)
-                    # Uninitialized blocks (.bss and friends) hold no bytes, so a scalar landing
-                    # there is far more likely to be an ordinary constant than a pointer — and a
-                    # wrong SourceType.ANALYSIS reference persists into a durable project.
-                    if block is None or block.isExecute() or not block.isInitialized():
+                    if block is None or block.isExecute():
                         continue
+                    # NOTE: an `isInitialized()` filter was measured here and REJECTED. The theory
+                    # (a scalar landing in .bss is likelier a constant than a pointer) is reasonable,
+                    # but in-regime it removed 2 of 742 false positives while discarding 8,664 TRUE
+                    # ones — 0.3% of the error for 6.4% of the recall. `OperandType.isScalarAsAddress`
+                    # is worse than useless here: that flag is set as a CONSEQUENCE of a reference
+                    # existing, so under the fast profile it matches nothing and drops the pass to
+                    # ZERO proposals. Re-measure before adding any further filter; both of these
+                    # sounded right and one would have silently disabled the whole stage.
                     if existing is None:
                         existing = [r.getToAddress() for r in insn.getReferencesFrom()]
                     if dest in existing:
