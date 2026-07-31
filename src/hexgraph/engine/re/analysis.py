@@ -108,13 +108,41 @@ def _analyze_outdir() -> str:
     return _ANALYZE_OUTDIR
 
 
+# Recovery knobs the PROBE reads (`pyghidra_lib`), forwarded so an operator override actually
+# reaches the container. Without forwarding, the host and the container disagree: the host sizes its
+# staleness window from its own `_DATA_REF_SLICE_S` while the container slices on the default, so a
+# raised slice budget makes every in-flight pass look stale to the host that launched it.
+_RECOVERY_ENV_KEYS = ("HEXGRAPH_DATA_REF_SLICE_S", "HEXGRAPH_DATA_REF_TOTAL_S",
+                      "HEXGRAPH_DATA_REF_TX_CHUNK", "HEXGRAPH_GHIDRA_FAST_PROFILE_MB")
+
+
+def _analysis_env() -> dict:
+    """Env for the detached analysis container: the analysis budget plus any recovery overrides set
+    on the host (absent keys are simply not forwarded, so the probe keeps its own defaults)."""
+    env = {"HEXGRAPH_PROBE_TIMEOUT_S": str(_analysis_timeout())}
+    for key in _RECOVERY_ENV_KEYS:
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
+    return env
+
+
 def _reap_if_present(ex, name) -> None:
-    """Best-effort: `docker rm` a detached container by name if it still exists — housekeeping so a
-    completed/failed analysis doesn't leave a stopped container behind. Never raises."""
+    """Best-effort: `docker rm` a detached container by name if it EXISTS AND IS NOT RUNNING —
+    housekeeping so a completed/failed analysis doesn't leave a stopped container behind.
+
+    The `not running` half is load-bearing, not defensive tidiness: `stop_detached` is a `docker
+    kill` + `docker rm -f`, so reaping on `exists` alone TERMINATES a live container. The recovery
+    stage made that reachable — a warm slot whose recovery slice is in flight takes the same
+    already-analyzed early return, so merely POLLING `re_analyze` would SIGKILL the pass it is
+    waiting on, and the killed probe never clears its heartbeat (nothing is durable until
+    `program.save()`), leaving the target locked out until the heartbeat goes stale with nothing
+    relaunching. Never raises."""
     if not name:
         return
     try:
-        if (ex.poll_detached(name) or {}).get("exists"):
+        poll = ex.poll_detached(name) or {}
+        if poll.get("exists") and not poll.get("running"):
             ex.stop_detached(name, remove=True)
     except Exception:  # noqa: BLE001 — reaping is best-effort, never breaks the caller
         pass
@@ -223,9 +251,11 @@ def analysis_lead(project, target, *, runner=None) -> str | None:
         # rather than "wait a few minutes" — exactly the kind of opaque failure the recovery stage
         # exists to remove.
         return ("A pass is rebuilding this target's code->data reference index and currently holds "
-                "the Ghidra project, so per-call Ghidra tools are unavailable for a few minutes. It "
-                "runs in slices and releases the project between them — retry shortly. (The warm "
-                "analysis itself is intact; nothing is being re-analyzed.) "
+                "the Ghidra project, so per-call Ghidra tools are unavailable on THIS target until "
+                "the current slice ends (slice budget defaults to 15 min; the pass yields the "
+                "project briefly between slices and a whole monolith can take several). Retry, or "
+                "work another target meanwhile. The warm analysis itself is intact and nothing is "
+                "being re-analyzed. "
                 f"[{st.get('detail', '')}]")
     if state in ("analyzed", "unavailable"):
         return None
@@ -262,8 +292,12 @@ def _recovery_running(slot) -> bool:
         return False
     from hexgraph.sandbox.probes import pyghidra_lib as L
 
-    # Generous: a slice may legitimately run its whole budget between heartbeats.
-    return (time.time() - ts) < (L._DATA_REF_SLICE_S * 2)
+    # Generous upper bound: a slice may legitimately run its whole budget between heartbeats.
+    # LOWER bound too — an unbounded `delta < window` reads a FUTURE-dated timestamp (clock skew
+    # between host and container, or a clock step) as perpetually fresh, which would lock every
+    # gated Ghidra tool out of the target forever and defeat the staleness escape hatch entirely.
+    delta = time.time() - ts
+    return 0 <= delta < (L._DATA_REF_SLICE_S * 2)
 
 
 def _bridge_live(slot, *, runner) -> bool:
@@ -280,6 +314,33 @@ def _bridge_live(slot, *, runner) -> bool:
         poll = ex.poll_detached(br.container_name(slot.content_sha)) or {}
         return bool(poll.get("running"))
     except Exception:  # noqa: BLE001 — if we cannot tell, do not block recovery on a guess
+        return False
+
+
+def data_ref_index_pending(project, target, *, runner=None) -> bool:
+    """True when this target's code->data reference index is NOT yet rebuilt — i.e. an empty
+    `re_data_xrefs` result here says something about the TOOLING, not about the binary.
+
+    Computed host-side from the slot marker rather than trusted from a probe payload, because the
+    payload is not a reliable carrier: the resident-bridge path and the radare2 path never set it,
+    and the recovery result itself only exists in a detached container's discarded stdout. The host
+    always has the marker, so this answers uniformly for every backend and every route.
+
+    Ghidra-only, and False on any uncertainty: a caveat that fires spuriously would train the reader
+    to ignore it."""
+    try:
+        from hexgraph.sandbox.probes import pyghidra_lib as L
+
+        if _active_backend() != "ghidra":
+            return False
+        ctx = _slot_ctx(project, target, runner=runner)
+        if ctx is None:
+            return False
+        slot, artifact, _name, _probe = ctx
+        if not L.fast_profile_applies(artifact):
+            return False
+        return not _read_slot_marker(slot).get("data_refs_recovered")
+    except Exception:  # noqa: BLE001 — advisory only; never break a tool over it
         return False
 
 
@@ -407,7 +468,7 @@ def start_analysis(project, target, *, runner=None) -> dict:
             # detached run discards anyway). Ghidra-only — `_needs_data_ref_recovery` gates on it.
             extra_args=["--recover-data-refs"] if recovery_only else ["--analyze"],
             # The analysis budget: Ghidra reads it as -analysisTimeoutPerFile; r2 ignores it.
-            extra_env={"HEXGRAPH_PROBE_TIMEOUT_S": str(_analysis_timeout())},
+            extra_env=_analysis_env(),
         )
     except Exception as exc:  # noqa: BLE001
         # A concurrent start won the deterministic name (docker refuses a duplicate) — that's the

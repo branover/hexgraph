@@ -116,6 +116,7 @@ def test_a_truncated_slice_records_a_resume_point_and_is_not_marked_complete(mon
                                          "through": "0x41000"})
     monkeypatch.setattr(G.L, "open_target", _fake_open_target())
     monkeypatch.setattr(G.L, "_DATA_REF_TOTAL_S", 0)     # one slice, then stop
+    monkeypatch.setattr(G, "_SLICE_GAP_S", 0)            # don't pay the real inter-slice pause
 
     out = G._recover_data_refs("/artifact")
     assert out["complete"] is False
@@ -162,7 +163,8 @@ def test_a_complete_pass_earns_the_marker(monkeypatch):
     monkeypatch.setattr(G.L, "read_marker", lambda: {})
     monkeypatch.setattr(G.L, "update_marker", lambda **kw: recorded.update(kw))
     monkeypatch.setattr(G.L, "recover_data_refs_core",
-                        lambda *a, **k: {"scanned": 10, "added": 3, "truncated": False})
+                        lambda *a, **k: {"scanned": 10, "added": 3, "truncated": False,
+                                         "saved": True})
     monkeypatch.setattr(G.L, "open_target", _fake_open_target())
 
     out = G._recover_data_refs("/artifact")
@@ -452,3 +454,154 @@ def test_bridge_check_failure_does_not_block_recovery(monkeypatch):
         content_sha = "c" * 64
 
     assert A._bridge_live(_Slot(), runner=_Ex()) is False
+
+
+# --- review A blockers: polling must not destroy the work it is waiting for ----------------------
+
+def _recovery_in_flight_ctx(tmp_path, monkeypatch, *, heartbeat=None, analyze_poll=None):
+    import time as _t
+    from hexgraph.engine.re import analysis as A
+
+    art = tmp_path / "big.bin"
+    art.write_bytes(b"\x00" * (L._FAST_PROFILE_BYTES + 1))
+    (tmp_path / L.META_NAME).write_text(json.dumps(
+        {"data_ref_recovery_running": _t.time() if heartbeat is None else heartbeat}))
+
+    class _Slot:
+        root = tmp_path
+        meta_path = tmp_path / L.META_NAME
+        content_sha = "a" * 64
+
+        def exists(self):
+            return True
+
+        def prepare(self):
+            pass
+
+    class _Ex:
+        def __init__(self):
+            self.stopped, self.started = [], []
+
+        def poll_detached(self, name):
+            if name.startswith("hexgraph-ghidra-bridge-"):
+                return {"exists": False, "running": False}
+            return dict(analyze_poll or {"exists": True, "running": True})
+
+        def stop_detached(self, name, remove=False):
+            self.stopped.append(name)
+
+        def start_detached(self, *a, **k):
+            self.started.append(k.get("name"))
+
+    monkeypatch.setattr(A, "_slot_ctx",
+                        lambda *a, **k: (_Slot(), str(art), "hexgraph-analyze-ghidra-dead", "p"))
+    monkeypatch.setattr(A, "_active_backend", lambda: "ghidra")
+    import hexgraph.sandbox.runner as R
+    monkeypatch.setattr(R, "docker_available", lambda: True)
+    return A, _Ex()
+
+
+def test_polling_does_not_kill_an_in_flight_recovery(tmp_path, monkeypatch):
+    """`stop_detached` is `docker kill` + `docker rm -f`. A warm slot whose recovery slice is in
+    flight takes the already-analyzed early return, so reaping on `exists` alone would SIGKILL the
+    pass the poll is waiting on — and since nothing is durable until `program.save()`, the whole
+    slice is lost while the killed probe never clears its heartbeat."""
+    A, ex = _recovery_in_flight_ctx(tmp_path, monkeypatch)
+
+    st = A.start_analysis(object(), object(), runner=ex)
+
+    assert st["state"] == "analyzed" and st.get("recovery_running") is True
+    assert ex.stopped == [], "polling killed the in-flight recovery container"
+
+
+def test_a_merely_lingering_container_is_still_reaped(tmp_path, monkeypatch):
+    """The housekeeping the reap exists for must survive the fix: an EXITED container is removed."""
+    A, ex = _recovery_in_flight_ctx(tmp_path, monkeypatch, heartbeat=0,
+                                    analyze_poll={"exists": True, "running": False})
+    # heartbeat=0 -> stale -> not "running", so this is the ordinary already-analyzed path
+    monkeypatch.setattr(A, "_needs_data_ref_recovery", lambda *a, **k: False)
+    A.start_analysis(object(), object(), runner=ex)
+    assert ex.stopped == ["hexgraph-analyze-ghidra-dead"]
+
+
+def test_a_future_dated_heartbeat_is_not_treated_as_fresh(tmp_path, monkeypatch):
+    """`delta < window` with no lower bound reads a clock-skewed FUTURE timestamp as perpetually
+    fresh, locking every gated Ghidra tool out of the target forever."""
+    from hexgraph.engine.re import analysis as A
+    import time as _t
+
+    class _Slot:
+        meta_path = tmp_path / L.META_NAME
+
+    (tmp_path / L.META_NAME).write_text(json.dumps({"data_ref_recovery_running": _t.time() + 99999}))
+    assert A._recovery_running(_Slot()) is False
+
+
+# --- the fast-profile state has to reach the agent, not just the payload -------------------------
+
+def test_empty_xrefs_on_an_unrecovered_target_says_why():
+    """An empty result on a fast-profiled target whose index is not rebuilt is a TOOLING state, not
+    a fact about the binary. Reporting it as 'nothing points at this address' is the exact wrong
+    turn this stage exists to prevent."""
+    from hexgraph.agent import agent_tools as T
+
+    pending = {"fast_profile": True, "data_refs_recovered": False}
+    msg = T._no_data_xrefs_msg("0x41000", pending)
+    assert "has NOT been rebuilt" in msg and "re_analyze" in msg
+
+    done = {"fast_profile": True, "data_refs_recovered": True}
+    assert T._pending_recovery_caveat(done) == ""
+    assert T._pending_recovery_caveat({"fast_profile": False}) == ""
+    assert T._pending_recovery_caveat(None) == ""
+    # unchanged for a small target: no caveat, original wording intact
+    assert "NOTE:" not in T._no_data_xrefs_msg("0x41000", {"fast_profile": False})
+
+
+# --- operator overrides must reach the container --------------------------------------------------
+
+def test_recovery_env_overrides_are_forwarded_to_the_probe(monkeypatch):
+    """The host sizes its staleness window from its own slice budget while the container slices on
+    whatever IT sees; if an override does not cross the boundary the two disagree and every
+    in-flight pass looks stale to the host that launched it."""
+    from hexgraph.engine.re import analysis as A
+
+    monkeypatch.setenv("HEXGRAPH_DATA_REF_SLICE_S", "1800")
+    monkeypatch.delenv("HEXGRAPH_DATA_REF_TOTAL_S", raising=False)
+    env = A._analysis_env()
+    assert env["HEXGRAPH_DATA_REF_SLICE_S"] == "1800"
+    assert "HEXGRAPH_PROBE_TIMEOUT_S" in env
+    assert "HEXGRAPH_DATA_REF_TOTAL_S" not in env, "an unset knob must not be forwarded"
+
+
+def test_a_complete_slice_whose_save_failed_is_not_marked_recovered(monkeypatch):
+    """"Scanned to the end" is not "persisted". The core reports a failed `program.save()` rather
+    than raising, so a complete-but-unsaved slice would otherwise earn the PERMANENT marker with
+    every reference discarded — and nothing would ever rebuild them."""
+    recorded = {}
+    monkeypatch.setattr(G.L, "read_marker", lambda: {})
+    monkeypatch.setattr(G.L, "update_marker", lambda **kw: recorded.update(kw))
+    monkeypatch.setattr(G.L, "recover_data_refs_core",
+                        lambda *a, **k: {"scanned": 10, "added": 135273, "truncated": False,
+                                         "saved": False, "save_error": "disk full"})
+    monkeypatch.setattr(G.L, "open_target", _fake_open_target())
+    monkeypatch.setattr(G, "_SLICE_GAP_S", 0)
+
+    G._recover_data_refs("/artifact")
+    assert not recorded.get("data_refs_recovered"), \
+        "a slice whose writes were discarded must not be marked permanently recovered"
+
+
+def test_a_complete_slice_that_added_nothing_is_marked_recovered(monkeypatch):
+    """The other side of the same guard: with nothing to add there is nothing to save, so an
+    empty-but-complete pass IS done and must not loop forever."""
+    recorded = {}
+    monkeypatch.setattr(G.L, "read_marker", lambda: {})
+    monkeypatch.setattr(G.L, "update_marker", lambda **kw: recorded.update(kw))
+    monkeypatch.setattr(G.L, "recover_data_refs_core",
+                        lambda *a, **k: {"scanned": 10, "added": 0, "truncated": False,
+                                         "saved": False})
+    monkeypatch.setattr(G.L, "open_target", _fake_open_target())
+    monkeypatch.setattr(G, "_SLICE_GAP_S", 0)
+
+    G._recover_data_refs("/artifact")
+    assert recorded.get("data_refs_recovered") is True

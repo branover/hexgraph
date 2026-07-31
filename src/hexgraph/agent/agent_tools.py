@@ -2517,7 +2517,37 @@ def _function_xrefs(ctx: ToolContext, function: str) -> str:
     return ctx.cache[key]
 
 
-def _no_data_xrefs_msg(subject: str) -> str:
+def _pending_recovery_caveat(payload: dict | None, ctx=None) -> str:
+    """The caveat to append to an EMPTY data_xrefs result on a target whose code->data index has not
+    been rebuilt yet.
+
+    Above 100 MB, Ghidra analysis runs the fast profile, which disables the analyzers that build
+    code->data references; `re_analyze` rebuilds them afterwards in slices. Between those two points
+    an empty result says nothing about the binary — it says the index is not ready. Without this the
+    caller reads "nothing points at this address" and concludes the string has no callers, which is
+    the exact wrong turn this whole stage exists to prevent."""
+    pending = None
+    if ctx is not None:
+        # Host-side is AUTHORITATIVE: the bridge and radare2 paths never populate these payload
+        # fields, so keying on the payload alone silently skips the caveat on exactly the
+        # long-lived, heavily-used targets most likely to be bridged.
+        from hexgraph.engine.re.analysis import data_ref_index_pending
+
+        pending = data_ref_index_pending(ctx.project, ctx.target)
+    if pending is None:
+        if not isinstance(payload, dict) or not payload.get("fast_profile"):
+            return ""
+        pending = not payload.get("data_refs_recovered")
+    if not pending:
+        return ""
+    return ("\n\nNOTE: this target is over the 100MB fast-profile threshold and its code->data "
+            "reference index has NOT been rebuilt yet, so CODE references are expected to be "
+            "missing here regardless of the binary — an empty result is not evidence that nothing "
+            "loads this address. Run re_analyze(target) to build the index (it runs detached, in "
+            "slices), then retry. Data->data pointers shown above, if any, are unaffected.")
+
+
+def _no_data_xrefs_msg(subject: str, payload: dict | None = None, ctx=None) -> str:
     """The 'no references' message for data_xrefs, tuned to what `subject` was. A hex address that
     resolved to nothing is a genuine empty result; a subject that did NOT resolve to an address (a bare
     name the index doesn't know — most often a string VALUE mistakenly passed here, e.g. a URL/path)
@@ -2525,7 +2555,8 @@ def _no_data_xrefs_msg(subject: str) -> str:
     s = (subject or "").strip()
     if re.fullmatch(r"0x[0-9a-fA-F]+", s):
         return (f"no references to {subject} found — nothing in the analyzed image points at this "
-                f"address (or it isn't a mapped address).")
+                f"address (or it isn't a mapped address)."
+                + _pending_recovery_caveat(payload, ctx))
     return (f"{subject!r} did not resolve to an address, so data_xrefs found nothing. This tool keys on "
             f"a hex ADDRESS (or a symbol that resolves to one), not a string VALUE. To find who "
             f"references a string like this, first get its address — re_list_strings to locate it (each "
@@ -2542,13 +2573,14 @@ def _data_xrefs(ctx: ToolContext, address: str) -> str:
     if err:
         return err
     if out.get("error") or out.get("not_found"):
-        return _no_data_xrefs_msg(address)
+        return _no_data_xrefs_msg(address, out, ctx)
     refs = out.get("data_refs") or []
     _record_obs(ctx, tool="data_xrefs", args={"address": address},
                 result_kind="data_xrefs", payload=out,
                 summary=f"{len(refs)} refs to {address}")
     if not refs:
-        ctx.cache[key] = f"no references to {address} found"
+        ctx.cache[key] = (f"no references to {address} found"
+                          + _pending_recovery_caveat(out, ctx))
         return ctx.cache[key]
     more = out.get("total", len(refs)) - len(refs)
     lines = [f"references to {address}:"]

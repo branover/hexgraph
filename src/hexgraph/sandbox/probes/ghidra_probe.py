@@ -251,9 +251,21 @@ def _run(m) -> dict:
     # nothing is legible instead of looking like "this string has no callers".
     fast_profile = L.fast_profile_applies(m["artifact"])
     result["fast_profile"] = fast_profile
+    if fast_profile:
+        # Carried on EVERY mode, not just analyze: an empty `re_data_xrefs` on a fast-profiled target
+        # whose recovery has not finished is a TOOLING state, not a fact about the binary, and the
+        # caller has to be able to tell those apart — reading "nothing points at this address" when
+        # the index simply has not been rebuilt yet is precisely the wrong turn this stage exists to
+        # prevent.
+        result["data_refs_recovered"] = bool(L.read_marker().get("data_refs_recovered"))
     if fast_profile and mode == "analyze":
         result["data_ref_recovery"] = _recover_data_refs(m["artifact"])
     return result
+
+
+# Pause between recovery slices so a per-call tool waiting on this target can actually acquire the
+# Ghidra project. Tunable mostly so tests do not sleep.
+_SLICE_GAP_S = float(os.environ.get("HEXGRAPH_DATA_REF_SLICE_GAP_S", "5") or 5)
 
 
 def _recover_data_refs(artifact) -> dict:
@@ -296,11 +308,27 @@ def _recover_data_refs(artifact) -> dict:
             total_added += last.get("added") or 0
             total_scanned += last.get("scanned") or 0
             if not last.get("truncated"):
-                # Complete: clear the resume state so a later cold re-analysis starts clean.
-                L.update_marker(data_refs_recovered=True, data_refs_recovered_through=None,
-                                data_ref_recovery_running=None)
+                # Scanned to the end — but "complete" is not the same as "persisted". The core only
+                # calls program.save() when it added something, and that save can RAISE (it is
+                # reported, never thrown, so the stage can't fail the analysis before it). Marking
+                # the target recovered on a save that failed is permanent and silent: every
+                # reference was discarded, yet nothing will ever rebuild them. Require that the
+                # writes actually landed, or that there were none to land.
+                persisted = last.get("saved") or not last.get("added")
+                if persisted:
+                    # Clear the resume state so a later cold re-analysis starts clean.
+                    L.update_marker(data_refs_recovered=True, data_refs_recovered_through=None,
+                                    data_ref_recovery_running=None)
+                else:
+                    L.update_marker(data_ref_recovery_running=None)
                 break
             through = last.get("through")
+            if through is not None:
+                # Actually YIELD the project between slices. Closing and immediately reopening
+                # releases the lock for microseconds, which is not a window anything can win — the
+                # point of slicing is that a per-call tool waiting on this target can get in, so the
+                # gap has to be long enough for one to actually acquire the project.
+                time.sleep(_SLICE_GAP_S)
             if through is None:
                 # The slice stopped early but its writes did not persist — there is no safe resume
                 # point, so stop and let the next run redo this range rather than skipping it.

@@ -414,8 +414,11 @@ def recover_data_refs_core(program, monitor=None, *, budget_s=None, start_after=
         while it.hasNext():
             insn = it.next()
             scanned += 1
-            last_addr = insn.getAddress()
             # Check the clock rarely — time.time() per instruction is a measurable share of the pass.
+            # Checked BEFORE this instruction is processed, and `last_addr` is only advanced AFTER
+            # it is: `through` must name the last instruction actually SCANNED, never the one we
+            # stopped at. Recording it up front would resume past an instruction neither slice
+            # examined, silently dropping one instruction's references per slice boundary.
             if (scanned & 0xFFFF) == 0 and (time.time() - t0) > budget:
                 truncated = True
                 break
@@ -457,6 +460,7 @@ def recover_data_refs_core(program, monitor=None, *, budget_s=None, start_after=
                         program.endTransaction(txid, True)
                         chunks += 1
                         txid = program.startTransaction("hexgraph recover data refs")
+            last_addr = insn.getAddress()      # fully scanned — safe to resume after it
     finally:
         program.endTransaction(txid, True)
         chunks += 1
