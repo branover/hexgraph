@@ -113,7 +113,8 @@ def _analyze_outdir() -> str:
 # staleness window from its own `_DATA_REF_SLICE_S` while the container slices on the default, so a
 # raised slice budget makes every in-flight pass look stale to the host that launched it.
 _RECOVERY_ENV_KEYS = ("HEXGRAPH_DATA_REF_SLICE_S", "HEXGRAPH_DATA_REF_TOTAL_S",
-                      "HEXGRAPH_DATA_REF_TX_CHUNK", "HEXGRAPH_GHIDRA_FAST_PROFILE_MB")
+                      "HEXGRAPH_DATA_REF_TX_CHUNK", "HEXGRAPH_DATA_REF_SLICE_GAP_S",
+                      "HEXGRAPH_GHIDRA_FAST_PROFILE_MB")
 
 
 def _analysis_env() -> dict:
@@ -300,6 +301,27 @@ def _recovery_running(slot) -> bool:
     return 0 <= delta < (L._DATA_REF_SLICE_S * 2)
 
 
+def _recovery_heartbeat_stale(slot) -> bool:
+    """True only when a recovery heartbeat EXISTS and has gone stale — i.e. the pass started and
+    then stopped reporting.
+
+    The distinction from "no heartbeat" is the whole point. A detached container spends most of its
+    life with no recovery heartbeat at all: the cold analysis runs first, for hours on a monolith,
+    and the heartbeat only appears once the recovery stage begins. Treating absence as evidence of a
+    wedge would reap healthy analyses mid-run — the exact over-correction the reap guard was added
+    to prevent, in the other direction."""
+    ts = _read_slot_marker(slot).get("data_ref_recovery_running")
+    if ts is None:
+        return False
+    try:
+        ts = float(ts)
+    except (TypeError, ValueError):
+        return False
+    from hexgraph.sandbox.probes import pyghidra_lib as L
+
+    return (time.time() - ts) >= (L._DATA_REF_SLICE_S * 2)
+
+
 def _bridge_live(slot, *, runner) -> bool:
     """True when a Ghidra BRIDGE container currently owns this slot's project.
 
@@ -339,8 +361,39 @@ def data_ref_index_pending(project, target, *, runner=None) -> bool:
         slot, artifact, _name, _probe = ctx
         if not L.fast_profile_applies(artifact):
             return False
-        return not _read_slot_marker(slot).get("data_refs_recovered")
+        # Fail CLOSED on an unreadable/absent marker, matching the docstring and
+        # `_needs_data_ref_recovery`: `not {}.get(...)` is True, which would fire the caveat on
+        # every empty result for a target we know nothing about.
+        meta = _read_slot_marker(slot)
+        return bool(meta) and not meta.get("data_refs_recovered")
     except Exception:  # noqa: BLE001 — advisory only; never break a tool over it
+        return False
+
+
+def data_ref_recovery_blocked_by_bridge(project, target, *, runner=None) -> bool:
+    """True when the ONLY thing stopping this target's reference recovery is its own live bridge.
+
+    Without this the advice is a closed loop: recovery defers to the bridge, so the index stays
+    pending, so the caveat says "run re_analyze", which returns `analyzed` and starts nothing, so the
+    next query gets the same caveat. The VR skill recommends a bridge for exactly the large targets
+    this stage exists for, so that loop is the RECOMMENDED configuration, not an edge case. Callers
+    use this to say `re_bridge_stop` first."""
+    try:
+        from hexgraph.sandbox.probes import pyghidra_lib as L
+
+        if _active_backend() != "ghidra":
+            return False
+        ctx = _slot_ctx(project, target, runner=runner)
+        if ctx is None:
+            return False
+        slot, artifact, _name, _probe = ctx
+        if not L.fast_profile_applies(artifact):
+            return False
+        meta = _read_slot_marker(slot)
+        if not meta or meta.get("data_refs_recovered"):
+            return False
+        return _bridge_live(slot, runner=runner)
+    except Exception:  # noqa: BLE001 — advisory only
         return False
 
 
@@ -433,9 +486,23 @@ def start_analysis(project, target, *, runner=None) -> dict:
         # report `running` forever, so the retry this stage's staging depends on could never happen.
         poll = ex.poll_detached(name) or {}
         if poll.get("running"):
-            return {"state": "running",
-                    "detail": "a detached pass is already rebuilding the code->data reference index "
-                              "the fast profile left out", "container": name}
+            # RUNNING is not the same as ALIVE. Requiring `not running` to reap (correct: reaping on
+            # `exists` alone SIGKILLed live passes) removed the last automatic kill, and the probe has
+            # no self-timeout, so a pass wedged inside Ghidra would otherwise hold the deterministic
+            # name forever with no way to clear it from the tool surface. The heartbeat distinguishes
+            # the two: a container that is running but has stopped writing it well past a slice
+            # budget is wedged, not working, and reaping THAT is a decision backed by evidence rather
+            # than a blind force-kill.
+            if not _recovery_heartbeat_stale(slot):
+                return {"state": "running",
+                        "detail": "a detached pass is already rebuilding the code->data reference "
+                                  "index the fast profile left out", "container": name}
+            try:
+                ex.stop_detached(name, remove=True)
+                log.warning("reaped a wedged data-ref recovery container (%s): running but its "
+                            "heartbeat went stale", name)
+            except Exception:  # noqa: BLE001 — best-effort; the start below re-checks
+                pass
         if poll.get("exists"):
             try:
                 ex.stop_detached(name, remove=True)

@@ -264,8 +264,11 @@ def _run(m) -> dict:
 
 
 # Pause between recovery slices so a per-call tool waiting on this target can actually acquire the
-# Ghidra project. Tunable mostly so tests do not sleep.
-_SLICE_GAP_S = float(os.environ.get("HEXGRAPH_DATA_REF_SLICE_GAP_S", "5") or 5)
+# Ghidra project. Sized against what a waiting caller has to do BEFORE it even attempts the project:
+# a container spawn plus a JVM boot, which is tens of seconds — a 5s window would be advertised and
+# then unwinnable. 45s is ~5% overhead against the 15-minute default slice, which is worth paying for
+# a gap that can actually be taken.
+_SLICE_GAP_S = L._env_num("HEXGRAPH_DATA_REF_SLICE_GAP_S", "45", float, 0.0)
 
 
 def _recover_data_refs(artifact) -> dict:
@@ -323,20 +326,22 @@ def _recover_data_refs(artifact) -> dict:
                     L.update_marker(data_ref_recovery_running=None)
                 break
             through = last.get("through")
-            if through is not None:
-                # Actually YIELD the project between slices. Closing and immediately reopening
-                # releases the lock for microseconds, which is not a window anything can win — the
-                # point of slicing is that a per-call tool waiting on this target can get in, so the
-                # gap has to be long enough for one to actually acquire the project.
-                time.sleep(_SLICE_GAP_S)
             if through is None:
                 # The slice stopped early but its writes did not persist — there is no safe resume
                 # point, so stop and let the next run redo this range rather than skipping it.
                 L.update_marker(data_ref_recovery_running=None)
                 break
+            # Record the resume point AND clear the heartbeat BEFORE yielding. Both orderings
+            # matter: while the heartbeat is set the host refuses every gated Ghidra tool on this
+            # target, so sleeping first would keep them locked out for the whole gap and make the
+            # yield useless to the callers it exists for; and a kill during the sleep must not cost
+            # the slice's resume point.
             L.update_marker(data_refs_recovered_through=through, data_ref_recovery_running=None)
             if (time.time() - started) > L._DATA_REF_TOTAL_S:
                 break
+            # Actually YIELD the project. Closing and immediately reopening releases the lock for
+            # microseconds, which is not a window anything can win.
+            time.sleep(_SLICE_GAP_S)
     except Exception as exc:  # noqa: BLE001 - recovery must never fail the analysis that preceded it
         with contextlib.suppress(Exception):
             L.update_marker(data_ref_recovery_running=None)

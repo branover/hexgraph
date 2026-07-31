@@ -329,9 +329,10 @@ def fast_profile_applies(artifact) -> bool:
 # sub-1% error rate in a graph whose whole purpose is finding candidate leads to verify.
 #
 # The pass runs in RESUMABLE SLICES rather than one long pass. Two reasons, both measured:
-#   * A full pass on a 160M-instruction image takes ~48 min against a 1h budget — 1.25x margin, and
-#     a restart-from-zero retry would truncate at the same address forever, never converging.
-#     Each slice records how far it got (`through`) so the next one starts there.
+#   * A full pass on a 160M-instruction image measured ~48 min as a SINGLE pass. That is over three
+#     slices at the 15-min default below, and a restart-from-zero retry would truncate at the same
+#     address forever, never converging. Each slice records how far it got (`through`) so the next
+#     one starts there; `_DATA_REF_TOTAL_S` (6h) bounds the whole multi-slice run.
 #   * Ghidra allows ONE writer per project. A slice holds that lock only for its own budget and
 #     releases it between slices, so the per-call tools contend for minutes, not an hour.
 def _env_num(name, default, cast=float, minimum=None):

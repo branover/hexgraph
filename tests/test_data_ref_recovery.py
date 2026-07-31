@@ -605,3 +605,198 @@ def test_a_complete_slice_that_added_nothing_is_marked_recovered(monkeypatch):
 
     G._recover_data_refs("/artifact")
     assert recorded.get("data_refs_recovered") is True
+
+
+# --- gaps both re-reviews proved by mutation: these paths vanished with the tier still green ------
+
+def test_caveat_fires_through_the_production_path(tmp_path, monkeypatch):
+    """GAP A: hardwiring `data_ref_index_pending` to False passed the whole tier, because nothing
+    exercised the host-side path the production call sites actually take."""
+    from hexgraph.agent import agent_tools as T
+    from hexgraph.engine.re import analysis as A
+
+    art = tmp_path / "big.bin"
+    art.write_bytes(b"\x00" * (L._FAST_PROFILE_BYTES + 1))
+
+    class _Slot:
+        root = tmp_path
+        meta_path = tmp_path / L.META_NAME
+        content_sha = "a" * 64
+
+    monkeypatch.setattr(A, "_active_backend", lambda: "ghidra")
+    monkeypatch.setattr(A, "_slot_ctx", lambda *a, **k: (_Slot(), str(art), "c", "p"))
+    monkeypatch.setattr(A, "_bridge_live", lambda slot, runner=None: False)
+    ctx = type("Ctx", (), {"project": object(), "target": object()})()
+
+    (tmp_path / L.META_NAME).write_text(json.dumps({"content_hash": "x"}))
+    assert "has NOT been rebuilt" in T._pending_recovery_caveat(None, ctx)
+
+    (tmp_path / L.META_NAME).write_text(json.dumps({"data_refs_recovered": True}))
+    assert T._pending_recovery_caveat(None, ctx) == ""
+
+
+def test_caveat_names_the_bridge_when_that_is_the_blocker(tmp_path, monkeypatch):
+    """Otherwise the advice is a closed loop: recovery defers to the bridge, the caveat says 'run
+    re_analyze', re_analyze reports 'analyzed' and starts nothing, forever."""
+    from hexgraph.agent import agent_tools as T
+    from hexgraph.engine.re import analysis as A
+
+    art = tmp_path / "big.bin"
+    art.write_bytes(b"\x00" * (L._FAST_PROFILE_BYTES + 1))
+    (tmp_path / L.META_NAME).write_text(json.dumps({"content_hash": "x"}))
+
+    class _Slot:
+        root = tmp_path
+        meta_path = tmp_path / L.META_NAME
+        content_sha = "a" * 64
+
+    monkeypatch.setattr(A, "_active_backend", lambda: "ghidra")
+    monkeypatch.setattr(A, "_slot_ctx", lambda *a, **k: (_Slot(), str(art), "c", "p"))
+    monkeypatch.setattr(A, "_bridge_live", lambda slot, runner=None: True)
+    ctx = type("Ctx", (), {"project": object(), "target": object()})()
+
+    msg = T._pending_recovery_caveat(None, ctx)
+    assert "re_bridge_stop" in msg, msg
+
+
+def test_a_payload_saying_pending_is_not_discarded_by_a_host_that_cannot_tell(monkeypatch):
+    """The host fails CLOSED on an unreadable marker; if that overrode a payload positively
+    reporting 'not recovered', the caveat would go silent exactly when warranted."""
+    from hexgraph.agent import agent_tools as T
+    from hexgraph.engine.re import analysis as A
+
+    monkeypatch.setattr(A, "data_ref_index_pending", lambda *a, **k: False)
+    ctx = type("Ctx", (), {"project": object(), "target": object()})()
+    payload = {"fast_profile": True, "data_refs_recovered": False}
+    assert "has NOT been rebuilt" in T._pending_recovery_caveat(payload, ctx)
+
+
+def test_the_inter_slice_pause_actually_happens(monkeypatch):
+    """GAP B: deleting the sleep passed the full tier — the tests only stubbed it to 0 to avoid
+    paying it, so nothing asserted the yield exists at all."""
+    slept = []
+    monkeypatch.setattr(G.time, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(G, "_SLICE_GAP_S", 7)
+
+    calls = {"n": 0}
+
+    def _core(program, monitor, *, start_after=None, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"scanned": 1, "added": 1, "truncated": True, "through": "0x2000", "saved": True}
+        return {"scanned": 1, "added": 1, "truncated": False, "saved": True}
+
+    monkeypatch.setattr(G.L, "read_marker", lambda: {})
+    monkeypatch.setattr(G.L, "update_marker", lambda **kw: None)
+    monkeypatch.setattr(G.L, "recover_data_refs_core", _core)
+    monkeypatch.setattr(G.L, "open_target", _fake_open_target())
+
+    G._recover_data_refs("/artifact")
+    assert slept == [7], f"the inter-slice yield did not happen: {slept}"
+
+
+def test_the_heartbeat_is_cleared_before_the_pause(monkeypatch):
+    """Order matters: while the heartbeat is set the host refuses every gated Ghidra tool on this
+    target, so sleeping first would keep them locked out for the whole gap and make the yield
+    useless to the callers it exists for."""
+    events = []
+    monkeypatch.setattr(G.time, "sleep", lambda s: events.append("sleep"))
+    monkeypatch.setattr(G, "_SLICE_GAP_S", 1)
+
+    calls = {"n": 0}
+
+    def _core(program, monitor, *, start_after=None, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"scanned": 1, "added": 1, "truncated": True, "through": "0x2000", "saved": True}
+        return {"scanned": 1, "added": 1, "truncated": False, "saved": True}
+
+    def _update(**kw):
+        if "data_ref_recovery_running" in kw and kw["data_ref_recovery_running"] is None:
+            events.append("heartbeat_cleared")
+
+    monkeypatch.setattr(G.L, "read_marker", lambda: {})
+    monkeypatch.setattr(G.L, "update_marker", _update)
+    monkeypatch.setattr(G.L, "recover_data_refs_core", _core)
+    monkeypatch.setattr(G.L, "open_target", _fake_open_target())
+
+    G._recover_data_refs("/artifact")
+    assert events.index("heartbeat_cleared") < events.index("sleep"), events
+
+
+def test_a_wedged_recovery_is_reapable_but_a_healthy_one_is_not(tmp_path, monkeypatch):
+    """Requiring `not running` to reap removed the last automatic kill, and the probe has no
+    self-timeout — so a pass wedged inside Ghidra would hold the deterministic name forever. The
+    heartbeat is the evidence: stale means wedged, ABSENT means the cold analysis phase (hours on a
+    monolith) and must never be killed."""
+    from hexgraph.engine.re import analysis as A
+    import time as _t
+
+    class _Slot:
+        meta_path = tmp_path / L.META_NAME
+
+    (tmp_path / L.META_NAME).write_text(json.dumps({}))
+    assert A._recovery_heartbeat_stale(_Slot()) is False, "absent heartbeat must not read as wedged"
+
+    (tmp_path / L.META_NAME).write_text(json.dumps({"data_ref_recovery_running": _t.time()}))
+    assert A._recovery_heartbeat_stale(_Slot()) is False, "fresh heartbeat is healthy"
+
+    (tmp_path / L.META_NAME).write_text(
+        json.dumps({"data_ref_recovery_running": _t.time() - L._DATA_REF_SLICE_S * 10}))
+    assert A._recovery_heartbeat_stale(_Slot()) is True
+
+
+def test_slice_gap_env_override_reaches_the_container():
+    """It was absent from the forwarded set, so a host-side setting could never reach the probe —
+    the same class of bug the env-forwarding fix closed for the other knobs."""
+    from hexgraph.engine.re import analysis as A
+
+    assert "HEXGRAPH_DATA_REF_SLICE_GAP_S" in A._RECOVERY_ENV_KEYS
+
+
+def test_recovery_env_reaches_start_detached(monkeypatch, tmp_path):
+    """A-L3: asserting `_analysis_env()` in isolation proves the dict is built, not that it is
+    WIRED — the bug it guards against is the value never crossing into the container."""
+    from hexgraph.engine.re import analysis as A
+
+    art = tmp_path / "big.bin"
+    art.write_bytes(b"\x00" * (L._FAST_PROFILE_BYTES + 1))
+    (tmp_path / L.META_NAME).write_text(json.dumps({"content_hash": "x"}))
+
+    class _Slot:
+        root = tmp_path
+        meta_path = tmp_path / L.META_NAME
+        content_sha = "a" * 64
+
+        def exists(self):
+            return True
+
+        def prepare(self):
+            pass
+
+    class _Ex:
+        def __init__(self):
+            self.started = []
+
+        def poll_detached(self, name):
+            return {"exists": False, "running": False}
+
+        def stop_detached(self, name, remove=False):
+            pass
+
+        def start_detached(self, probe, artifact, **k):
+            self.started.append(k)
+
+    monkeypatch.setenv("HEXGRAPH_DATA_REF_SLICE_GAP_S", "99")
+    monkeypatch.setattr(A, "_active_backend", lambda: "ghidra")
+    monkeypatch.setattr(A, "_slot_ctx",
+                        lambda *a, **k: (_Slot(), str(art), "hexgraph-analyze-ghidra-x", "p"))
+    monkeypatch.setattr(A, "_bridge_live", lambda slot, runner=None: False)
+    import hexgraph.sandbox.runner as R
+    monkeypatch.setattr(R, "docker_available", lambda: True)
+
+    ex = _Ex()
+    A.start_analysis(object(), object(), runner=ex)
+
+    assert ex.started, "no detached run was launched"
+    assert ex.started[0]["extra_env"]["HEXGRAPH_DATA_REF_SLICE_GAP_S"] == "99"

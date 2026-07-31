@@ -2526,6 +2526,8 @@ def _pending_recovery_caveat(payload: dict | None, ctx=None) -> str:
     an empty result says nothing about the binary — it says the index is not ready. Without this the
     caller reads "nothing points at this address" and concludes the string has no callers, which is
     the exact wrong turn this whole stage exists to prevent."""
+    payload_pending = (isinstance(payload, dict) and payload.get("fast_profile")
+                       and not payload.get("data_refs_recovered"))
     pending = None
     if ctx is not None:
         # Host-side is AUTHORITATIVE: the bridge and radare2 paths never populate these payload
@@ -2534,17 +2536,28 @@ def _pending_recovery_caveat(payload: dict | None, ctx=None) -> str:
         from hexgraph.engine.re.analysis import data_ref_index_pending
 
         pending = data_ref_index_pending(ctx.project, ctx.target)
-    if pending is None:
-        if not isinstance(payload, dict) or not payload.get("fast_profile"):
-            return ""
-        pending = not payload.get("data_refs_recovered")
-    if not pending:
+    # OR, never override: the host answer is authoritative when it can tell, but it fails CLOSED on
+    # an unreadable marker, and the probe payload is a real signal in its own right. Letting a
+    # host-side "couldn't tell" discard a payload that positively says "not recovered" would drop
+    # the caveat exactly when it is warranted.
+    if not (pending or payload_pending):
         return ""
+    blocked = False
+    if ctx is not None:
+        from hexgraph.engine.re.analysis import data_ref_recovery_blocked_by_bridge
+
+        blocked = data_ref_recovery_blocked_by_bridge(ctx.project, ctx.target)
+    how = ("This target has a resident BRIDGE open, which owns the Ghidra project, so the rebuild "
+           "cannot start while it runs — re_bridge_stop(target), then re_analyze(target), then "
+           "re_bridge_start(target) again when it finishes. (Calling re_analyze with the bridge up "
+           "just reports 'analyzed' and builds nothing.)"
+           if blocked else
+           "Run re_analyze(target) to build the index (it runs detached, in slices), then retry.")
     return ("\n\nNOTE: this target is over the 100MB fast-profile threshold and its code->data "
             "reference index has NOT been rebuilt yet, so CODE references are expected to be "
             "missing here regardless of the binary — an empty result is not evidence that nothing "
-            "loads this address. Run re_analyze(target) to build the index (it runs detached, in "
-            "slices), then retry. Data->data pointers shown above, if any, are unaffected.")
+            "loads this address. " + how +
+            " Data->data pointers shown above, if any, are unaffected.")
 
 
 def _no_data_xrefs_msg(subject: str, payload: dict | None = None, ctx=None) -> str:
