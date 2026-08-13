@@ -188,11 +188,37 @@ def register_agent(agent: str, scope: str = "user", project_dir: str | None = No
     }
 
 
-def default_skill_dir() -> str:
-    """The default destination for the VR skill: the user-global Claude skills dir."""
+SKILL_AGENTS = ("claude", "codex")
+
+
+def skill_dir_for_agent(agent: str) -> str:
+    """Return the native user-global skill directory for a supported agent."""
     import os
 
-    return os.path.join(os.path.expanduser("~"), ".claude", "skills")
+    home = os.path.expanduser("~")
+    if agent == "claude":
+        return os.path.join(home, ".claude", "skills")
+    if agent == "codex":
+        return os.path.join(home, ".agents", "skills")
+    raise ValueError(f"unknown skill host {agent!r}; choose one of {SKILL_AGENTS}")
+
+
+def default_skill_dir() -> str:
+    """Back-compatible default destination: Claude Code's user-global skill directory."""
+    return skill_dir_for_agent("claude")
+
+
+def detected_skill_targets() -> list[tuple[str, str]]:
+    """Installed skill-capable agents and their native user-global directories.
+
+    Detection intentionally follows the executable on PATH: setup runs from a shell, and
+    this avoids treating stale config left by an uninstalled client as an active install.
+    """
+    return [
+        (agent, skill_dir_for_agent(agent))
+        for agent in SKILL_AGENTS
+        if shutil.which(agent) is not None
+    ]
 
 
 # The skill bundle's spine file — its presence under <base>/hexgraph-vr marks an install.
@@ -201,19 +227,34 @@ _SKILL_SPINE = "SKILL.md"
 
 
 def detect_skill_dirs(project_dir: str | None = None) -> list[str]:
-    """Base dirs where the VR skill is ALREADY installed (so a refresh can regenerate it
-    in place, never inventing a new location).
+    """Base dirs a refresh should regenerate.
 
-    A base counts as installed when `<base>/hexgraph-vr/SKILL.md` exists. We check the
-    user-global dir (`~/.claude/skills`) and the project-local `./.claude/skills`; pass
-    `write_skill(base)` each one to refresh it. Returns an ordered, de-duplicated list."""
+    Existing user-global installs opt in to the skill across supported installed agents:
+    if one native copy exists, refresh also returns the native directory for each detected
+    Claude Code/Codex client. This lets an existing Claude user gain the Codex copy after an
+    upgrade without making refresh install the skill for someone who declined it entirely.
+
+    Existing project-local installs stay project-local. Both `.claude/skills` and
+    `.agents/skills` are scanned, and custom paths remain the caller's responsibility.
+    Returns an ordered, de-duplicated list of base directories for `write_skill(base)`.
+    """
     import os
 
     proj = os.path.abspath(project_dir or os.getcwd())
-    candidates = [default_skill_dir(), os.path.join(proj, ".claude", "skills")]
+    native = [skill_dir_for_agent(agent) for agent in SKILL_AGENTS]
+    local = [
+        os.path.join(proj, ".claude", "skills"),
+        os.path.join(proj, ".agents", "skills"),
+    ]
+    native_opted_in = any(
+        os.path.isfile(os.path.join(base, _SKILL_DIR_NAME, _SKILL_SPINE))
+        for base in native
+    )
+    detected = {base for _, base in detected_skill_targets()} if native_opted_in else set()
     out: list[str] = []
-    for base in candidates:
-        if base not in out and os.path.isfile(os.path.join(base, _SKILL_DIR_NAME, _SKILL_SPINE)):
+    for base in native + local:
+        installed = os.path.isfile(os.path.join(base, _SKILL_DIR_NAME, _SKILL_SPINE))
+        if base not in out and (installed or base in detected):
             out.append(base)
     return out
 
@@ -391,6 +432,8 @@ def install_help(agent: str | None = None) -> str:
               "(emits SKILL.md + the capability sub-files):\n"
               "  hexgraph mcp install --write-skill .claude/skills   # Claude Code (project-local)\n"
               "  hexgraph mcp install --write-skill ~/.claude/skills  # Claude Code (global)\n"
-              "(For Codex/gemini, paste the whole bundle into AGENTS.md / your system prompt — "
-              "print it with `hexgraph mcp install --print-skill`.)")
+              "  hexgraph mcp install --write-skill .agents/skills   # Codex (project-local)\n"
+              "  hexgraph mcp install --write-skill ~/.agents/skills  # Codex (global)\n"
+              "(For agents without native skill discovery, print the whole bundle with "
+              "`hexgraph mcp install --print-skill` and add it to their instructions.)")
     return header + "\n\n".join(blocks) + footer

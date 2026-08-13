@@ -1,0 +1,4 @@
+interface:
+  display_name: "HexGraph UX Assessment"
+  short_description: "Run HexGraph’s two-role UX walkthrough"
+  default_prompt: "Use $ux-assessment to run a role-separated HexGraph UI contract walkthrough."

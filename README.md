@@ -64,15 +64,18 @@ just serve                 # → http://127.0.0.1:8765
 Either one hands off to an interactive setup wizard. The wizard walks you through the optional
 features, and for each one that relaxes the security posture it shows you the implication and asks you
 to confirm before turning it on. It then writes your settings and builds the images you picked, and it
-can optionally register HexGraph's MCP server with a coding agent and install the VR skill for you
-(both local-only, no secret). If you accept the defaults you stay in the static-only posture;
+can optionally register HexGraph's MCP server with a coding agent and install the VR skill for you.
+When you opt in to the skill, it detects Claude Code and Codex on your `PATH` and installs the same
+bundle into both clients' native user-level skill directories (both local-only, no secret). If you
+accept the defaults you stay in the static-only posture;
 everything beyond that is something you turn on yourself, with eyes open. To skip the prompts and take
 the static-only defaults, pass `--yes` (`just setup --yes` or `./setup.sh --yes`). For the wizard, the
 manual step-by-step, the non-interactive CI mode, and Ghidra, see **[docs/setup.md](docs/setup.md)**.
 
 After a later `git pull`, `just refresh` (a.k.a. `just setup --refresh`) is a quick sanity-sync: it
 keeps your configuration and rebuilds only what's stale — the package, the web UI, any images whose
-Dockerfile moved, the MCP registration, and the VR skill. Run it before `just serve` to be sure
+Dockerfile moved, the MCP registration, and every detected Claude/Codex copy of an already-installed
+VR skill. Run it before `just serve` to be sure
 you're on the latest build of everything.
 
 > To install `just` without sudo:

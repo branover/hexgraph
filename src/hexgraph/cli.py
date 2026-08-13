@@ -395,8 +395,8 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
         )
 
         if getattr(args, "print_skill", False):
-            # The WHOLE bundle (spine + sub-files) so a Codex/gemini system prompt that
-            # can't read on-demand sub-files still gets the complete field manual.
+            # The WHOLE bundle (spine + sub-files) for an agent/system prompt that can't
+            # read native skill sub-files on demand.
             print(full_skill_markdown())
             return 0
         if getattr(args, "write_skill", None):
@@ -578,7 +578,8 @@ def build_parser() -> argparse.ArgumentParser:
     mi = msub.add_parser("install", help="print how to register HexGraph with claude/codex/gemini")
     mi.add_argument("--agent", choices=["claude", "codex", "gemini"], default=None)
     mi.add_argument("--write-skill", dest="write_skill", metavar="DIR",
-                    help="write the VR skill to DIR/hexgraph-vr/SKILL.md (e.g. .claude/skills)")
+                    help="write the VR skill to DIR/hexgraph-vr/SKILL.md "
+                         "(e.g. .claude/skills or .agents/skills)")
     mi.add_argument("--print-skill", dest="print_skill", action="store_true", help="print the VR skill markdown")
     mi.set_defaults(func=_cmd_mcp)
     pm.set_defaults(func=_cmd_mcp, _mcpcmd=None)

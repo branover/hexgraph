@@ -41,5 +41,9 @@ src/hexgraph/_build_info.py
 !.claude/hooks/
 !.claude/settings.json
 
+# Local project-memory bridge. It can contain real-target history and must never
+# enter this public repository; tracked Codex config lives elsewhere in .codex/.
+.codex/memories
+
 # Potentially sensitive docs
 docs/dev/

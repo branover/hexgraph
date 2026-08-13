@@ -530,6 +530,21 @@ def test_default_skill_dir_under_home(tmp_path, monkeypatch):
 
     monkeypatch.setenv("HOME", str(tmp_path))
     assert agent_setup.default_skill_dir() == str(tmp_path / ".claude" / "skills")
+    assert agent_setup.skill_dir_for_agent("codex") == str(tmp_path / ".agents" / "skills")
+
+
+def test_detected_skill_targets_include_installed_claude_and_codex(tmp_path, monkeypatch):
+    from hexgraph.agent import agent_setup
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(
+        agent_setup.shutil, "which",
+        lambda name: f"/bin/{name}" if name in {"claude", "codex"} else None,
+    )
+    assert agent_setup.detected_skill_targets() == [
+        ("claude", str(tmp_path / ".claude" / "skills")),
+        ("codex", str(tmp_path / ".agents" / "skills")),
+    ]
 
 
 # --- The wizard step driven with fakes (no real TTY) -----------------------
@@ -580,25 +595,49 @@ def test_coding_agent_step_registers_and_installs(tmp_path, monkeypatch):
     from hexgraph.setup_wizard import _coding_agent_step
 
     monkeypatch.setenv("HOME", str(tmp_path))
-    skill_dir = tmp_path / "skills"
+    monkeypatch.setattr(
+        agent_setup.shutil, "which",
+        lambda name: f"/bin/{name}" if name in {"claude", "codex"} else None,
+    )
     q = _FakeQuestionary([
         True, "claude", "user",                 # register MCP for claude, user scope
-        True, "__custom__", str(skill_dir),     # install skill to a custom dir
+        True,                                    # install for every detected skill host
     ])
     _coding_agent_step(_FakeConsole(), q)
     data = json.loads((tmp_path / ".claude.json").read_text())
     assert data["mcpServers"]["hexgraph"] == agent_setup.mcp_server_entry()
+    assert (tmp_path / ".claude" / "skills" / "hexgraph-vr" / "SKILL.md").is_file()
+    assert (tmp_path / ".agents" / "skills" / "hexgraph-vr" / "SKILL.md").is_file()
+
+
+def test_coding_agent_step_falls_back_to_custom_dir_when_no_agent_detected(
+    tmp_path, monkeypatch,
+):
+    from hexgraph.agent import agent_setup
+    from hexgraph.setup_wizard import _coding_agent_step
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(agent_setup.shutil, "which", lambda _name: None)
+    skill_dir = tmp_path / "skills"
+    q = _FakeQuestionary([
+        False,                                   # skip MCP registration
+        True, "__custom__", str(skill_dir),     # install skill to a custom dir
+    ])
+    _coding_agent_step(_FakeConsole(), q)
     assert (skill_dir / "hexgraph-vr" / "SKILL.md").is_file()
 
 
 def test_coding_agent_step_skip_both(tmp_path, monkeypatch):
+    from hexgraph.agent import agent_setup
     from hexgraph.setup_wizard import _coding_agent_step
 
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(agent_setup.shutil, "which", lambda _name: None)
     q = _FakeQuestionary([False, False])  # decline both prompts
     _coding_agent_step(_FakeConsole(), q)
     assert not (tmp_path / ".claude.json").exists()
     assert not (tmp_path / ".claude" / "skills").exists()
+    assert not (tmp_path / ".agents" / "skills").exists()
 
 
 def test_non_interactive_setup_skips_agent_step(hg_home, tmp_path, monkeypatch):

@@ -20,11 +20,14 @@ command -v jq >/dev/null 2>&1 || exit 0
 input="$(cat)"
 [ -n "$input" ] || exit 0
 
-subagent_type="$(printf '%s' "$input" | jq -r '.tool_input.subagent_type // ""' 2>/dev/null)" || exit 0
-prompt="$(printf '%s' "$input" | jq -r '.tool_input.prompt // ""' 2>/dev/null)" || exit 0
+subagent_type="$(printf '%s' "$input" | jq -r '.tool_input.subagent_type // .tool_input.agent_type // .tool_input.task_name // ""' 2>/dev/null)" || exit 0
+prompt="$(printf '%s' "$input" | jq -r '.tool_input.prompt // .tool_input.message // ""' 2>/dev/null)" || exit 0
 
-# Already the correct reviewer -> allow.
-[ "$subagent_type" = "pr-reviewer" ] && exit 0
+# Already the correct reviewer -> allow. Codex task names use underscores while
+# the custom agent profile and Claude subagent type use a hyphen.
+case "$subagent_type" in
+  pr-reviewer|pr_reviewer) exit 0 ;;
+esac
 
 # Heuristic: a PR/merge-gate review delegation mentions BOTH a review verb AND a
 # PR/merge context. Both must be present to deny, to keep false positives low.
@@ -36,7 +39,7 @@ pr_re='\bPR\b|pull request|pull/[0-9]|merge gate|merge-gate|origin/main\.\.\.|--
 
 if printf '%s' "$prompt" | grep -iqE "$review_re" \
    && printf '%s' "$prompt" | grep -iqE "$pr_re"; then
-  reason='Merge-gate / PR reviews must be dispatched to subagent_type=pr-reviewer (.claude/agents/pr-reviewer.md) — it carries the required posting instructions: post findings ON the PR via `gh pr review <N> --comment` (verdict in the body; NEVER --request-changes/--approve on your own PR), falling back to `gh pr comment`. Re-spawn this review with subagent_type: pr-reviewer.'
+  reason='Merge-gate / PR reviews must use the independent pr-reviewer profile (.codex/agents/pr-reviewer.toml for Codex; .claude/agents/pr-reviewer.md for Claude). It carries the required posting instructions: post findings ON the PR via `gh pr review <N> --comment` (verdict in the body; NEVER --request-changes/--approve on your own PR), falling back to `gh pr comment`. Re-dispatch with the pr-reviewer profile (or Codex task_name pr_reviewer with that full rubric).'
   jq -n --arg r "$reason" \
     '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
   exit 0

@@ -95,6 +95,7 @@ def test_refresh_only_rebuilds_other_images_that_are_built_and_stale(monkeypatch
 
 def test_detect_skill_dirs_only_where_installed(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(agent_setup.shutil, "which", lambda _name: None)
     proj = str(tmp_path / "proj")
     assert agent_setup.detect_skill_dirs(project_dir=proj) == []
 
@@ -103,6 +104,38 @@ def test_detect_skill_dirs_only_where_installed(tmp_path, monkeypatch):
     (base / "SKILL.md").write_text("# skill\n")
     dirs = agent_setup.detect_skill_dirs(project_dir=proj)
     assert str(tmp_path / ".claude" / "skills") in dirs
+
+
+def test_detect_skill_dirs_expands_global_opt_in_to_detected_agents(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(
+        agent_setup.shutil, "which",
+        lambda name: f"/bin/{name}" if name in {"claude", "codex"} else None,
+    )
+    claude = tmp_path / ".claude" / "skills" / "hexgraph-vr"
+    claude.mkdir(parents=True)
+    (claude / "SKILL.md").write_text("# skill\n")
+
+    assert agent_setup.detect_skill_dirs(project_dir=str(tmp_path / "proj")) == [
+        str(tmp_path / ".claude" / "skills"),
+        str(tmp_path / ".agents" / "skills"),
+    ]
+
+
+def test_project_skill_opt_in_stays_project_local(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(
+        agent_setup.shutil, "which",
+        lambda name: f"/bin/{name}" if name in {"claude", "codex"} else None,
+    )
+    project = tmp_path / "proj"
+    local = project / ".agents" / "skills" / "hexgraph-vr"
+    local.mkdir(parents=True)
+    (local / "SKILL.md").write_text("# skill\n")
+
+    assert agent_setup.detect_skill_dirs(project_dir=str(project)) == [
+        str(project / ".agents" / "skills"),
+    ]
 
 
 def test_detect_and_refresh_registrations(tmp_path, monkeypatch):
