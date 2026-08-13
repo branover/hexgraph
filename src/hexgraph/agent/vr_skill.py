@@ -852,7 +852,7 @@ SUBFILES: dict[str, str] = {
 
 
 def skill_markdown() -> str:
-    """The skill SPINE as a Claude Code skill file (YAML frontmatter + the SKILL.md body)."""
+    """The skill spine as an Agent Skills file (YAML frontmatter + SKILL.md body)."""
     return _FRONTMATTER + SPINE
 
 
@@ -860,7 +860,7 @@ def full_skill_markdown() -> str:
     """The WHOLE skill bundle as one document: the spine followed by every sub-file.
 
     For consumers that can't read on-demand sub-files — `hexgraph mcp install --print-skill`
-    (paste into a Codex/gemini system prompt) and the delegate-task brief — so no
+    (paste into their system prompt) and the delegate-task brief — so no
     "read static-analysis.md" pointer dangles.
     """
     parts = [skill_markdown()]

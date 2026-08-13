@@ -18,7 +18,8 @@ hypotheses, and annotations, and run sandboxed tasks.
 
 The setup wizard can do this for you. When you run `hexgraph setup` interactively it offers to
 register the MCP server with the agent of your choice (for this project or globally) and to install
-the VR skill, so you usually do not need to wire it up by hand. The commands above are the manual path
+the VR skill for every detected Claude Code and Codex client, so you usually do not need to wire it up
+by hand. The commands above are the manual path
 if you skipped that step or want to script it.
 
 The MCP server speaks JSON-RPC over stdio, and your agent spawns it on demand. Run it by hand and it
@@ -140,7 +141,8 @@ tools even when a per-feature probe still passes) — rebuild with `just sandbox
 
 ```bash
 hexgraph mcp install [--agent claude|codex|gemini]   # print registration steps
-hexgraph mcp install --write-skill .claude/skills    # also install the VR skill
+hexgraph mcp install --write-skill ~/.claude/skills  # install for Claude Code
+hexgraph mcp install --write-skill ~/.agents/skills  # install for Codex
 hexgraph mcp --tools read,write                      # serve a restricted tool set
 ```
 
@@ -150,8 +152,8 @@ The spine teaches the whole engagement arc (ingest a path, orient, decompose the
 across parallel sub-agents, prove, and synthesize) and routes the agent to the matching sub-file
 when it enters a phase, so the deep methodology for fuzzing or live-surface assessment only costs
 context when it is actually being used. `--write-skill` emits the whole set into the skill
-directory; `--print-skill` prints the entire bundle as one document for a Codex or gemini system
-prompt that cannot read the sub-files on demand.
+directory; `--print-skill` prints the entire bundle as one document for a system prompt that cannot
+read the sub-files on demand.
 
 ### Tool results, the substrate, and the curation contract
 

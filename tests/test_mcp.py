@@ -511,7 +511,7 @@ def test_ingest_tool_offline(hg_home, monkeypatch):
     assert "target_ingest" in {t["name"] for t in mcp_tools.catalog({"run"})}
 
 
-def test_skill_markdown_is_a_claude_skill():
+def test_skill_markdown_is_an_agent_skill():
     from hexgraph.agent.agent_setup import skill_markdown, write_skill
     import tempfile, os
     md = skill_markdown()
@@ -532,6 +532,14 @@ def test_install_help_includes_sdk_and_check():
     from hexgraph.agent.agent_setup import install_help
     h = install_help("claude")
     assert "pip install" in h and "--check" in h and "serve" in h and "same time" in h
+
+
+def test_install_help_includes_native_claude_and_codex_skill_paths():
+    from hexgraph.agent.agent_setup import install_help
+
+    help_text = install_help(None)
+    assert "~/.claude/skills" in help_text
+    assert "~/.agents/skills" in help_text
 
 
 def test_get_schemas_contract():
