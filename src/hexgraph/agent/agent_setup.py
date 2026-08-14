@@ -1,5 +1,5 @@
 """Connect a coding agent (Claude Code / Codex / gemini-cli) to HexGraph's MCP
-server, and the VR skill that teaches it the workflow + the hostile-target rules.
+server, and the VR skill pair that teaches it the workflow + tool-routing choices.
 
 `hexgraph mcp install [--agent ...]` prints the registration steps. The setup wizard
 (`hexgraph setup`) can also PERFORM the registration for you — `register_agent()` edits
@@ -7,9 +7,10 @@ the chosen agent's own config file directly and idempotently. Either way this is
 local filesystem edit only: no network, and no secret (the MCP command carries no key;
 the server reads any key from env / config.toml at run time).
 
-The skill content (the spine + capability sub-files) and its emission helpers live in
-`vr_skill` — the single source of truth shared by the deployed skill, the delegate-task
-brief, and `--print-skill`. They are re-exported here for back-compat.
+The skill content (the primary spine + capability sub-files and the additive companion)
+and its emission helpers live in `vr_skill` — the single source of truth shared by the
+deployed skills, the delegate-task brief, and `--print-skill`. They are re-exported here
+for back-compat.
 """
 
 from __future__ import annotations
@@ -18,14 +19,20 @@ import json
 import shutil
 
 # Re-exported: the VR skill content + the helpers that render/emit it. `SKILL` is the
-# spine body; `write_skill` emits the spine + every sub-file; `full_skill_markdown` is the
-# whole bundle as one document (for consumers that can't read on-demand sub-files).
+# primary spine body; `write_skills` emits both skills; the legacy `write_skill` does the
+# same but returns only the primary path. `full_skill_markdown` remains the primary bundle
+# used by restricted delegate mode and consumers that cannot read on-demand sub-files.
 from hexgraph.agent.vr_skill import (  # noqa: F401
+    COMPANION_SKILL_NAME,
+    COMPANION_SPINE,
+    PRIMARY_SKILL_NAME,
     SKILL,
     SUBFILES,
+    companion_skill_markdown,
     full_skill_markdown,
     skill_markdown,
     write_skill,
+    write_skills,
 )
 
 
@@ -221,9 +228,19 @@ def detected_skill_targets() -> list[tuple[str, str]]:
     ]
 
 
-# The skill bundle's spine file — its presence under <base>/hexgraph-vr marks an install.
-_SKILL_DIR_NAME = "hexgraph-vr"
+# Either skill's spine marks an opted-in install. A refresh always restores the pair, so a
+# missing primary cannot leave the companion's explicit invocation dangling.
+_SKILL_DIR_NAMES = (PRIMARY_SKILL_NAME, COMPANION_SKILL_NAME)
 _SKILL_SPINE = "SKILL.md"
+
+
+def _has_skill_install(base: str) -> bool:
+    import os
+
+    return any(
+        os.path.isfile(os.path.join(base, name, _SKILL_SPINE))
+        for name in _SKILL_DIR_NAMES
+    )
 
 
 def detect_skill_dirs(project_dir: str | None = None) -> list[str]:
@@ -232,11 +249,11 @@ def detect_skill_dirs(project_dir: str | None = None) -> list[str]:
     Existing user-global installs opt in to the skill across supported installed agents:
     if one native copy exists, refresh also returns the native directory for each detected
     Claude Code/Codex client. This lets an existing Claude user gain the Codex copy after an
-    upgrade without making refresh install the skill for someone who declined it entirely.
+    upgrade without making refresh install the pair for someone who declined it entirely.
 
     Existing project-local installs stay project-local. Both `.claude/skills` and
     `.agents/skills` are scanned, and custom paths remain the caller's responsibility.
-    Returns an ordered, de-duplicated list of base directories for `write_skill(base)`.
+    Returns an ordered, de-duplicated list of base directories for `write_skills(base)`.
     """
     import os
 
@@ -246,14 +263,11 @@ def detect_skill_dirs(project_dir: str | None = None) -> list[str]:
         os.path.join(proj, ".claude", "skills"),
         os.path.join(proj, ".agents", "skills"),
     ]
-    native_opted_in = any(
-        os.path.isfile(os.path.join(base, _SKILL_DIR_NAME, _SKILL_SPINE))
-        for base in native
-    )
+    native_opted_in = any(_has_skill_install(base) for base in native)
     detected = {base for _, base in detected_skill_targets()} if native_opted_in else set()
     out: list[str] = []
     for base in native + local:
-        installed = os.path.isfile(os.path.join(base, _SKILL_DIR_NAME, _SKILL_SPINE))
+        installed = _has_skill_install(base)
         if base not in out and (installed or base in detected):
             out.append(base)
     return out
@@ -428,12 +442,13 @@ def install_help(agent: str | None = None) -> str:
         f"(`{cmd_str}` with no flag prints a 'ready, waiting for a client' line to stderr then\n"
         f" blocks — that's correct; your agent launches it. `hexgraph serve` (the web UI) can run\n"
         f" at the same time; they're separate processes sharing the DB.)\n\n")
-    footer = ("\n\nInstall the VR skill so the agent knows the workflow + the hostile-target rules\n"
-              "(emits SKILL.md + the capability sub-files):\n"
+    footer = ("\n\nInstall the VR skill pair: `hexgraph-vr` is the sandboxed workflow, and\n"
+              "`hexgraph-vr-companion` invokes it with optional external-tool routing.\n"
+              "Each command emits both siblings plus the primary capability sub-files:\n"
               "  hexgraph mcp install --write-skill .claude/skills   # Claude Code (project-local)\n"
               "  hexgraph mcp install --write-skill ~/.claude/skills  # Claude Code (global)\n"
               "  hexgraph mcp install --write-skill .agents/skills   # Codex (project-local)\n"
               "  hexgraph mcp install --write-skill ~/.agents/skills  # Codex (global)\n"
-              "(For agents without native skill discovery, print the whole bundle with "
-              "`hexgraph mcp install --print-skill` and add it to their instructions.)")
+              "(`--print-skill` prints only the self-contained primary bundle for restricted "
+              "delegate mode and agents without native skill composition.)")
     return header + "\n\n".join(blocks) + footer

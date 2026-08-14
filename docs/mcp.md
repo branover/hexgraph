@@ -1,7 +1,9 @@
 # Coding-agent integration (MCP)
 
-HexGraph integrates with coding agents in two directions, and both keep target bytes inside the
-sandbox. Worth saying up front: LLM tasks already run a tool-use agent loop over a plain BYOK key (the
+HexGraph integrates with coding agents in two directions. Operations requested through HexGraph keep
+target bytes inside its sandbox; the optional companion skill can instead use external tools under
+the coding agent's own permissions and isolation. Worth saying up front: LLM tasks already run a
+tool-use agent loop over a plain BYOK key (the
 model directs, HexGraph runs the tools), so Claude Code and Codex are an *alternative* backend or
 driver, never a requirement.
 
@@ -18,7 +20,7 @@ hypotheses, and annotations, and run sandboxed tasks.
 
 The setup wizard can do this for you. When you run `hexgraph setup` interactively it offers to
 register the MCP server with the agent of your choice (for this project or globally) and to install
-the VR skill for every detected Claude Code and Codex client, so you usually do not need to wire it up
+both VR skills for every detected Claude Code and Codex client, so you usually do not need to wire it up
 by hand. The commands above are the manual path
 if you skipped that step or want to script it.
 
@@ -141,19 +143,32 @@ tools even when a per-feature probe still passes) — rebuild with `just sandbox
 
 ```bash
 hexgraph mcp install [--agent claude|codex|gemini]   # print registration steps
-hexgraph mcp install --write-skill ~/.claude/skills  # install for Claude Code
-hexgraph mcp install --write-skill ~/.agents/skills  # install for Codex
+hexgraph mcp install --write-skill ~/.claude/skills  # install both skills for Claude Code
+hexgraph mcp install --write-skill ~/.agents/skills  # install both skills for Codex
 hexgraph mcp --tools read,write                      # serve a restricted tool set
 ```
 
-The VR skill is a small always-loaded spine (`SKILL.md`) plus a set of capability sub-files —
+`--write-skill` installs two sibling skills. The primary `hexgraph-vr` skill is a small
+always-loaded spine (`SKILL.md`) plus a set of capability sub-files —
 `static-analysis.md`, `dynamic-analysis.md`, `fuzzing.md`, `proving.md`, and `record-keeping.md`.
 The spine teaches the whole engagement arc (ingest a path, orient, decompose the attack surface
 across parallel sub-agents, prove, and synthesize) and routes the agent to the matching sub-file
 when it enters a phase, so the deep methodology for fuzzing or live-surface assessment only costs
-context when it is actually being used. `--write-skill` emits the whole set into the skill
-directory; `--print-skill` prints the entire bundle as one document for a system prompt that cannot
-read the sub-files on demand.
+context when it is actually being used.
+
+The additive `hexgraph-vr-companion` skill invokes `hexgraph-vr`, inherits that methodology, and
+changes only its tool-routing policy. HexGraph remains the durable ledger for journal entries,
+findings, hypotheses, and curated graph nodes and edges, but a missing, gated, slow, or less-capable
+HexGraph tool does not stop the engagement: the agent can use a better static or dynamic tool allowed
+by its current environment, then record the result back into HexGraph. HexGraph's own feature gates
+still govern calls made through HexGraph, and external work does not inherit HexGraph's sandbox
+guarantees or automatically become an Observation. The companion records curated external-tool
+provenance and conclusions in the journal, findings, and graph. Use it only where the operator has
+provided an approved target copy, suitable authorization, and isolation for the external toolchain.
+
+`--print-skill` continues to print only the self-contained primary bundle. That output feeds delegate
+mode, whose shell-free sandbox contract remains intentionally restricted; skill composition requires
+a host with native skill discovery.
 
 ### Tool results, the substrate, and the curation contract
 

@@ -34,13 +34,15 @@ something you opt into, informed.
 
 Near the end the wizard also offers to wire HexGraph up to a coding agent, if you want to drive it
 that way. It can register HexGraph's MCP server with Claude Code, Codex, or gemini-cli (you pick the
-agent and whether to register it just for this project or for all of them), and it can install the VR
-skill, the file that teaches the agent the workflow and the hostile-target rules. If Claude Code or
-Codex are present on your `PATH`, one confirmation installs the same bundle for every detected client:
-`~/.claude/skills/hexgraph-vr` for Claude Code and `~/.agents/skills/hexgraph-vr` for Codex. If neither
+agent and whether to register it just for this project or for all of them), and it can install two VR
+skills. `hexgraph-vr` teaches the sandboxed workflow and hostile-target rules;
+`hexgraph-vr-companion` invokes that skill but permits better external analysis tools while using
+HexGraph as the durable findings, journal, and graph ledger. If Claude Code or Codex are present on
+your `PATH`, one confirmation installs both siblings for every detected client under
+`~/.claude/skills` for Claude Code and `~/.agents/skills` for Codex. If neither
 is detected, the wizard lets you choose a Claude project directory, a Codex project directory, or a
 custom path. Both steps are
-just local edits to the agent's own config and a skill file on disk: nothing goes over the network,
+just local edits to the agent's own config and skill files on disk: nothing goes over the network,
 and no secret is written, because the MCP command carries no key (the server reads any key from your
 environment or `config.toml` when it runs). Both are optional and you can decline either one, and
 re-running setup and choosing them again is harmless since the registration and the skill install are
@@ -81,7 +83,7 @@ actually stale. Concretely it reinstalls the package when its version changed, r
 the bundle is older than the front-end sources, rebuilds any image you've already built whose
 Dockerfile has moved (preserving your Ghidra choice — and rebuilding *with* Ghidra if your settings
 ask for headless Ghidra but the current image happens to lack it), re-affirms wherever the `hexgraph`
-MCP server is registered, regenerates the VR skill into whatever location it is already installed,
+MCP server is registered, regenerates the VR skill pair wherever either skill is already installed,
 adds a missing native user-level copy when another supported agent is detected (but only after a
 user-level skill install has already opted in), and applies any pending database migration. Run it
 before `just serve` whenever you want to be sure

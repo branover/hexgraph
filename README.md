@@ -64,9 +64,12 @@ just serve                 # → http://127.0.0.1:8765
 Either one hands off to an interactive setup wizard. The wizard walks you through the optional
 features, and for each one that relaxes the security posture it shows you the implication and asks you
 to confirm before turning it on. It then writes your settings and builds the images you picked, and it
-can optionally register HexGraph's MCP server with a coding agent and install the VR skill for you.
-When you opt in to the skill, it detects Claude Code and Codex on your `PATH` and installs the same
-bundle into both clients' native user-level skill directories (both local-only, no secret). If you
+can optionally register HexGraph's MCP server with a coding agent and install the VR skill pair for
+you. The pair includes the sandbox-only `hexgraph-vr` workflow and `hexgraph-vr-companion`, which
+invokes the original workflow but may use better external analysis tools while keeping HexGraph as
+the findings, journal, and graph ledger. When you opt in, setup detects Claude Code and Codex on your
+`PATH` and installs both skills into both clients' native user-level skill directories (all
+local-only, no secret). If you
 accept the defaults you stay in the static-only posture;
 everything beyond that is something you turn on yourself, with eyes open. To skip the prompts and take
 the static-only defaults, pass `--yes` (`just setup --yes` or `./setup.sh --yes`). For the wizard, the
@@ -75,7 +78,7 @@ manual step-by-step, the non-interactive CI mode, and Ghidra, see **[docs/setup.
 After a later `git pull`, `just refresh` (a.k.a. `just setup --refresh`) is a quick sanity-sync: it
 keeps your configuration and rebuilds only what's stale — the package, the web UI, any images whose
 Dockerfile moved, the MCP registration, and every detected Claude/Codex copy of an already-installed
-VR skill. Run it before `just serve` to be sure
+VR skill pair. Run it before `just serve` to be sure
 you're on the latest build of everything.
 
 > To install `just` without sudo:

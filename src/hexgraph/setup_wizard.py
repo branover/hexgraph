@@ -376,7 +376,7 @@ def _sandbox_staleness_warning(*, will_rebuild: bool = False) -> str | None:
 # already opt into). The venv reinstall (on a version change) and the UI rebuild are done
 # by setup.sh BEFORE this runs — the same division of labour as a normal bootstrap
 # (setup.sh owns venv+deps+SPA; the wizard owns images+DB). Here we cover: stale docker
-# images, the MCP registration, the VR skill, and pending DB migrations.
+# images, the MCP registration, the VR skill pair, and pending DB migrations.
 # ---------------------------------------------------------------------------
 
 
@@ -472,7 +472,7 @@ def refresh_build_keys(state: DetectedState, *, root: str) -> list[str]:
 
 def run_refresh(*, project_dir: str | None = None) -> int:
     """Entry point for `hexgraph setup --refresh`: rebuild stale docker images (config
-    preserved), re-affirm the MCP registration, regenerate opted-in VR skill installs (and
+    preserved), re-affirm the MCP registration, regenerate opted-in VR skill-pair installs (and
     add missing native copies for detected agents), and apply pending DB migrations. No
     prompts, no settings changes. Returns a non-zero exit only on a CORE (sandbox) image
     build failure; everything else is best-effort and reported. (setup.sh has already done
@@ -526,17 +526,17 @@ def run_refresh(*, project_dir: str | None = None) -> int:
         print("  MCP: no existing registration found "
               "(add one with `hexgraph mcp install`).")
 
-    # --- VR skill: regenerate opted-in installs + missing native detected-agent copies ---
+    # --- VR skills: regenerate opted-in installs + missing native detected-agent copies --
     skill_dirs = agent_setup.detect_skill_dirs(project_dir)
     if skill_dirs:
         for base in skill_dirs:
             try:
-                path = agent_setup.write_skill(base)
-                print(f"  skill: ✓ regenerated → {path}")
+                paths = agent_setup.write_skills(base)
+                print(f"  skills: ✓ regenerated → {', '.join(paths.values())}")
             except Exception as exc:  # noqa: BLE001
-                print(f"  skill: (!) could not write under {base}: {exc}")
+                print(f"  skills: (!) could not write under {base}: {exc}")
     else:
-        print("  skill: not installed anywhere — add it with "
+        print("  skills: not installed anywhere — add them with "
               "`hexgraph mcp install --write-skill ~/.claude/skills` (Claude Code) or "
               "`hexgraph mcp install --write-skill ~/.agents/skills` (Codex).")
 
@@ -671,7 +671,7 @@ def _run_non_interactive(state: DetectedState, *, reason: str, rebuild: bool) ->
 
 def _coding_agent_step(console, questionary) -> None:
     """Optional, prompted step: register HexGraph's MCP server with a coding agent and
-    install the VR skill. Both are LOCAL filesystem / local-agent-config actions — no
+    install the VR skill pair. Both are LOCAL filesystem / local-agent-config actions — no
     network, no secret (the MCP command carries no key; the server reads any key from
     env / config.toml at run time). Only ever reached on the interactive path, so the
     non-interactive / CI baseline skips it entirely (no prompts, no hang).
@@ -724,13 +724,13 @@ def _coding_agent_step(console, questionary) -> None:
                 if agent == "claude":
                     console.print("  [dim]Restart Claude Code (or reload) to pick it up.[/dim]")
 
-    # --- (b) Install the VR skill ------------------------------------------
+    # --- (b) Install the VR skills -----------------------------------------
     detected_targets = agent_setup.detected_skill_targets()
     detected_names = {"claude": "Claude Code", "codex": "Codex"}
     target_label = " and ".join(detected_names[a] for a, _ in detected_targets)
-    prompt = "Install the VR skill (teaches the agent the workflow + hostile-target rules)?"
+    prompt = "Install the VR skills (sandboxed primary + external-tool companion)?"
     if target_label:
-        prompt = f"Install the VR skill for detected {target_label}?"
+        prompt = f"Install both VR skills for detected {target_label}?"
     if questionary.confirm(
         prompt,
         default=False,
@@ -738,7 +738,7 @@ def _coding_agent_step(console, questionary) -> None:
         if not detected_targets:
             default_dir = agent_setup.default_skill_dir()
             where = questionary.select(
-                "No supported agent was detected. Install the skill where?",
+                "No supported agent was detected. Install the skills where?",
                 choices=[
                     questionary.Choice(f"Claude Code user-global ({default_dir})", default_dir),
                     questionary.Choice(
@@ -760,12 +760,13 @@ def _coding_agent_step(console, questionary) -> None:
 
         for agent, where in detected_targets:
             try:
-                path = agent_setup.write_skill(where)
+                paths = agent_setup.write_skills(where)
             except Exception as exc:  # noqa: BLE001
-                console.print(f"[yellow]Could not write the skill for {agent}:[/yellow] {exc}")
+                console.print(f"[yellow]Could not write the skills for {agent}:[/yellow] {exc}")
             else:
                 console.print(
-                    f"[green]✓[/green] installed the VR skill for {agent} → [dim]{path}[/dim]"
+                    f"[green]✓[/green] installed both VR skills for {agent} → "
+                    f"[dim]{', '.join(paths.values())}[/dim]"
                 )
 
 
@@ -943,7 +944,7 @@ def _run_interactive(state: DetectedState, *, rebuild: bool) -> int:  # pragma: 
     except Exception as exc:  # noqa: BLE001
         console.print(f"[yellow]DB init note:[/yellow] {exc}")
 
-    # --- Step 5: optional coding-agent integration (MCP + VR skill) ---------
+    # --- Step 5: optional coding-agent integration (MCP + VR skills) --------
     # Local-only filesystem/agent-config edits; idempotent. Skipped entirely on the
     # non-interactive path (this whole function only runs interactively).
     _coding_agent_step(console, questionary)

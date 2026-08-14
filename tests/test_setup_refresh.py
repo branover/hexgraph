@@ -9,7 +9,7 @@ Docker/git — so these tests cover, with everything mocked:
   less (the self-heal for the old `with_ghidra=1` arg bug), and every OTHER image only when
   it is ALREADY built AND stale (never build one you didn't opt into),
 - `_dockerfile_for`: the Dockerfile is read from the build step's command (can't drift),
-- `agent_setup.detect_skill_dirs`: only bases that already hold the skill,
+- `agent_setup.detect_skill_dirs`: only bases that already hold either installed skill,
 - `agent_setup.detect_registrations` / `refresh_registrations`: find the existing MCP
   registrations (incl. Claude's per-project "local" scope) and re-affirm a drifted one
   while leaving a current one untouched.
@@ -104,6 +104,19 @@ def test_detect_skill_dirs_only_where_installed(tmp_path, monkeypatch):
     (base / "SKILL.md").write_text("# skill\n")
     dirs = agent_setup.detect_skill_dirs(project_dir=proj)
     assert str(tmp_path / ".claude" / "skills") in dirs
+
+
+def test_detect_skill_dirs_repairs_a_companion_only_install(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(agent_setup.shutil, "which", lambda _name: None)
+    project = tmp_path / "proj"
+    companion = project / ".agents" / "skills" / "hexgraph-vr-companion"
+    companion.mkdir(parents=True)
+    (companion / "SKILL.md").write_text("# companion\n")
+
+    assert agent_setup.detect_skill_dirs(project_dir=str(project)) == [
+        str(project / ".agents" / "skills"),
+    ]
 
 
 def test_detect_skill_dirs_expands_global_opt_in_to_detected_agents(tmp_path, monkeypatch):
