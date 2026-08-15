@@ -20,6 +20,7 @@ import os
 import subprocess
 import uuid
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 
 from hexgraph.sandbox.resources import (
@@ -45,6 +46,17 @@ CONTAINER_PROBES = "/opt/hexgraph"
 # engine.re.ghidra_project). A single bounded WRITABLE volume of HexGraph's own data — must match
 # engine.re.ghidra_project.CONTAINER_PROJECT_DIR.
 CONTAINER_PROJECT_DIR = "/ghidra-project"
+# Labels on synchronous one-shot probes. `docker run --rm` does NOT stop a container when its
+# launcher process disappears; Docker merely keeps the container until its own command exits. A
+# large Ghidra probe can therefore outlive a cancelled MCP/client session and hold the warm-project
+# lock for its full size-scaled timeout. The labels let the next project owner distinguish an
+# abandoned probe from a still-live call without guessing or killing another agent's work.
+_ONESHOT_LABEL = "com.hexgraph.lifecycle"
+_ONESHOT_VALUE = "one-shot-probe"
+_PROBE_LABEL = "com.hexgraph.probe"
+_PROJECT_LABEL = "com.hexgraph.project-key"
+_OWNER_PID_LABEL = "com.hexgraph.owner-pid"
+_OWNER_START_LABEL = "com.hexgraph.owner-start"
 # The unprivileged uid:gid every sandbox container runs as — UNCONDITIONAL hardening,
 # never root. Kept as a constant (not a bare literal) so the host-side `/out` bind-mount
 # can be made writable by exactly this uid no matter what the host process's own uid is
@@ -57,6 +69,147 @@ SANDBOX_GID = 1000
 # target (Docker's default profile filters out exactly that one personality arg value).
 # Provenance: github.com/moby/profiles seccomp/default.json + the one personality rule.
 SECCOMP_ASLR_PROFILE = Path(__file__).resolve().parent / "seccomp" / "fuzz-aslr.json"
+
+
+def _process_start_token(pid: int) -> str | None:
+    """Linux boot + process-start identity for PID-reuse-safe one-shot ownership checks.
+
+    `/proc/<pid>/stat` field 22 is the process start tick. Pair it with the boot id so the same PID
+    and tick after a reboot cannot make a leftover Docker container look owned. On a non-Linux host
+    this returns None; reconciliation then remains conservative and never kills a live-looking PID.
+    """
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        fields = stat.rsplit(")", 1)[1].split()  # fields[0] is stat field 3 after the `(comm)`
+        start_ticks = fields[19]                 # field 22: 22 - 3 = 19
+        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        identity = f"{boot_id}:{start_ticks}" if boot_id else None
+        return sha256(identity.encode("utf-8")).hexdigest() if identity else None
+    except (OSError, IndexError):
+        return None
+
+
+def _project_label_value(project_mount: str | Path) -> str:
+    """Non-sensitive stable identity for a host warm-project path."""
+    path = str(Path(project_mount).resolve())
+    return sha256(path.encode("utf-8")).hexdigest()
+
+
+def _oneshot_labels(probe: str, project_mount: str | Path | None) -> dict[str, str]:
+    labels = {
+        _ONESHOT_LABEL: _ONESHOT_VALUE,
+        _PROBE_LABEL: probe,
+        _OWNER_PID_LABEL: str(os.getpid()),
+    }
+    owner_start = _process_start_token(os.getpid())
+    if owner_start:
+        labels[_OWNER_START_LABEL] = owner_start
+    if project_mount is not None:
+        labels[_PROJECT_LABEL] = _project_label_value(project_mount)
+    return labels
+
+
+def _owner_process_alive(labels: dict[str, str]) -> bool | None:
+    """Tri-state owner liveness: False only on positive death/PID-reuse evidence.
+
+    Returning None on malformed or uncheckable metadata is deliberate: reconciliation must fail
+    closed rather than terminate a possibly active probe owned by another HexGraph process.
+    """
+    try:
+        pid = int(labels.get(_OWNER_PID_LABEL, ""))
+        if pid <= 0:
+            return None
+    except (TypeError, ValueError):
+        return None
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except (OSError, OverflowError):
+        return None
+
+    expected_start = labels.get(_OWNER_START_LABEL)
+    if not expected_start:
+        return True  # PID is alive; without a stronger token, preserve its container
+    actual_start = _process_start_token(pid)
+    if actual_start is None:
+        return None
+    return actual_start == expected_start
+
+
+def _terminate_oneshot_container(name: str) -> bool:
+    """Stop an exact one-shot container name/id; best-effort and never raises."""
+    try:
+        proc = subprocess.run(
+            ["docker", "kill", name], capture_output=True, text=True, timeout=30)
+        return proc.returncode == 0 or "no such container" in (proc.stderr or "").casefold()
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def reconcile_oneshot_project_probes(
+        project_mount: str | Path) -> dict[str, list[str] | str | None]:
+    """Reap one-shot containers for this warm project whose launcher is positively gone.
+
+    Returns `reaped`, `active`, and `uncertain` container names plus an optional `error`. Only
+    HexGraph-labeled containers on the exact hashed project path are considered. A living owner is
+    preserved; missing/unverifiable ownership is reported as uncertain and also preserved.
+    """
+    project_key = _project_label_value(project_mount)
+    result: dict[str, list[str] | str | None] = {
+        "reaped": [], "active": [], "uncertain": [], "error": None,
+    }
+    try:
+        listed = subprocess.run(
+            ["docker", "ps", "--quiet",
+             "--filter", f"label={_ONESHOT_LABEL}={_ONESHOT_VALUE}",
+             "--filter", f"label={_PROJECT_LABEL}={project_key}"],
+            capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as exc:
+        result["error"] = f"could not list project probe containers: {exc}"
+        return result
+    if listed.returncode != 0:
+        result["error"] = (listed.stderr or "docker ps failed").strip()[:500]
+        return result
+    ids = [line.strip() for line in listed.stdout.splitlines() if line.strip()]
+    if not ids:
+        return result
+
+    try:
+        inspected = subprocess.run(
+            ["docker", "inspect", *ids], capture_output=True, text=True, timeout=30)
+        rows = json.loads(inspected.stdout) if inspected.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, TypeError, ValueError) as exc:
+        result["error"] = f"could not inspect project probe containers: {exc}"
+        result["uncertain"] = ids
+        return result
+    if not isinstance(rows, list):
+        result["error"] = (inspected.stderr or "docker inspect failed").strip()[:500]
+        result["uncertain"] = ids
+        return result
+
+    for row in rows:
+        if not isinstance(row, dict):
+            result["uncertain"].append("unknown")
+            continue
+        container_id = str(row.get("Id") or "").strip()
+        name = str(row.get("Name") or "").lstrip("/") or container_id
+        labels = ((row.get("Config") or {}).get("Labels") or {})
+        if not container_id or not isinstance(labels, dict):
+            result["uncertain"].append(name or "unknown")
+            continue
+        alive = _owner_process_alive(labels)
+        if alive is True:
+            result["active"].append(name)
+        elif alive is None:
+            result["uncertain"].append(name)
+        elif _terminate_oneshot_container(container_id):
+            result["reaped"].append(name)
+        else:
+            result["uncertain"].append(name)
+    # A container that appeared in `ps` but vanished before inspect is already gone. Do not report
+    # it as uncertain; it cannot still hold the project lock.
+    return result
 
 
 def _seccomp_aslr_profile() -> str:
@@ -514,8 +667,11 @@ class SandboxRunner:
         resources = resources or resource_spec_for_artifact(artifact, "sandbox")
         timeout = resources.timeout or self.timeout
         name = f"hexgraph-{uuid.uuid4().hex[:12]}"
+        labels = _oneshot_labels(probe, project_mount)
         cmd = [
             "docker", "run", "--rm", "--name", name,
+            *[arg for key, value in labels.items()
+              for arg in ("--label", f"{key}={value}")],
             # Expose THIS run's wall-clock budget to the probe so a long-running tool can stop
             # itself GRACEFULLY a little before the external kill and save partial work, rather
             # than being torn down with nothing (Ghidra's `-analysisTimeoutPerFile` uses this on a
@@ -581,13 +737,24 @@ class SandboxRunner:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
                                   env=run_env)
         except subprocess.TimeoutExpired as exc:
-            subprocess.run(["docker", "kill", name], capture_output=True)
+            _terminate_oneshot_container(name)
             target = artifact.name if artifact is not None else "live channel"
             raise SandboxTimeout(f"probe {probe} exceeded {timeout}s on {target}") from exc
         except OSError as exc:
+            _terminate_oneshot_container(name)
             raise SandboxError(f"failed to launch docker: {exc}") from exc
+        except BaseException:
+            # KeyboardInterrupt/SystemExit and cancellation exceptions must not strand the Docker
+            # container. If this process itself is killed before Python can unwind, the labels above
+            # let a later project probe reap it once the launcher PID is positively gone.
+            _terminate_oneshot_container(name)
+            raise
 
         if proc.returncode != 0:
+            # Normally `docker run` returns only after its --rm container exits. If the CLI itself
+            # was interrupted while the daemon kept the container alive, ensure the exact run is
+            # stopped before surfacing the failure.
+            _terminate_oneshot_container(name)
             raise SandboxError(
                 _probe_failure_message(probe, proc.returncode, proc.stdout, proc.stderr)
             )

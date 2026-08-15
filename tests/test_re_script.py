@@ -13,6 +13,11 @@ Offline coverage (no Docker / no Ghidra):
   * the FEATURE GATE hides the catalog tool when off, and the dispatch REFUSES it when off
     (defence in depth);
   * a WARM MISS returns the re_analyze lead (re_script is warm-only, never runs a cold analysis);
+  * a live or uncertain resident bridge fails before the script probe with actionable
+    stop/retry/restart guidance, while a positively stopped bridge allows the probe;
+  * an abandoned one-shot project probe is reconciled before Ghidra opens, while a live or
+    uncertain launcher is preserved and reported;
+  * a raced Ghidra LockException is translated into the same actionable guidance;
   * radare2 (non-Ghidra backend) is rejected with a clear error;
   * an oversized script is rejected host-side;
   * probe-level: the `--script` arg-parse + base64 decode + size cap (`_load_user_script`); that a
@@ -90,6 +95,9 @@ def _wire_warm(monkeypatch, result=None):
     # The slot key uses the ghidra version; _make_warm resolves with None, so match it here.
     monkeypatch.setattr(gp, "ghidra_version_for_image", lambda image, **kw: None)
     monkeypatch.setattr("hexgraph.sandbox.executor.get_executor", lambda *a, **k: fake)
+    monkeypatch.setattr(
+        "hexgraph.sandbox.runner.reconcile_oneshot_project_probes",
+        lambda project_mount: {"reaped": [], "active": [], "uncertain": [], "error": None})
     return fake
 
 
@@ -142,6 +150,119 @@ def test_run_script_records_error_observation_but_still_no_graph(hg_home, monkey
                                           Observation.result_kind == "script").all()
         assert len(obs) == 1 and obs[0].status == "error"
         assert s.query(Node).count() == nb and s.query(Edge).count() == eb
+
+
+def test_run_script_continues_after_reaping_abandoned_project_probe(hg_home, monkeypatch):
+    fake = _wire_warm(monkeypatch)
+    monkeypatch.setattr(
+        "hexgraph.sandbox.runner.reconcile_oneshot_project_probes",
+        lambda project_mount: {
+            "reaped": ["hexgraph-abandoned"], "active": [], "uncertain": [], "error": None,
+        })
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        _make_warm(p, t)
+
+        out = run_tool(ctx, "run_script", {"script": "result = {'ok': True}"})
+
+        assert "function_count" in out
+        assert len(fake.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("report", "expected"),
+    [
+        ({"reaped": [], "active": ["hexgraph-live"], "uncertain": [], "error": None},
+         "owned by a live process"),
+        ({"reaped": [], "active": [], "uncertain": ["hexgraph-unknown"], "error": None},
+         "could not safely verify ownership"),
+    ],
+    ids=["live-owner", "uncertain-owner"],
+)
+def test_run_script_preserves_non_abandoned_project_probe(
+        hg_home, monkeypatch, report, expected):
+    fake = _wire_warm(monkeypatch)
+    monkeypatch.setattr(
+        "hexgraph.sandbox.runner.reconcile_oneshot_project_probes",
+        lambda project_mount: report)
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        _make_warm(p, t)
+
+        out = run_tool(ctx, "run_script", {"script": "result = {'ok': True}"})
+
+        assert expected in out
+        assert "another agent" in out or "owning session" in out
+        assert fake.calls == []
+
+
+@pytest.mark.parametrize("container_not_running", [False, None], ids=["live", "uncertain"])
+def test_run_script_refuses_when_bridge_may_own_project(
+        hg_home, monkeypatch, container_not_running):
+    """A registered bridge that is live OR cannot be checked still may own the project lock.
+
+    Fail before spawning the script sandbox and tell the agent how to recover without silently
+    interrupting another bridge user.
+    """
+    from hexgraph.engine.re import bridge as B
+
+    fake = _wire_warm(monkeypatch)
+    monkeypatch.setattr(B, "_container_not_running", lambda name: container_not_running)
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        _make_warm(p, t)
+        t.metadata_json = {
+            **(t.metadata_json or {}),
+            "bridge": {"container": "hexgraph-ghidra-test", "ip": "172.17.0.9", "port": 4768},
+        }
+        s.flush()
+
+        out = run_tool(ctx, "run_script", {"script": "result = {'ok': True}"})
+
+        assert "project lock" in out
+        assert "re_bridge_stop" in out and "retry re_script" in out and "re_bridge_start" in out
+        assert "another agent may be using it" in out
+        assert fake.calls == []
+
+
+def test_run_script_allows_positively_stopped_bridge(hg_home, monkeypatch):
+    """Stale bridge metadata is not a blocker when Docker positively reports the JVM stopped."""
+    from hexgraph.engine.re import bridge as B
+
+    fake = _wire_warm(monkeypatch)
+    monkeypatch.setattr(B, "_container_not_running", lambda name: True)
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        _make_warm(p, t)
+        t.metadata_json = {
+            **(t.metadata_json or {}),
+            "bridge": {"container": "hexgraph-ghidra-test", "ip": "172.17.0.9", "port": 4768},
+        }
+        s.flush()
+
+        out = run_tool(ctx, "run_script", {"script": "result = {'ok': True}"})
+
+        assert "function_count" in out
+        assert len(fake.calls) == 1
+
+
+def test_run_script_translates_raced_ghidra_lock_exception(hg_home, monkeypatch):
+    """If a project owner appears after preflight, normalize Ghidra's opaque LockException."""
+    fake = _wire_warm(monkeypatch)
+
+    def _locked(*args, **kwargs):
+        raise RuntimeError("ghidra.framework.store.LockException: project is locked")
+
+    monkeypatch.setattr(fake, "run_json_probe", _locked)
+    with session_scope() as s:
+        ctx, p, t = _ctx(s)
+        _make_warm(p, t)
+
+        out = run_tool(ctx, "run_script", {"script": "result = {'ok': True}"})
+
+        assert "another Ghidra process acquired its lock" in out
+        assert "re_bridge_stop" in out and "retry re_script" in out and "re_bridge_start" in out
+        assert "LockException" not in out
 
 
 # ── the feature gate: hidden in the catalog when off, refused by the dispatch when off ─

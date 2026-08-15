@@ -272,7 +272,11 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
   to it rather than a conflicting headless open. Two things still want their own open and so need the
   bridge stopped first, since a second open of the project fails outright: a cold re-analysis
   (`re_reanalyze`), and `re_script`, which runs your script against the warm project in its own
-  container. Recon enrichment is not one of them: the bridge serves the whole-program inventory it
+  container. `re_script` detects live or uncertain bridge ownership before opening Ghidra and
+  returns the exact `re_bridge_stop` → retry → `re_bridge_start` recovery sequence; it does not
+  stop the bridge automatically because another agent may be using it. A raced Ghidra
+  `LockException` is translated into the same actionable guidance. Recon enrichment is not one of
+  them: the bridge serves the whole-program inventory it
   needs, so revealing with `enrich=true` works against a bridged target. Also on the CLI: `hexgraph ghidra-bridge start|stop|status <target>`.
 - **`re_script` is the escape hatch over the warm analysis DB (gated, off by default).** The curated `re_*`
   verbs answer the common questions; the full Ghidra analysis holds more than any fixed verb exposes.
@@ -281,7 +285,13 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
   project, and never executes the target). The namespace exposes `program`/`currentProgram`, a `flat`
   `FlatProgramAPI`, `monitor`, and `out_path`; results come back as JSON written to `out_path` (or an assigned
   `result`), the script body is capped at 64 KiB and delivered off the argv, and long output truncates to
-  `max_chars` (recover it with `obs_get`). It's **warm-only** (run `re_analyze` first) and **Ghidra-only**, and
+  `max_chars` (recover it with `obs_get`). It's **warm-only** (run `re_analyze` first), **Ghidra-only**, and
+  requires the persistent bridge to be stopped as described above; this conflict is detected before
+  the script sandbox starts. One-shot probes are labeled with their launcher identity: if a client
+  or MCP process terminates while its Docker container is still holding this warm project, the next
+  `re_script` stops that container only after positively proving its launcher is gone. A probe with
+  a live or unverifiable owner is preserved and reported. Normal timeout, interruption, and
+  non-zero-exit paths also stop their exact container before returning. It is
   gated behind **`features.ghidra.scripting`** — OFF by default, which HIDES the tool from the list until an
   operator enables it. Full Ghidra-API reach (data-flow slices, stack-frame layout, dispatch-table recovery,
   BSim/FunctionID naming, info-leak hunts) without a bespoke tool per query, and no sandbox boundary relaxed.
