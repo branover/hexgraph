@@ -22,12 +22,14 @@ Three principles are non-negotiable, and they shape everything else:
 - **You bring the key, or you bring nothing.** Model access comes from your own Anthropic API key, a
   local Claude Code session, or the built-in **mock** backend. The mock is the default, it needs no
   key and no network, and it lets you run the entire loop for $0.
-- **Every target is treated as hostile.** All parsing, unpacking, and analysis of target bytes
-  happens inside a disposable Docker container with no network and tight resource limits. HexGraph is
-  static-only by default. Executing the target, reaching the network, and rehosting firmware are each
-  a separate capability you opt into deliberately, and even then they run inside that same locked-down
-  sandbox. The model never sees raw target bytes, only the output of the tools HexGraph runs for it
-  (decompilation, strings, imports, and so on).
+- **Every target is treated as hostile.** HexGraph performs all parsing, unpacking, and analysis of
+  target bytes inside a disposable Docker container with no network and tight resource limits.
+  HexGraph is static-only by default. Executing the target, reaching the network, and rehosting
+  firmware are each a separate capability you opt into deliberately, and even then they run inside
+  that same locked-down sandbox. The model never sees raw target bytes through HexGraph, only the
+  output of the tools HexGraph runs for it (decompilation, strings, imports, and so on). The optional
+  companion skill described below can use separately authorized external tools; those operations are
+  outside HexGraph's sandbox and need their own suitable isolation.
 
 > **Status: pre-1.0.** The core loop works end to end today, from ingest through recon, AI analysis,
 > a structured finding, the graph, and on to the next task it suggests. That includes extracting real
@@ -137,8 +139,10 @@ child targets), then launch tasks from the UI and triage the findings they produ
 .venv/bin/hexgraph serve          # → http://127.0.0.1:8765
 ```
 
-There are two ways to drive the loop. Both write into the same graph, and both keep target bytes
-inside the sandbox.
+There are two ways to drive HexGraph's own loop. Both write into the same graph, and every target
+operation they request through HexGraph stays inside its sandbox. The optional companion skill can
+supplement the MCP path with separately authorized external tools, but that work is outside
+HexGraph's sandbox and policy guarantees.
 
 The first is the **web UI**: pick a target, choose a task (recon, static analysis, RE, a pattern
 sweep, harness generation, fuzzing, or a PoC), and run it. Behind your chosen backend, HexGraph runs
@@ -151,8 +155,9 @@ HexGraph as an MCP server (the setup wizard can also do it for you), and Claude 
 gemini-cli then inspect targets and populate the graph on their own through the same sandboxed tools.
 The details are in **[docs/mcp.md](docs/mcp.md)**.
 
-In both cases the model only ever directs the work; HexGraph runs the tools. A plain API key is enough
-on its own, and no external coding agent is required.
+In both core paths the model only ever directs the HexGraph work; HexGraph runs those tools. A plain
+API key is enough on its own, and no external coding agent is required. If you select the companion,
+the agent may also run approved external tools while HexGraph remains the shared ledger.
 
 | Backend | Select with | Notes |
 |---|---|---|
@@ -179,7 +184,7 @@ separate, explicit opt-in.
 | **Fuzzing** | Coverage-guided, surface-aware, campaign-driven fuzzing (AFL++, libFuzzer, qemu-mode, boofuzz, desock), detached and crash-safe, with live triage, dedup, minimization, and one-click re-verification. Campaigns can run on a beefier host you own. | [fuzzing.md](docs/fuzzing.md) |
 | **Build from source** | Compile a managed source tree into an instrumented, reproducible artifact through a recorded recipe HexGraph runs in the sandbox, with the build-to-fuzz handoff wired up automatically. Includes an in-browser **Source / IDE tab** with coverage shading. | [build-from-source.md](docs/build-from-source.md) |
 | **Dynamic surfaces, rehosting & remote** | Model a running web service or a raw-TCP daemon as a first-class **surface**, **rehost** a whole firmware image under full-system emulation, or assess a physical **remote** device over SSH/telnet, all with bounded and audited egress. | [dynamic-surfaces-rehosting-remote.md](docs/dynamic-surfaces-rehosting-remote.md) |
-| **Coding-agent integration (MCP)** | Drive HexGraph from Claude Code, Codex, or gemini-cli, or have HexGraph drive a headless agent in delegate mode. Either way the agent is restricted to HexGraph's sandboxed tools. | [mcp.md](docs/mcp.md) |
+| **Coding-agent integration (MCP)** | Drive HexGraph from Claude Code, Codex, or gemini-cli, or have HexGraph drive a headless agent in restricted delegate mode. Calls through HexGraph stay sandboxed; the optional companion can use separately authorized external tools outside those guarantees. | [mcp.md](docs/mcp.md) |
 
 ### The opt-in policy tiers, briefly
 
@@ -224,14 +229,16 @@ add `surface_recon`, `web_discover`, and `web_recon`. The full configuration sto
 
 - **Loopback only.** The server refuses to bind a non-loopback address unless you set
   `HEXGRAPH_I_KNOW_WHAT_IM_DOING=1`.
-- **Hostile-target isolation.** Every operation on target bytes runs in a fresh container with
-  `--network none`, a read-only root filesystem, a tmpfs scratch space, memory, CPU, and PID limits,
-  and a wall-clock timeout. Only HexGraph's own probe scripts ever run in there.
+- **Hostile-target isolation.** Every operation HexGraph performs on target bytes runs in a fresh
+  container with `--network none`, a read-only root filesystem, a tmpfs scratch space, memory, CPU,
+  and PID limits, and a wall-clock timeout. Only HexGraph's own probe scripts ever run in there.
 - **Static by default, with capability that is opt-in and graduated.** Each tier is a separate,
   explicit opt-in that flips the single policy seam, and nothing relaxes anywhere else. The same
   sandbox hardening holds for every tier, with foreign-arch work running under qemu-user rather than
   on the host. The full ladder is in [docs/verification-assurance.md](docs/verification-assurance.md).
-- **The model never sees raw target bytes**, only tool output.
+- **Through HexGraph, the model never sees raw target bytes**, only tool output. The optional
+  companion's external tools are a separate, operator-authorized path and do not inherit HexGraph's
+  sandbox, feature-gate, or Observation-provenance guarantees.
 - **Secrets are never persisted or logged.** Your API key, along with any SSH or remote-Docker
   credentials, lives only in your environment or `config.toml`. HexGraph reads it on demand and
   reports it as present or absent, never by value.
