@@ -36,7 +36,7 @@ Near the end the wizard also offers to wire HexGraph up to a coding agent, if yo
 that way. It can register HexGraph's MCP server with Claude Code, Codex, or gemini-cli (you pick the
 agent and whether to register it just for this project or for all of them), and it can install two VR
 skills. `hexgraph-vr` teaches the sandboxed workflow and hostile-target rules;
-`hexgraph-vr-companion` invokes that skill but permits better external analysis tools while using
+`hexgraph-vr-unrestricted` invokes that skill but permits better external analysis tools while using
 HexGraph as the durable findings, journal, and graph ledger. If Claude Code or Codex are present on
 your `PATH`, one confirmation installs both siblings for every detected client under
 `~/.claude/skills` for Claude Code and `~/.agents/skills` for Codex. If neither

@@ -7,7 +7,7 @@ the chosen agent's own config file directly and idempotently. Either way this is
 local filesystem edit only: no network, and no secret (the MCP command carries no key;
 the server reads any key from env / config.toml at run time).
 
-The skill content (the primary spine + capability sub-files and the additive companion)
+The skill content (the primary spine + capability sub-files and the additive unrestricted skill)
 and its emission helpers live in `vr_skill` — the single source of truth shared by the
 deployed skills, the delegate-task brief, and `--print-skill`. They are re-exported here
 for back-compat.
@@ -23,14 +23,14 @@ import shutil
 # same but returns only the primary path. `full_skill_markdown` remains the primary bundle
 # used by restricted delegate mode and consumers that cannot read on-demand sub-files.
 from hexgraph.agent.vr_skill import (  # noqa: F401
-    COMPANION_SKILL_NAME,
-    COMPANION_SPINE,
     PRIMARY_SKILL_NAME,
     SKILL,
     SUBFILES,
-    companion_skill_markdown,
+    UNRESTRICTED_SKILL_NAME,
+    UNRESTRICTED_SPINE,
     full_skill_markdown,
     skill_markdown,
+    unrestricted_skill_markdown,
     write_skill,
     write_skills,
 )
@@ -229,8 +229,8 @@ def detected_skill_targets() -> list[tuple[str, str]]:
 
 
 # Either skill's spine marks an opted-in install. A refresh always restores the pair, so a
-# missing primary cannot leave the companion's explicit invocation dangling.
-_SKILL_DIR_NAMES = (PRIMARY_SKILL_NAME, COMPANION_SKILL_NAME)
+# missing primary cannot leave unrestricted's explicit invocation dangling.
+_SKILL_DIR_NAMES = (PRIMARY_SKILL_NAME, UNRESTRICTED_SKILL_NAME)
 _SKILL_SPINE = "SKILL.md"
 
 
@@ -443,7 +443,7 @@ def install_help(agent: str | None = None) -> str:
         f" blocks — that's correct; your agent launches it. `hexgraph serve` (the web UI) can run\n"
         f" at the same time; they're separate processes sharing the DB.)\n\n")
     footer = ("\n\nInstall the VR skill pair: `hexgraph-vr` is the sandboxed workflow, and\n"
-              "`hexgraph-vr-companion` invokes it with optional external-tool routing.\n"
+              "`hexgraph-vr-unrestricted` invokes it with unrestricted external-tool routing.\n"
               "Each command emits both siblings plus the primary capability sub-files:\n"
               "  hexgraph mcp install --write-skill .claude/skills   # Claude Code (project-local)\n"
               "  hexgraph mcp install --write-skill ~/.claude/skills  # Claude Code (global)\n"

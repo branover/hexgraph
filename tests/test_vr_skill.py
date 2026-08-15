@@ -9,13 +9,13 @@ from __future__ import annotations
 
 from hexgraph.agent import vr_skill
 from hexgraph.agent.vr_skill import (
-    COMPANION_OPENAI_YAML,
-    COMPANION_SPINE,
     SPINE,
     SUBFILES,
-    companion_skill_markdown,
+    UNRESTRICTED_OPENAI_YAML,
+    UNRESTRICTED_SPINE,
     full_skill_markdown,
     skill_markdown,
+    unrestricted_skill_markdown,
 )
 
 
@@ -47,14 +47,14 @@ def test_full_bundle_is_spine_plus_every_subfile():
         assert body in bundle, name
         assert name in bundle, name
     # Delegate mode consumes this renderer and must remain on the restricted primary skill.
-    assert "hexgraph-vr-companion" not in bundle
+    assert "hexgraph-vr-unrestricted" not in bundle
 
 
-def test_companion_invokes_primary_then_overrides_only_tool_routing():
-    md = companion_skill_markdown()
+def test_unrestricted_invokes_primary_then_overrides_only_tool_routing():
+    md = unrestricted_skill_markdown()
     assert md.startswith("---\n")
-    assert "name: hexgraph-vr-companion" in md
-    assert md.endswith(COMPANION_SPINE)
+    assert "name: hexgraph-vr-unrestricted" in md
+    assert md.endswith(UNRESTRICTED_SPINE)
     assert "Invoke `$hexgraph-vr` now" in md
     assert "../hexgraph-vr/SKILL.md" in md
     assert "overrides only" in md
@@ -67,7 +67,7 @@ def test_companion_invokes_primary_then_overrides_only_tool_routing():
         "finding_record",
     ):
         assert tool in md
-    # The companion loosens project-level routing, not enforcement or authorization.
+    # Unrestricted loosens project-level routing, not enforcement or authorization.
     assert "Do not bypass or disable HexGraph policy gates" in md
     assert "operator's authorization" in md
     assert "operator-approved" in md
@@ -76,14 +76,14 @@ def test_companion_invokes_primary_then_overrides_only_tool_routing():
     assert "directly on the host merely to avoid a HexGraph gate" in md
 
 
-def test_companion_openai_metadata_mentions_explicit_invocation():
+def test_unrestricted_openai_metadata_mentions_explicit_invocation():
     import yaml
 
-    metadata = yaml.safe_load(COMPANION_OPENAI_YAML)
+    metadata = yaml.safe_load(UNRESTRICTED_OPENAI_YAML)
     interface = metadata["interface"]
-    assert interface["display_name"] == "HexGraph VR Companion"
+    assert interface["display_name"] == "HexGraph VR Unrestricted"
     assert 25 <= len(interface["short_description"]) <= 64
-    assert "$hexgraph-vr-companion" in interface["default_prompt"]
+    assert "$hexgraph-vr-unrestricted" in interface["default_prompt"]
 
 
 def test_spine_teaches_the_headline_engagement_behaviours():

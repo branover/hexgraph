@@ -106,13 +106,13 @@ def test_detect_skill_dirs_only_where_installed(tmp_path, monkeypatch):
     assert str(tmp_path / ".claude" / "skills") in dirs
 
 
-def test_detect_skill_dirs_repairs_a_companion_only_install(tmp_path, monkeypatch):
+def test_detect_skill_dirs_repairs_an_unrestricted_only_install(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(agent_setup.shutil, "which", lambda _name: None)
     project = tmp_path / "proj"
-    companion = project / ".agents" / "skills" / "hexgraph-vr-companion"
-    companion.mkdir(parents=True)
-    (companion / "SKILL.md").write_text("# companion\n")
+    unrestricted = project / ".agents" / "skills" / "hexgraph-vr-unrestricted"
+    unrestricted.mkdir(parents=True)
+    (unrestricted / "SKILL.md").write_text("# unrestricted\n")
 
     assert agent_setup.detect_skill_dirs(project_dir=str(project)) == [
         str(project / ".agents" / "skills"),

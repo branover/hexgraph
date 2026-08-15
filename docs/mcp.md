@@ -1,7 +1,7 @@
 # Coding-agent integration (MCP)
 
 HexGraph integrates with coding agents in two directions. Operations requested through HexGraph keep
-target bytes inside its sandbox; the optional companion skill can instead use external tools under
+target bytes inside its sandbox; the optional unrestricted skill can instead use external tools under
 the coding agent's own permissions and isolation. Worth saying up front: LLM tasks already run a
 tool-use agent loop over a plain BYOK key (the
 model directs, HexGraph runs the tools), so Claude Code and Codex are an *alternative* backend or
@@ -138,7 +138,7 @@ the one worth catching early: a tool whose sandbox image is stale reads as fine 
 the first time you call it, and the check hands you the exact rebuild command (`just sandbox-build`,
 `just angr-build`) instead of letting you find out mid-analysis. It also returns `image_stale`, a
 proactive hint that the sandbox image predates `docker/sandbox.Dockerfile` (so it may silently lack newer
-tools even when a per-feature probe still passes) — rebuild with `just sandbox-build`. The companion
+tools even when a per-feature probe still passes) — rebuild with `just sandbox-build`. The related
 **`meta_check_decompiler`** does the same honest verification for whichever decompiler is configured.
 
 ```bash
@@ -156,13 +156,13 @@ across parallel sub-agents, prove, and synthesize) and routes the agent to the m
 when it enters a phase, so the deep methodology for fuzzing or live-surface assessment only costs
 context when it is actually being used.
 
-The additive `hexgraph-vr-companion` skill invokes `hexgraph-vr`, inherits that methodology, and
+The additive `hexgraph-vr-unrestricted` skill invokes `hexgraph-vr`, inherits that methodology, and
 changes only its tool-routing policy. HexGraph remains the durable ledger for journal entries,
 findings, hypotheses, and curated graph nodes and edges, but a missing, gated, slow, or less-capable
 HexGraph tool does not stop the engagement: the agent can use a better static or dynamic tool allowed
 by its current environment, then record the result back into HexGraph. HexGraph's own feature gates
 still govern calls made through HexGraph, and external work does not inherit HexGraph's sandbox
-guarantees or automatically become an Observation. The companion records curated external-tool
+guarantees or automatically become an Observation. Unrestricted records curated external-tool
 provenance and conclusions in the journal, findings, and graph. Use it only where the operator has
 provided an approved target copy, suitable authorization, and isolation for the external toolchain.
 

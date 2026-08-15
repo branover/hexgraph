@@ -519,7 +519,7 @@ def test_skill_markdown_is_an_agent_skill():
     d = tempfile.mkdtemp()
     p = write_skill(d)
     assert os.path.isfile(p) and p.endswith("hexgraph-vr/SKILL.md")
-    assert os.path.isfile(os.path.join(d, "hexgraph-vr-companion", "SKILL.md"))
+    assert os.path.isfile(os.path.join(d, "hexgraph-vr-unrestricted", "SKILL.md"))
 
 
 def test_cli_write_skill_installs_the_pair(tmp_path, capsys):
@@ -529,7 +529,7 @@ def test_cli_write_skill_installs_the_pair(tmp_path, capsys):
     out = capsys.readouterr().out
     assert rc == 0 and "wrote VR skills" in out
     assert (tmp_path / "hexgraph-vr" / "SKILL.md").is_file()
-    assert (tmp_path / "hexgraph-vr-companion" / "SKILL.md").is_file()
+    assert (tmp_path / "hexgraph-vr-unrestricted" / "SKILL.md").is_file()
 
 
 def test_cli_mcp_check_lists_tools(capsys):

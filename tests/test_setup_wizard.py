@@ -608,11 +608,11 @@ def test_coding_agent_step_registers_and_installs(tmp_path, monkeypatch):
     assert data["mcpServers"]["hexgraph"] == agent_setup.mcp_server_entry()
     assert (tmp_path / ".claude" / "skills" / "hexgraph-vr" / "SKILL.md").is_file()
     assert (
-        tmp_path / ".claude" / "skills" / "hexgraph-vr-companion" / "SKILL.md"
+        tmp_path / ".claude" / "skills" / "hexgraph-vr-unrestricted" / "SKILL.md"
     ).is_file()
     assert (tmp_path / ".agents" / "skills" / "hexgraph-vr" / "SKILL.md").is_file()
     assert (
-        tmp_path / ".agents" / "skills" / "hexgraph-vr-companion" / "SKILL.md"
+        tmp_path / ".agents" / "skills" / "hexgraph-vr-unrestricted" / "SKILL.md"
     ).is_file()
 
 
@@ -631,7 +631,7 @@ def test_coding_agent_step_falls_back_to_custom_dir_when_no_agent_detected(
     ])
     _coding_agent_step(_FakeConsole(), q)
     assert (skill_dir / "hexgraph-vr" / "SKILL.md").is_file()
-    assert (skill_dir / "hexgraph-vr-companion" / "SKILL.md").is_file()
+    assert (skill_dir / "hexgraph-vr-unrestricted" / "SKILL.md").is_file()
 
 
 def test_coding_agent_step_skip_both(tmp_path, monkeypatch):

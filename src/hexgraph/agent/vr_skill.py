@@ -851,14 +851,14 @@ SUBFILES: dict[str, str] = {
 }
 
 
-# The opt-in companion composes the primary skill instead of copying its field manual. It
+# The opt-in unrestricted skill composes the primary instead of copying its field manual. It
 # deliberately changes only the primary skill's tool-routing policy: the engagement method
 # and durable record-keeping contract remain inherited from hexgraph-vr.
 PRIMARY_SKILL_NAME = "hexgraph-vr"
-COMPANION_SKILL_NAME = "hexgraph-vr-companion"
+UNRESTRICTED_SKILL_NAME = "hexgraph-vr-unrestricted"
 
-COMPANION_SPINE = """\
-# HexGraph VR companion
+UNRESTRICTED_SPINE = """\
+# HexGraph VR unrestricted
 
 Run authorized vulnerability research with the best tools available while using HexGraph as
 a durable coordination and evidence ledger. HexGraph is enabled throughout the engagement,
@@ -873,7 +873,7 @@ broader analysis stops.
 2. If the host cannot invoke one skill from another, open the sibling
    `../hexgraph-vr/SKILL.md` directly, then load the phase files it routes to. This is a
    compatibility fallback, not a separate copy of the primary instructions.
-3. Apply this companion after the primary skill. Where the two conflict, this companion
+3. Apply this unrestricted overlay after the primary skill. Where the two conflict, it
    overrides only the primary skill's requirements to use HexGraph exclusively, to handle
    every target operation inside HexGraph's sandbox, or to stop when a HexGraph capability
    is unavailable. All other primary-skill instructions remain in force.
@@ -921,10 +921,10 @@ The graph is curated, not an exhaustive import of another tool's program databas
 entities, relationships, evidence, decisions, and dead ends a human or later agent needs to
 continue the engagement.
 
-## Boundaries that this companion does not override
+## Boundaries that unrestricted does not override
 
 - Do not bypass or disable HexGraph policy gates. They continue to govern operations requested
-  through HexGraph; this companion only permits a separate, authorized tool path outside it.
+  through HexGraph; this skill only permits a separate, authorized tool path outside it.
 - Continue to obey the operator's authorization, scope, host permissions, product policies,
   and every higher-priority instruction.
 - Treat unknown target bytes as hostile. For external analysis, use isolation suited to the
@@ -935,22 +935,22 @@ continue the engagement.
   must stay within the engagement's approved data-handling boundary.
 """
 
-_COMPANION_DESCRIPTION = (
+_UNRESTRICTED_DESCRIPTION = (
     "Run authorized binary or firmware vulnerability research with any suitable static or "
     "dynamic tools while using HexGraph as an optional durable ledger for findings, journal "
     "entries, graph nodes, and edges. Use when HexGraph should aid the work without constraining "
     "the toolchain or becoming a blocker."
 )
 
-_COMPANION_FRONTMATTER = (
-    f"---\nname: {COMPANION_SKILL_NAME}\ndescription: {_COMPANION_DESCRIPTION}\n---\n\n"
+_UNRESTRICTED_FRONTMATTER = (
+    f"---\nname: {UNRESTRICTED_SKILL_NAME}\ndescription: {_UNRESTRICTED_DESCRIPTION}\n---\n\n"
 )
 
-COMPANION_OPENAI_YAML = """\
+UNRESTRICTED_OPENAI_YAML = """\
 interface:
-  display_name: "HexGraph VR Companion"
-  short_description: "Use HexGraph as an optional research ledger"
-  default_prompt: "Use $hexgraph-vr-companion for an authorized vulnerability-research engagement with HexGraph as a durable optional sidecar."
+  display_name: "HexGraph VR Unrestricted"
+  short_description: "Use HexGraph without restricting external tools"
+  default_prompt: "Use $hexgraph-vr-unrestricted for an authorized vulnerability-research engagement with HexGraph as a durable optional sidecar."
 """
 
 
@@ -959,9 +959,9 @@ def skill_markdown() -> str:
     return _FRONTMATTER + SPINE
 
 
-def companion_skill_markdown() -> str:
-    """The additive companion as an Agent Skills file."""
-    return _COMPANION_FRONTMATTER + COMPANION_SPINE
+def unrestricted_skill_markdown() -> str:
+    """The additive unrestricted skill as an Agent Skills file."""
+    return _UNRESTRICTED_FRONTMATTER + UNRESTRICTED_SPINE
 
 
 def full_skill_markdown() -> str:
@@ -992,31 +992,31 @@ def _write_primary_skill(base_dir: str) -> str:
     return path
 
 
-def _write_companion_skill(base_dir: str) -> str:
-    """Write the additive companion bundle and return its SKILL.md path."""
+def _write_unrestricted_skill(base_dir: str) -> str:
+    """Write the additive unrestricted bundle and return its SKILL.md path."""
     import os
 
-    d = os.path.join(base_dir, COMPANION_SKILL_NAME)
+    d = os.path.join(base_dir, UNRESTRICTED_SKILL_NAME)
     agents_dir = os.path.join(d, "agents")
     os.makedirs(agents_dir, exist_ok=True)
     path = os.path.join(d, "SKILL.md")
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write(companion_skill_markdown())
+        fh.write(unrestricted_skill_markdown())
     with open(os.path.join(agents_dir, "openai.yaml"), "w", encoding="utf-8") as fh:
-        fh.write(COMPANION_OPENAI_YAML)
+        fh.write(UNRESTRICTED_OPENAI_YAML)
     return path
 
 
 def write_skills(base_dir: str) -> dict[str, str]:
-    """Write the primary and companion skills under *base_dir*.
+    """Write the primary and unrestricted skills under *base_dir*.
 
     Returns a mapping from skill name to its generated SKILL.md path. Keeping both siblings
-    in the same base directory lets the companion invoke the primary by name and fall back to
+    in the same base directory lets unrestricted invoke the primary by name and fall back to
     its relative path on hosts that do not support nested skill invocation.
     """
     return {
         PRIMARY_SKILL_NAME: _write_primary_skill(base_dir),
-        COMPANION_SKILL_NAME: _write_companion_skill(base_dir),
+        UNRESTRICTED_SKILL_NAME: _write_unrestricted_skill(base_dir),
     }
 
 
@@ -1024,6 +1024,6 @@ def write_skill(base_dir: str) -> str:
     """Write both skills and return the primary SKILL.md path for compatibility.
 
     Existing callers historically expect a single string ending in `hexgraph-vr/SKILL.md`.
-    Preserve that API while ensuring every legacy install path also gains the companion.
+    Preserve that API while ensuring every legacy install path also gains unrestricted.
     """
     return write_skills(base_dir)[PRIMARY_SKILL_NAME]

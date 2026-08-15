@@ -728,7 +728,7 @@ def _coding_agent_step(console, questionary) -> None:
     detected_targets = agent_setup.detected_skill_targets()
     detected_names = {"claude": "Claude Code", "codex": "Codex"}
     target_label = " and ".join(detected_names[a] for a, _ in detected_targets)
-    prompt = "Install the VR skills (sandboxed primary + external-tool companion)?"
+    prompt = "Install the VR skills (restricted primary + unrestricted external tools)?"
     if target_label:
         prompt = f"Install both VR skills for detected {target_label}?"
     if questionary.confirm(

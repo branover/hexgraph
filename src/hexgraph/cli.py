@@ -391,7 +391,7 @@ def _cmd_config(args: argparse.Namespace) -> int:
 def _cmd_mcp(args: argparse.Namespace) -> int:
     if args._mcpcmd == "install":
         from hexgraph.agent.agent_setup import (
-            COMPANION_SKILL_NAME, PRIMARY_SKILL_NAME, SUBFILES, full_skill_markdown,
+            PRIMARY_SKILL_NAME, SUBFILES, UNRESTRICTED_SKILL_NAME, full_skill_markdown,
             install_help, write_skills,
         )
 
@@ -404,7 +404,7 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
             paths = write_skills(args.write_skill)
             print(
                 f"wrote VR skills to {paths[PRIMARY_SKILL_NAME]} "
-                f"(+ {len(SUBFILES)} sub-files) and {paths[COMPANION_SKILL_NAME]}"
+                f"(+ {len(SUBFILES)} sub-files) and {paths[UNRESTRICTED_SKILL_NAME]}"
             )
             return 0
         print(install_help(args.agent))
@@ -582,7 +582,7 @@ def build_parser() -> argparse.ArgumentParser:
     mi = msub.add_parser("install", help="print how to register HexGraph with claude/codex/gemini")
     mi.add_argument("--agent", choices=["claude", "codex", "gemini"], default=None)
     mi.add_argument("--write-skill", dest="write_skill", metavar="DIR",
-                    help="write the primary and companion VR skills under DIR "
+                    help="write the restricted and unrestricted VR skills under DIR "
                          "(e.g. .claude/skills or .agents/skills)")
     mi.add_argument("--print-skill", dest="print_skill", action="store_true",
                     help="print the restricted primary VR skill markdown")

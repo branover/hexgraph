@@ -28,7 +28,7 @@ Three principles are non-negotiable, and they shape everything else:
   firmware are each a separate capability you opt into deliberately, and even then they run inside
   that same locked-down sandbox. The model never sees raw target bytes through HexGraph, only the
   output of the tools HexGraph runs for it (decompilation, strings, imports, and so on). The optional
-  companion skill described below can use separately authorized external tools; those operations are
+  unrestricted skill described below can use separately authorized external tools; those operations are
   outside HexGraph's sandbox and need their own suitable isolation.
 
 > **Status: pre-1.0.** The core loop works end to end today, from ingest through recon, AI analysis,
@@ -67,7 +67,7 @@ Either one hands off to an interactive setup wizard. The wizard walks you throug
 features, and for each one that relaxes the security posture it shows you the implication and asks you
 to confirm before turning it on. It then writes your settings and builds the images you picked, and it
 can optionally register HexGraph's MCP server with a coding agent and install the VR skill pair for
-you. The pair includes the sandbox-only `hexgraph-vr` workflow and `hexgraph-vr-companion`, which
+you. The pair includes the sandbox-only `hexgraph-vr` workflow and `hexgraph-vr-unrestricted`, which
 invokes the original workflow but may use better external analysis tools while keeping HexGraph as
 the findings, journal, and graph ledger. When you opt in, setup detects Claude Code and Codex on your
 `PATH` and installs both skills into both clients' native user-level skill directories (all
@@ -140,7 +140,7 @@ child targets), then launch tasks from the UI and triage the findings they produ
 ```
 
 There are two ways to drive HexGraph's own loop. Both write into the same graph, and every target
-operation they request through HexGraph stays inside its sandbox. The optional companion skill can
+operation they request through HexGraph stays inside its sandbox. The optional unrestricted skill can
 supplement the MCP path with separately authorized external tools, but that work is outside
 HexGraph's sandbox and policy guarantees.
 
@@ -156,7 +156,7 @@ gemini-cli then inspect targets and populate the graph on their own through the 
 The details are in **[docs/mcp.md](docs/mcp.md)**.
 
 In both core paths the model only ever directs the HexGraph work; HexGraph runs those tools. A plain
-API key is enough on its own, and no external coding agent is required. If you select the companion,
+API key is enough on its own, and no external coding agent is required. If you select unrestricted,
 the agent may also run approved external tools while HexGraph remains the shared ledger.
 
 | Backend | Select with | Notes |
@@ -184,7 +184,7 @@ separate, explicit opt-in.
 | **Fuzzing** | Coverage-guided, surface-aware, campaign-driven fuzzing (AFL++, libFuzzer, qemu-mode, boofuzz, desock), detached and crash-safe, with live triage, dedup, minimization, and one-click re-verification. Campaigns can run on a beefier host you own. | [fuzzing.md](docs/fuzzing.md) |
 | **Build from source** | Compile a managed source tree into an instrumented, reproducible artifact through a recorded recipe HexGraph runs in the sandbox, with the build-to-fuzz handoff wired up automatically. Includes an in-browser **Source / IDE tab** with coverage shading. | [build-from-source.md](docs/build-from-source.md) |
 | **Dynamic surfaces, rehosting & remote** | Model a running web service or a raw-TCP daemon as a first-class **surface**, **rehost** a whole firmware image under full-system emulation, or assess a physical **remote** device over SSH/telnet, all with bounded and audited egress. | [dynamic-surfaces-rehosting-remote.md](docs/dynamic-surfaces-rehosting-remote.md) |
-| **Coding-agent integration (MCP)** | Drive HexGraph from Claude Code, Codex, or gemini-cli, or have HexGraph drive a headless agent in restricted delegate mode. Calls through HexGraph stay sandboxed; the optional companion can use separately authorized external tools outside those guarantees. | [mcp.md](docs/mcp.md) |
+| **Coding-agent integration (MCP)** | Drive HexGraph from Claude Code, Codex, or gemini-cli, or have HexGraph drive a headless agent in restricted delegate mode. Calls through HexGraph stay sandboxed; the optional unrestricted skill can use separately authorized external tools outside those guarantees. | [mcp.md](docs/mcp.md) |
 
 ### The opt-in policy tiers, briefly
 
@@ -237,7 +237,7 @@ add `surface_recon`, `web_discover`, and `web_recon`. The full configuration sto
   sandbox hardening holds for every tier, with foreign-arch work running under qemu-user rather than
   on the host. The full ladder is in [docs/verification-assurance.md](docs/verification-assurance.md).
 - **Through HexGraph, the model never sees raw target bytes**, only tool output. The optional
-  companion's external tools are a separate, operator-authorized path and do not inherit HexGraph's
+  unrestricted skill's external tools are a separate, operator-authorized path and do not inherit HexGraph's
   sandbox, feature-gate, or Observation-provenance guarantees.
 - **Secrets are never persisted or logged.** Your API key, along with any SSH or remote-Docker
   credentials, lives only in your environment or `config.toml`. HexGraph reads it on demand and
