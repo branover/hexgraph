@@ -5,6 +5,51 @@ All notable changes to HexGraph are recorded here. The format loosely follows
 [semantic versioning](https://semver.org/) properly once it reaches 1.0. Until then,
 expect breaking changes between minor versions.
 
+## [0.10.0](https://github.com/branover/hexgraph/compare/hexgraph-v0.9.0...hexgraph-v0.10.0) (2026-08-15)
+
+
+### Features
+
+* add a web-UI button to import a directory as a target ([#281](https://github.com/branover/hexgraph/issues/281)) ([6dbd047](https://github.com/branover/hexgraph/commit/6dbd04711ca2470291221c09fca2d98bb71681b3))
+* add unrestricted HexGraph VR skill ([#308](https://github.com/branover/hexgraph/issues/308)) ([1ac157f](https://github.com/branover/hexgraph/commit/1ac157fb573c11abe90dda5e124804e2442506e9))
+* audit the real connection outcome of egress probes (net_list_egress) ([#289](https://github.com/branover/hexgraph/issues/289)) ([2fae871](https://github.com/branover/hexgraph/commit/2fae8719d446ecd489e25bd294027b00391176b2))
+* import a mounted/extracted filesystem directory as a target ([#279](https://github.com/branover/hexgraph/issues/279)) ([8ef9270](https://github.com/branover/hexgraph/commit/8ef92702503d6e57f1c68c6eb899988b09d79206))
+* integrate Codex project workflows ([#307](https://github.com/branover/hexgraph/issues/307)) ([b1370c5](https://github.com/branover/hexgraph/commit/b1370c5962e0fa981430fbde0604e934d39222bc))
+* lazy per-directory loading for the Targets sidebar tree ([#276](https://github.com/branover/hexgraph/issues/276)) ([3f96c96](https://github.com/branover/hexgraph/commit/3f96c965f771def6a5b6339791f9c882aa0a430b))
+
+
+### Bug Fixes
+
+* clean up abandoned re_script probes ([#309](https://github.com/branover/hexgraph/issues/309)) ([c1b4ce7](https://github.com/branover/hexgraph/commit/c1b4ce76173a812c3c939592457f38c623af8f3c))
+* clean up the directory-import modal's recon-toggle copy ([#282](https://github.com/branover/hexgraph/issues/282)) ([67eb586](https://github.com/branover/hexgraph/commit/67eb586ba65e0ac89b42ac66a68e50a24f53a154))
+* copy/hash firmware artifacts off the SQLite write lock (ingest/unpack/delete) ([#295](https://github.com/branover/hexgraph/issues/295)) ([960f54a](https://github.com/branover/hexgraph/commit/960f54aead6927fa4073880a4b9d0e9699bb146e))
+* detach analyze_target's per-child recon loop for large firmware ([#278](https://github.com/branover/hexgraph/issues/278)) ([b0755f8](https://github.com/branover/hexgraph/commit/b0755f8adb451a767ebc5de29dbb336fb5d6c6e5))
+* detach Ghidra enrichment on reveal — target_reveal_dir hung 2+ hours ([#275](https://github.com/branover/hexgraph/issues/275)) ([ea3ee20](https://github.com/branover/hexgraph/commit/ea3ee20ed869f5accbe2e31d12cc2ac2bbac4e1a))
+* detach promote_file's analysis + close its idempotency gap ([#274](https://github.com/branover/hexgraph/issues/274)) ([d4904fd](https://github.com/branover/hexgraph/commit/d4904fd24855f32c7589f318c2a0a9df67e373d1))
+* dirimport database-locked crash + silent skip visibility ([#280](https://github.com/branover/hexgraph/issues/280)) ([790ab2c](https://github.com/branover/hexgraph/commit/790ab2cdb64b8c69d8824f9d99b37bcd0acc6521))
+* disable Non-Returning Functions analyzer under the large-binary fast profile ([#284](https://github.com/branover/hexgraph/issues/284)) ([567442a](https://github.com/branover/hexgraph/commit/567442ae7a0cdf9b76bf9d8aa6f2724376c8526f))
+* dispose the DecompInterface in the researcher Ghidra bridge (leak per decompile) ([#273](https://github.com/branover/hexgraph/issues/273)) ([ca73b6d](https://github.com/branover/hexgraph/commit/ca73b6d2c2d333b155386e6b5b6bfcd9dd116eca))
+* eliminate the O(N²) / long lock holds in link_same_code, reachability, and merge ([#297](https://github.com/branover/hexgraph/issues/297)) ([3b3613f](https://github.com/branover/hexgraph/commit/3b3613f1f038784b6f46ef9dc3c01267e3830e2d))
+* give every seam-routed Ghidra op the dead-bridge degradation ([#301](https://github.com/branover/hexgraph/issues/301)) ([0ee9ae6](https://github.com/branover/hexgraph/commit/0ee9ae6ad9ba6e0594bf5adb2d052d67a155e382))
+* hold the SQLite write lock in short bursts so ingest stops hitting "database is locked" ([#283](https://github.com/branover/hexgraph/issues/283)) ([2c74190](https://github.com/branover/hexgraph/commit/2c741909c0fad2c8c832661c76a7f983527a242b))
+* index nodes once in extract-at-write enrichment (O(N²) write-lock stall) ([#291](https://github.com/branover/hexgraph/issues/291)) ([6eeb9ad](https://github.com/branover/hexgraph/commit/6eeb9ad570d7a1b15042ae748fa745c49d23f263))
+* list_strings greps the whole artifact, not the capped facts ([#285](https://github.com/branover/hexgraph/issues/285)) ([0b59219](https://github.com/branover/hexgraph/commit/0b592190d21c4f5b620a7959685c00e9b424b9d4))
+* make re_search_code's decompile-on-demand grep reuse, bound, and price itself ([#298](https://github.com/branover/hexgraph/issues/298)) ([a74831c](https://github.com/branover/hexgraph/commit/a74831c8d0de8abf12834529e59997d8e9c88a6f))
+* make reveal's Ghidra enrichment opt-in, not automatic ([#277](https://github.com/branover/hexgraph/issues/277)) ([29d6979](https://github.com/branover/hexgraph/commit/29d6979de495f345d48934dcc4f7d338346e183e))
+* never hold the SQLite write lock across slow sandbox work (multi-agent decompile contention) ([#288](https://github.com/branover/hexgraph/issues/288)) ([b5095d3](https://github.com/branover/hexgraph/commit/b5095d3ff7d8aa22084b6e3a1dad8c5d633f0ff0))
+* normalize new Ghidra PIE imports ([#310](https://github.com/branover/hexgraph/issues/310)) ([2970458](https://github.com/branover/hexgraph/commit/2970458c46c73990ae52d309695428b9edfc6eba))
+* read re_hexdump bytes in the sandbox (r2 p8), not host pyelftools ([#290](https://github.com/branover/hexgraph/issues/290)) ([c51e952](https://github.com/branover/hexgraph/commit/c51e9523e9e4a965fff72587fbd5d2f3f9199ea5))
+* rebuild the code-&gt;data xref index the large-binary fast profile drops ([#306](https://github.com/branover/hexgraph/issues/306)) ([9316379](https://github.com/branover/hexgraph/commit/9316379965d7033259082e35e96a080f8b1a84d7))
+* recover a doomed session on a failed observation write (stop the SQL leak) ([#292](https://github.com/branover/hexgraph/issues/292)) ([6e55232](https://github.com/branover/hexgraph/commit/6e5523200fe542dced1aa88c9a0a63abbbdb6e25))
+* release the write lock across fuzz reaper snapshot/teardown + campaign launch ([#296](https://github.com/branover/hexgraph/issues/296)) ([28e1d71](https://github.com/branover/hexgraph/commit/28e1d71e6cbe65d767b28d22b4516c44fe03b277))
+* release the write lock across the two remaining Ghidra slow ops ([#293](https://github.com/branover/hexgraph/issues/293)) ([343149b](https://github.com/branover/hexgraph/commit/343149bd2a961701699742ad477e49daa72c6b3b))
+* report the true function count, not the capped inventory slice ([#287](https://github.com/branover/hexgraph/issues/287)) ([07b0bbb](https://github.com/branover/hexgraph/commit/07b0bbb773eb26bbbabd5367be49132367fa87f4))
+* resident Ghidra bridge empties decompiles over time (DecompInterface leak + reused TaskMonitor) ([#271](https://github.com/branover/hexgraph/issues/271)) ([76c8df0](https://github.com/branover/hexgraph/commit/76c8df0539480875f009d4b3142cb17e6fc40b75))
+* route on positive evidence of death, not on an unanswered probe ([#304](https://github.com/branover/hexgraph/issues/304)) ([bf303bd](https://github.com/branover/hexgraph/commit/bf303bdfa3a95d9bea9e22f7aeac715832097ae0))
+* route re_resolve's section/symbol reads through the sandbox (drop host pyelftools) ([#294](https://github.com/branover/hexgraph/issues/294)) ([1acee19](https://github.com/branover/hexgraph/commit/1acee19113b75b4cbaca4a28af7802bb3c6eee00))
+* route taint through the Ghidra seam, and correct stale/missing tool caveats ([#299](https://github.com/branover/hexgraph/issues/299)) ([e4444b9](https://github.com/branover/hexgraph/commit/e4444b9295e59f343e4dd046a2ffeafa7587f776))
+* route the xref family to warm Ghidra in any mode, not just headless ([#286](https://github.com/branover/hexgraph/issues/286)) ([4d8130b](https://github.com/branover/hexgraph/commit/4d8130b830ac9ee237772e2969bcf09f2d2e538d))
+
 ## [0.9.0](https://github.com/branover/hexgraph/compare/hexgraph-v0.8.0...hexgraph-v0.9.0) (2026-07-07)
 
 
