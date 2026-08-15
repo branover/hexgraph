@@ -215,20 +215,28 @@ def _run(m) -> dict:
     if mode == "recover_data_refs":
         # Its own short path: no core runs, so the warm slot is opened once — by the recovery itself
         # — and a detached recovery does not pay for a whole-program inventory it would discard.
-        return {"tool": "ghidra_probe", "mode": mode, "cached": True,
-                "fast_profile": L.fast_profile_applies(m["artifact"]),
-                "data_ref_recovery": _recover_data_refs(m["artifact"])}
+        recovery = _recover_data_refs(m["artifact"])
+        mapping = recovery.pop("address_mapping", None)
+        result = {"tool": "ghidra_probe", "mode": mode, "cached": True,
+                  "fast_profile": L.fast_profile_applies(m["artifact"]),
+                  "data_ref_recovery": recovery, "address_mapping": mapping}
+        if isinstance(mapping, dict) and mapping.get("warning"):
+            result["warning"] = mapping["warning"]
+        return result
     # THE analysis chokepoint: ONLY the `analyze` mode (re_analyze) may build a cold analysis. Every
     # other mode is WARM-ONLY — main() already refused a cold miss with the re_analyze lead, so on the
     # warm path open_target never analyzes. script + search additionally open the program READ-ONLY
     # (immutable) so a query can't mutate the project.
     cold_analyze = mode == "analyze"
     read_only = mode in ("script", "search")
+    mapping_out = {}
     with L.open_target(m["artifact"], cold_analyze=cold_analyze,
-                       read_only=read_only) as (program, flat, cached):
+                       read_only=read_only, mapping_out=mapping_out) as (program, flat, cached):
         monitor = ConsoleTaskMonitor()
         if mode == "script":
-            result = L.script_core(program, flat, monitor, m["user_script"])
+            result = L.script_core(
+                program, flat, monitor, m["user_script"],
+                address_mapping=mapping_out.get("address_mapping"))
         elif mode == "search":
             result = L.search_bytes_core(program, flat, monitor,
                                          bytes_pattern=m.get("search_bytes"),
@@ -243,6 +251,9 @@ def _run(m) -> dict:
             result = L.decompile_core(program, flat, monitor, focus=m["focus"], rename=m["rename"])
         result.setdefault("tool", "ghidra_probe")
         result["cached"] = cached
+        result["address_mapping"] = mapping_out.get("address_mapping")
+        if mapping_out.get("address_mapping", {}).get("warning"):
+            result.setdefault("warning", mapping_out["address_mapping"]["warning"])
 
     # Whether this target's analysis runs under the fast profile is part of its RESULT, not a detail
     # an agent has to infer from empty xrefs: the profile disables the constant/scalar reference
@@ -299,13 +310,17 @@ def _recover_data_refs(artifact) -> dict:
     through = marker.get("data_refs_recovered_through")
     total_added = total_scanned = slices = 0
     last = {}
+    mapping = None
     try:
         while True:
             L.update_marker(data_ref_recovery_running=time.time())
             # No Ghidra import here on purpose (this module keeps Ghidra lazy):
             # recover_data_refs_core constructs its own ConsoleTaskMonitor when passed None, so the
             # whole wrapper — including the skip and failure paths — stays stdlib-only.
-            with L.open_target(artifact, cold_analyze=False) as (program, _flat, _cached):
+            mapping_out = {}
+            with L.open_target(
+                    artifact, cold_analyze=False, mapping_out=mapping_out) as (program, _flat, _cached):
+                mapping = mapping_out.get("address_mapping")
                 last = L.recover_data_refs_core(program, None, start_after=through)
             slices += 1
             total_added += last.get("added") or 0
@@ -345,12 +360,13 @@ def _recover_data_refs(artifact) -> dict:
     except Exception as exc:  # noqa: BLE001 - recovery must never fail the analysis that preceded it
         with contextlib.suppress(Exception):
             L.update_marker(data_ref_recovery_running=None)
-        return {"error": str(exc), "added": total_added, "slices": slices}
+        return {"error": str(exc), "added": total_added, "slices": slices,
+                "address_mapping": mapping}
     return {"added": total_added, "scanned": total_scanned, "slices": slices,
             "seconds": round(time.time() - started, 1),
             "complete": not last.get("truncated", False),
             "through": through if last.get("truncated") else None,
-            "saved": last.get("saved", False)}
+            "saved": last.get("saved", False), "address_mapping": mapping}
 
 
 def main() -> int:
@@ -392,6 +408,15 @@ def main() -> int:
     try:
         L.start()
         print(json.dumps(_run(m)))
+        return 0
+    except L.AddressMappingMismatch as exc:
+        # Cold imports are normalized before this check. A mismatch here means the newly imported
+        # program could not be put in the promised coordinate system; warm legacy bases are instead
+        # preserved and returned with an explicit warning by open_target.
+        tool = "ghidra_script" if mode == "script" else "ghidra_probe"
+        print(json.dumps({"error": str(exc), "analysis_invalid": True, "needs_analysis": True,
+                          "address_mapping": exc.report, "functions": [], "focus": None,
+                          "tool": tool}))
         return 0
     except Exception as exc:  # noqa: BLE001 — always emit a structured payload, never nothing
         tool = "ghidra_script" if mode == "script" else "ghidra_probe"

@@ -35,7 +35,9 @@ def main() -> int:
     try:
         # WARM open REQUIRED (start_bridge gates on slot.exists()); cold_analyze=False so a missing
         # slot fails fast here rather than silently kicking off a huge cold analysis in the bridge.
-        with L.open_target(artifact, cold_analyze=False) as (program, flat, cached):
+        mapping_out = {}
+        with L.open_target(
+                artifact, cold_analyze=False, mapping_out=mapping_out) as (program, flat, cached):
             from ghidra.util.task import ConsoleTaskMonitor
 
             sys.stderr.write(f"ghidra_bridge_probe: project resident (cached={cached}); "
@@ -45,7 +47,9 @@ def main() -> int:
             # fresh ConsoleTaskMonitor per request so a decompile timeout — which cancels the monitor
             # it's handed, permanently for a ConsoleTaskMonitor — can't poison later decompiles into
             # empty bodies. See pyghidra_lib._serve_one.
-            L.serve_bridge("0.0.0.0", PORT, program, flat, ConsoleTaskMonitor)  # blocks forever
+            L.serve_bridge(
+                "0.0.0.0", PORT, program, flat, ConsoleTaskMonitor,
+                mapping_out.get("address_mapping"))  # blocks forever
     except Exception as exc:  # noqa: BLE001
         sys.stderr.write(f"ghidra_bridge_probe: {exc}\n")
         return 4

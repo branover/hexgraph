@@ -418,7 +418,8 @@ question.
   to put names on `FUN_*` bodies, or an info-leak hunt for a routine that copies uninitialised
   stack into a reply.
 - **The contract.** The namespace exposes `program`/`currentProgram` (the analysed `Program`),
-  `flat` (a `FlatProgramAPI`), `monitor`, and `out_path`; `import ghidra.*` freely. Return
+  `flat` (a `FlatProgramAPI`), `monitor`, `out_path`, the reported `address_mapping`, and
+  `file_offset_to_address(value)` / `address_to_file_offset(value)`; `import ghidra.*` freely. Return
   results by writing JSON to `out_path` (or assigning a JSON-serialisable `result`) — that becomes
   the tool output (truncates to `max_chars`; recover the tail with `obs_get`). The script body is
   capped at 64 KiB and delivered off the argv; it records ONE `script` Observation, no graph nodes.
@@ -428,6 +429,13 @@ question.
       rows = [{"name": v.getName(), "off": v.getStackOffset(), "size": v.getLength()}
               for v in f.getStackFrame().getStackVariables()]
       import json; open(out_path, "w").write(json.dumps(rows))
+- **Use the right address coordinate.** HexGraph normalizes new PIE imports to the ELF's preferred
+  base, so new Ghidra, radare2, and debugger virtual/module offsets agree. Existing warm projects
+  are preserved at their original Ghidra image base; each result warns with that base and load bias.
+  Raw file offsets remain
+  different whenever a `PT_LOAD` maps `p_offset` to `p_vaddr`; inspect `address_mapping` and pass
+  only those file coordinates through `file_offset_to_address(...)`. Inspect `address_mapping`
+  before combining addresses from a preserved legacy project with results from another backend.
 - **Warm-only, Ghidra-only, gated.** Run `re_analyze(target)` first; unavailable on a
   radare2-only project. **Gate: features.ghidra.scripting** — OFF by default, and the tool is
   HIDDEN from your list until the operator enables it. If you don't see `re_script`, scripting

@@ -62,6 +62,31 @@ def test_identical_rerun_is_cached_no_duplicate(hg_home):
         assert s.query(Observation).count() == 1
 
 
+def test_ghidra_address_mapping_is_part_of_observation_identity(hg_home):
+    pid, tid = _seed()
+    args = {"function": "f"}
+    zero = {"schema": 1, "image_base": "0x0", "preferred_image_base": "0x0",
+            "ghidra_load_bias": "0x0"}
+    legacy = {**zero, "image_base": "0x100000", "ghidra_load_bias": "0x100000"}
+    with session_scope() as s:
+        first, c1 = O.record_observation(
+            s, project_id=pid, target_id=tid, source="a", tool="decompile_function",
+            args=args, result_kind="decompilation", payload={"address_mapping": legacy},
+            summary="legacy", content_hash="deadbeef")
+        second, c2 = O.record_observation(
+            s, project_id=pid, target_id=tid, source="a", tool="decompile_function",
+            args=args, result_kind="decompilation", payload={"address_mapping": zero},
+            summary="normalized", content_hash="deadbeef")
+        repeated, c3 = O.record_observation(
+            s, project_id=pid, target_id=tid, source="a", tool="decompile_function",
+            args=args, result_kind="decompilation", payload={"address_mapping": zero},
+            summary="normalized again", content_hash="deadbeef")
+
+        assert (c1, c2, c3) == (False, False, True)
+        assert first.id != second.id == repeated.id
+        assert first.args_json[O._ADDRESS_MAPPING_ARG] != second.args_json[O._ADDRESS_MAPPING_ARG]
+
+
 def test_explicit_none_arg_dedups_with_omitted(hg_home):
     pid, tid = _seed()
     payload = {"pseudocode": "void f(){}"}

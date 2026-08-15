@@ -6,7 +6,9 @@ scoped to the exact analyzed bytes by `content_hash`. This is the home for resul
 that aren't promoted into the graph yet — what both agent and user mine to decide
 what belongs there — and it gives "analyze once, reuse forever" for free: a repeat
 call with the same `(tool, args, content_hash, result_kind)` returns the existing
-row flagged `cached` instead of re-running.
+row flagged `cached` instead of re-running. Address-bearing Ghidra results additionally key on the
+reported Program image base/load bias, because a preserved legacy warm project and a normalized new
+import can validly describe the same bytes in different coordinates.
 
 Observations are NOT graph nodes; recording one creates ZERO nodes/edges. The link
 to the graph is bidirectional by reference only: an enriched node/edge/finding
@@ -28,6 +30,28 @@ from hexgraph.db.models import Observation, Project, Target
 from hexgraph.engine import cas
 
 
+_ADDRESS_MAPPING_ARG = "_ghidra_address_mapping"
+
+
+def _args_with_address_mapping(args: dict[str, Any] | None, payload: Any) -> dict[str, Any] | None:
+    """Version address-bearing Ghidra results by the Program coordinate system.
+
+    The same bytes and tool arguments can legitimately produce different addresses when an older
+    warm Ghidra project uses its historical PIE load bias while a new project uses the normalized
+    ELF base. Include the reported schema/base/bias in the dedup key so neither result can silently
+    reuse the other's Observation. Non-Ghidra payloads keep their long-standing key unchanged.
+    """
+    mapping = payload.get("address_mapping") if isinstance(payload, dict) else None
+    if not isinstance(mapping, dict):
+        return args
+    fingerprint = ":".join(str(mapping.get(key, "")) for key in (
+        "schema", "image_base", "preferred_image_base", "ghidra_load_bias",
+    ))
+    versioned = dict(args or {})
+    versioned[_ADDRESS_MAPPING_ARG] = fingerprint
+    return versioned
+
+
 def _normalize_args(args: dict[str, Any] | None) -> dict[str, Any]:
     """Canonical form of the call args so dedup is order-insensitive. Drops None
     values so an omitted optional arg dedups with an explicit None."""
@@ -43,8 +67,8 @@ def _find_fresh(
     args: dict[str, Any] | None, content_hash: str | None, result_kind: str,
 ) -> Observation | None:
     """An existing OK Observation for the identical call against the identical bytes.
-    The dedup key is (tool, normalized args, content_hash, result_kind) — the same
-    bytes + the same call must yield the same answer (design §5.2)."""
+    The dedup key is (tool, normalized args, content_hash, result_kind); Ghidra mapping identity is
+    folded into normalized args by `record_observation` (design §5.2)."""
     key = _args_key(args)
     rows = (
         session.query(Observation)
@@ -83,7 +107,8 @@ def record_observation(
     """Record one tool call, or reuse a fresh identical one.
 
     Returns `(observation, cached)`. When an OK Observation already exists for the
-    same `(tool, normalized args, content_hash, result_kind)`, returns it with
+    same `(tool, normalized args, content_hash, result_kind)`, including any Ghidra mapping
+    fingerprint folded into the args, returns it with
     `cached=True` and stores nothing new ("analyze once, reuse forever", §5.2).
     Otherwise stores the full `payload` in CAS, sets `result_cas`/`size`, writes the
     row, and returns `cached=False`. Creates NO graph nodes/edges (curation gate).
@@ -128,6 +153,10 @@ def record_observation(
     becomes durable when `session` commits — for callers that genuinely want the
     Observation to share the caller's transaction lifetime (e.g. a unit-of-work test, or a
     flow whose observation should roll back with it)."""
+    # A Ghidra Program's coordinate system is part of the deterministic call identity. This keeps
+    # preserved legacy warm projects and normalized new imports from sharing address-bearing rows.
+    args = _args_with_address_mapping(args, payload)
+
     # Only OK results dedup — re-running after an error must be allowed to retry. The
     # lookup runs on the caller's session so it also sees this task's own just-flushed
     # rows; the durable checkpoint below is what makes a fresh row survive a later failure.

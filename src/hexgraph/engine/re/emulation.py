@@ -156,4 +156,5 @@ def emulate_constant(session: Session, project: Any, target: Any, *, function: s
     return {"available": True, "function": function, "value": value,
             "value_hex": emu.get("value_hex"), "reached_ret": reached,
             "steps": emu.get("steps"), "width_bytes": emu.get("width_bytes"),
-            "observation_id": observation.id, "error": err}
+            "observation_id": observation.id, "error": err,
+            "address_mapping": out.get("address_mapping"), "warning": out.get("warning")}

@@ -91,6 +91,19 @@ def test_format_decomp_warns_on_fallback_engine():
     assert "FALLBACK" not in _format_decomp(normal, "main")
 
 
+def test_format_decomp_surfaces_preserved_warm_image_base_warning():
+    out = {
+        "focus": {"name": "main", "address": "0x101000", "pseudocode": "return 0;"},
+        "warning": "Warm Ghidra project uses image base 0x100000.",
+        "address_mapping": {"image_base": "0x100000", "ghidra_load_bias": "0x100000"},
+    }
+
+    text = _format_decomp(out, "main")
+
+    assert text.startswith("// WARNING: Warm Ghidra project uses image base 0x100000.")
+    assert "// main @ 0x101000" in text
+
+
 def test_format_decomp_surfaces_promoted_node_id_for_mention():
     """F11: _format_decomp renders the promoted node id in the header (truncation-safe) in the
     journal @-mention syntax, so a just-decompiled function is mention-able without a lookup."""

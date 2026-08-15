@@ -19,6 +19,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import time
 
 SCRATCH = os.environ.get("TMPDIR", "/scratch")
@@ -26,6 +27,36 @@ PROJECT_MOUNT = "/ghidra-project"
 PROJECT_NAME = "hexgraph"          # the Ghidra project name (matches ghidra_probe)
 META_NAME = "meta.json"            # the committed warm marker (matches ghidra_probe)
 _ADDR = re.compile(r"^0x[0-9a-fA-F]+$")
+
+# Versioned contract for the ELF PT_LOAD <-> Ghidra address-space check recorded in meta.json and
+# returned by every headless result. Bump when the validation semantics change so old markers are
+# informational only; every warm open re-validates against the live Program before it is yielded.
+ADDRESS_MAPPING_SCHEMA = 1
+
+
+class AddressMappingMismatch(RuntimeError):
+    """A newly imported Ghidra Program does not map the ELF at its declared virtual addresses.
+
+    Warm projects are deliberately accepted at their existing base with a warning; this error is
+    reserved for a cold import that cannot satisfy the new coordinate contract.
+    """
+
+    def __init__(self, report):
+        self.report = report
+        details = []
+        if report.get("unexpected_image_base"):
+            details.append(
+                f"image base {report.get('image_base')} instead of "
+                f"{report.get('preferred_image_base')}"
+            )
+        missing = ", ".join(report.get("unmapped_addresses") or [])
+        if missing:
+            details.append(f"unmapped {missing}")
+        super().__init__(
+            "Ghidra project address mapping does not match the ELF PT_LOAD virtual-address map "
+            f"({'; '.join(details) or 'unknown mismatch'}). The new analysis cannot be committed; "
+            "check the ELF loader result before retrying."
+        )
 
 # Above this size a COLD import runs the "fast profile": disable the auto-analysis passes proven
 # pathological on a 100 MB+ monolith (see _slow) so recon still gets functions/call-graph/strings
@@ -82,7 +113,7 @@ def _is_warm(proj_dir: str) -> bool:
     return os.path.isdir(proj_dir) and bool(os.listdir(proj_dir))
 
 
-def _commit_marker() -> None:
+def _commit_marker(**fields) -> None:
     """Commit the warm marker atomically — the LAST step of a successful cold analyze.
 
     MERGES, like `update_marker`. A cold analyze normally runs after `_clear_partial` has removed
@@ -91,7 +122,7 @@ def _commit_marker() -> None:
     completed or partially-completed pass and make the next run redo tens of minutes of work."""
     marker = os.path.join(PROJECT_MOUNT, META_NAME)
     data = read_marker()
-    data.update({"program_name": PROJECT_NAME, "created_at": time.time()})
+    data.update({"program_name": PROJECT_NAME, "created_at": time.time(), **fields})
     tmp = marker + ".tmp"
     try:
         with open(tmp, "w") as fh:
@@ -129,6 +160,292 @@ def update_marker(**fields) -> None:
         pass
 
 
+def _hex(value):
+    """Stable JSON rendering for an address/offset, including a negative mapping delta."""
+    value = int(value)
+    return ("-0x" + format(-value, "x")) if value < 0 else ("0x" + format(value, "x"))
+
+
+def _elf_load_map(artifact):
+    """Parse the bounded ELF header + PT_LOAD table from `artifact` inside the sandbox.
+
+    Returns None for a non-ELF (the cache still works, but no ELF coordinate contract applies).
+    Malformed/extended layouts return an `unverified` report instead of guessing. No target bytes
+    are parsed on the host, and only the fixed-size headers are read here.
+    """
+    try:
+        file_size = os.path.getsize(artifact)
+        with open(artifact, "rb") as fh:
+            ident = fh.read(16)
+            if len(ident) != 16 or ident[:4] != b"\x7fELF":
+                return None
+            elf_class, elf_data = ident[4], ident[5]
+            if elf_class not in (1, 2) or elf_data not in (1, 2):
+                raise ValueError("unsupported ELF class or byte order")
+            endian = "<" if elf_data == 1 else ">"
+            hdr_fmt = endian + ("HHIIIIIHHHHHH" if elf_class == 1 else "HHIQQQIHHHHHH")
+            hdr_size = struct.calcsize(hdr_fmt)
+            raw = fh.read(hdr_size)
+            if len(raw) != hdr_size:
+                raise ValueError("truncated ELF header")
+            header = struct.unpack(hdr_fmt, raw)
+            entry = header[3]
+            phoff = header[4]
+            phentsize = header[8]
+            phnum = header[9]
+            # PN_XNUM stores the real count in section-header zero. It is uncommon and requires a
+            # second parser; fail explicitly instead of treating 65,535 hostile headers as real.
+            if phnum == 0xFFFF:
+                raise ValueError("extended ELF program-header counts are not supported")
+            if phnum > 4096:
+                raise ValueError("ELF program-header count exceeds validation limit")
+            ph_fmt = endian + ("IIIIIIII" if elf_class == 1 else "IIQQQQQQ")
+            ph_size = struct.calcsize(ph_fmt)
+            if phnum and (phentsize < ph_size or phoff + phentsize * phnum > file_size):
+                raise ValueError("ELF program-header table is out of bounds")
+            segments = []
+            for i in range(phnum):
+                fh.seek(phoff + i * phentsize)
+                raw = fh.read(ph_size)
+                if len(raw) != ph_size:
+                    raise ValueError("truncated ELF program header")
+                values = struct.unpack(ph_fmt, raw)
+                if elf_class == 1:
+                    p_type, p_offset, p_vaddr, _paddr, p_filesz, p_memsz, p_flags, p_align = values
+                else:
+                    p_type, p_flags, p_offset, p_vaddr, _paddr, p_filesz, p_memsz, p_align = values
+                if p_type != 1:  # PT_LOAD
+                    continue
+                if p_offset + p_filesz > file_size or p_filesz > p_memsz:
+                    raise ValueError("ELF PT_LOAD range is out of bounds")
+                segments.append({
+                    "file_offset": p_offset,
+                    "virtual_address": p_vaddr,
+                    "file_size": p_filesz,
+                    "memory_size": p_memsz,
+                    "flags": p_flags,
+                    "alignment": p_align,
+                })
+            if not segments:
+                raise ValueError("ELF has no PT_LOAD segments")
+            return {
+                "elf_type": header[0],
+                "entry_point": entry,
+                "preferred_image_base": min(s["virtual_address"] for s in segments),
+                "segments": segments,
+            }
+    except (OSError, ValueError, struct.error) as exc:
+        return {
+            "schema": ADDRESS_MAPPING_SCHEMA,
+            "format": "elf",
+            "status": "unverified",
+            "reason": str(exc),
+            "coordinate_system": "elf_virtual_address",
+        }
+
+
+def _address_offset(address):
+    """Convert a Ghidra Address to a non-negative Python integer."""
+    try:
+        return int(address.getUnsignedOffset())
+    except Exception:  # noqa: BLE001 — older Ghidra Address implementations expose getOffset only
+        value = int(address.getOffset())
+        if value >= 0:
+            return value
+        try:
+            bits = int(address.getAddressSpace().getSize())
+        except Exception:  # noqa: BLE001
+            bits = 64
+        return value + (1 << bits)
+
+
+def _mapping_segment_json(segment, load_bias=0):
+    flags = int(segment["flags"])
+    result = {
+        "file_offset": _hex(segment["file_offset"]),
+        "virtual_address": _hex(segment["virtual_address"]),
+        "file_size": _hex(segment["file_size"]),
+        "memory_size": _hex(segment["memory_size"]),
+        "flags": ("R" if flags & 4 else "-") + ("W" if flags & 2 else "-")
+                 + ("X" if flags & 1 else "-"),
+        "file_to_virtual_delta": _hex(segment["virtual_address"] - segment["file_offset"]),
+    }
+    if load_bias:
+        result["ghidra_address"] = _hex(segment["virtual_address"] + load_bias)
+    return result
+
+
+def validate_address_mapping(program, artifact, *, allow_existing_base=False):
+    """Validate a live Ghidra Program against the ELF's declared virtual-address ranges.
+
+    Ghidra addresses are ELF *virtual addresses*, while debugger/module reports sometimes use raw
+    file offsets. Those differ whenever a PT_LOAD has `p_vaddr != p_offset`. Separately, Ghidra's
+    ELF loader gives PIEs a default non-zero image base (commonly +0x100000); HexGraph normalizes
+    that cold import back to the ELF's preferred base so every backend uses one coordinate system.
+    Cold imports require the canonical image base plus every non-empty PT_LOAD's start, file-backed
+    end, memory end, and ELF entry point at its declared virtual address. Warm projects may predate
+    that policy: with `allow_existing_base`, their existing load bias is validated and reported as
+    a warning rather than forcing an expensive rebuild. Unsupported/non-ELF formats are reported
+    honestly and not guessed at.
+    """
+    parsed = _elf_load_map(artifact)
+    if parsed is None:
+        return {
+            "schema": ADDRESS_MAPPING_SCHEMA,
+            "format": "other",
+            "status": "not_applicable",
+            "coordinate_system": "ghidra_program_address",
+            "image_base": _hex(_address_offset(program.getImageBase())),
+        }
+    if parsed.get("status") == "unverified":
+        image_base = _hex(_address_offset(program.getImageBase()))
+        parsed["image_base"] = image_base
+        if allow_existing_base:
+            parsed["coordinate_system"] = "ghidra_program_address"
+            parsed["warning"] = (
+                f"Warm Ghidra project uses image base {image_base}; its ELF address mapping "
+                f"could not be verified ({parsed.get('reason', 'unknown reason')})."
+            )
+        return parsed
+
+    image_base = _address_offset(program.getImageBase())
+    preferred_base = parsed["preferred_image_base"]
+    load_bias = image_base - preferred_base
+    memory = program.getMemory()
+    space = program.getAddressFactory().getDefaultAddressSpace()
+    missing = []
+
+    def _mapped(value):
+        try:
+            return memory.getBlock(space.getAddress(int(value))) is not None
+        except Exception:  # noqa: BLE001 — an out-of-space address is definitively not mapped
+            return False
+
+    accepted_bias = load_bias if allow_existing_base else 0
+    for segment in parsed["segments"]:
+        start = segment["virtual_address"] + accepted_bias
+        if not segment["memory_size"]:
+            continue
+        anchors = [start]
+        if segment["file_size"]:
+            anchors.append(start + segment["file_size"] - 1)
+        if segment["memory_size"]:
+            anchors.append(start + segment["memory_size"] - 1)
+        for anchor in dict.fromkeys(anchors):
+            if not _mapped(anchor):
+                missing.append(_hex(anchor))
+    entry = parsed["entry_point"] + accepted_bias if parsed["entry_point"] else 0
+    if entry and not _mapped(entry):
+        missing.append(_hex(entry))
+
+    report = {
+        "schema": ADDRESS_MAPPING_SCHEMA,
+        "format": "elf",
+        "status": "mismatch" if missing else "validated",
+        "coordinate_system": ("elf_virtual_address_plus_load_bias"
+                              if accepted_bias else "elf_virtual_address"),
+        "image_base": _hex(image_base),
+        "preferred_image_base": _hex(preferred_base),
+        "ghidra_load_bias": _hex(load_bias),
+        "entry_point": _hex(parsed["entry_point"]),
+        "ghidra_entry_point": _hex(entry),
+        "load_segments": [_mapping_segment_json(s, accepted_bias) for s in parsed["segments"]],
+    }
+    if load_bias and not allow_existing_base:
+        report["status"] = "mismatch"
+        report["unexpected_image_base"] = True
+    if allow_existing_base and load_bias:
+        report["legacy_image_base"] = True
+        report["warning"] = (
+            f"Warm Ghidra project uses image base {_hex(image_base)} "
+            f"(ELF preferred base {_hex(preferred_base)}; load bias {_hex(load_bias)}). "
+            "Ghidra addresses include this bias; new PIE imports use their ELF preferred base "
+            "(normally 0x0)."
+        )
+    if missing:
+        report["status"] = "warning" if allow_existing_base else "mismatch"
+        detail = (" Existing project address ranges could not be fully verified."
+                  if allow_existing_base else "")
+        base_note = (
+            f"Warm Ghidra project uses image base {_hex(image_base)} "
+            f"(ELF preferred base {_hex(preferred_base)}; load bias {_hex(load_bias)})."
+        )
+        report["warning"] = report.get("warning", base_note) + detail
+    if missing or (load_bias and not allow_existing_base):
+        report["unmapped_addresses"] = list(dict.fromkeys(missing))[:32]
+    if missing and allow_existing_base:
+        return report
+    if missing or (load_bias and not allow_existing_base):
+        raise AddressMappingMismatch(report)
+    return report
+
+
+def normalize_program_image_base(program, artifact):
+    """Rebase a newly imported ELF Program to its preferred PT_LOAD base before analysis.
+
+    Ghidra 12.x defaults PIE imports to 0x100000 even when the ELF's lowest PT_LOAD begins at zero.
+    That makes an exact address from the ELF, radare2, or a debugger resolve one megabyte away in
+    Ghidra. Cold imports are writable, so normalize once before auto-analysis and persist the shared
+    coordinate system. Warm projects are never mutated or rejected here; their existing image base
+    is reported with every result so expensive legacy analyses remain usable.
+    """
+    parsed = _elf_load_map(artifact)
+    if (parsed is None or parsed.get("status") == "unverified"
+            or parsed.get("elf_type") != 3):  # ET_DYN (PIE/shared object)
+        return
+    preferred = int(parsed["preferred_image_base"])
+    current = _address_offset(program.getImageBase())
+    if current == preferred:
+        return
+    space = program.getAddressFactory().getDefaultAddressSpace()
+    txid = program.startTransaction("hexgraph normalize ELF image base")
+    commit = False
+    try:
+        program.setImageBase(space.getAddress(preferred), True)
+        commit = True
+    finally:
+        program.endTransaction(txid, commit)
+
+
+def _mapping_value(value):
+    """Normalize an int/hex string/Ghidra Address passed to a re_script mapping helper."""
+    if hasattr(value, "getOffset"):
+        return _address_offset(value)
+    return int(str(value), 0) if isinstance(value, str) else int(value)
+
+
+def mapping_file_offset_to_vaddr(mapping, value):
+    """Translate an ELF file offset into the reported Ghidra Program coordinate system."""
+    offset = _mapping_value(value)
+    for segment in (mapping or {}).get("load_segments") or []:
+        start = int(segment["file_offset"], 0)
+        size = int(segment["file_size"], 0)
+        if start <= offset < start + size:
+            program_start = segment.get("ghidra_address", segment["virtual_address"])
+            return int(program_start, 0) + offset - start
+    return None
+
+
+def mapping_vaddr_to_file_offset(mapping, value):
+    """Translate a reported Ghidra Program address to an ELF file offset."""
+    address = _mapping_value(value)
+    for segment in (mapping or {}).get("load_segments") or []:
+        start = int(segment.get("ghidra_address", segment["virtual_address"]), 0)
+        size = int(segment["file_size"], 0)
+        if start <= address < start + size:
+            return int(segment["file_offset"], 0) + address - start
+    return None
+
+
+def _validate_warm_address_mapping(program, artifact, mapping_out=None):
+    """Publish a warm mapping without mutating or rejecting an expensive existing project."""
+    address_mapping = validate_address_mapping(program, artifact, allow_existing_base=True)
+    update_marker(address_mapping=address_mapping)
+    if mapping_out is not None:
+        mapping_out["address_mapping"] = address_mapping
+    return address_mapping
+
+
 @contextlib.contextmanager
 def _read_only_program(project, prog_name):
     """Open the warm program IMMUTABLE via DomainFile.getReadOnlyDomainObject — the returned
@@ -162,7 +479,7 @@ def _read_only_program(project, prog_name):
 
 
 @contextlib.contextmanager
-def open_target(artifact, *, cold_analyze=True, read_only=False):
+def open_target(artifact, *, cold_analyze=True, read_only=False, mapping_out=None):
     """Yield `(program, flat, cached)` for the target. WARM (a committed slot at PROJECT_MOUNT):
     open the resident project + program, NO re-analysis. COLD: import + analyze; persist into the
     slot (+ commit the marker) when the mount is present, else a throwaway /scratch project.
@@ -170,7 +487,12 @@ def open_target(artifact, *, cold_analyze=True, read_only=False):
     `read_only` (re_script) opens the WARM program IMMUTABLE (getReadOnlyDomainObject) so an
     agent-supplied script can query but never write the persistent project; it also forces warm-only
     (no cold analysis for a read-only query) — a cold miss raises so the probe returns the re_analyze
-    lead. `cached` is True on the warm path. The Program is closed / the project released on exit."""
+    lead. `cached` is True on the warm path. Before ANY warm Program is yielded, its address space
+    is checked against the artifact's ELF PT_LOAD virtual-address map. Legacy image bases are kept
+    intact and returned as warnings rather than invalidating a costly project. `mapping_out`, when
+    supplied, receives the JSON-safe validation report without changing
+    the long-standing `(program, flat, cached)` tuple. The Program is closed / project released on
+    exit."""
     import pyghidra
     from ghidra.program.flatapi import FlatProgramAPI
 
@@ -182,9 +504,11 @@ def open_target(artifact, *, cold_analyze=True, read_only=False):
         try:
             if read_only:
                 with _read_only_program(project, prog_name) as program:
+                    _validate_warm_address_mapping(program, artifact, mapping_out)
                     yield program, FlatProgramAPI(program), True
             else:
                 with pyghidra.program_context(project, "/" + prog_name) as program:
+                    _validate_warm_address_mapping(program, artifact, mapping_out)
                     yield program, FlatProgramAPI(program), True
         finally:
             with contextlib.suppress(Exception):
@@ -216,10 +540,14 @@ def open_target(artifact, *, cold_analyze=True, read_only=False):
                                program_name=prog_name, analyze=False,
                                nested_project_location=False) as flat:
         program = flat.getCurrentProgram()
+        normalize_program_image_base(program, artifact)
         _analyze(program, artifact)
+        address_mapping = validate_address_mapping(program, artifact)
+        if mapping_out is not None:
+            mapping_out["address_mapping"] = address_mapping
         yield program, flat, False
     if persist:
-        _commit_marker()
+        _commit_marker(address_mapping=address_mapping)
 
 
 def _slow_analyzer(name: str) -> bool:
@@ -1208,7 +1536,7 @@ def xrefs_core(program, flat, monitor, mode, subject) -> dict:
 # script can query the warm project but never mutate/corrupt it. Delivery is unchanged from the
 # Jython path (HEXGRAPH_USER_SCRIPT_B64 → the probe → here); only the runtime moved in-process.
 
-def script_core(program, flat, monitor, user_script, *, out_path=None) -> dict:
+def script_core(program, flat, monitor, user_script, *, out_path=None, address_mapping=None) -> dict:
     """Run the agent-supplied Python-3 `user_script` body against the RESIDENT (read-only) program
     and return its JSON result. The script's namespace exposes:
 
@@ -1218,6 +1546,9 @@ def script_core(program, flat, monitor, user_script, *, out_path=None) -> dict:
         out_path — a scratch file path; write your JSON result there (the built-in-core convention)
         getScriptArgs() — a shim returning [out_path] (so a script written to the postScript
                           `out_path = getScriptArgs()[0]` contract keeps working unchanged)
+        address_mapping — the reported ELF PT_LOAD / Ghidra coordinate report
+        file_offset_to_address(value) — translate an ELF file offset to a Ghidra Address
+        address_to_file_offset(value) — translate a Ghidra Address/vaddr to an ELF file offset
         result   — OR: assign a JSON-serializable object to `result` instead of writing out_path
 
     The result is taken from an explicit `result` binding if the script set one, else parsed from
@@ -1239,6 +1570,18 @@ def script_core(program, flat, monitor, user_script, *, out_path=None) -> dict:
         # Back-compat shim for scripts written to the Jython postScript contract (out_path = args[0]).
         return [out_path]
 
+    def _file_offset_to_address(value):
+        mapped = mapping_file_offset_to_vaddr(address_mapping, value)
+        if mapped is None:
+            raise ValueError(f"ELF file offset {_hex(_mapping_value(value))} is not file-backed")
+        return flat.toAddr(mapped)
+
+    def _address_to_file_offset(value):
+        mapped = mapping_vaddr_to_file_offset(address_mapping, value)
+        if mapped is None:
+            raise ValueError(f"virtual address {_hex(_mapping_value(value))} is not file-backed")
+        return mapped
+
     ns = {
         "__name__": "hexgraph_user_script",
         "__builtins__": __builtins__,
@@ -1248,6 +1591,9 @@ def script_core(program, flat, monitor, user_script, *, out_path=None) -> dict:
         "monitor": monitor,
         "out_path": out_path,
         "getScriptArgs": _get_script_args,
+        "address_mapping": address_mapping,
+        "file_offset_to_address": _file_offset_to_address,
+        "address_to_file_offset": _address_to_file_offset,
         "result": None,
     }
     try:
@@ -1427,7 +1773,7 @@ def bridge_dispatch(program, flat, monitor, req) -> dict:
         return {"error": f"bridge op {op} failed: {exc}", "tb": traceback.format_exc()}
 
 
-def _serve_one(conn, program, flat, make_monitor) -> None:
+def _serve_one(conn, program, flat, make_monitor, address_mapping=None) -> None:
     """Handle one connection: read one JSON request line, dispatch, write one JSON response line.
 
     Mints a FRESH TaskMonitor for THIS request via `make_monitor()`. A resident bridge serves many
@@ -1448,11 +1794,15 @@ def _serve_one(conn, program, flat, make_monitor) -> None:
         resp = {"error": "bad request json"}
     else:
         resp = bridge_dispatch(program, flat, make_monitor(), req)
+    if address_mapping is not None and isinstance(resp, dict):
+        resp.setdefault("address_mapping", address_mapping)
+        if address_mapping.get("warning"):
+            resp.setdefault("warning", address_mapping["warning"])
     fh.write((json.dumps(resp) + "\n").encode("utf-8"))
     fh.flush()
 
 
-def serve_bridge(host, port, program, flat, make_monitor) -> None:
+def serve_bridge(host, port, program, flat, make_monitor, address_mapping=None) -> None:
     """Block forever serving line-delimited JSON bridge requests over TCP against the RESIDENT
     (program, flat). Single-threaded — Ghidra program access is NOT concurrency-safe, so one
     connection + one request at a time (two host processes serialize). The caller binds AFTER the
@@ -1472,7 +1822,7 @@ def serve_bridge(host, port, program, flat, make_monitor) -> None:
         except OSError:
             continue
         try:
-            _serve_one(conn, program, flat, make_monitor)
+            _serve_one(conn, program, flat, make_monitor, address_mapping)
         except Exception:  # noqa: BLE001 — never let one connection kill the resident loop
             pass
         finally:

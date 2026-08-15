@@ -142,6 +142,21 @@ def test_serve_one_round_trips_over_a_socket():
         server.close()
 
 
+def test_serve_one_attaches_validated_address_mapping():
+    client, server = socket.socketpair()
+    mapping = {"status": "validated", "coordinate_system": "elf_virtual_address",
+               "warning": "Warm Ghidra project uses image base 0x100000."}
+    try:
+        client.sendall(json.dumps({"op": "ping"}).encode() + b"\n")
+        L._serve_one(server, _FakeProgram(["a"]), None, lambda: None, mapping)
+        resp = json.loads(client.makefile("rb").readline())
+        assert resp["address_mapping"] == mapping
+        assert resp["warning"] == mapping["warning"]
+    finally:
+        client.close()
+        server.close()
+
+
 def test_serve_one_bad_json_is_a_structured_error():
     client, server = socket.socketpair()
     try:

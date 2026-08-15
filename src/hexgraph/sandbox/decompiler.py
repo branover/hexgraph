@@ -44,9 +44,12 @@ def focus_only_payload(out: dict) -> dict:
     ftotal = (out or {}).get("functions_total")
     if not isinstance(ftotal, int) or ftotal < len(fns):
         ftotal = len(fns)
-    return {"functions": fns[:_FOCUS_PAYLOAD_FUNCTION_SAMPLE],
-            "functions_total": ftotal,
-            "focus": (out or {}).get("focus")}
+    payload = {"functions": fns[:_FOCUS_PAYLOAD_FUNCTION_SAMPLE],
+               "functions_total": ftotal,
+               "focus": (out or {}).get("focus")}
+    if isinstance((out or {}).get("address_mapping"), dict):
+        payload["address_mapping"] = out["address_mapping"]
+    return payload
 
 
 class Decompiler(ABC):

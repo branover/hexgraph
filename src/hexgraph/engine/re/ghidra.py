@@ -160,6 +160,10 @@ def enrich_target(session, project, target) -> dict:
     functions = list(data.get("functions") or [])
     calls = list(data.get("calls") or [])
     structs = list(data.get("structs") or [])
+    mapping = data.get("address_mapping") if isinstance(data.get("address_mapping"), dict) else None
+
+    def _with_mapping(payload):
+        return {**payload, "address_mapping": mapping} if mapping is not None else payload
 
     def _record(tool, result_kind, payload, summary):
         # content_hash scopes the facts to the exact bytes (extract-at-write + passive
@@ -171,13 +175,15 @@ def enrich_target(session, project, target) -> dict:
 
     # Function inventory + recovered prototypes/addresses → function_list facts.
     _record("enrich_recon", "function_list",
-            {"functions": [f if isinstance(f, dict) else {"name": f} for f in functions]},
+            _with_mapping({"functions": [
+                f if isinstance(f, dict) else {"name": f} for f in functions]}),
             f"{len(functions)} functions")
     # Call graph → `A calls B` relationship facts (edges self-wire among promoted fns).
     _record("enrich_recon", "call_graph",
-            {"functions": _call_graph_records(calls)}, f"{len(calls)} call edges")
+            _with_mapping({"functions": _call_graph_records(calls)}), f"{len(calls)} call edges")
     # Recovered structs → real-layout facts (the extractor drops built-ins).
-    _record("enrich_recon", "structs", {"structs": structs}, f"{len(structs)} structs")
+    _record("enrich_recon", "structs", _with_mapping({"structs": structs}),
+            f"{len(structs)} structs")
 
     return {"ok": True, "recorded": True, "functions": len(functions),
             "calls": len(calls), "structs": len(structs)}
