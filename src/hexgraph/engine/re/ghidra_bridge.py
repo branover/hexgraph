@@ -228,6 +228,13 @@ class _ManagedOps:
                "functions_total": resp.get("functions_total"), "focus": focus,
                "calls": resp.get("calls") or [], "structs": resp.get("structs") or [],
                "tool": "ghidra_bridge"}
+        mapping = resp.get("address_mapping")
+        if isinstance(mapping, dict):
+            out["address_mapping"] = mapping
+        warning = resp.get("warning") or (
+            mapping.get("warning") if isinstance(mapping, dict) else None)
+        if warning:
+            out["warning"] = warning
         if resp.get("error"):
             out["error"] = resp["error"]
         return out

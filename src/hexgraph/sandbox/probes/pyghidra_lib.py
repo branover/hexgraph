@@ -52,6 +52,8 @@ class AddressMappingMismatch(RuntimeError):
         missing = ", ".join(report.get("unmapped_addresses") or [])
         if missing:
             details.append(f"unmapped {missing}")
+        if report.get("reason"):
+            details.append(f"unverified ELF mapping: {report['reason']}")
         super().__init__(
             "Ghidra project address mapping does not match the ELF PT_LOAD virtual-address map "
             f"({'; '.join(details) or 'unknown mismatch'}). The new analysis cannot be committed; "
@@ -226,6 +228,15 @@ def _elf_load_map(artifact):
                     "flags": p_flags,
                     "alignment": p_align,
                 })
+            if not segments and header[0] == 1:  # ET_REL has no runtime PT_LOAD coordinate system
+                return {
+                    "schema": ADDRESS_MAPPING_SCHEMA,
+                    "format": "elf",
+                    "elf_type": header[0],
+                    "status": "not_applicable",
+                    "coordinate_system": "ghidra_program_address",
+                    "reason": "relocatable ELF has no PT_LOAD segments",
+                }
             if not segments:
                 raise ValueError("ELF has no PT_LOAD segments")
             return {
@@ -297,6 +308,9 @@ def validate_address_mapping(program, artifact, *, allow_existing_base=False):
             "coordinate_system": "ghidra_program_address",
             "image_base": _hex(_address_offset(program.getImageBase())),
         }
+    if parsed.get("status") == "not_applicable":
+        parsed["image_base"] = _hex(_address_offset(program.getImageBase()))
+        return parsed
     if parsed.get("status") == "unverified":
         image_base = _hex(_address_offset(program.getImageBase()))
         parsed["image_base"] = image_base
@@ -306,7 +320,12 @@ def validate_address_mapping(program, artifact, *, allow_existing_base=False):
                 f"Warm Ghidra project uses image base {image_base}; its ELF address mapping "
                 f"could not be verified ({parsed.get('reason', 'unknown reason')})."
             )
-        return parsed
+            return parsed
+        # A cold import has no durable analysis to preserve. Committing one whose ELF mapping this
+        # bounded parser could not verify would silently keep Ghidra's loader-selected base while
+        # promising the normalized coordinate contract. Warm projects take the warn-and-preserve
+        # path above; new projects fail closed and leave no committed marker.
+        raise AddressMappingMismatch(parsed)
 
     image_base = _address_offset(program.getImageBase())
     preferred_base = parsed["preferred_image_base"]

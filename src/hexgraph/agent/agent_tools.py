@@ -605,7 +605,10 @@ def _format_decomp(out: dict, label: str, *, limit: int = _MAX) -> str:
     Truncates the body to `limit` chars with the ACTIONABLE marker (recovery knobs + sizes)
     rather than a bare `…[truncated]`, so a head-truncation can't silently hide a tail sink —
     the marker names both the max_chars re-call and the get_observation full-body path."""
-    address_warning = _address_mapping_warning(out)
+    # A missing Ghidra focus can be replaced by radare2. That focus/address does not use the warm
+    # Ghidra project's legacy bias, so attaching its mapping warning to this focused result would
+    # describe the wrong coordinate system. The fallback-engine warning below remains explicit.
+    address_warning = "" if out.get("focus_fallback") else _address_mapping_warning(out)
     focus = out.get("focus")
     if not focus:
         defined = out.get("functions", []) or []

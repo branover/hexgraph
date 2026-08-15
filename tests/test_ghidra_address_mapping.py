@@ -234,6 +234,18 @@ def test_non_elf_mapping_is_reported_without_guessing(tmp_path):
     }
 
 
+def test_relocatable_elf_without_load_segments_is_not_rejected(tmp_path):
+    artifact = _elf64(tmp_path / "relocatable", elf_type=1)
+    data = bytearray(artifact.read_bytes())
+    data[56:58] = b"\0\0"  # ELF64 e_phnum
+    artifact.write_bytes(data)
+
+    report = L.validate_address_mapping(_Program([], image_base=0), artifact)
+
+    assert report["status"] == "not_applicable"
+    assert report["coordinate_system"] == "ghidra_program_address"
+
+
 def test_unparseable_warm_elf_reports_its_base_as_a_warning(tmp_path):
     artifact = tmp_path / "broken-elf"
     artifact.write_bytes(b"\x7fELF" + bytes([2, 1]) + b"\0" * 10)
@@ -244,6 +256,17 @@ def test_unparseable_warm_elf_reports_its_base_as_a_warning(tmp_path):
     assert report["status"] == "unverified"
     assert report["image_base"] == "0x100000"
     assert "image base 0x100000" in report["warning"]
+
+
+def test_unparseable_cold_elf_is_rejected_before_commit(tmp_path):
+    artifact = tmp_path / "broken-elf"
+    artifact.write_bytes(b"\x7fELF" + bytes([2, 1]) + b"\0" * 10)
+
+    with pytest.raises(L.AddressMappingMismatch) as raised:
+        L.validate_address_mapping(_Program([], image_base=0x100000), artifact)
+
+    assert raised.value.report["status"] == "unverified"
+    assert "truncated ELF header" in str(raised.value)
 
 
 def test_probe_surfaces_cold_mapping_mismatch(tmp_path, monkeypatch, capsys):

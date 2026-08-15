@@ -55,7 +55,12 @@ def test_ghidra_falls_back_to_r2_for_explicit_focus_it_missed(monkeypatch):
     g = GhidraDecompiler.__new__(GhidraDecompiler)
     g.runner = object()  # the fallback constructs its own R2Decompiler; never touched
     ghidra_out = {"functions": ["main", "helper"], "focus": None,
-                  "calls": [["main", "helper"]], "structs": [{"name": "cfg_t"}]}
+                  "calls": [["main", "helper"]], "structs": [{"name": "cfg_t"}],
+                  "address_mapping": {"schema": 1, "image_base": "0x100000",
+                                      "preferred_image_base": "0x0",
+                                      "ghidra_load_bias": "0x100000",
+                                      "warning": "legacy warm mapping"},
+                  "warning": "legacy warm mapping"}
     monkeypatch.setattr(GhidraDecompiler, "_decompile_ghidra",
                         lambda self, *a, **k: dict(ghidra_out))
     r2_calls = []
@@ -75,6 +80,9 @@ def test_ghidra_falls_back_to_r2_for_explicit_focus_it_missed(monkeypatch):
     # it and the pseudocode isn't Ghidra-quality (r2dec can mis-resolve PLT/args / fabricate a call).
     assert out["focus_engine"] == "radare2"
     assert out["focus_fallback"] is True
+    payload = focus_only_payload(out)
+    assert payload["focus_engine"] == "radare2" and payload["focus_fallback"] is True
+    assert "address_mapping" not in payload
 
 
 def test_format_decomp_warns_on_fallback_engine():
@@ -82,9 +90,12 @@ def test_format_decomp_warns_on_fallback_engine():
     can't silently read r2dec pseudocode as Ghidra-quality (the dogfood chased a fabricated call)."""
     fallback = {"focus": {"name": "cgi_handler", "address": "0x401200",
                           "pseudocode": "void cgi_handler(){ system(x); }", "callees": []},
-                "focus_engine": "radare2", "focus_fallback": True}
+                "focus_engine": "radare2", "focus_fallback": True,
+                "warning": "legacy Ghidra mapping",
+                "address_mapping": {"warning": "legacy Ghidra mapping"}}
     text = _format_decomp(fallback, "cgi_handler")
     assert "FALLBACK DECOMPILER" in text and "radare2" in text
+    assert "legacy Ghidra mapping" not in text
     assert text.index("FALLBACK") < text.index("system(x)")  # warning precedes the body
     # a normal Ghidra focus carries NO warning
     normal = {"focus": {"name": "main", "pseudocode": "int main(){}", "callees": []}}
