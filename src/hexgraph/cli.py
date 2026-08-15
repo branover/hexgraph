@@ -391,7 +391,8 @@ def _cmd_config(args: argparse.Namespace) -> int:
 def _cmd_mcp(args: argparse.Namespace) -> int:
     if args._mcpcmd == "install":
         from hexgraph.agent.agent_setup import (
-            SUBFILES, full_skill_markdown, install_help, write_skill,
+            PRIMARY_SKILL_NAME, SUBFILES, UNRESTRICTED_SKILL_NAME, full_skill_markdown,
+            install_help, write_skills,
         )
 
         if getattr(args, "print_skill", False):
@@ -400,8 +401,11 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
             print(full_skill_markdown())
             return 0
         if getattr(args, "write_skill", None):
-            path = write_skill(args.write_skill)
-            print(f"wrote VR skill to {path} (+ {len(SUBFILES)} sub-files)")
+            paths = write_skills(args.write_skill)
+            print(
+                f"wrote VR skills to {paths[PRIMARY_SKILL_NAME]} "
+                f"(+ {len(SUBFILES)} sub-files) and {paths[UNRESTRICTED_SKILL_NAME]}"
+            )
             return 0
         print(install_help(args.agent))
         return 0
@@ -473,7 +477,7 @@ def build_parser() -> argparse.ArgumentParser:
                      help="rebuild images even if already present")
     psw.add_argument("--refresh", action="store_true",
                      help="non-interactive sanity-sync: rebuild only what's stale vs the "
-                          "current source (images, MCP registration, VR skill, DB), keeping "
+                          "current source (images, MCP registration, VR skills, DB), keeping "
                           "your configuration (use `just refresh` for venv+UI too)")
     psw.set_defaults(func=_cmd_setup)
 
@@ -578,9 +582,10 @@ def build_parser() -> argparse.ArgumentParser:
     mi = msub.add_parser("install", help="print how to register HexGraph with claude/codex/gemini")
     mi.add_argument("--agent", choices=["claude", "codex", "gemini"], default=None)
     mi.add_argument("--write-skill", dest="write_skill", metavar="DIR",
-                    help="write the VR skill to DIR/hexgraph-vr/SKILL.md "
+                    help="write the restricted and unrestricted VR skills under DIR "
                          "(e.g. .claude/skills or .agents/skills)")
-    mi.add_argument("--print-skill", dest="print_skill", action="store_true", help="print the VR skill markdown")
+    mi.add_argument("--print-skill", dest="print_skill", action="store_true",
+                    help="print the restricted primary VR skill markdown")
     mi.set_defaults(func=_cmd_mcp)
     pm.set_defaults(func=_cmd_mcp, _mcpcmd=None)
 

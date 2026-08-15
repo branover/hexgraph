@@ -9,7 +9,13 @@ from __future__ import annotations
 
 from hexgraph.agent import vr_skill
 from hexgraph.agent.vr_skill import (
-    SPINE, SUBFILES, full_skill_markdown, skill_markdown,
+    SPINE,
+    SUBFILES,
+    UNRESTRICTED_OPENAI_YAML,
+    UNRESTRICTED_SPINE,
+    full_skill_markdown,
+    skill_markdown,
+    unrestricted_skill_markdown,
 )
 
 
@@ -40,6 +46,44 @@ def test_full_bundle_is_spine_plus_every_subfile():
     for name, body in SUBFILES.items():
         assert body in bundle, name
         assert name in bundle, name
+    # Delegate mode consumes this renderer and must remain on the restricted primary skill.
+    assert "hexgraph-vr-unrestricted" not in bundle
+
+
+def test_unrestricted_invokes_primary_then_overrides_only_tool_routing():
+    md = unrestricted_skill_markdown()
+    assert md.startswith("---\n")
+    assert "name: hexgraph-vr-unrestricted" in md
+    assert md.endswith(UNRESTRICTED_SPINE)
+    assert "Invoke `$hexgraph-vr` now" in md
+    assert "../hexgraph-vr/SKILL.md" in md
+    assert "overrides only" in md
+    assert "HexGraph unavailability alone is not a blocker" in md
+    for tool in (
+        "journal_add",
+        "graph_create_node",
+        "graph_create_edge",
+        "graph_create_hypothesis",
+        "finding_record",
+    ):
+        assert tool in md
+    # Unrestricted loosens project-level routing, not enforcement or authorization.
+    assert "Do not bypass or disable HexGraph policy gates" in md
+    assert "operator's authorization" in md
+    assert "operator-approved" in md
+    assert "not automatically a HexGraph Observation" in md
+    assert "disposable offline container or VM" in md
+    assert "directly on the host merely to avoid a HexGraph gate" in md
+
+
+def test_unrestricted_openai_metadata_mentions_explicit_invocation():
+    import yaml
+
+    metadata = yaml.safe_load(UNRESTRICTED_OPENAI_YAML)
+    interface = metadata["interface"]
+    assert interface["display_name"] == "HexGraph VR Unrestricted"
+    assert 25 <= len(interface["short_description"]) <= 64
+    assert "$hexgraph-vr-unrestricted" in interface["default_prompt"]
 
 
 def test_spine_teaches_the_headline_engagement_behaviours():

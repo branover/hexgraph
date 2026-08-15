@@ -52,7 +52,12 @@ def test_compact_states_the_core_rule_and_authorship():
 
 def test_write_skill_emits_spine_and_subfiles():
     from hexgraph.agent.agent_setup import write_skill
-    from hexgraph.agent.vr_skill import SUBFILES
+    from hexgraph.agent.vr_skill import (
+        SUBFILES,
+        UNRESTRICTED_OPENAI_YAML,
+        UNRESTRICTED_SKILL_NAME,
+        unrestricted_skill_markdown,
+    )
 
     with tempfile.TemporaryDirectory() as d:
         skill_path = write_skill(d)
@@ -65,6 +70,14 @@ def test_write_skill_emits_spine_and_subfiles():
             assert open(sub).read() == body, name
         # the record-keeping sub-file IS the shared rubric — no drift, no second copy
         assert open(os.path.join(skill_dir, "record-keeping.md")).read() == RECORD_KEEPING
+        # The compatibility writer also installs the additive sibling the primary invokes.
+        unrestricted_dir = os.path.join(d, UNRESTRICTED_SKILL_NAME)
+        assert open(os.path.join(unrestricted_dir, "SKILL.md")).read() == (
+            unrestricted_skill_markdown()
+        )
+        assert open(os.path.join(unrestricted_dir, "agents", "openai.yaml")).read() == (
+            UNRESTRICTED_OPENAI_YAML
+        )
 
 
 def test_skill_body_points_to_the_subfile():
