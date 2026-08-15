@@ -283,7 +283,9 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
   `re_script(target, script=…)` runs an agent-supplied **Python 3** script in the sandbox against the same warm
   program, opened **read-only** (`getReadOnlyDomainObject` — it queries everything but cannot mutate or save the
   project, and never executes the target). The namespace exposes `program`/`currentProgram`, a `flat`
-  `FlatProgramAPI`, `monitor`, and `out_path`; results come back as JSON written to `out_path` (or an assigned
+  `FlatProgramAPI`, `monitor`, `out_path`, the reported `address_mapping`, and
+  `file_offset_to_address(value)` / `address_to_file_offset(value)`; results come back as JSON written to
+  `out_path` (or an assigned
   `result`), the script body is capped at 64 KiB and delivered off the argv, and long output truncates to
   `max_chars` (recover it with `obs_get`). It's **warm-only** (run `re_analyze` first), **Ghidra-only**, and
   requires the persistent bridge to be stopped as described above; this conflict is detected before
@@ -295,6 +297,16 @@ already state, and `meta_get_schemas` spells out in its `substrate_vs_graph` and
   gated behind **`features.ghidra.scripting`** — OFF by default, which HIDES the tool from the list until an
   operator enables it. Full Ghidra-API reach (data-flow slices, stack-frame layout, dispatch-table recovery,
   BSim/FunctionID naming, info-leak hunts) without a bespoke tool per query, and no sandbox boundary relaxed.
+
+  New HexGraph Ghidra projects use ELF **virtual addresses**, matching radare2 and debugger virtual/module
+  offsets, not raw file offsets. On a new cold import HexGraph normalizes Ghidra's default PIE image base (Ghidra
+  12.x commonly adds `0x100000`) back to the ELF's preferred load base *before* analysis. Every cold import
+  validates that base plus the ELF entry point and each `PT_LOAD` at its declared virtual addresses. Existing
+  warm projects are never rebased, rejected, or rebuilt: HexGraph preserves their analysis and returns a
+  top-level warning stating the actual image base and load bias whenever one differs from the ELF preference.
+  Every managed-project Ghidra result includes `address_mapping`, with the image base/load bias and each segment's file offset, virtual
+  address, and delta. Only when a source really reports a raw file offset, translate its `p_offset` coordinate
+  with `file_offset_to_address(...)` before calling Ghidra APIs.
 - **Enrichment of existing objects is automatic and free.** When a call recovers something unambiguous
   about an object that is *already* a node, a function's recovered prototype and address, the `is_sink`
   tag on a dangerous import, the call sites on an existing `calls` edge, HexGraph attaches it in place

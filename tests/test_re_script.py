@@ -525,9 +525,14 @@ def test_probe_script_mode_warm_runs_core_read_only(tmp_path, monkeypatch, capsy
     import contextlib as _cl
 
     @_cl.contextmanager
-    def _fake_open(artifact, *, cold_analyze=True, read_only=False):
+    def _fake_open(artifact, *, cold_analyze=True, read_only=False, mapping_out=None):
         seen["read_only"] = read_only
         seen["cold_analyze"] = cold_analyze
+        if mapping_out is not None:
+            mapping_out["address_mapping"] = {
+                "status": "validated", "image_base": "0x100000",
+                "warning": "Warm Ghidra project uses image base 0x100000.",
+            }
         yield _FakeProg(), object(), True
 
     def _fake_core(program, flat, monitor, user_script, **kw):
@@ -548,6 +553,8 @@ def test_probe_script_mode_warm_runs_core_read_only(tmp_path, monkeypatch, capsy
     out = json.loads(capsys.readouterr().out)
     assert out["answer"] == 42 and out["tool"] == "ghidra_script"
     assert out["cached"] is True
+    assert out["address_mapping"]["image_base"] == "0x100000"
+    assert out["warning"] == "Warm Ghidra project uses image base 0x100000."
 
 
 # ── probe-level: script_core execs the body against the resident program ──────────────

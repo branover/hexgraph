@@ -103,7 +103,8 @@ class GhidraTaintAnalyzer(TaintAnalyzer):
             return {"available": True, "flows": [], "analyzed": 0, "error": str(exc)}
         taint = out.get("taint") or {}
         return {"available": True, "flows": taint.get("flows", []),
-                "analyzed": taint.get("analyzed", 0), "error": out.get("error")}
+                "analyzed": taint.get("analyzed", 0), "error": out.get("error"),
+                "address_mapping": out.get("address_mapping"), "warning": out.get("warning")}
 
 
 def get_taint_analyzer() -> TaintAnalyzer:
@@ -226,4 +227,5 @@ def analyze_taint(session: Session, project: Any, target: Any, *,
 
     return {"available": True, "flows": flows, "analyzed": result.get("analyzed", 0),
             "promoted": promoted, "observation_id": observation.id, "cached": cached,
-            "error": result.get("error")}
+            "error": result.get("error"), "address_mapping": result.get("address_mapping"),
+            "warning": result.get("warning")}

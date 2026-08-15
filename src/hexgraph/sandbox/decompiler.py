@@ -44,9 +44,20 @@ def focus_only_payload(out: dict) -> dict:
     ftotal = (out or {}).get("functions_total")
     if not isinstance(ftotal, int) or ftotal < len(fns):
         ftotal = len(fns)
-    return {"functions": fns[:_FOCUS_PAYLOAD_FUNCTION_SAMPLE],
-            "functions_total": ftotal,
-            "focus": (out or {}).get("focus")}
+    payload = {"functions": fns[:_FOCUS_PAYLOAD_FUNCTION_SAMPLE],
+               "functions_total": ftotal,
+               "focus": (out or {}).get("focus")}
+    if (out or {}).get("focus_engine"):
+        payload["focus_engine"] = out["focus_engine"]
+    if (out or {}).get("focus_fallback"):
+        payload["focus_fallback"] = True
+    # A missed Ghidra focus can be replaced with a radare2 focus. Its address is in radare2's
+    # normalized virtual-address coordinate, not a preserved warm Ghidra project's biased space;
+    # never fingerprint that hybrid payload with the Ghidra mapping.
+    if (not (out or {}).get("focus_fallback")
+            and isinstance((out or {}).get("address_mapping"), dict)):
+        payload["address_mapping"] = out["address_mapping"]
+    return payload
 
 
 class Decompiler(ABC):

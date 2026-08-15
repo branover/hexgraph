@@ -448,6 +448,11 @@ _SCRIPT_SPEC = ToolSpec(
     "fails before opening Ghidra with re_bridge_stop → retry → re_bridge_start remediation. "
     "CANCELLATION: the next call automatically reaps a prior one-shot project probe only when its "
     "launcher is positively gone; live or uncertain owners are preserved and reported. "
+    "ADDRESS SPACE: new PIE imports are normalized to the ELF preferred base. Existing warm "
+    "projects are preserved even when they use Ghidra's legacy load bias; every result warns with "
+    "their actual image base and load bias. The script namespace includes "
+    "address_mapping, file_offset_to_address(value), and address_to_file_offset(value), so use "
+    "file_offset_to_address only when a source reports a raw file offset. "
     "WARM-ONLY: errors → run re_analyze first if there's no warm project (never runs a cold "
     "analysis). CONTRACT (same as the built-in postScripts): your script receives "
     "out_path = getScriptArgs()[0] and MUST write its JSON result there; HexGraph reads it back. "
@@ -584,6 +589,15 @@ def _callee_names(callees) -> list[str]:
     return out
 
 
+def _address_mapping_warning(out: dict | None) -> str:
+    """User-visible warning for a preserved warm Ghidra project's coordinate system."""
+    if not isinstance(out, dict):
+        return ""
+    mapping = out.get("address_mapping")
+    warning = out.get("warning") or (mapping.get("warning") if isinstance(mapping, dict) else None)
+    return f"// WARNING: {warning}\n" if warning else ""
+
+
 def _format_decomp(out: dict, label: str, *, limit: int = _MAX) -> str:
     """Render a focused decompile (decompile_function / decompile_at) result as text:
     the resolved name+address, callees, pseudocode, and any not-yet-promoted callees.
@@ -591,6 +605,10 @@ def _format_decomp(out: dict, label: str, *, limit: int = _MAX) -> str:
     Truncates the body to `limit` chars with the ACTIONABLE marker (recovery knobs + sizes)
     rather than a bare `…[truncated]`, so a head-truncation can't silently hide a tail sink —
     the marker names both the max_chars re-call and the get_observation full-body path."""
+    # A missing Ghidra focus can be replaced by radare2. That focus/address does not use the warm
+    # Ghidra project's legacy bias, so attaching its mapping warning to this focused result would
+    # describe the wrong coordinate system. The fallback-engine warning below remains explicit.
+    address_warning = "" if out.get("focus_fallback") else _address_mapping_warning(out)
     focus = out.get("focus")
     if not focus:
         defined = out.get("functions", []) or []
@@ -605,7 +623,7 @@ def _format_decomp(out: dict, label: str, *, limit: int = _MAX) -> str:
         # simply not code). Dumping the function-name list can't help an address lookup — point at the
         # raw-disassembly / deeper-analysis escape hatches instead.
         if label.startswith("address "):
-            return (f"{label} is not inside any defined function (of {total} defined). It may be in an "
+            return address_warning + (f"{label} is not inside any defined function (of {total} defined). It may be in an "
                     f"unanalyzed region, data, or a different segment. Try re_disassemble_range(<addr>, "
                     f"count=…) for a raw disassembly there regardless of function boundaries, or "
                     f"re_decompile_at(<addr>, reanalyze=True) to force a deeper analysis pass.")
@@ -614,7 +632,7 @@ def _format_decomp(out: dict, label: str, *, limit: int = _MAX) -> str:
         # (never the whole thing) with the true total, and point at the address-based path.
         shown = defined[:40]
         more = f" (+{total - len(shown)} more)" if total > len(shown) else ""
-        return (f"{label} not found among the {total} defined functions"
+        return address_warning + (f"{label} not found among the {total} defined functions"
                 + (f": {', '.join(shown)}{more}" if shown else "")
                 + " — if you have its address, try re_decompile_at(<addr>)")
     addr = f" @ {focus['address']}" if focus.get("address") else ""
@@ -652,7 +670,7 @@ def _format_decomp(out: dict, label: str, *, limit: int = _MAX) -> str:
     # read — and it was concatenated last, so a long function clipped away the actionable half
     # first. Reserve it like a paging hint.
     return _clip_with_hint(
-        f"// {name}{addr} (callees: {', '.join(_callee_names(focus.get('callees')))})"
+        f"{address_warning}// {name}{addr} (callees: {', '.join(_callee_names(focus.get('callees')))})"
         f"{engine_warn}{node_ref}\n{focus.get('pseudocode', '')}",
         hint=note.lstrip("\n"), limit=limit, obs_id=out.get("observation_id"))
 
@@ -782,14 +800,20 @@ def _decomp(ctx: ToolContext, function: str | None, *,
             ftotal = len(fns)
         if focused:
             subj = function or address
+            payload = {"functions": fns, "functions_total": ftotal}
+            if isinstance(out.get("address_mapping"), dict):
+                payload["address_mapping"] = out["address_mapping"]
             obs, _cached = _record_obs(
                 ctx, tool=req_tool, args=req_args, result_kind="function_list",
-                payload={"functions": fns, "functions_total": ftotal},
+                payload=payload,
                 summary=f"{subj!r} not found; {ftotal} functions available")
         else:
+            payload = {"functions": fns, "functions_total": ftotal}
+            if isinstance(out.get("address_mapping"), dict):
+                payload["address_mapping"] = out["address_mapping"]
             obs, _cached = _record_obs(
                 ctx, tool=req_tool, args=req_args, result_kind="function_list",
-                payload={"functions": fns, "functions_total": ftotal},
+                payload=payload,
                 summary=f"{ftotal} functions" + (" (re-analyzed)" if reanalyze else ""))
         out["observation_id"] = obs.id if obs is not None else None
     return out
@@ -1396,12 +1420,15 @@ def _list_functions(ctx: ToolContext, args: dict) -> str:
     # own row) under a DISTINCT kind from the raw `function_list` inventory _decomp wrote — else
     # search_symbols_project (which reads the newest `function_list` as a target's whole-program
     # name set) would see only this filtered page and under-report its function names.
+    page_payload = {"functions": page, "total": total, "grand_total": grand_total,
+                    "offset": offset, "limit": limit}
+    if isinstance(out.get("address_mapping"), dict):
+        page_payload["address_mapping"] = out["address_mapping"]
     _obs, _ = _record_obs(ctx, tool="list_functions",
                 args={k: v for k, v in (("pattern", pat), ("offset", offset),
                                         ("limit", limit)) if v},
                 result_kind="function_list_page",
-                payload={"functions": page, "total": total, "grand_total": grand_total,
-                         "offset": offset, "limit": limit},
+                payload=page_payload,
                 summary=f"{total} functions{pat_note}; page {offset}-{next_offset}")
 
     header = f"functions{pat_note} ({total} total, showing {offset}-{next_offset})"
@@ -1415,7 +1442,7 @@ def _list_functions(ctx: ToolContext, args: dict) -> str:
         # read as the whole program: name the true total and how many are beyond the returned set.
         tail += (f"\n…[note: {grand_total} functions defined; {withheld} are beyond the returned "
                  f"inventory and not listed here — re_decompile_at reaches any function by address]")
-    prefix = f"{header}:\n"
+    prefix = _address_mapping_warning(out) + f"{header}:\n"
     return _clip_page(prefix, body, tail, _obs.id if _obs is not None else None)
 
 
@@ -2448,7 +2475,7 @@ def _xrefs(ctx: ToolContext, symbol: str | None) -> str:
                          "listens_on/connects_to edges:\n" + "\n".join(fmt_group(net)))
         text = "\n\n".join(parts) if parts else \
             "no dangerous, format-string, or network sinks referenced in this target"
-    ctx.cache[key] = _clip(text)
+    ctx.cache[key] = _clip(_address_mapping_warning(out) + text)
     return ctx.cache[key]
 
 
@@ -2573,8 +2600,11 @@ def _function_xrefs(ctx: ToolContext, function: str) -> str:
     _record_obs(ctx, tool="function_xrefs", args={"function": function},
                 result_kind="function_xrefs", payload=out,
                 summary=f"{function}: {len(callers)} callers, {len(callees)} callees")
-    lines = [f"// {function}: callers (who calls it) and callees (what it calls){source_note}",
+    lines = [_address_mapping_warning(out).rstrip("\n"),
+             f"// {function}: callers (who calls it) and callees (what it calls){source_note}",
              "callers:"]
+    if not lines[0]:
+        lines.pop(0)
     lines += [f"- {c['caller']}"
               + (f" (@ {c['caller_addr']})" if c.get("caller_addr") else "")
               + (f" at {c['at']}" if c.get("at") else "") for c in callers] or ["  (none)"]
@@ -2660,17 +2690,19 @@ def _data_xrefs(ctx: ToolContext, address: str) -> str:
     if err:
         return err
     if out.get("error") or out.get("not_found"):
-        return _no_data_xrefs_msg(address, out, ctx)
+        return _address_mapping_warning(out) + _no_data_xrefs_msg(address, out, ctx)
     refs = out.get("data_refs") or []
     _record_obs(ctx, tool="data_xrefs", args={"address": address},
                 result_kind="data_xrefs", payload=out,
                 summary=f"{len(refs)} refs to {address}")
     if not refs:
-        ctx.cache[key] = (f"no references to {address} found"
+        ctx.cache[key] = (_address_mapping_warning(out) + f"no references to {address} found"
                           + _pending_recovery_caveat(out, ctx))
         return ctx.cache[key]
     more = out.get("total", len(refs)) - len(refs)
-    lines = [f"references to {address}:"]
+    lines = [_address_mapping_warning(out).rstrip("\n"), f"references to {address}:"]
+    if not lines[0]:
+        lines.pop(0)
     lines += [f"- {r['from_function']} at {r.get('at')} ({r.get('kind')})" for r in refs]
     if more > 0:
         lines.append(f"  … and {more} more")
@@ -2756,24 +2788,28 @@ def _call_graph_tool(ctx: ToolContext, function: str | None, depth) -> str:
     # TEXT), so record under args={} — it dedups to ONE Observation no matter how many rooted
     # views are requested, instead of re-storing the identical graph per root.
     from hexgraph.engine.re.ghidra import _call_graph_records
+    call_graph_payload = {"functions": _call_graph_records(edges)}
+    if isinstance(out.get("address_mapping"), dict):
+        call_graph_payload["address_mapping"] = out["address_mapping"]
     _record_obs(ctx, tool="call_graph", args={},
-                result_kind="call_graph", payload={"functions": _call_graph_records(edges)},
+                result_kind="call_graph", payload=call_graph_payload,
                 summary=f"{len(edges)} call edges")
     if function:
         d = max(1, min(int(depth or 2), 6))
         sub = _bfs_subgraph(edges, function, d)
         if not sub:
-            ctx.cache[key] = f"{function!r} not found in the call graph (or it calls nothing)"
+            ctx.cache[key] = (_address_mapping_warning(out)
+                              + f"{function!r} not found in the call graph (or it calls nothing)")
             return ctx.cache[key]
         text = f"call graph from {function} (depth {d}, {len(sub)} edges){source_note}:\n" + \
                "\n".join(f"- {a} → {b}" for a, b in sub)
-        ctx.cache[key] = _clip(text)
+        ctx.cache[key] = _clip(_address_mapping_warning(out) + text)
         return ctx.cache[key]
     shown = edges[:200]
     note = f"\n  … and {len(edges) - len(shown)} more edges" if len(edges) > len(shown) else ""
     text = f"call graph ({len(edges)} edges){source_note}:\n" + \
            "\n".join(f"- {p[0]} → {p[1]}" for p in shown if len(p) == 2) + note
-    ctx.cache[key] = _clip(text)
+    ctx.cache[key] = _clip(_address_mapping_warning(out) + text)
     return ctx.cache[key]
 
 
@@ -3339,16 +3375,20 @@ def _search_code_scan(ctx: ToolContext, args: dict, *, bytes_pat, immediate) -> 
     next_offset = offset + len(page)
     more = next_offset < total
 
+    scan_payload = {"mode": "scan", "bytes_pattern": bytes_pat, "immediate": immediate,
+                    "hits": page, "total": total, "offset": offset, "limit": limit}
+    if isinstance(out.get("address_mapping"), dict):
+        scan_payload["address_mapping"] = out["address_mapping"]
     obs, _cached = _record_obs(
         ctx, tool="search_code",
         args={k: v for k, v in (("bytes_pattern", bytes_pat), ("immediate", immediate),
                                 ("offset", offset), ("limit", limit)) if v is not None and v != 0},
         result_kind="search_code",
-        payload={"mode": "scan", "bytes_pattern": bytes_pat, "immediate": immediate,
-                 "hits": page, "total": total, "offset": offset, "limit": limit},
+        payload=scan_payload,
         summary=f"scan {subj}: {total} hit(s); page {offset}-{next_offset}")
 
-    header = f"search_code scan for {subj} ({total} hit(s), showing {offset}-{next_offset}):"
+    header = (_address_mapping_warning(out)
+              + f"search_code scan for {subj} ({total} hit(s), showing {offset}-{next_offset}):")
     body = "\n".join(
         f"- {h['addr']}" + (f"  in {h['in_function']}" if h.get("in_function") else "  (no function)")
         for h in page) or "(none)"

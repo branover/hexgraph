@@ -142,6 +142,21 @@ def test_serve_one_round_trips_over_a_socket():
         server.close()
 
 
+def test_serve_one_attaches_validated_address_mapping():
+    client, server = socket.socketpair()
+    mapping = {"status": "validated", "coordinate_system": "elf_virtual_address",
+               "warning": "Warm Ghidra project uses image base 0x100000."}
+    try:
+        client.sendall(json.dumps({"op": "ping"}).encode() + b"\n")
+        L._serve_one(server, _FakeProgram(["a"]), None, lambda: None, mapping)
+        resp = json.loads(client.makefile("rb").readline())
+        assert resp["address_mapping"] == mapping
+        assert resp["warning"] == mapping["warning"]
+    finally:
+        client.close()
+        server.close()
+
+
 def test_serve_one_bad_json_is_a_structured_error():
     client, server = socket.socketpair()
     try:
@@ -382,13 +397,18 @@ def _one_shot_server(response: dict):
 def test_managed_ops_decompile_round_trip():
     from hexgraph.engine.re.ghidra_bridge import _ManagedOps
 
+    mapping = {"status": "validated", "image_base": "0x100000",
+               "warning": "Warm Ghidra project uses image base 0x100000."}
     port, captured, t = _one_shot_server(
-        {"functions": ["f1", "f2"], "focus": {"name": "f1"}, "tool": "ghidra_bridge"})
+        {"functions": ["f1", "f2"], "focus": {"name": "f1"}, "tool": "ghidra_bridge",
+         "address_mapping": mapping, "warning": mapping["warning"]})
     out = _ManagedOps("127.0.0.1", port).decompile(None, "f1")
     t.join(timeout=5)
     assert captured["req"] == {"op": "decompile", "focus": "f1"}   # client sent the right request
     assert out["functions"] == ["f1", "f2"] and out["focus"] == {"name": "f1"}
     assert out["tool"] == "ghidra_bridge"
+    assert out["address_mapping"] == mapping
+    assert out["warning"] == mapping["warning"]
 
 
 def test_managed_ops_error_response_reads_as_no_focus():
