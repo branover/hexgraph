@@ -444,6 +444,10 @@ _SCRIPT_SPEC = ToolSpec(
     "don't cover. GHIDRA-ONLY (radare2 unsupported). Runs in the SAME hardened sandbox every probe "
     "uses (--network none, read-only rootfs, --cap-drop ALL, non-root) and opens the warm project "
     "READ-ONLY, so your script inspects but never mutates it; the target is NEVER executed. "
+    "BRIDGE LOCK: a resident Ghidra bridge owns the warm project, so re_script detects it and "
+    "fails before opening Ghidra with re_bridge_stop → retry → re_bridge_start remediation. "
+    "CANCELLATION: the next call automatically reaps a prior one-shot project probe only when its "
+    "launcher is positively gone; live or uncertain owners are preserved and reported. "
     "WARM-ONLY: errors → run re_analyze first if there's no warm project (never runs a cold "
     "analysis). CONTRACT (same as the built-in postScripts): your script receives "
     "out_path = getScriptArgs()[0] and MUST write its JSON result there; HexGraph reads it back. "
@@ -2218,6 +2222,50 @@ def _resolve_warm_ghidra_slot(ctx: ToolContext):
         return None
 
 
+_RE_SCRIPT_BRIDGE_LOCKED = (
+    "re_script cannot open this target's warm Ghidra project while its persistent bridge may "
+    "still own the project lock. Run re_bridge_stop(target_id), retry re_script, then run "
+    "re_bridge_start(target_id) again if you want resident Ghidra operations. HexGraph will not "
+    "stop the bridge automatically because another agent may be using it."
+)
+
+_RE_SCRIPT_PROJECT_LOCKED = (
+    "re_script could not open this target's warm Ghidra project because another Ghidra process "
+    "acquired its lock after the ownership checks. Retry once: HexGraph will automatically reap a "
+    "labeled one-shot probe whose launcher process has died. If a persistent bridge owns the "
+    "project, run re_bridge_stop(target_id), retry re_script, then run "
+    "re_bridge_start(target_id) again. Otherwise wait for the active Ghidra operation to finish."
+)
+
+
+def _is_ghidra_project_lock_error(exc: Exception) -> bool:
+    """Recognize the stable forms Ghidra uses when another process owns a project.
+
+    Keep this deliberately narrow: unrelated sandbox failures should preserve their original error
+    instead of being mislabeled as bridge contention.
+    """
+    detail = str(exc).casefold()
+    return ("lockexception" in detail or "project is locked" in detail
+            or "project lock" in detail)
+
+
+def _re_script_probe_owner_message(*, active: list[str], uncertain: list[str], error=None) -> str:
+    names = ", ".join([*active, *uncertain]) or "unknown"
+    if active:
+        return (
+            "re_script cannot open this target's warm Ghidra project while another one-shot "
+            f"HexGraph probe is still owned by a live process ({names}). Wait for that query to "
+            "finish or cancel its owning session; retrying after the owner exits will automatically "
+            "reap the abandoned container."
+        )
+    detail = f" ({error})" if error else ""
+    return (
+        "re_script could not safely verify ownership of a one-shot HexGraph probe for this warm "
+        f"project ({names}){detail}. It preserved the container rather than risk stopping another "
+        "agent's active work. Retry after the owner finishes, or inspect the named container."
+    )
+
+
 def _run_script(ctx: ToolContext, args: dict) -> str:
     """re_script: run an AGENT-SUPPLIED PyGhidra/Jython script over the target's WARM Ghidra project
     READ-ONLY, in the same hardened sandbox every probe uses, and return its JSON output. Ghidra-only
@@ -2252,7 +2300,7 @@ def _run_script(ctx: ToolContext, args: dict) -> str:
         return (f"error: script is {nbytes} bytes, over the {_SCRIPT_MAX_BYTES}-byte cap for "
                 "re_script — trim it or split the query.")
 
-    from hexgraph.sandbox.runner import docker_available
+    from hexgraph.sandbox.runner import docker_available, reconcile_oneshot_project_probes
 
     if not docker_available():
         return "re_script unavailable (Docker/sandbox not running)"
@@ -2263,6 +2311,28 @@ def _run_script(ctx: ToolContext, args: dict) -> str:
         return ("re_script found no warm Ghidra project for this target. Run re_analyze(target) "
                 "first to build it ONCE (detached; poll until state='analyzed'), then retry — "
                 "re_script is warm-only and never runs a cold analysis.")
+
+    # A cancelled MCP/client process can disappear while Docker keeps its synchronous `docker run`
+    # container alive. That abandoned one-shot still owns Ghidra's project lock until the (possibly
+    # hour-long) container timeout. Reconcile only HexGraph-labeled containers on this exact project:
+    # a dead/PID-reused launcher is reaped; a live or unprovable owner is preserved and surfaced.
+    probes = reconcile_oneshot_project_probes(slot.root)
+    active = list(probes.get("active") or [])
+    uncertain = list(probes.get("uncertain") or [])
+    if active or uncertain or probes.get("error"):
+        return _re_script_probe_owner_message(
+            active=active, uncertain=uncertain, error=probes.get("error"))
+
+    # Unlike the ordinary Ghidra verbs, re_script cannot route through the resident bridge: the
+    # agent-supplied body must stay inside its own hardened, networkless sandbox. That container
+    # therefore needs to open the warm project itself, and Ghidra's read-only open still collides
+    # with a bridge that owns the project lock. Require positive evidence that the bridge is gone;
+    # uncertainty fails closed just like the shared Ghidra-op routing seam. Do not auto-stop here:
+    # another concurrent agent may be actively using the resident bridge.
+    from hexgraph.engine.re.bridge import bridge_confirmed_gone
+
+    if not bridge_confirmed_gone(ctx.target):
+        return _RE_SCRIPT_BRIDGE_LOCKED
 
     import base64
 
@@ -2281,6 +2351,10 @@ def _run_script(ctx: ToolContext, args: dict) -> str:
             project_mount=str(slot.root),
         )
     except Exception as exc:  # noqa: BLE001 — surface a reason, let the agent recover
+        # Close the check/open race: another process can acquire the project after the preflight.
+        # Normalize Ghidra's otherwise opaque LockException into the same actionable recovery path.
+        if _is_ghidra_project_lock_error(exc):
+            return _RE_SCRIPT_PROJECT_LOCKED
         return f"re_script failed: {exc}"
     if not isinstance(out, dict):
         return f"re_script returned an unexpected result: {out!r}"

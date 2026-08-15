@@ -187,7 +187,12 @@ resident project, not just `re_decompile_*` but `re_xrefs`/`re_function_xrefs`/`
 taint pass, `re_recover_constant` and rename. Two things need the bridge stopped first
 (`re_bridge_stop`, restart after), because each opens the project itself and a second open fails
 outright: a COLD re-analysis (`re_reanalyze`), and `re_script`, which runs your script against the
-warm project in its own container. Recon enrichment runs fine against a bridged
+warm project in its own container. `re_script` detects live or uncertain bridge ownership before
+opening Ghidra and returns the exact stop → retry → restart sequence; it never stops a possibly
+shared bridge automatically. It also labels one-shot project probes with their launcher identity:
+after a client/session termination, the next `re_script` automatically stops an abandoned probe
+only when its launcher is positively gone, while preserving live or uncertain owners. Recon
+enrichment runs fine against a bridged
 target: the bridge serves the whole-program inventory it needs. `re_bridge_stop` when done
 (needs features.network). The spine of it: get the authoritative facts (`re_binutils_facts`,
 `re_list_strings` — GREP the FULL string table, not a sample) → map the sinks and who reaches
